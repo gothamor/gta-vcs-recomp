@@ -248,6 +248,7 @@ struct Ps2WriteWatch
     uint32_t span = 0; // 0 = disabled
     bool matchValue = false;
     uint64_t value = 0;
+    uint32_t laneMask = 0; // nonzero: match any 32-bit lane with (lane & laneMask) == value
 };
 inline Ps2WriteWatch g_ps2WriteWatch{};
 void ps2WriteWatchHit(uint32_t guestAddr, uint32_t size, uint64_t value, const char *op, const R5900Context *ctx);
@@ -267,7 +268,12 @@ inline void ps2TraceGuestWrite(uint8_t *rdram,
 #if PS2X_WRITE_WATCH
     const uint32_t phys = guestAddr & 0x1FFFFFFFu;
     if (__builtin_expect(phys - g_ps2WriteWatch.lo < g_ps2WriteWatch.span, 0) &&
-        (!g_ps2WriteWatch.matchValue || valueLo == g_ps2WriteWatch.value))
+        (!g_ps2WriteWatch.matchValue ||
+         (g_ps2WriteWatch.laneMask == 0u ? valueLo == g_ps2WriteWatch.value
+                                         : (((uint32_t)valueLo & g_ps2WriteWatch.laneMask) == g_ps2WriteWatch.value ||
+                                            ((uint32_t)(valueLo >> 32) & g_ps2WriteWatch.laneMask) == g_ps2WriteWatch.value ||
+                                            (size == 16u && (((uint32_t)valueHi & g_ps2WriteWatch.laneMask) == g_ps2WriteWatch.value ||
+                                                             ((uint32_t)(valueHi >> 32) & g_ps2WriteWatch.laneMask) == g_ps2WriteWatch.value))))))
     {
         ps2WriteWatchHit(phys, size, valueLo, op, ctx);
     }

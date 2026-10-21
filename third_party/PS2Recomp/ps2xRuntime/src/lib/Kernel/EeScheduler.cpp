@@ -83,6 +83,8 @@ EeScheduler::~EeScheduler()
     requestStop();
 }
 
+void ps2ClearCheckpointUnwind(); // [gta-recomp] ps2_runtime.cpp
+
 void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
 {
     m_executorThread = std::this_thread::get_id();
@@ -297,6 +299,7 @@ void EeScheduler::run()
         {
             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
             m_guestExecuting.store(true, std::memory_order_release);
+            ps2ClearCheckpointUnwind(); // [gta-recomp]
             function(m_rdram, &context, &m_runtime);
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;

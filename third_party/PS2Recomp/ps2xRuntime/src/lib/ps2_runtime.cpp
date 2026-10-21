@@ -377,6 +377,14 @@ namespace
     }
 }
 
+// [gta-recomp] Set while generated code unwinds to the scheduler because a checkpoint fired
+// (eeCheckpointDue / the call-site check in dispatchGuestBranch). Upstream treated a callee
+// that came back with pc == its own entry as "returned normally"; when a *recursive* call is
+// the one preempted, pc == entry too, and the outer frame carried on with the inner frames
+// still on the stack (sp off by their sizes -> $ra loaded from someone's locals).
+static bool g_checkpointUnwind = false;
+void ps2ClearCheckpointUnwind() { g_checkpointUnwind = false; }
+
 // [gta-recomp] Report each distinct unlisted mid-body entry once (see function_emitter.cpp).
 void ps2ReportUnlistedResume(const R5900Context *ctx, uint32_t functionStart)
 {
@@ -1517,6 +1525,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     // this charge bounds straight-line call chains that have no local loop.
     if (m_eeScheduler && m_eeScheduler->checkpointDue(EeScheduler::kGuestDispatchCycles))
     {
+        g_checkpointUnwind = true;
         return false;
     }
 
@@ -1557,7 +1566,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     const uint32_t entryPc = ctx->pc;
     targetFn(rdram, ctx, this);
 
-    if (isStopRequested() || ctx->pc == 0u)
+    if (isStopRequested() || ctx->pc == 0u || g_checkpointUnwind)
     {
         return false;
     }
@@ -2370,7 +2379,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
 
 bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
 {
-    return m_eeScheduler->checkpointDue(cycles);
+    const bool due = m_eeScheduler->checkpointDue(cycles);
+    if (due)
+        g_checkpointUnwind = true; // [gta-recomp] see g_checkpointUnwind
+    return due;
 }
 
 [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)

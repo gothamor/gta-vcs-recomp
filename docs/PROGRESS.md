@@ -31,7 +31,11 @@
 - [x] Stuck on the loading screen: IOP `sprintf` didn't format, so the sound
       bank file was never found. Fixed; the game now reaches the first in-game
       scene (Fort Baxter: Vic + army truck).
-- [ ] World geometry (ground, buildings) not drawn in the HW renderer
+- [x] Crash in the first scene (returns to 0x3F333333-style addresses): runtime
+      treated a preempted recursive call as returned (stack off by inner frames).
+      Fixed; the game now plays the opening cutscene (Vic, Sgt. Martinez).
+- [ ] World/interior geometry not drawn in the HW renderer (characters, vehicles,
+      sky, coronas are)
 - [ ] Camera roll / tilted horizon in the first scene (check vs. real game)
 - [ ] Performance: per-instruction `ctx->pc` stores (emitter now skips them for
       pure ALU ops - needs a regenerate + test), `__restrict` for generated code

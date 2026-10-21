@@ -1,5 +1,6 @@
 // Write watchpoint backend for ps2TraceGuestWrite (third_party ps2_runtime.h).
-//   VCS_WATCH=<lo>,<hi>[,<value>]   hex guest addresses, optional value to match
+//   VCS_WATCH=<lo>,<hi>[,<value>[,<mask>]]   hex guest addresses, optional value to match;
+//                                   with a mask, any 32-bit lane where (lane & mask) == value
 //   VCS_WATCH_MAX=<n>               stop logging after n hits (default 50)
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -27,14 +28,15 @@ namespace vcs
         const char *env = std::getenv("VCS_WATCH");
         if (!env)
             return;
-        unsigned long long lo = 0, hi = 0, value = 0;
-        const int n = std::sscanf(env, "%llx,%llx,%llx", &lo, &hi, &value);
+        unsigned long long lo = 0, hi = 0, value = 0, mask = 0;
+        const int n = std::sscanf(env, "%llx,%llx,%llx,%llx", &lo, &hi, &value, &mask);
         if (n < 2 || hi <= lo)
             return;
         g_ps2WriteWatch.lo = static_cast<uint32_t>(lo);
         g_ps2WriteWatch.span = static_cast<uint32_t>(hi - lo);
         g_ps2WriteWatch.matchValue = n >= 3;
         g_ps2WriteWatch.value = value;
+        g_ps2WriteWatch.laneMask = n >= 4 ? static_cast<uint32_t>(mask) : 0u;
         std::fprintf(stderr, "[watch] armed 0x%08llx..0x%08llx%s\n", lo, hi, n >= 3 ? " (value match)" : "");
     }
 }
