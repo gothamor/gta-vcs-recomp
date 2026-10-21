@@ -16,6 +16,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <tlhelp32.h>
+#include <dbghelp.h>
+#include <string>
 #endif
 
 namespace vcs
@@ -96,6 +98,8 @@ namespace vcs
         std::thread([&runtime, reportSeconds]()
                     {
             const std::vector<HostFn> map = buildHostMap();
+            SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+            SymInitialize(GetCurrentProcess(), nullptr, TRUE);
             std::vector<HANDLE> threads;
             std::unordered_map<uint32_t, uint64_t> hits;    // guest function -> samples
             std::unordered_map<uintptr_t, uint64_t> other;  // non-generated host RIP (page) -> samples
@@ -127,7 +131,7 @@ namespace vcs
                     if (it != map.begin() && rip - std::prev(it)->host < 0x100000)
                         ++hits[std::prev(it)->guest];
                     else
-                        ++other[rip & ~uintptr_t(0xFFF)];
+                        ++other[rip];
                 }
                 const auto now = std::chrono::steady_clock::now();
                 if (std::chrono::duration<double>(now - lastReport).count() < reportSeconds || total == 0)
@@ -138,20 +142,34 @@ namespace vcs
                 std::fprintf(stderr, "[profile] %llu samples\n", static_cast<unsigned long long>(total));
                 for (size_t i = 0; i < top.size() && i < 15; ++i)
                     std::fprintf(stderr, "[profile]   %5.1f%%  guest 0x%08x\n", 100.0 * top[i].second / total, top[i].first);
-                std::vector<std::pair<uintptr_t, uint64_t>> rest(other.begin(), other.end());
-                std::sort(rest.begin(), rest.end(), [](auto &a, auto &b) { return a.second > b.second; });
-                for (size_t i = 0; i < rest.size() && i < 6; ++i)
+                // Resolve non-generated samples to host symbols (needs the PDB; see VCS_RUNTIME_DEBUG_INFO).
+                std::unordered_map<std::string, uint64_t> byName;
+                for (const auto &[rip, count] : other)
                 {
-                    HMODULE mod = nullptr;
-                    char modName[MAX_PATH] = "?";
-                    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                           reinterpret_cast<LPCSTR>(rest[i].first), &mod))
-                        GetModuleFileNameA(mod, modName, MAX_PATH);
-                    const char *leaf = std::strrchr(modName, '\\');
-                    std::fprintf(stderr, "[profile]   %5.1f%%  host %s+0x%llx\n", 100.0 * rest[i].second / total,
-                                 leaf ? leaf + 1 : modName,
-                                 static_cast<unsigned long long>(rest[i].first - reinterpret_cast<uintptr_t>(mod)));
+                    alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 256];
+                    auto *sym = reinterpret_cast<SYMBOL_INFO *>(buffer);
+                    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+                    sym->MaxNameLen = 255;
+                    DWORD64 displacement = 0;
+                    std::string name;
+                    if (SymFromAddr(GetCurrentProcess(), rip, &displacement, sym))
+                        name = sym->Name;
+                    else
+                    {
+                        HMODULE mod = nullptr;
+                        char modName[MAX_PATH] = "?";
+                        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                               reinterpret_cast<LPCSTR>(rip), &mod))
+                            GetModuleFileNameA(mod, modName, MAX_PATH);
+                        const char *leaf = std::strrchr(modName, '\\');
+                        name = std::string(leaf ? leaf + 1 : modName) + "!?";
+                    }
+                    byName[name] += count;
                 }
+                std::vector<std::pair<std::string, uint64_t>> rest(byName.begin(), byName.end());
+                std::sort(rest.begin(), rest.end(), [](auto &a, auto &b) { return a.second > b.second; });
+                for (size_t i = 0; i < rest.size() && i < 12; ++i)
+                    std::fprintf(stderr, "[profile]   %5.1f%%  host %s\n", 100.0 * rest[i].second / total, rest[i].first.c_str());
                 std::fflush(stderr);
                 hits.clear();
                 other.clear();

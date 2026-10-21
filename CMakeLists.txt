@@ -43,3 +43,20 @@ if(VCS_HAVE_GENERATED)
 else()
     message(STATUS "No generated code in ${VCS_GENERATED_DIR}: building tools only. Run tools/recompile.sh first.")
 endif()
+
+# Debug symbols for the runtime and our code (not the 240 MB of generated code),
+# so the sampling profiler and debuggers can name host functions.
+option(VCS_RUNTIME_DEBUG_INFO "Emit CodeView debug info for runtime + launcher" ON)
+if(VCS_RUNTIME_DEBUG_INFO AND MSVC)
+    foreach(t ps2_runtime ps2_iop)
+        if(TARGET ${t})
+            target_compile_options(${t} PRIVATE /Z7)
+        endif()
+    endforeach()
+    if(VCS_HAVE_GENERATED)
+        set_source_files_properties(${VCS_SOURCES} "${CMAKE_SOURCE_DIR}/src/main.cpp"
+            TARGET_DIRECTORY ps2EntryRunner PROPERTIES COMPILE_OPTIONS "/Z7")
+        target_link_options(ps2EntryRunner PRIVATE /DEBUG)
+        target_link_libraries(ps2EntryRunner PRIVATE dbghelp)
+    endif()
+endif()
