@@ -7,8 +7,8 @@
 SLUS_*
 SLES_*
 SCUS_*
-gamefiles/
-disc/
+/gamefiles/
+/disc/
 
 # --- Generated from the user's own ELF: contains translated game code ---
 generated/
