@@ -86,8 +86,11 @@ namespace ps2_stubs
         constexpr uint32_t kStmFdir = 0x1000, kStmFreg = 0x2000, kStmRead = 0x0124;
         writeLe32(out + 0, (e.isDirectory ? kStmFdir : kStmFreg) | kStmRead);
         writeLe32(out + 8, e.sizeBytes);
-        std::memcpy(out + 64, e.name.data(), std::min<size_t>(255, e.name.size()));
-        setReturnS32(ctx, static_cast<int32_t>(std::min<size_t>(255, e.name.size())));
+        // Like the real cdrom0: driver, files keep their ISO 9660 version suffix
+        // ("NAME.EXT;1"). VCS's file table lookups depend on it.
+        const std::string name = e.isDirectory ? e.name : e.name + ";1";
+        std::memcpy(out + 64, name.data(), std::min<size_t>(255, name.size()));
+        setReturnS32(ctx, static_cast<int32_t>(std::min<size_t>(255, name.size())));
     }
 
     void sceDclose(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

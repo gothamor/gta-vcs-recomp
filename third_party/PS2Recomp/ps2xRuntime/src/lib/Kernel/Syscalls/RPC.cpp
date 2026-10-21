@@ -18,6 +18,20 @@ namespace ps2_syscalls
 
         void pushSifRpcDebugEventLocked(SifRpcDebugEvent event)
         {
+            // [gta-recomp] PS2X_TRACE_RPC=<n>: print the first n RPC events (bind/call) to stderr.
+            static const long traceLimit = std::getenv("PS2X_TRACE_RPC") ? std::atol(std::getenv("PS2X_TRACE_RPC")) : 0;
+            if (static_cast<long>(g_sif_rpc_debug_next_seq) < traceLimit)
+            {
+                std::fprintf(stderr, "[rpc] %s sid=0x%x fn=%u client=0x%x server=0x%x mode=%u send=0x%x/%u recv=0x%x/%u flags=0x%x result=%d pc=0x%x ra=0x%x send[",
+                             event.op, event.sid, event.rpcNum, event.clientPtr, event.serverPtr, event.mode,
+                             event.sendBuf, event.sendSize, event.recvBuf, event.recvSize, event.flags, event.result, event.pc, event.ra);
+                for (uint32_t i = 0; i < event.sendPreviewSize; ++i)
+                    std::fprintf(stderr, "%02x", event.sendPreview[i]);
+                std::fprintf(stderr, "] recv[");
+                for (uint32_t i = 0; i < event.recvPreviewSize; ++i)
+                    std::fprintf(stderr, "%02x", event.recvPreview[i]);
+                std::fprintf(stderr, "]\n");
+            }
             event.seq = ++g_sif_rpc_debug_next_seq;
             g_sif_rpc_debug_history[event.seq % kSifRpcDebugHistoryCount] = event;
         }

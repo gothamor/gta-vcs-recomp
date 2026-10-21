@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -95,7 +96,6 @@ namespace vcs
         std::thread([&runtime, reportSeconds]()
                     {
             const std::vector<HostFn> map = buildHostMap();
-            const uintptr_t exeBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
             std::vector<HANDLE> threads;
             std::unordered_map<uint32_t, uint64_t> hits;    // guest function -> samples
             std::unordered_map<uintptr_t, uint64_t> other;  // non-generated host RIP (page) -> samples
@@ -127,7 +127,7 @@ namespace vcs
                     if (it != map.begin() && rip - std::prev(it)->host < 0x100000)
                         ++hits[std::prev(it)->guest];
                     else
-                        ++other[(rip - exeBase) & ~uintptr_t(0xFFF)];
+                        ++other[rip & ~uintptr_t(0xFFF)];
                 }
                 const auto now = std::chrono::steady_clock::now();
                 if (std::chrono::duration<double>(now - lastReport).count() < reportSeconds || total == 0)
@@ -140,9 +140,18 @@ namespace vcs
                     std::fprintf(stderr, "[profile]   %5.1f%%  guest 0x%08x\n", 100.0 * top[i].second / total, top[i].first);
                 std::vector<std::pair<uintptr_t, uint64_t>> rest(other.begin(), other.end());
                 std::sort(rest.begin(), rest.end(), [](auto &a, auto &b) { return a.second > b.second; });
-                for (size_t i = 0; i < rest.size() && i < 5; ++i)
-                    std::fprintf(stderr, "[profile]   %5.1f%%  host exe+0x%llx (runtime/stub code)\n",
-                                 100.0 * rest[i].second / total, static_cast<unsigned long long>(rest[i].first));
+                for (size_t i = 0; i < rest.size() && i < 6; ++i)
+                {
+                    HMODULE mod = nullptr;
+                    char modName[MAX_PATH] = "?";
+                    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                           reinterpret_cast<LPCSTR>(rest[i].first), &mod))
+                        GetModuleFileNameA(mod, modName, MAX_PATH);
+                    const char *leaf = std::strrchr(modName, '\\');
+                    std::fprintf(stderr, "[profile]   %5.1f%%  host %s+0x%llx\n", 100.0 * rest[i].second / total,
+                                 leaf ? leaf + 1 : modName,
+                                 static_cast<unsigned long long>(rest[i].first - reinterpret_cast<uintptr_t>(mod)));
+                }
                 std::fflush(stderr);
                 hits.clear();
                 other.clear();

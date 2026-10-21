@@ -503,8 +503,11 @@ PS2Runtime::PS2Runtime()
     m_guestHeapLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
     m_guestHeapSuggestedBase = kGuestHeapDefaultBase;
     m_guestHeapConfigured = false;
-    m_asyncCallbackStackFloor = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
-    m_asyncCallbackStackTop = PS2_RAM_SIZE;
+    // [gta-recomp] Interrupt/callback stacks live in the kernel-reserved area below
+    // the ELF (0x80000..0x100000). Games put their main stack at the top of RAM
+    // (VCS: SetupThread(0x1FE0000, 0x20000)), so carving from there clobbered it.
+    m_asyncCallbackStackFloor = kAsyncCallbackStackFloor;
+    m_asyncCallbackStackTop = kAsyncCallbackStackTop;
 }
 
 void PS2Runtime::setDebugUiCallbacks(DebugUiCallback initCallback,
@@ -972,8 +975,9 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
     {
         std::lock_guard<std::mutex> lock(m_asyncCallbackStackMutex);
         const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
-        m_asyncCallbackStackFloor = std::min(std::max(hardLimit, suggestedHeapBase), PS2_RAM_SIZE);
-        m_asyncCallbackStackTop = PS2_RAM_SIZE;
+        (void)hardLimit;
+        m_asyncCallbackStackFloor = kAsyncCallbackStackFloor; // [gta-recomp] see reset
+        m_asyncCallbackStackTop = kAsyncCallbackStackTop;
     }
 
     LoadedModule module;

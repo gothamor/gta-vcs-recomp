@@ -56,3 +56,24 @@ Newest at the bottom. Each entry: what, why, and what would change it.
 3. End state for performance and real hi-res/widescreen: native renderer fed by
    high-level hooks on the game's VU1 render paths (VCS has only ~4.8 KB of VU
    microcode + 4 small DVP overlays, so the set of programs is small).
+
+## 2026-10-22 - Movies skipped during bring-up
+- `FUN_0021CA70` (from `main`) plays `STINGS.PSS` then `INTRO.PSS` via the movie
+  player at `0x40D8B8`. Under the runtime's sceMpeg stubs it stalls after ~8
+  stream reads. Skipped (returns 0) in `src/game/vcs_overrides.cpp` for now.
+- Plan (Phase 4): native playback - demux the PSS from the disc with FFmpeg and
+  draw it ourselves (cheaper than emulating the IPU, and allows clean scaling).
+
+## 2026-10-22 - Iteration speed
+- New bindings go in `src/game/vcs_overrides.cpp` (relink only) rather than the
+  recompiler config (rebuilds all generated code).
+- LTO off for development builds; ThinLTO for release builds.
+
+## 2026-10-22 - Rule for hooks on recompiled functions
+- A generated function can return to the EE scheduler in the middle of its body
+  (thread switch at a checkpoint, e.g. inside a `DelayThread` poll loop). It is
+  later resumed through the function table at the *resume address*, which maps
+  to the original generated function, not to a wrapper registered on its entry.
+- So a hook may do work **before** calling the original, or replace the
+  function entirely, but must not rely on code running after the original
+  returns. For "after" logic, hook the next function the caller invokes.

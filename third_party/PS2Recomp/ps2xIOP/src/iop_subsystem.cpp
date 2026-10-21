@@ -258,6 +258,8 @@ namespace ps2x::iop
         snapshot.emulatorThreads = m_impl->emulator.threadCount();
         snapshot.emulatorRpcServers = m_impl->emulator.rpcServerCount();
         snapshot.diagnostics = m_impl->loadOutcomes;
+        for (std::string &line : m_impl->emulator.threadDiagnostics()) // [gta-recomp]
+            snapshot.diagnostics.push_back(std::move(line));
         if (!m_impl->lastError.empty())
         {
             snapshot.diagnostics.push_back(m_impl->lastError);

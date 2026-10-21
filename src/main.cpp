@@ -11,6 +11,7 @@
 #include "runtime/ps2_disc_image.h"
 
 #include "debug/profiler.h"
+#include "debug/selftest.h"
 #include "debug/watchdog.h"
 #include "disc/iso_image.h"
 #include "util/sha1.h"
@@ -29,6 +30,11 @@
 #endif
 
 namespace fs = std::filesystem;
+
+namespace vcs
+{
+    void configureWatch(); // debug/watch.cpp
+}
 
 namespace
 {
@@ -218,6 +224,8 @@ int main(int argc, char *argv[])
         paths.mcRoot = data / "mc0";
         PS2Runtime::setIoPaths(paths);
 
+        vcs::configureWatch();
+        vcs::runSelfTest(runtime);
         vcs::startWatchdog(runtime);
         vcs::startProfiler(runtime);
         runtime.run();

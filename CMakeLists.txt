@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Generated C++ from the user's own SLUS_215.90 (tools/recompile.sh). Never committed.
 set(VCS_GENERATED_DIR "${CMAKE_SOURCE_DIR}/generated/ee" CACHE PATH "Recompiled EE code")
 
+set(PS2X_LTO "OFF" CACHE STRING "Link-time optimisation for the game: OFF (dev), THIN (release), FULL")
 option(VCS_BUILD_TOOLS "Build the PS2Recomp recompiler/analyzer" ON)
 
 set(PS2X_BUILD_RECOMP ${VCS_BUILD_TOOLS} CACHE BOOL "" FORCE)

@@ -6,11 +6,16 @@ function(EnableFastReleaseMode TargetName)
     message("> Enabling optimization for: ${TargetName}")
     # [gta-recomp] clang-cl rejects /Qspectre- and /GL//LTCG need MSVC's own
     # linker; use plain optimisation flags there and leave LTO to IPO below.
+    # LTO is opt-in (PS2X_LTO=THIN|FULL): with full LTO every relink of the
+    # 150 MB game re-codegens everything, which kills iteration time.
     if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         target_compile_options(${TargetName} PRIVATE
             $<$<CONFIG:Release>:/O2 /Oi /Gy /Gw /GF /DNDEBUG /arch:AVX2 /GS->
         )
-        if(IPO_SUPPORTED AND CMAKE_LINKER MATCHES "lld-link")
+        if(PS2X_LTO STREQUAL "THIN")
+            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
+            target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:/lldltocache:${CMAKE_BINARY_DIR}/lto-cache>)
+        elseif(PS2X_LTO STREQUAL "FULL" AND IPO_SUPPORTED)
             set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
         endif()
         return()

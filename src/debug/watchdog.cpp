@@ -32,6 +32,13 @@ namespace vcs
                              runtime.m_debugPc.load(std::memory_order_relaxed),
                              runtime.m_debugRa.load(std::memory_order_relaxed));
                 lastCycle = snap.eeCycle;
+                const ps2x::iop::DebugSnapshot iop = runtime.iopDebugSnapshot();
+                std::fprintf(stderr, "[watchdog] iop cycles=%llu instructions=%llu modules=%u threads=%u rpcServers=%u\n",
+                             static_cast<unsigned long long>(iop.emulatorCycles),
+                             static_cast<unsigned long long>(iop.emulatorInstructions),
+                             iop.emulatorLoadedModules, iop.emulatorThreads, iop.emulatorRpcServers);
+                for (const std::string &d : iop.diagnostics)
+                    std::fprintf(stderr, "[watchdog] iop: %s\n", d.c_str());
                 for (const EeThreadSnapshot &t : snap.threads)
                 {
                     std::fprintf(stderr, "[watchdog]   thread %d prio=%d status=%d wait=%d/%d pc=%08x ra=%08x entry=%08x\n",

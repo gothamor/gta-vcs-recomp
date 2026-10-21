@@ -1,5 +1,8 @@
 #include "iop_sysmem.h"
 
+#include <cstdio>
+#include <string>
+
 #include "../core/iop_cpu.h"
 #include "../core/iop_memory.h"
 #include "ps2x/iop/iop_host.h"
@@ -30,6 +33,13 @@ namespace ps2x::iop::detail
             const uint32_t address = a0 == 2u
                                          ? m_memory.allocate(a1, 16u, a2)
                                          : m_memory.allocate(a1, 16u);
+            if (address == 0u) // [gta-recomp] diagnose IOP heap exhaustion
+            {
+                m_host.log(LogLevel::Warning, "[IOP] AllocSysMemory(mode=" + std::to_string(a0) + ", size=0x" +
+                                                  [](uint32_t v) { char b[16]; std::snprintf(b, sizeof(b), "%x", v); return std::string(b); }(a1) +
+                                                  ") failed, max free=0x" +
+                                                  [](uint32_t v) { char b[16]; std::snprintf(b, sizeof(b), "%x", v); return std::string(b); }(m_memory.maxFreeMemory()));
+            }
             setV0(address);
             return true;
         }

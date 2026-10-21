@@ -41,6 +41,7 @@ namespace ps2x::iop::detail
         [[nodiscard]] uint32_t loadedModuleCount() const noexcept;
         [[nodiscard]] uint32_t threadCount() const noexcept;
         [[nodiscard]] uint32_t rpcServerCount() const noexcept;
+        [[nodiscard]] std::vector<std::string> threadDiagnostics() const; // [gta-recomp]
 
     private:
         class Impl;

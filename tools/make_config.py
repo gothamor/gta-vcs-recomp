@@ -26,6 +26,7 @@ import tomllib
 
 ROOT_OUT = "game/vcs/vcs.toml"
 CSV_OUT = "game/vcs/functions.csv"
+EXTRA_CSV = "game/vcs/extra_functions.csv"  # tools/find_missing_functions.py
 LABEL_PREFIXES = ("entry_", "caseD_", "default", "LAB_", "switchD_")
 OVERRIDES = "game/vcs/overrides.toml"
 
@@ -43,16 +44,28 @@ def q(s):
 
 
 def filter_csv(src):
-    kept = dropped = 0
-    with open(src) as f, open(CSV_OUT, "w", newline="\n") as out:
-        out.write(f.readline())
+    rows, dropped = [], 0
+    with open(src) as f:
+        header = f.readline()
         for line in f:
             if line.startswith(LABEL_PREFIXES):
                 dropped += 1
                 continue
-            out.write(line)
-            kept += 1
-    print("wrote %s: %d functions (%d label records dropped)" % (CSV_OUT, kept, dropped))
+            rows.append(line)
+    kept, extra = len(rows), 0
+    try:
+        with open(EXTRA_CSV) as ex:
+            ex.readline()
+            for line in ex:
+                rows.append(line)
+                extra += 1
+    except FileNotFoundError:
+        pass
+    rows.sort(key=lambda line: int(line.split(",")[1], 16))
+    with open(CSV_OUT, "w", newline="\n") as out:
+        out.write(header)
+        out.writelines(rows)
+    print("wrote %s: %d functions + %d extra (%d label records dropped)" % (CSV_OUT, kept, extra, dropped))
 
 
 RUNTIME_KERNEL = "third_party/PS2Recomp/ps2xRuntime/src/lib/Kernel"

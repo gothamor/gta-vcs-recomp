@@ -15,3 +15,9 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xIOP/include/ps2x/iop/iop_host.h` | optional `findDiscFile` / `readDiscSectors` virtuals | IOP cdvdman (CDSTREAM.IRX etc.) sees the same disc |
 | `ps2xIOP/src/emulator/imports/iop_cdvd.cpp` | `sceCdSearchFile` and `sceCdRead` try the host disc hooks first | Upstream's `searchFile` used the folder-built virtual ISO even when a real image was set, so LSNs could disagree with reads |
 | `ps2xRuntime/src/lib/ps2_iop_host.{h,cpp}` | implement the hooks via `ps2_disc::image()` | |
+| `ps2xRuntime/src/lib/ps2_iop_host.{h,cpp}` | `translateGuestPath` maps `cdrom0:` to a disc pseudo-path; `openHostFile`/`readHostFile`/`hostFileSize` serve it from the image | IOP loads the real IRX modules from the disc |
+| `ps2xRuntime/include/ps2_call_list.h` | `sceDopen`, `sceDread`, `sceDclose` added to the stub list | Directory API (the recompiler embeds this list, so rebuild `ps2_recomp` after changing it) |
+| `ps2xRuntime/src/lib/Kernel/Stubs/Dir.cpp` (new) | `sceDopen/sceDread/sceDclose` over `IPS2DiscImage::listDirectory` | VCS scans `cdrom0:` recursively at boot |
+| `ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp` | `PS2X_LOG_MPG` / `PS2X_DUMP_MPG_DIR` log/dump each distinct VU1 microcode upload | Find the renderer's microcode |
+| `ps2xRuntime/cmake/ReleaseMode.cmake` | `PS2X_LTO=OFF|THIN|FULL` (default OFF) for clang-cl | Full LTO made every relink re-codegen the whole 150 MB game |
+| `ps2xIOP/src/emulator/imports/iop_cdvd.cpp` | cdvdman imports 14 `sceCdTrayReq`, 15 `sceCdStop`, 21 `sceCdCheckCmd`, 38 `sceCdPause`, 39 `sceCdBreak` | Used by Rockstar's CDSTREAM.IRX |

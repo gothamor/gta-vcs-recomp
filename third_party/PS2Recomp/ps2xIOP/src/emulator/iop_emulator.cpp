@@ -18,6 +18,7 @@
 #include "iop_emulator_const.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cctype>
 #include <map>
 #include <optional>
@@ -820,6 +821,22 @@ namespace ps2x::iop::detail
     uint32_t IopEmulator::threadCount() const noexcept
     {
         return static_cast<uint32_t>(m_impl->kernel.threadCount());
+    }
+
+    std::vector<std::string> IopEmulator::threadDiagnostics() const
+    {
+        static const char *kStates[] = {"dormant", "ready", "running", "sleep", "delay", "sema", "evflag", "suspended", "dead"};
+        std::vector<std::string> out;
+        for (const auto &[id, t] : m_impl->kernel.threads())
+        {
+            char line[200];
+            const unsigned state = static_cast<unsigned>(t.state);
+            std::snprintf(line, sizeof(line), "thread %d %s wait=%d bits=0x%x prio=0x%x entry=0x%05x pc=0x%05x ra=0x%05x",
+                          id, state < 9 ? kStates[state] : "?", t.waitId, t.waitBits, t.priority, t.entry,
+                          t.cpu.pc, t.cpu.gpr[31]);
+            out.emplace_back(line);
+        }
+        return out;
     }
 
     uint32_t IopEmulator::rpcServerCount() const noexcept

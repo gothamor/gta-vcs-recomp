@@ -237,6 +237,21 @@ inline uint8_t ps2PathWatchExtractByteFromWrite(uint32_t writeAddr, uint32_t wat
     return static_cast<uint8_t>((valueHi >> ((byteIndex - 8u) * 8u)) & 0xFFu);
 }
 
+// [gta-recomp] Debug write watchpoint (VCS_WATCH=lo,hi[,value] read by the game
+// launcher). One unsigned compare per guest store when compiled in.
+#ifndef PS2X_WRITE_WATCH
+#define PS2X_WRITE_WATCH 1
+#endif
+struct Ps2WriteWatch
+{
+    uint32_t lo = 0;
+    uint32_t span = 0; // 0 = disabled
+    bool matchValue = false;
+    uint64_t value = 0;
+};
+inline Ps2WriteWatch g_ps2WriteWatch{};
+void ps2WriteWatchHit(uint32_t guestAddr, uint32_t size, uint64_t value, const char *op, const R5900Context *ctx);
+
 inline void ps2TraceGuestWrite(uint8_t *rdram,
                                uint32_t guestAddr,
                                uint32_t size,
@@ -246,13 +261,21 @@ inline void ps2TraceGuestWrite(uint8_t *rdram,
                                const R5900Context *ctx)
 {
     (void)rdram;
+    (void)valueHi;
+#if PS2X_WRITE_WATCH
+    const uint32_t phys = guestAddr & 0x1FFFFFFFu;
+    if (__builtin_expect(phys - g_ps2WriteWatch.lo < g_ps2WriteWatch.span, 0) &&
+        (!g_ps2WriteWatch.matchValue || valueLo == g_ps2WriteWatch.value))
+    {
+        ps2WriteWatchHit(phys, size, valueLo, op, ctx);
+    }
+#else
     (void)guestAddr;
     (void)size;
     (void)valueLo;
-    (void)valueHi;
     (void)op;
     (void)ctx;
-    // TODO we dont need this anymore so on next release it will be deleted
+#endif
 }
 
 inline void ps2TraceGuestRangeWrite(uint8_t *rdram,
@@ -513,8 +536,10 @@ private:
     uint32_t m_guestHeapLimit = PS2_RAM_SIZE;
     uint32_t m_guestHeapSuggestedBase = 0x00100000u;
     bool m_guestHeapConfigured = false;
-    uint32_t m_asyncCallbackStackFloor = 0x01F00000u;
-    uint32_t m_asyncCallbackStackTop = PS2_RAM_SIZE;
+    static constexpr uint32_t kAsyncCallbackStackFloor = 0x00080000u; // [gta-recomp]
+    static constexpr uint32_t kAsyncCallbackStackTop = 0x00100000u;
+    uint32_t m_asyncCallbackStackFloor = kAsyncCallbackStackFloor;
+    uint32_t m_asyncCallbackStackTop = kAsyncCallbackStackTop;
 
     std::atomic<uint32_t> m_missingFunctionPolicy{static_cast<uint32_t>(MissingFunctionPolicy::ContinueToTarget)};
     std::atomic<bool> m_missingFunctionReported{false};
