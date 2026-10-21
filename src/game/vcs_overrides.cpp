@@ -53,6 +53,21 @@ namespace
     void traceOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t nameAddr = GPR_U32(ctx, 4);
+        if (std::strstr(guestString(rdram, nameAddr), "LVZ"))
+        {
+            // The disc index built at boot by FUN_002209F0: count at 0x486E8C, 16-byte entries at 0x5038A8
+            uint32_t count = 0;
+            std::memcpy(&count, rdram + 0x00486E8Cu, 4);
+            std::fprintf(stderr, "[file] index has %u entries; LVZ/IMG ones:\n", count);
+            for (uint32_t i = 0; i < count && i < 4096u; ++i)
+            {
+                uint32_t e[4];
+                std::memcpy(e, rdram + 0x005038A8u + i * 16u, sizeof(e));
+                const char *n = guestString(rdram, e[0]);
+                if (std::strstr(n, "LVZ") || std::strstr(n, "IMG"))
+                    std::fprintf(stderr, "[file]   #%u \"%s\" lsn=0x%x size=0x%x\n", i, n, e[1], e[2]);
+            }
+        }
         const uint32_t ra = GPR_U32(ctx, 31);
         FUN_00220c68_0x220c68(rdram, ctx, runtime);
         std::fprintf(stderr, "[file] open \"%s\" -> handle %d (ra=0x%08x)\n", guestString(rdram, nameAddr),
@@ -98,6 +113,14 @@ namespace
             hash = (hash ^ rdram[image + i]) * 1099511628211ull;
         std::fprintf(stderr, "[file] relocate image=0x%08x fnv64(0x6495d0)=%016llx\n", image,
                      static_cast<unsigned long long>(hash));
+        if (std::memcmp(rdram + image, "DLRW", 4) == 0) // WRLD level image (from .LVZ): dump before relocation
+        {
+            if (FILE *f = std::fopen("wrld_image.bin", "wb"))
+            {
+                std::fwrite(rdram + image, 1, 0x00600000u, f);
+                std::fclose(f);
+            }
+        }
         FUN_00324a50_0x324a50(rdram, ctx, runtime);
     }
 

@@ -1306,6 +1306,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             const uint32_t channelBase = address & 0xFFFFFF00;
             const uint32_t madr = m_ioRegisters[channelBase + 0x10];
             const uint32_t qwc = m_ioRegisters[channelBase + 0x20];
+            {
+                static const bool trace = std::getenv("PS2X_TRACE_VIF") != nullptr; // [gta-recomp]
+                static int reported = 0;
+                const uint32_t tadr = m_ioRegisters[channelBase + 0x30];
+                if (trace && (((madr | tadr) & 0x80000000u) != 0u) && reported++ < 40)
+                    std::fprintf(stderr, "[dma] start ch=0x%08x chcr=0x%08x madr=0x%08x tadr=0x%08x qwc=%u\n", channelBase, value, madr, tadr, qwc);
+            }
             m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
 
             if (tryProcessScratchpadDma(channelBase, value))
@@ -1441,6 +1448,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         uint32_t id = static_cast<uint32_t>((tag >> 28) & 0x7);
                         const bool irq = ((tag >> 31) & 0x1ull) != 0ull;
                         uint32_t addr = static_cast<uint32_t>((tag >> 32) & 0x7FFFFFFF);
+                        {
+                            static const bool trace = std::getenv("PS2X_TRACE_VIF") != nullptr; // [gta-recomp]
+                            static int reported = 0;
+                            if (trace && (tag >> 63) != 0u && reported++ < 40)
+                                std::fprintf(stderr, "[dma] ch=0x%08x tag id=%u qwc=%u SPR addr=0x%08x (tag at 0x%08x)\n", channelBase, id,
+                                             tagQwc, static_cast<uint32_t>(tag >> 32), tagAddr);
+                        }
                         lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
                         ++tagsProcessed;
 
@@ -1517,6 +1531,18 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                         if (hasPayload)
                             appendData(dataAddr, tagQwc);
+                        { // [gta-recomp] PS2X_TRACE_DMA_RANGE=lo,hi: report chain tags/payloads inside a guest range
+                            static uint32_t rangeLo = 0, rangeHi = 0;
+                            static const bool rangeSet = [] {
+                                const char *e = std::getenv("PS2X_TRACE_DMA_RANGE");
+                                return e && std::sscanf(e, "%x,%x", &rangeLo, &rangeHi) == 2;
+                            }();
+                            static int reported = 0;
+                            const bool inRange = (dataAddr >= rangeLo && dataAddr < rangeHi) || (currentTagAddr >= rangeLo && currentTagAddr < rangeHi);
+                            if (rangeSet && inRange && hasPayload && reported++ < 200000)
+                                std::fprintf(stderr, "[dma-range] ch=0x%08x tag@0x%08x id=%u qwc=%u data=0x%08x\n", channelBase,
+                                             currentTagAddr, id, tagQwc, dataAddr);
+                        }
                         if (irq && tieEnabled)
                             endChain = true;
                         if (endChain)

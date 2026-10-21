@@ -2,6 +2,8 @@
 #include "runtime/gs/gs_hw.h"
 #include "runtime/gs/gs_cpu_backend.h"
 
+extern "C" bool IsKeyDown(int key); // raylib (window owner)
+
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -695,12 +697,19 @@ void main()
                 GLint prevFbo = 0, prevViewport[4] = {};
                 m_gl.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
                 m_gl.glGetIntegerv(GL_VIEWPORT, prevViewport);
+                // [gta-recomp] F12 (or PS2X_HW_DUMP=<frame>): list the next frame's draws and dump its targets
+                static const long dumpAt = std::getenv("PS2X_HW_DUMP") ? std::atol(std::getenv("PS2X_HW_DUMP")) : -1;
+                const bool f12 = IsKeyDown(301 /* KEY_F12 */);
+                const bool dumpNow = (f12 && !m_f12Down) ||
+                                     (dumpAt >= 0 && !m_dumped && m_executedFrames + frames.size() >= static_cast<uint64_t>(dumpAt));
+                m_f12Down = f12;
+                m_logDraws = dumpNow;
                 for (auto &frame : frames)
                     execute(*frame);
+                m_logDraws = false;
                 composeDisplay(*frames.back());
-                static const long dumpAt = std::getenv("PS2X_HW_DUMP") ? std::atol(std::getenv("PS2X_HW_DUMP")) : -1;
                 m_executedFrames += frames.size();
-                if (dumpAt >= 0 && !m_dumped && m_executedFrames >= static_cast<uint64_t>(dumpAt))
+                if (dumpNow)
                 {
                     m_dumped = true;
                     for (const auto &[fbp, rt] : m_glRts)
@@ -1205,8 +1214,31 @@ void main()
                     break;
                 }
                 case CmdType::Draw:
+                {
+                    // [gta-recomp] F12 / PS2X_HW_DUMP: list every draw of the dumped frame (state + bounds)
+                    if (m_logDraws)
+                    {
+                        const DrawCmd &d = f.draws[c.index];
+                        const HwState &s = d.s;
+                        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, z0 = 1e9f, z1 = -1e9f;
+                        uint32_t rgbaOr = 0, fogMin = 255;
+                        for (uint32_t i = 0; i < d.count; ++i)
+                        {
+                            const HwVertex &v = f.vertices[d.first + i];
+                            x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
+                            z0 = std::min(z0, v.z); z1 = std::max(z1, v.z);
+                            rgbaOr |= v.r | (v.g << 8) | (v.b << 16) | (uint32_t(v.a) << 24);
+                            fogMin = std::min<uint32_t>(fogMin, static_cast<uint32_t>(v.fog * 255.0f));
+                        }
+                        std::fprintf(stderr,
+                                     "[draw] n=%u fbp=%u zbp=%u zte=%u ztst=%u zmsk=%u tme=%u tex(psm? key=%llx %ux%u rt=%u) tfx=%u tcc=%u abe=%u blend=%u%u%u%u fix=%u ate=%u atst=%u aref=%u afail=%u fge=%u fogMin=%u fogCol=%u,%u,%u fbmsk=%x prim=%u iip=%u fst=%u bounds=(%.0f,%.0f)-(%.0f,%.0f) z=%.5f..%.5f rgbaOr=%08x\n",
+                                     d.count, s.fbp, s.zbp, s.zte, s.ztst, s.zmsk, s.tme, (unsigned long long)s.texKey, s.tw, s.th, s.texIsRt,
+                                     s.tfx, s.tcc, s.abe, s.ba, s.bb, s.bc, s.bd, s.fix, s.ate, s.atst, s.aref, s.afail, s.fge, fogMin,
+                                     s.fogR, s.fogG, s.fogB, s.fbmsk, s.mode, s.iip, s.fst, x0, y0, x1, y1, z0, z1, rgbaOr);
+                    }
                     draw(f.draws[c.index]);
                     break;
+                }
                 }
             }
         }
@@ -1504,6 +1536,8 @@ void main()
         uint64_t m_executedFrames = 0;
         uint32_t m_loggedTransfers = 0, m_loggedTextures = 0;
         bool m_dumped = false;
+        bool m_f12Down = false;  // [gta-recomp]
+        bool m_logDraws = false; // [gta-recomp]
     };
 }
 

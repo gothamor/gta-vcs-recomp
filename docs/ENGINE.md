@@ -145,3 +145,16 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   `sceSdSetIRQCallback`) - real SPU2 emulation is needed for audio.
 - `DelayThread` (`0x468318`) = `SetTimerAlarm` (SDK timer lib on EE T0,
   handler `0x451038`) + `WaitSema`; a fresh semaphore per call.
+
+## Level data (WRLD)
+- `MAINLA.LVZ` / `BEACH.LVZ` / `MALL.LVZ` are zlib streams of a `WRLD` image
+  (header bytes `"DLRW"`); MAINLA inflates to 0x54F358 bytes at `0x756680`
+  (read into `0xA8FE00`, inflated by `FUN_0021FA38`, relocated by `FUN_00324A50`).
+- World sectors then stream from the matching `.IMG` through CDSTREAM
+  (e.g. MAINLA.IMG reads into 0xCB7A80..0x112A660).
+- VIF1 DMA payloads come from packet buffers (0x500000-0x6FFFFF) and the model
+  heap (0x1200000-0x17FFFFF). Peds, vehicles, props render; static world
+  geometry did not (no DMA ever referenced the WRLD image or sector buffers) -
+  under investigation, possibly the SQRT.S fix.
+- In-world draws are mostly MODULATE + alpha test GREATER 8, fogged, vertex
+  colours from V4-5 unpacks.

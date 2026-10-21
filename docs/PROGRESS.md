@@ -34,9 +34,11 @@
 - [x] Crash in the first scene (returns to 0x3F333333-style addresses): runtime
       treated a preempted recursive call as returned (stack off by inner frames).
       Fixed; the game now plays the opening cutscene (Vic, Sgt. Martinez).
-- [ ] World/interior geometry not drawn in the HW renderer (characters, vehicles,
-      sky, coronas are)
-- [ ] Camera roll / tilted horizon in the first scene (check vs. real game)
+- [x] Props near-invisible: VIF UNPACK V4-5 didn't expand RGBA5551. Fixed.
+- [x] Tilted horizon / broken camera maths: SQRT.S read the wrong register field
+      (every sqrtf). Fixed: horizon level, palm trees and vehicles in place.
+- [ ] Static world (terrain, buildings, interior walls) still not drawn: the game
+      never DMAs from the WRLD image or the streamed sectors
 - [ ] Performance: per-instruction `ctx->pc` stores (emitter now skips them for
       pure ALU ops - needs a regenerate + test), `__restrict` for generated code
 

@@ -47,3 +47,7 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRecomp/src/lib/instruction_translator.cpp` | LQ/SQ/LQC2/SQC2 mask the low 4 address bits | R5900 behaviour (was not the cause of the crash above, but correct) |
 | `ps2xRecomp/src/lib/function_emitter.cpp` | Skip the per-instruction `ctx->pc` store for pure ALU/FPU/MMI instructions | Performance (nothing can observe pc there) |
 | `ps2xRuntime/include/ps2_runtime.h`, `src/debug/watch.cpp` | `VCS_WATCH=lo,hi,value,mask`: match any 32-bit lane (incl. 128-bit stores) under a mask | Catching float-like corruption |
+| `ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp` | **Fix:** UNPACK V4-5 expands RGBA5551 to 8-bit positions (R<<3, G>>2, B>>7, A 0x8000>>8) | Upstream stored the raw 5/1-bit fields: vertex colours 8x too dark and alpha 1 instead of 0x80, so alpha-tested (ATST GREATER 8) props vanished |
+| `ps2xRecomp/src/lib/fpu_translator.cpp` | **Fix:** `SQRT.S fd, ft` reads the ft field | On the R5900 the operand is in ft (fs is always 0 - all 694 sqrt.s in VCS); upstream read fs, so every sqrtf returned sqrt($f0) (257 sites with ft != 0) |
+| `ps2xRuntime/src/lib/gs/gs_hw.cpp` | F12 (or `PS2X_HW_DUMP=<frame>`) lists the frame's draws (`[draw]` lines) and dumps render targets | Renderer debugging |
+| `ps2xRuntime/src/lib/ps2_memory.cpp`, `ps2_vif1_interpreter.cpp` | `PS2X_TRACE_VIF=1` (unknown VIFcodes, scratchpad DMA), `PS2X_TRACE_DMA_RANGE=lo,hi` (chain payloads from a guest range) | Finding where geometry comes from |
