@@ -397,6 +397,25 @@ add_library(ps2_runtime STATIC
     src/lib/games_database.cpp
 )
 
+# [gta-recomp] GS on the graphics card: paraLLEl-GS (Vulkan compute, LGPLv3+). Integration ported from
+# BigDaddyJRich/PS2Recomp (hctp branch, GPL-3.0). Without PS2X_PARALLEL_GS_DIR only the CPU renderer exists.
+set(PS2X_PARALLEL_GS_DIR "" CACHE PATH "paraLLEl-GS source tree (optional Vulkan GS renderer)")
+target_sources(ps2_runtime PRIVATE src/lib/gs/gs_gpu.cpp)
+if(PS2X_PARALLEL_GS_DIR AND EXISTS "${PS2X_PARALLEL_GS_DIR}/gs/gs_interface.hpp" AND WIN32)
+    # paraLLEl-GS picks the static C runtime when none is set; everything else uses the DLL one
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    set(PARALLEL_GS_STANDALONE ON CACHE BOOL "" FORCE)
+    add_subdirectory("${PS2X_PARALLEL_GS_DIR}" "${CMAKE_BINARY_DIR}/parallel-gs" EXCLUDE_FROM_ALL)
+    target_sources(ps2_runtime PRIVATE src/lib/gs/gs_gpu_parallel.cpp)
+    set_source_files_properties(src/lib/gs/gs_gpu_parallel.cpp PROPERTIES
+        COMPILE_DEFINITIONS "NOMINMAX;WIN32_LEAN_AND_MEAN;_SILENCE_CXX20_IS_POD_DEPRECATION_WARNING")
+    target_link_libraries(ps2_runtime PRIVATE parallel-gs)
+    target_compile_definitions(ps2_runtime PRIVATE PS2X_HAS_PARALLEL_GS=1)
+    message(STATUS "paraLLEl-GS: ${PS2X_PARALLEL_GS_DIR}")
+else()
+    target_sources(ps2_runtime PRIVATE src/lib/gs/gs_gpu_none.cpp)
+endif()
+
 if(PS2X_ENABLE_RUNTIME_LOGS)
     target_compile_definitions(ps2_runtime PUBLIC
         PS2_RUNTIME_LOGS=1

@@ -96,6 +96,12 @@ struct GSDebugHistoryEntry
     bool usedPreferred = false;
 };
 
+class GSGpuRenderer; // [gta-recomp] runtime/gs/gs_gpu.h
+
+// [gta-recomp] Which GIF path the packet being handed to GS::processGIFPacket came from
+// (the GIF arbiter and VU1 XGKICK set it). paraLLEl-GS keeps GIF tag state per path.
+void gsSetCurrentGifPath(uint8_t path);
+
 class GS
 {
 public:
@@ -105,6 +111,10 @@ public:
     void init(uint8_t *vram, uint32_t vramSize, struct GSRegisters *privRegs = nullptr);
     void reset();
     void setRasterBackend(std::unique_ptr<GSRasterBackend> backend);
+    // [gta-recomp] Mirror the raw GS input to a GPU renderer. gpuOnly: skip the CPU decode/rasterizer entirely.
+    void setGpuRenderer(GSGpuRenderer *gpu, bool gpuOnly);
+    GSGpuRenderer *gpuRenderer() const { return m_gpu; }
+    bool gpuOnly() const { return m_gpu && m_gpuOnly; }
 
     void processGIFPacket(const uint8_t *data, uint32_t sizeBytes);
     bool processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes);
@@ -181,6 +191,8 @@ private:
     uint32_t m_localMemorySize = 0u;
     struct GSRegisters *m_privRegs = nullptr;
     mutable std::recursive_mutex m_stateMutex;
+    GSGpuRenderer *m_gpu = nullptr; // [gta-recomp]
+    bool m_gpuOnly = false;
     mutable std::mutex m_backendLifetimeMutex;
     mutable std::mutex m_presentationMutex;
 

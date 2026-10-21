@@ -10,7 +10,7 @@ function(EnableFastReleaseMode TargetName)
     # 150 MB game re-codegens everything, which kills iteration time.
     if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         target_compile_options(${TargetName} PRIVATE
-            $<$<CONFIG:Release>:/O2 /Oi /Gy /Gw /GF /DNDEBUG /arch:AVX2 /GS->
+            $<$<CONFIG:Release>:/O2 /Oi /Gy /Gw /GF /DNDEBUG /arch:AVX2 /GS- /clang:-fno-math-errno>
         )
         if(PS2X_LTO STREQUAL "THIN")
             target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)

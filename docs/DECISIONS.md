@@ -77,3 +77,18 @@ Newest at the bottom. Each entry: what, why, and what would change it.
 - So a hook may do work **before** calling the original, or replace the
   function entirely, but must not rely on code running after the original
   returns. For "after" logic, hook the next function the caller invokes.
+
+## 2026-10-22 - paraLLEl-GS: integrated, but off by default
+- Ported hctp-recomp's paraLLEl-GS backend (runtime/gs/gs_gpu*.{h,cpp}) and hooked
+  it into upstream's GS frontend (raw GIF per path, register writes, IMAGE uploads,
+  readbacks, present at VBlankStart, frames read back into the raylib window).
+- On the dev GPU (GTX 1080 Ti, Pascal) every run hung the GPU > 2 s and Windows
+  reset the display driver (TDR, event 4101); NVIDIA's OpenGL driver then
+  aborts the process (fail-fast code 7 in nvoglv64.dll). Independent of the
+  supersampling rate. Likely the compute rasterizer relies on behaviour Pascal
+  lacks (no independent thread scheduling) or on a content-specific hang.
+- Because the target is *modest* hardware, a compute-heavy rasterizer that
+  doesn't run on a 2017 high-end card is the wrong default. The CPU renderer
+  stays default; `PS2X_GS=gpu` opts in to paraLLEl-GS for newer GPUs.
+- Next: a conventional hardware-rasterized GS backend (GSdx-HW style) behind the
+  existing `GSRasterBackend` interface - broad GPU support, upscaling-friendly.

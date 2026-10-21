@@ -292,9 +292,16 @@ inline void ps2TraceGuestRangeWrite(uint8_t *rdram,
     // TODO we dont need this anymore so on next release it will be deleted
 }
 
+class GSGpuRenderer; // [gta-recomp]
+
 class PS2Runtime
 {
 public:
+    // [gta-recomp] GPU GS renderer (paraLLEl-GS), or null when the CPU renderer draws.
+    GSGpuRenderer *gpuRenderer() const { return m_gpu.get(); }
+    // EE scheduler, at each VBlankStart: hand the frame to the GPU renderer.
+    void presentGpuVBlank(uint64_t vsyncTick);
+    void shutdownGpuRenderer();
     struct IoPaths
     {
         std::filesystem::path elfPath;
@@ -524,6 +531,7 @@ private:
     VU1Interpreter m_vu1{VU1Interpreter::Unit::VU1};
     R5900Context m_cpuContext;
     std::unique_ptr<EeScheduler> m_eeScheduler;
+    std::unique_ptr<GSGpuRenderer> m_gpu; // [gta-recomp]
     mutable std::mutex m_eeKernelStateMutex;
     std::unordered_map<int, std::vector<EeExitHandlerRegistration>> m_eeExitHandlers;
     std::unordered_map<uint32_t, uint32_t> m_eeSyscallOverrides;

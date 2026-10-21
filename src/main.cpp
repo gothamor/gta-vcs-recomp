@@ -10,6 +10,7 @@
 #include "ps2_runtime.h"
 #include "runtime/ps2_disc_image.h"
 
+#include "debug/crash.h"
 #include "debug/profiler.h"
 #include "debug/selftest.h"
 #include "debug/watchdog.h"
@@ -175,6 +176,7 @@ namespace
 
 int main(int argc, char *argv[])
 {
+    vcs::installCrashHandlers();
     try
     {
         const fs::path isoPath = locateIso(argc, argv);

@@ -1,4 +1,5 @@
 #include "ps2_runtime.h"
+#include "runtime/gs/gs_gpu.h"
 #include "ps2_log.h"
 #include "ps2_stubs.h"
 #include "ps2_syscalls.h"
@@ -373,8 +374,60 @@ namespace
     }
 }
 
+// [gta-recomp] Shows the GPU renderer's newest picture. False when there is no GPU renderer.
+static bool UploadGpuFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
+{
+    GSGpuRenderer *gpu = rt->gpuRenderer();
+    if (!gpu)
+        return false;
+    static uint64_t s_lastSeq = 0u;
+    static uint32_t s_width = 640u, s_height = 448u;
+    gpu->setOutputSize(static_cast<uint32_t>(GetScreenWidth()), static_cast<uint32_t>(GetScreenHeight()));
+    static const bool s_noShow = std::getenv("PS2X_GPU_NOSHOW") != nullptr; // debugging
+    if (const GSGpuFrame *frame = s_noShow ? nullptr : gpu->takeFrame(s_lastSeq))
+    {
+        if (frame->width && frame->height && frame->rgba.size() >= size_t(frame->width) * frame->height * 4u)
+        {
+            if (tex.width != static_cast<int>(frame->width) || tex.height != static_cast<int>(frame->height))
+            {
+                UnloadTexture(tex);
+                std::fprintf(stderr, "[gs] presenting %ux%u (internal %ux%u)\n", frame->width, frame->height, frame->internalWidth, frame->internalHeight);
+                Image img = GenImageColor(static_cast<int>(frame->width), static_cast<int>(frame->height), BLACK);
+                tex = LoadTextureFromImage(img);
+                UnloadImage(img);
+                SetTextureFilter(tex, TEXTURE_FILTER_BILINEAR);
+            }
+            UpdateTexture(tex, frame->rgba.data());
+            s_width = frame->width;
+            s_height = frame->height;
+        }
+    }
+    outWidth = s_width;
+    outHeight = s_height;
+    return true;
+}
+
+void PS2Runtime::presentGpuVBlank(uint64_t vsyncTick)
+{
+    if (!m_gpu)
+        return;
+    uint64_t regs[GSGpuRenderer::kPrivRegCount];
+    std::memcpy(regs, &m_memory.gs(), sizeof(regs)); // PMODE .. BGCOLOR, GS register order
+    m_gpu->present(regs, vsyncTick, true);
+    // Don't let the game run more than two frames ahead of the graphics card.
+    (void)m_gpu->waitPresentBacklog(2u, m_stopRequested);
+}
+
+void PS2Runtime::shutdownGpuRenderer()
+{
+    if (m_gpu)
+        m_gpu->shutdown();
+}
+
 static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
 {
+    if (UploadGpuFrame(tex, rt, outWidth, outHeight))
+        return;
     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
     static bool s_hasLatchedInitialFrame = false;
     static uint32_t s_lastDisplayFbp = std::numeric_limits<uint32_t>::max();
@@ -668,6 +721,21 @@ bool PS2Runtime::syncCoreSubsystems()
     }
 
     m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
+    // [gta-recomp] GPU GS renderer: PS2X_GS=gpu (default) | cpu | both
+    if (!m_gpu)
+    {
+        const GSRendererMode mode = gsRendererModeFromEnvironment();
+        if (mode != GSRendererMode::Cpu)
+        {
+            std::string whyNot;
+            m_gpu = makeGpuRenderer(GSGpuOptions::fromEnvironment(), whyNot);
+            if (m_gpu)
+                std::cerr << "[gs] GPU renderer: " << m_gpu->deviceName() << " (" << gsRendererModeName(mode) << ")" << std::endl;
+            else
+                std::cerr << "[gs] GPU renderer unavailable (" << whyNot << "), using the CPU renderer" << std::endl;
+        }
+        m_gs.setGpuRenderer(m_gpu.get(), mode == GSRendererMode::Gpu);
+    }
     m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
                                     { m_gs.processGIFPacket(data, size); });
     m_memory.setGifArbiter(&m_gifArbiter);
@@ -2469,6 +2537,7 @@ void PS2Runtime::run()
         m_debugUiShutdownCallback(*this, m_debugUiUserData);
         m_debugUiInitialized = false;
     }
+    shutdownGpuRenderer(); // [gta-recomp]
     UnloadTexture(frameTex);
     CloseWindow();
 

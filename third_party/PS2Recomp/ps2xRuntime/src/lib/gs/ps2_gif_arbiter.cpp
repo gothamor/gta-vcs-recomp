@@ -1,4 +1,5 @@
 #include "runtime/gs/ps2_gif_arbiter.h"
+#include "runtime/gs/gs_frontend.h"
 #include <algorithm>
 #include <cstring>
 
@@ -56,7 +57,9 @@ void GifArbiter::drain()
         auto &pkt = m_queue[i];
         if (!pkt.data.empty())
         {
+            gsSetCurrentGifPath(static_cast<uint8_t>(pkt.pathId)); // [gta-recomp]
             m_processFn(pkt.data.data(), static_cast<uint32_t>(pkt.data.size()));
+            gsSetCurrentGifPath(3u);
         }
     }
     m_queue.clear();

@@ -1,4 +1,5 @@
 #include "runtime/gs/gs_frontend.h"
+#include "runtime/gs/gs_gpu.h"
 #include "runtime/gs/gs_cpu_backend.h"
 #include "ps2_log.h"
 #include "runtime/ps2_memory.h"
@@ -111,6 +112,48 @@ GS::GS()
     reset();
 }
 
+namespace
+{
+    thread_local uint8_t g_currentGifPath = 3u; // [gta-recomp]
+
+    // GS::uploadImageNative as the GIF traffic the GS would have seen: the transfer registers, then an IMAGE packet.
+    void gpuUploadImage(GSGpuRenderer &gpu, uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, uint64_t trxdir,
+                        const uint8_t *data, uint32_t sizeBytes)
+    {
+        gpu.reg(GS_REG_BITBLTBUF, bitbltbuf);
+        gpu.reg(GS_REG_TRXPOS, trxpos);
+        gpu.reg(GS_REG_TRXREG, trxreg);
+        gpu.reg(GS_REG_TRXDIR, trxdir);
+        const uint32_t qwords = sizeBytes / 16u;
+        uint32_t done = 0u;
+        thread_local std::vector<uint8_t> packet;
+        while (done < qwords)
+        {
+            const uint32_t n = std::min<uint32_t>(qwords - done, 0x7FFFu);
+            packet.resize(16u + size_t(n) * 16u);
+            const uint64_t tagLo = uint64_t(n) | (uint64_t(done + n == qwords) << 15u) | (2ull << 58u);
+            const uint64_t tagHi = 0u;
+            std::memcpy(packet.data(), &tagLo, 8);
+            std::memcpy(packet.data() + 8, &tagHi, 8);
+            std::memcpy(packet.data() + 16, data + size_t(done) * 16u, size_t(n) * 16u);
+            gpu.gif(3u, packet.data(), static_cast<uint32_t>(packet.size()));
+            done += n;
+        }
+    }
+}
+
+void gsSetCurrentGifPath(uint8_t path)
+{
+    g_currentGifPath = path;
+}
+
+void GS::setGpuRenderer(GSGpuRenderer *gpu, bool gpuOnly)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    m_gpu = gpu;
+    m_gpuOnly = gpu && gpuOnly;
+}
+
 void GS::init(uint8_t *vram, uint32_t vramSize, GSRegisters *privRegs)
 {
     m_localMemoryStorage = vram;
@@ -125,6 +168,8 @@ void GS::init(uint8_t *vram, uint32_t vramSize, GSRegisters *privRegs)
 void GS::reset()
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (m_gpu)
+        m_gpu->reset();
     std::memset(m_ctx, 0, sizeof(m_ctx));
     m_prim = {};
     m_primRegister = {};
@@ -643,6 +688,12 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (!data || sizeBytes < 16 || !m_backend)
         return;
+    if (m_gpu)
+    {
+        m_gpu->gif(g_currentGifPath, data, sizeBytes & ~15u);
+        if (m_gpuOnly)
+            return;
+    }
 
     if (tryProcessNativeImageUploadPacket(data, sizeBytes))
         return;
@@ -741,6 +792,11 @@ bool GS::processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes)
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (!data || sizeBytes < 16u || !m_backend)
         return false;
+    if (m_gpuOnly)
+    {
+        m_gpu->gif(g_currentGifPath, data, sizeBytes & ~15u);
+        return true;
+    }
 
     if (!validatePackedGifPacket(data, sizeBytes))
         return false;
@@ -784,6 +840,12 @@ void GS::uploadImageNative(uint64_t bitbltbuf,
                            uint32_t sizeBytes)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (m_gpu && data && sizeBytes)
+    {
+        gpuUploadImage(*m_gpu, bitbltbuf, trxpos, trxreg, trxdir, data, sizeBytes);
+        if (m_gpuOnly)
+            return;
+    }
     uploadImageNativeUnlocked(bitbltbuf, trxpos, trxreg, trxdir, data, sizeBytes);
 }
 
@@ -1062,6 +1124,12 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
 void GS::writeRegister(uint8_t regAddr, uint64_t value)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (m_gpu)
+    {
+        m_gpu->reg(regAddr, value);
+        if (m_gpuOnly)
+            return;
+    }
     writeRegisterUnlocked(regAddr, value);
 }
 
@@ -1629,6 +1697,8 @@ bool GS::clearActiveFramebuffer(uint32_t rgba)
 uint32_t GS::consumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (m_gpuOnly)
+        return m_gpu->readTransfer(dst, maxBytes);
     return m_backend ? m_backend->ConsumeLocalToHostBytes(dst, maxBytes) : 0u;
 }
 
