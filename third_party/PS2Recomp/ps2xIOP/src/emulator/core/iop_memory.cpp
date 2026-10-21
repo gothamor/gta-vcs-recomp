@@ -1,4 +1,6 @@
 #include "iop_memory.h"
+#include <cstdio>
+#include <cstdlib>
 
 #include <algorithm>
 #include <cstring>
@@ -213,6 +215,15 @@ namespace ps2x::iop::detail
 
     uint32_t IopMemory::readHardware32(uint32_t address) const
     {
+        { // [gta-recomp] PS2X_TRACE_SPU=1: SPU2 register reads
+            static const bool trace = std::getenv("PS2X_TRACE_SPU") != nullptr;
+            static int traced = 0;
+            if (trace && address >= Spu2Base && address < Spu2End && traced++ < 3000)
+            {
+                const auto it = m_hardware.find(address);
+                std::fprintf(stderr, "[spu] r32 0x%08x -> 0x%08x\n", address, it != m_hardware.end() ? it->second : 0u);
+            }
+        }
         const auto value = m_hardware.find(address);
         if (value != m_hardware.end())
             return value->second;
@@ -231,6 +242,14 @@ namespace ps2x::iop::detail
 
     void IopMemory::writeHardware32(uint32_t address, uint32_t value)
     {
+        { // [gta-recomp] PS2X_TRACE_SPU=1: SPU2 and IOP DMA register writes
+            static const bool trace = std::getenv("PS2X_TRACE_SPU") != nullptr;
+            static int traced = 0;
+            if (trace && ((address >= 0x1F801080u && address < 0x1F801100u) || (address >= 0x1F801500u && address < 0x1F801580u) ||
+                          (address >= Spu2Base && address < Spu2End)) &&
+                traced++ < 200000)
+                std::fprintf(stderr, "[spu] w32 0x%08x = 0x%08x\n", address, value);
+        }
         switch (address)
         {
         case 0x1F801070u:

@@ -624,7 +624,7 @@ namespace ps2x::iop::detail
                     writeLe32(result.data(), lsn);
                     writeLe32(result.data() + 4u, size);
                     std::string leaf = guestPath;
-                    const size_t slash = leaf.find_last_of("/\:");
+                    const size_t slash = leaf.find_last_of("/\\:");
                     if (slash != std::string::npos)
                         leaf.erase(0, slash + 1u);
                     std::memcpy(result.data() + 8u, leaf.data(), std::min<size_t>(16u, leaf.size()));
@@ -634,7 +634,12 @@ namespace ps2x::iop::detail
             }
             IsoNode *node = findVirtualIsoNode(guestPath);
             if (!node)
+            {
+                static int logged = 0; // [gta-recomp]
+                if (logged++ < 20)
+                    host.log(LogLevel::Warning, "[IOP] sceCdSearchFile failed: \"" + guestPath + "\"");
                 return false;
+            }
 
             // sceCdlFILE: lsn, size, name[16], date/flags[8].
             std::array<uint8_t, 32u> result{};

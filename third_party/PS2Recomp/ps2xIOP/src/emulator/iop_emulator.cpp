@@ -1,4 +1,6 @@
 #include "iop_emulator.h"
+#include <cstdio>
+#include <cstdlib>
 #include "imports/iop_cdvd.h"
 #include "core/iop_cpu.h"
 #include "imports/iop_heaplib.h"
@@ -457,6 +459,9 @@ namespace ps2x::iop::detail
             }
             cpu.gpr[31] = kCallReturnSentinel;
             runCpu(cpu, budget);
+            if (cpu.pc != kCallReturnSentinel && std::getenv("PS2X_TRACE_SPU")) // [gta-recomp] budget ran out or the callee blocked
+                std::fprintf(stderr, "[iop] call 0x%x did not return: pc=0x%x ra=0x%x stopped=%d yielded=%d budget=%u\n", address, cpu.pc,
+                             cpu.gpr[31], cpu.stopped ? 1 : 0, cpu.yielded ? 1 : 0, budget);
             return cpu.gpr[2];
         }
 
@@ -503,7 +508,14 @@ namespace ps2x::iop::detail
             try
             {
                 for (const int irq : completed)
-                    (void)intrman.dispatchInterrupt(irq, *this);
+                {
+                    const bool handled = intrman.dispatchInterrupt(irq, *this);
+                    static const bool trace = std::getenv("PS2X_TRACE_IOP_DMA") != nullptr; // [gta-recomp]
+                    static int traced = 0;
+                    if (trace && traced++ < 200)
+                        std::fprintf(stderr, "[iop-dma] irq 0x%x done at cycle %llu handled=%d\n", irq,
+                                     static_cast<unsigned long long>(totalCycles), handled ? 1 : 0);
+                }
             }
             catch (...)
             {

@@ -1,4 +1,6 @@
 #include "iop_intrman.h"
+#include <cstdio>
+#include <cstdlib>
 
 #include "../core/iop_cpu.h"
 #include "../core/iop_memory.h"
@@ -35,6 +37,8 @@ namespace ps2x::iop::detail
             return true;
         case 4: // RegisterIntrHandler
             m_handlers[static_cast<int>(a0)] = {a2, a3, cpu.gpr[28]};
+            if (std::getenv("PS2X_TRACE_SPU")) // [gta-recomp]
+                std::fprintf(stderr, "[intr] RegisterIntrHandler irq=%u mode=%u handler=0x%x arg=0x%x\n", a0, a1, a2, a3);
             setV0(0u);
             return true;
         case 5: // ReleaseIntrHandler

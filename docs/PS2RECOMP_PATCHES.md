@@ -39,3 +39,7 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRuntime/src/lib/ps2_runtime.cpp` | Missing-target report lists stack slots below `$sp` holding the bad target (`stackHits=`) | Corrupted saved `$ra` hunting |
 | `ps2xIOP/src/emulator/core/iop_memory.h` | IOP heap base 0x120000 -> 0x80000 (heap 832 KB -> 1.4 MB) | VCS modules end near 0x5E000; CDSTREAM/SDRDRV then failed `AllocSysMemory(0x40000)` ("Failed to allocate IOP buffer for streaming") |
 | `ps2xRuntime/src/lib/ps2_pad.cpp` | Keyboard + mouse + gamepad combined; WASD/IJKL drive the analog sticks, analog triggers count as L2/R2 | GTA needs analog movement; upstream used keyboard only without a pad, and only for digital buttons |
+| `ps2xIOP/src/emulator/imports/iop_sysclib.{h,cpp}` | **Fix:** real `sprintf`/`vsprintf` formatting of guest varargs (o32: a2, a3, stack from sp+16; va_list for vsprintf) | Upstream copied the format string, so CDSTREAM looked up the literal `\AUDIO\SET%s_PS.SDT;1` forever: the sound bank never loaded and the game sat on the loading screen |
+| `ps2xIOP/src/emulator/imports/iop_cdvd.cpp` | Log failed `sceCdSearchFile` lookups; fix `"/\:"` separator literal | Diagnostics |
+| `ps2xIOP/src/emulator/iop_emulator.cpp`, `core/iop_memory.cpp`, `imports/iop_intrman.cpp` | `PS2X_TRACE_SPU=1`: SPU2/IOP-DMA register reads/writes, interrupt registrations, IOP calls that never return; `PS2X_TRACE_IOP_DMA=1`: SPU DMA completions | Sound/IOP debugging |
+| `ps2xRuntime/src/lib/Kernel/EeScheduler.cpp` | Log when a guest thread goes dormant | Hang hunting |

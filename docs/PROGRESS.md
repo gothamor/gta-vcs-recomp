@@ -24,15 +24,21 @@
 - [~] Hardware OpenGL GS backend (`PS2X_GS=hw`, `src/lib/gs/gs_hw.cpp`): runs at
       full speed and shows the loading screen. Fixed: overlapping render targets
       (back buffer FBP 140 = FBP 0 + 448 lines), stale page cache for CLUT loads.
-- [ ] Loading-screen PSMT8 image is pixel-scrambled within small blocks (same in the
-      file decode test). The bytes the game uploads (512x512 T8) are not the XTX
-      file bytes: the game converts the PSP-format XTX on the EE first. Suspect a
-      mis-translated 128-bit / MMI instruction in that conversion. Next: find the
-      conversion routine (writer of the upload buffer, `VCS_WATCH`), unit-test it.
-- [ ] Bad function-pointer jump ~25 s into the game (also with GS discarded):
-      targets 0x3F000000 / 0x01C1FF00 - memory corruption or a mis-translation
+- [x] Loading screens had wrong colours: VIF1 fed the next DMAtag's VIFcodes to
+      the GIF as image data (8-byte shift of every texture/CLUT). Fixed.
+- [x] ~25 s bad-pointer crash: gone after the IOP heap fix (CDSTREAM's 256 KB
+      streaming buffer failed to allocate; the game ran an error path).
+- [x] Stuck on the loading screen: IOP `sprintf` didn't format, so the sound
+      bank file was never found. Fixed; the game now reaches the first in-game
+      scene (Fort Baxter: Vic + army truck).
+- [ ] World geometry (ground, buildings) not drawn in the HW renderer
+- [ ] Camera roll / tilted horizon in the first scene (check vs. real game)
+- [ ] Performance: per-instruction `ctx->pc` stores (emitter now skips them for
+      pure ALU ops - needs a regenerate + test), `__restrict` for generated code
 
 ## Phase 4 - audio, input, memory card, movies
+- [~] Input: keyboard + mouse + gamepad (docs/CONTROLS.md); not yet verified in game
+- [ ] Audio: needs SPU2 emulation (voices, ADPCM, IRQ, AutoDMA) - see ENGINE.md "Sound system"
 ## Phase 5 - stability
 ## Phase 6 - enhancements
 
@@ -50,4 +56,9 @@
 | `PS2X_LOG_MPG=1`, `PS2X_DUMP_MPG_DIR=d` | VU1 microcode uploads |
 | `VCS_GS_STATS=s` | GS state histogram |
 | `VCS_SELFTEST=1` | recompiled libgcc helpers vs native |
+| `VCS_TRACE_DELAY=1`, `VCS_TRACE_SOUND=1` | DelayThread calls; EE sound driver commands |
+| `PS2X_TRACE_SPU=1`, `PS2X_TRACE_IOP_DMA=1` | IOP SPU2/DMA/interrupt tracing |
+| `PS2X_HW_DUMP=<frame>` | dump HW render targets + display as PPM |
+| `tools/sendkey.ps1 -Key Return` | press a key in the game window |
+| `python tools/eedis.py <elf> <addr or name>` | EE disassembly with function names |
 | `python tools/minidbg.py <exe> <iso>` | catch fail-fast crashes with a stack |

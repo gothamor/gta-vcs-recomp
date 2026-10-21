@@ -121,3 +121,27 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   upper half is `NOP; DIRECTHL n` carrying the data. (This split exposed the
   upstream VIF bug in `docs/PS2RECOMP_PATCHES.md`.)
 - The legal screen (copyright text + logo) is also a 512x512 T8 upload.
+
+## Sound system (EE side + CDSTREAM.IRX)
+- CDSTREAM.IRX is Rockstar's IOP driver for **both** disc streaming and sound.
+  It registers three SIF RPC servers (IOP threads):
+  - `0x65686577` - stream reads. EE client `0x505B48`: fn 1 = read
+    `{channel, EE dest, LSN, -bytes}` (size is negated), fn 2 = poll
+    (`0xFA` busy, `0` done). The first request is GAME.DTZ (0x217E70 bytes).
+  - `0x65686578` - EE client `0x4CE2C0`, bound by `FUN_0010DCE8`.
+  - `0x65686579` - EE client `0x4D3D40`, bound by `FUN_0010E918`. Commands go
+    through `FUN_0010E970(cmd, arg)`: send/receive buffer `0x4CE300`, the reply's
+    first word is the result. Seen: `0xA0000` (count, 0x6D8 = 1752 sounds),
+    `0xA0B00`/`0xA0C00` per-sound queries, `0xA0D00` load bank,
+    `0xB0100` bank-load status (1 = loaded).
+- `FUN_0010D868` = sound init (skipped if `*(0x481900) != 0`), called from
+  `FUN_002A6330`, which then loads a bank and loops
+  `while (FUN_0010DE78() != 1) DelayThread(1000)`.
+- On the IOP the load handler (`0x22DC0`) builds `\AUDIO\SET%s_PS.SDT;1` with
+  sysclib `sprintf` and spins `while (!sceCdSearchFile()) WaitVblankStart()`.
+  Sound banks: `AUDIO/SETn/SFXnn_PS.RAW` (ADPCM) + `.SDT` (table).
+- CDSTREAM's audio thread (entry `0x1FCE8`) waits on a semaphore signalled by
+  libsd transfer-complete and SPU2 IRQ handlers (`sceSdSetTransCallback`,
+  `sceSdSetIRQCallback`) - real SPU2 emulation is needed for audio.
+- `DelayThread` (`0x468318`) = `SetTimerAlarm` (SDK timer lib on EE T0,
+  handler `0x451038`) + `WaitSema`; a fresh semaphore per call.

@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "runtime/ee_scheduler.h"
 
 #include "ps2_log.h"
@@ -1640,6 +1641,12 @@ void EeScheduler::makeRunning(GuestThread &item)
 
 void EeScheduler::makeDormant(GuestThread &item)
 {
+    if (item.id > 0) // [gta-recomp] say how a guest thread ended
+    {
+        const R5900Context &c = item.activeContext();
+        std::fprintf(stderr, "[ee] thread %d -> dormant pc=0x%08x ra=0x%08x sp=0x%08x v0=0x%08x a0=0x%08x\n", item.id, c.pc,
+                     getRegU32(&c, 31), getRegU32(&c, 29), getRegU32(&c, 2), getRegU32(&c, 4));
+    }
     removeReady(item);
     removeFromWaitObject(item);
     item.status = EeThreadStatus::Dormant;

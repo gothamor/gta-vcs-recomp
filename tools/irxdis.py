@@ -69,6 +69,7 @@ def main(path, base=0):
             i += 4
 
     md = capstone.Cs(capstone.CS_ARCH_MIPS, capstone.CS_MODE_MIPS32 + capstone.CS_MODE_LITTLE_ENDIAN)
+    md.skipdata = True  # keep going past words capstone cannot decode
     for ins in md.disasm(code, 0):
         note = ""
         if ins.mnemonic in ("jal", "j"):

@@ -9,6 +9,7 @@
 #include "ps2_runtime_macros.h"
 #include <ps2_recompiled_functions.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -131,8 +132,83 @@ namespace
         ctx->pc = GPR_U32(ctx, 31);
     }
 
+    // abort() (0x4604F0 -> exit(1)): the game hit a fatal check. Log a heuristic guest
+    // backtrace: stack words that point just past a jal/jalr in .text.
+    void traceAbort(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        std::fprintf(stderr, "[vcs] abort()/_Exit pc=0x%08x called from ra=0x%08x sp=0x%08x a0=0x%08x\n[vcs] backtrace:",
+                     ctx->pc, GPR_U32(ctx, 31), GPR_U32(ctx, 29), GPR_U32(ctx, 4));
+        const uint32_t sp = GPR_U32(ctx, 29) & 0x01FFFFFFu;
+        int shown = 0;
+        for (uint32_t a = sp; a < sp + 0x2000u && a + 4u <= 0x02000000u && shown < 24; a += 4u)
+        {
+            uint32_t v = 0;
+            std::memcpy(&v, rdram + a, 4);
+            if (v < 0x00100008u || v >= 0x00480000u || (v & 3u))
+                continue;
+            uint32_t call = 0;
+            std::memcpy(&call, rdram + v - 8u, 4);
+            if ((call >> 26) == 3u || (call & 0xFC1F07FFu) == 0x00000009u)
+            {
+                std::fprintf(stderr, " 0x%08x", v - 8u);
+                ++shown;
+            }
+        }
+        std::fprintf(stderr, "\n");
+        if (ctx->pc == 0x004672C0u)
+            ps2__Exit_0x4672c0(rdram, ctx, runtime);
+        else
+            FUN_004604f0_0x4604f0(rdram, ctx, runtime);
+    }
+
+    // VCS_TRACE_DELAY=1: DelayThread(usec) (0x468318, SetTimerAlarm + WaitSema) with host time between calls.
+    void traceDelay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static auto last = std::chrono::steady_clock::now();
+        static int count = 0;
+        const auto now = std::chrono::steady_clock::now();
+        if (count++ < 100000)
+            std::fprintf(stderr, "[delay] DelayThread(%u us) ra=0x%08x  %.2f ms since previous call\n", GPR_U32(ctx, 4),
+                         GPR_U32(ctx, 31), std::chrono::duration<double, std::milli>(now - last).count());
+        last = now;
+        FUN_00468318_0x468318(rdram, ctx, runtime);
+    }
+
+    // VCS_TRACE_SOUND=1: the EE sound driver's RPC commands (FUN_0010E970(cmd, arg) -> client 0x4D3D40, sid 0x65686579)
+    void traceSoundCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static int count = 0;
+        const uint32_t cmd = GPR_U32(ctx, 4);
+        if ((cmd & 0xFF0000u) != 0x0A0000u && count++ < 300)
+        {
+            uint32_t server = 0, reply = 0;
+            std::memcpy(&server, rdram + 0x004D3D40u + 0x24u, 4);
+            std::memcpy(&reply, rdram + 0x004CE300u, 4);
+            std::fprintf(stderr, "[sound] cmd=0x%06x arg=0x%x ra=0x%08x client.server=0x%08x lastReply=0x%x\n", GPR_U32(ctx, 4),
+                         GPR_U32(ctx, 5), GPR_U32(ctx, 31), server, reply);
+        }
+        FUN_0010e970_0x10e970(rdram, ctx, runtime);
+    }
+
+    void traceSoundInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        uint32_t flag = 0;
+        std::memcpy(&flag, rdram + 0x00481900u, 4);
+        std::fprintf(stderr, "[sound] init (0x10D868) skipFlag@0x481900=0x%x ra=0x%08x\n", flag, GPR_U32(ctx, 31));
+        FUN_0010d868_0x10d868(rdram, ctx, runtime);
+    }
+
     void applyVcs(PS2Runtime &runtime)
     {
+        if (std::getenv("VCS_TRACE_SOUND"))
+        {
+            runtime.replaceFunction(0x0010E970u, &traceSoundCmd);
+            runtime.replaceFunction(0x0010D868u, &traceSoundInit);
+        }
+        if (std::getenv("VCS_TRACE_DELAY"))
+            runtime.replaceFunction(0x00468318u, &traceDelay);
+        runtime.replaceFunction(0x004604F0u, &traceAbort);
+        runtime.replaceFunction(0x004672C0u, &traceAbort); // _Exit
         for (const Binding &b : kBindings)
         {
             if (b.handler && !ps2_game_overrides::bindAddressHandler(runtime, b.address, b.handler))

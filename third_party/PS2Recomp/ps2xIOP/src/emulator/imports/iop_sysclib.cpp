@@ -4,6 +4,7 @@
 #include "../core/iop_memory.h"
 
 #include <cctype>
+#include <cstring>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -14,6 +15,139 @@ namespace ps2x::iop::detail
     IopSysclib::IopSysclib(IopMemory &memory) noexcept
         : m_memory(memory)
     {
+    }
+
+    // [gta-recomp] printf-style formatting of guest arguments (32-bit IOP: %d %i %u %x %X %o %c %s %p %%,
+    // flags - + space # 0, width/precision incl. '*', length h/hh/l/ll/z/j/t).
+    std::string IopSysclib::formatGuest(const std::string &format, const std::function<uint32_t()> &nextArg) const
+    {
+        std::string out;
+        for (size_t i = 0; i < format.size(); ++i)
+        {
+            const char c = format[i];
+            if (c != '%')
+            {
+                out.push_back(c);
+                continue;
+            }
+            if (++i >= format.size())
+                break;
+            bool left = false, plus = false, space = false, alt = false, zero = false;
+            for (;; ++i)
+            {
+                const char f = i < format.size() ? format[i] : '\0';
+                if (f == '-') left = true;
+                else if (f == '+') plus = true;
+                else if (f == ' ') space = true;
+                else if (f == '#') alt = true;
+                else if (f == '0') zero = true;
+                else break;
+            }
+            int width = 0;
+            if (i < format.size() && format[i] == '*')
+            {
+                width = static_cast<int32_t>(nextArg());
+                if (width < 0) { left = true; width = -width; }
+                ++i;
+            }
+            while (i < format.size() && std::isdigit(static_cast<unsigned char>(format[i])))
+                width = width * 10 + (format[i++] - '0');
+            int precision = -1;
+            if (i < format.size() && format[i] == '.')
+            {
+                ++i;
+                precision = 0;
+                if (i < format.size() && format[i] == '*')
+                {
+                    precision = static_cast<int32_t>(nextArg());
+                    ++i;
+                }
+                while (i < format.size() && std::isdigit(static_cast<unsigned char>(format[i])))
+                    precision = precision * 10 + (format[i++] - '0');
+            }
+            bool longLong = false;
+            while (i < format.size() && std::strchr("hlLqjzt", format[i]))
+            {
+                if (format[i] == 'l' && i + 1 < format.size() && format[i + 1] == 'l')
+                {
+                    longLong = true;
+                    ++i;
+                }
+                else if (format[i] == 'q' || format[i] == 'L')
+                    longLong = true;
+                ++i;
+            }
+            if (i >= format.size())
+                break;
+            const char conv = format[i];
+            std::string body, prefix;
+            switch (conv)
+            {
+            case 'd':
+            case 'i':
+            case 'u':
+            case 'x':
+            case 'X':
+            case 'o':
+            case 'p':
+            {
+                uint64_t value = nextArg();
+                if (longLong)
+                    value |= static_cast<uint64_t>(nextArg()) << 32u;
+                bool negative = false;
+                if (conv == 'd' || conv == 'i')
+                {
+                    const int64_t s = longLong ? static_cast<int64_t>(value) : static_cast<int64_t>(static_cast<int32_t>(value));
+                    negative = s < 0;
+                    value = negative ? static_cast<uint64_t>(-(s + 1)) + 1u : static_cast<uint64_t>(s);
+                }
+                const unsigned base = (conv == 'x' || conv == 'X' || conv == 'p') ? 16u : (conv == 'o' ? 8u : 10u);
+                const char *digits = conv == 'X' ? "0123456789ABCDEF" : "0123456789abcdef";
+                if (value == 0u && precision != 0)
+                    body = "0";
+                for (uint64_t v = value; v != 0u; v /= base)
+                    body.insert(body.begin(), digits[v % base]);
+                if (precision >= 0 && body.size() < static_cast<size_t>(precision))
+                    body.insert(0, static_cast<size_t>(precision) - body.size(), '0');
+                if (negative) prefix = "-";
+                else if (plus && (conv == 'd' || conv == 'i')) prefix = "+";
+                else if (space && (conv == 'd' || conv == 'i')) prefix = " ";
+                if ((alt && value != 0u && (conv == 'x' || conv == 'X')) || conv == 'p')
+                    prefix += conv == 'X' ? "0X" : "0x";
+                if (alt && conv == 'o' && body[0] != '0')
+                    body.insert(body.begin(), '0');
+                if (zero && !left && precision < 0 && width > 0 && prefix.size() + body.size() < static_cast<size_t>(width))
+                    body.insert(0, static_cast<size_t>(width) - prefix.size() - body.size(), '0');
+                break;
+            }
+            case 'c':
+                body.push_back(static_cast<char>(nextArg()));
+                break;
+            case 's':
+            {
+                const uint32_t address = nextArg();
+                body = address ? m_memory.readString(address, precision >= 0 ? static_cast<size_t>(precision) : 4096u) : "(null)";
+                if (precision >= 0 && body.size() > static_cast<size_t>(precision))
+                    body.resize(static_cast<size_t>(precision));
+                break;
+            }
+            case '%':
+                body = "%";
+                break;
+            default: // unknown conversion: keep it visible
+                body = std::string("%") + conv;
+                break;
+            }
+            const size_t length = prefix.size() + body.size();
+            const size_t pad = width > 0 && length < static_cast<size_t>(width) ? static_cast<size_t>(width) - length : 0u;
+            if (!left)
+                out.append(pad, ' ');
+            out += prefix;
+            out += body;
+            if (left)
+                out.append(pad, ' ');
+        }
+        return out;
     }
 
     bool IopSysclib::dispatchImport(uint16_t ordinal, IopCpuState &cpu)
@@ -124,15 +258,29 @@ namespace ps2x::iop::detail
         case 18: // prnt
             setV0(0);
             return true;
-        case 19: // sprintf: preserve useful literal formats even before full vararg formatting.
-        case 42: // vsprintf fallback: copy format literal.
+        case 19: // sprintf(buf, fmt, ...)
+        case 42: // vsprintf(buf, fmt, va_list)
         {
+            // [gta-recomp] Real formatting (upstream copied the format literally, so IRXs that build
+            // paths like "\AUDIO\SET%s_PS.SDT;1" looked up the template). o32 varargs: a2, a3, then
+            // the caller's stack from sp+16; a va_list is a pointer to consecutive 32-bit slots.
             const std::string format = m_memory.readString(a1, 4096u);
-            for (size_t i = 0; i <= format.size(); ++i)
+            uint32_t argIndex = 0;
+            const uint32_t sp = cpu.gpr[29];
+            const auto nextArg = [&]() -> uint32_t
             {
-                m_memory.write8(a0 + static_cast<uint32_t>(i), i < format.size() ? static_cast<uint8_t>(format[i]) : 0u);
-            }
-            setV0(static_cast<uint32_t>(format.size()));
+                const uint32_t i = argIndex++;
+                if (ordinal == 42u)
+                    return m_memory.read32(a2 + i * 4u);
+                if (i == 0u)
+                    return cpu.gpr[6];
+                if (i == 1u)
+                    return cpu.gpr[7];
+                return m_memory.read32(sp + 16u + (i - 2u) * 4u);
+            };
+            const std::string out = formatGuest(format, nextArg);
+            (void)m_memory.writeRam(a0, out.c_str(), out.size() + 1u);
+            setV0(static_cast<uint32_t>(out.size()));
             return true;
         }
         case 20:
