@@ -10,6 +10,7 @@
 #include "ps2_runtime.h"
 #include "runtime/ps2_disc_image.h"
 
+#include "debug/profiler.h"
 #include "debug/watchdog.h"
 #include "disc/iso_image.h"
 #include "util/sha1.h"
@@ -218,6 +219,7 @@ int main(int argc, char *argv[])
         PS2Runtime::setIoPaths(paths);
 
         vcs::startWatchdog(runtime);
+        vcs::startProfiler(runtime);
         runtime.run();
         std::cout.flush();
         std::cerr.flush();

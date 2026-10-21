@@ -76,7 +76,14 @@ All VU microcode is in `.vutext` as four VIF `MPG` packets (DVP overlays):
 | `0x48176C` | `0x200` | 20 | `..0x200.3422538243.453.2` |
 
 No other MPG packets in `.text/.data/.rodata/.vudata` (scan with VIF cmd 0x4A).
-So the whole VU1 renderer is essentially **one ~245-instruction program**
-(the other three are tiny; likely VU0 helpers or alternate entry stubs - TBD).
-This makes a native/HLE replacement of the VU1 path very tractable.
 `.vudata` (28 KB at `0x492000`) holds no microcode - probably VIF/GIF packet templates.
+
+**Correction after disassembly** (`build/analysis/vu1_prog0.txt`, not committed - made with hctp-recomp's
+`vu1dis.py`): program 0 does *not* look like a renderer. It has E-bit exits at
+`0x000` and `0x010` (entry stubs that set `vi1` and stop), converts fixed-point
+inputs with `ITOF0` and `MULi 1/128`, builds edge vectors and runs
+`CLIP`/`FMAND`/`FCAND`/`DIV` tests - i.e. a VU0 macro/micro helper, most likely
+collision (line/sphere vs triangle). The tiny programs 1-3 are helpers too.
+**So the VU1 rendering microcode is not in the ELF as static MPG packets.**
+Candidates: `PS2/GAME.DTZ` (2 MB, compressed game data), or code sent at run
+time. To confirm: log VIF1 MPG uploads at run time (Phase 3).

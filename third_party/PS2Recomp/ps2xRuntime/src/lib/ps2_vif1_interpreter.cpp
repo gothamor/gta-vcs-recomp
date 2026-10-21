@@ -26,6 +26,40 @@ enum VIFCmd : uint8_t
     VIF_DIRECTHL = 0x51,
 };
 
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <unordered_set>
+
+// [gta-recomp] PS2X_LOG_MPG=1 logs every distinct VU1 microcode upload once;
+// PS2X_DUMP_MPG_DIR=<dir> also writes each one to <dir>/mpg_<vuaddr>_<hash>.bin.
+static void ps2xLogMpgUpload(uint32_t destAddr, uint32_t pairs, const uint8_t *code, uint32_t bytes)
+{
+    static const bool enabled = std::getenv("PS2X_LOG_MPG") != nullptr || std::getenv("PS2X_DUMP_MPG_DIR") != nullptr;
+    if (!enabled)
+        return;
+    uint64_t hash = 1469598103934665603ull;
+    for (uint32_t i = 0; i < bytes; ++i)
+        hash = (hash ^ code[i]) * 1099511628211ull;
+    static std::mutex mutex;
+    static std::unordered_set<uint64_t> seen;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!seen.insert(hash ^ destAddr).second)
+        return;
+    std::fprintf(stderr, "[vif1:mpg] new microcode vu=0x%04x pairs=%u hash=%016llx\n", destAddr, pairs,
+                 static_cast<unsigned long long>(hash));
+    if (const char *dir = std::getenv("PS2X_DUMP_MPG_DIR"))
+    {
+        char name[512];
+        std::snprintf(name, sizeof(name), "%s/mpg_%04x_%016llx.bin", dir, destAddr, static_cast<unsigned long long>(hash));
+        if (FILE *f = std::fopen(name, "wb"))
+        {
+            std::fwrite(code, 1, bytes, f);
+            std::fclose(f);
+        }
+    }
+}
+
 namespace
 {
     constexpr uint8_t kGifFmtImage = 2u;
@@ -477,6 +511,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 if (pos + copyBytes <= sizeBytes)
                 {
                     std::memcpy(m_vu1Code + destAddr, data + pos, copyBytes);
+                    ps2xLogMpgUpload(destAddr, instructionCount, data + pos, copyBytes);
                     markVU1CodeModified();
                 }
             }

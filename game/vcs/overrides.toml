@@ -26,4 +26,10 @@ stubs = [
   "sceDopen@0x0046C7B8",
   "sceDread@0x0046C9E8",
   "sceDclose@0x0046C880",
+  # libcdvd calls that RPC the IOP ROM's cdvdfsv server, which doesn't exist here.
+  # (The rest of libcdvd is stubbed from the analyzer's SDK identification.)
+  "sceCdSearchFile@0x0044E480",
+  "sceCdSearchFile@0x0044E180",  # sceCdLayerSearchFile(fp, name, layer): same args, layer ignored
+  "sceCdGetDiskType@0x0044EFA8", # sceCdGetDiskType2
+  "sceCdDiskReady@0x0044EB48",   # sceCdDiskReady_old
 ]

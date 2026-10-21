@@ -13,6 +13,7 @@ SCUS_*
 # --- Generated from the user's own ELF: contains translated game code ---
 generated/
 *.gzf
+build/analysis/
 ghidra/project/
 ghidra/export/
 
