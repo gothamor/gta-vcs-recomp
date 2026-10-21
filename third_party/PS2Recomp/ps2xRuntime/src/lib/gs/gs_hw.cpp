@@ -10,6 +10,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -244,6 +245,7 @@ namespace
         GLFN(void, glBlendFuncSeparate, (GLenum, GLenum, GLenum, GLenum))
         GLFN(void, glBlendEquationSeparate, (GLenum, GLenum))
         GLFN(void, glBindFragDataLocationIndexed, (GLuint, GLuint, GLuint, const GLchar *))
+        GLFN(void, glGetTexImage, (GLenum, GLint, GLenum, GLenum, void *))
 
         bool load()
         {
@@ -269,7 +271,7 @@ namespace
             GLLOAD(glCompileShader) GLLOAD(glGetShaderiv) GLLOAD(glGetShaderInfoLog) GLLOAD(glCreateProgram) GLLOAD(glAttachShader)
             GLLOAD(glLinkProgram) GLLOAD(glGetProgramiv) GLLOAD(glGetProgramInfoLog) GLLOAD(glUseProgram) GLLOAD(glGetUniformLocation)
             GLLOAD(glUniform1i) GLLOAD(glUniform1f) GLLOAD(glUniform2f) GLLOAD(glUniform3f) GLLOAD(glUniform2i) GLLOAD(glUniform4i)
-            GLLOAD(glBlendFuncSeparate) GLLOAD(glBlendEquationSeparate) GLLOAD(glBindFragDataLocationIndexed)
+            GLLOAD(glBlendFuncSeparate) GLLOAD(glBlendEquationSeparate) GLLOAD(glBindFragDataLocationIndexed) GLLOAD(glGetTexImage)
 #undef GLLOAD
             return true;
 #else
@@ -509,12 +511,41 @@ void main()
         {
             m_transfer = command;
             m_cpu.BeginTransfer(command);
+            static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
+            if (debug && command.direction == 2u && m_loggedTransfers < 20u)
+            {
+                ++m_loggedTransfers;
+                std::fprintf(stderr, "[gs-hw] transfer dir=%u sbp=%u sbw=%u spsm=%u ss=%u,%u -> dbp=%u dbw=%u dpsm=%u ds=%u,%u size=%ux%u\n",
+                             command.direction, command.bitbltbuf.sbp, command.bitbltbuf.sbw, command.bitbltbuf.spsm,
+                             command.trxpos.ssax, command.trxpos.ssay, command.bitbltbuf.dbp, command.bitbltbuf.dbw,
+                             command.bitbltbuf.dpsm, command.trxpos.dsax, command.trxpos.dsay, command.trxreg.rrw, command.trxreg.rrh);
+            }
             if (command.direction == 2u) // local -> local: destination pages change
                 touchTransferDest();
         }
 
         void UploadImage(const uint8_t *data, uint32_t sizeBytes) override
         {
+            static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
+            if (debug && sizeBytes >= 65536u)
+            {
+                uint64_t h = 1469598103934665603ull;
+                for (uint32_t i = 0; i < sizeBytes; ++i)
+                    h = (h ^ data[i]) * 1099511628211ull;
+                std::fprintf(stderr, "[gs-hw] upload %u bytes dpsm=%u fnv=%016llx first=%02x%02x%02x%02x%02x%02x%02x%02x\n", sizeBytes,
+                             m_transfer.bitbltbuf.dpsm, static_cast<unsigned long long>(h), data[0], data[1], data[2], data[3], data[4],
+                             data[5], data[6], data[7]);
+                static bool dumped = false;
+                if (!dumped && sizeBytes == 262144u)
+                {
+                    dumped = true;
+                    if (FILE *f = std::fopen("hw_upload.bin", "wb"))
+                    {
+                        std::fwrite(data, 1, sizeBytes, f);
+                        std::fclose(f);
+                    }
+                }
+            }
             m_cpu.UploadImage(data, sizeBytes);
             touchTransferDest();
         }
@@ -561,6 +592,17 @@ void main()
         {
             Frame &f = *m_frame;
             std::memcpy(f.privRegs, privRegs, sizeof(f.privRegs));
+            static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
+            if (debug && m_frameIndex >= 100u && m_frameIndex < 130u)
+                std::fprintf(stderr, "[gs-hw] vblank %llu: draws=%zu dispfb1=%llx dispfb2=%llx last draw fbp=%u\n",
+                             static_cast<unsigned long long>(m_frameIndex), f.draws.size(), static_cast<unsigned long long>(privRegs[7]),
+                             static_cast<unsigned long long>(privRegs[9]), f.draws.empty() ? 9999u : f.draws.back().s.fbp);
+            if (debug && m_frameIndex >= 100u && m_frameIndex < 104u)
+                for (const DrawCmd &dc : f.draws)
+                    std::fprintf(stderr, "[gs-hw]   draw fbp=%u fbw=%u psm=%u zbp=%u zte=%u n=%u mode=%u tme=%u rt=%u(%u @%u,%u) tex=%llx %ux%u tfx=%u abe=%u fbmsk=%x sc=%u,%u-%u,%u\n",
+                                 dc.s.fbp, dc.s.fbw, dc.s.fpsm, dc.s.zbp, dc.s.zte, dc.count, dc.s.mode, dc.s.tme, dc.s.texIsRt,
+                                 dc.s.rtFbp, dc.s.rtOx, dc.s.rtOy, static_cast<unsigned long long>(dc.s.texKey), dc.s.tw, dc.s.th,
+                                 dc.s.tfx, dc.s.abe, dc.s.fbmsk, dc.s.scx0, dc.s.scy0, dc.s.scx1, dc.s.scy1);
             // Which buffer is displayed: circuit 1 if enabled, else 2.
             const uint64_t pmode = privRegs[0];
             const bool use1 = (pmode & 1u) != 0u || (pmode & 2u) == 0u;
@@ -629,6 +671,15 @@ void main()
                 for (auto &frame : frames)
                     execute(*frame);
                 composeDisplay(*frames.back());
+                static const long dumpAt = std::getenv("PS2X_HW_DUMP") ? std::atol(std::getenv("PS2X_HW_DUMP")) : -1;
+                m_executedFrames += frames.size();
+                if (dumpAt >= 0 && !m_dumped && m_executedFrames >= static_cast<uint64_t>(dumpAt))
+                {
+                    m_dumped = true;
+                    for (const auto &[fbp, rt] : m_glRts)
+                        dumpTexture(rt.color, rt.w * m_scale, rt.h * m_scale, "rt_" + std::to_string(fbp));
+                    dumpTexture(m_displayTex, m_displayTexW, m_displayTexH, "display");
+                }
                 static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
                 if (debug)
                 {
@@ -669,6 +720,22 @@ void main()
         }
 
         void releaseGl() override {}
+
+        void dumpTexture(GLuint tex, uint32_t w, uint32_t h, const std::string &name)
+        {
+            std::vector<uint8_t> px(size_t(w) * h * 4u);
+            m_gl.glBindTexture(GL_TEXTURE_2D, tex);
+            m_gl.glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            const std::string path = "hw_" + name + ".ppm";
+            if (FILE *f = std::fopen(path.c_str(), "wb"))
+            {
+                std::fprintf(f, "P6 %u %u 255 ", w, h);
+                for (size_t i = 0; i < size_t(w) * h; ++i)
+                    std::fwrite(&px[i * 4u], 1, 3, f);
+                std::fclose(f);
+                std::fprintf(stderr, "[gs-hw] dumped %s (%ux%u)\n", path.c_str(), w, h);
+            }
+        }
 
     private:
         // ---- recording helpers (game thread) -----------------------------------------------------------------
@@ -740,18 +807,29 @@ void main()
         {
             const GSTex0Reg &t = d.context.tex0;
             const uint32_t texStart = t.tbp0 * 256u;
-            for (const auto &[fbp, rt] : m_rts)
+            if (t.psm == GS_PSM_CT32 || t.psm == GS_PSM_CT24 || t.psm == GS_PSM_CT16 || t.psm == GS_PSM_CT16S)
             {
-                const uint32_t rtStart = fbp * 8192u;
-                const uint32_t rtEnd = rtStart + rt.pageRows * rt.fbw * 8192u;
-                if (texStart >= rtStart && texStart < rtEnd &&
-                    (t.psm == GS_PSM_CT32 || t.psm == GS_PSM_CT24 || t.psm == GS_PSM_CT16 || t.psm == GS_PSM_CT16S))
+                // Targets can overlap in VRAM (a 640x448 buffer's tail is the next buffer's head): use the target
+                // whose base is the closest at or below the texture.
+                const RtInfo *best = nullptr;
+                uint32_t bestFbp = 0;
+                for (const auto &[fbp, rt] : m_rts)
                 {
-                    const uint32_t page = (texStart - rtStart) / 8192u;
+                    const uint32_t rtStart = fbp * 8192u;
+                    const uint32_t rtEnd = rtStart + rt.pageRows * rt.fbw * 8192u;
+                    if (texStart >= rtStart && texStart < rtEnd && (!best || fbp > bestFbp))
+                    {
+                        best = &rt;
+                        bestFbp = fbp;
+                    }
+                }
+                if (best)
+                {
+                    const uint32_t page = (texStart - bestFbp * 8192u) / 8192u;
                     s.texIsRt = 1u;
-                    s.rtFbp = fbp;
-                    s.rtOx = static_cast<uint16_t>((page % rt.fbw) * 64u);
-                    s.rtOy = static_cast<uint16_t>((page / rt.fbw) * 32u);
+                    s.rtFbp = bestFbp;
+                    s.rtOx = static_cast<uint16_t>((page % best->fbw) * 64u);
+                    s.rtOy = static_cast<uint16_t>((page / best->fbw) * 32u);
                     return true;
                 }
             }
@@ -773,6 +851,13 @@ void main()
             {
                 it->second = m_frameIndex;
                 return true;
+            }
+            static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
+            if (debug && m_loggedTextures < 60u)
+            {
+                ++m_loggedTextures;
+                std::fprintf(stderr, "[gs-hw] texture tbp=%u tbw=%u psm=%u %ux%u cbp=%u cpsm=%u csm=%u csa=%u tfx=%u\n", t.tbp0, t.tbw, t.psm,
+                             d.textureWidth, d.textureHeight, t.cbp, t.cpsm, t.csm, t.csa, t.tfx);
             }
             Frame &f = *m_frame;
             TexCreate tc;
@@ -1389,6 +1474,9 @@ void main()
         std::unordered_set<uint32_t> m_reportedBlend;
         GLuint m_displayTex = 0;
         uint32_t m_displayTexW = 0, m_displayTexH = 0, m_displayW = 640, m_displayH = 448;
+        uint64_t m_executedFrames = 0;
+        uint32_t m_loggedTransfers = 0, m_loggedTextures = 0;
+        bool m_dumped = false;
     };
 }
 

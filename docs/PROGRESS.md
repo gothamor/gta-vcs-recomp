@@ -21,8 +21,14 @@
 - [x] IOP time batching (23 -> 60 VBlanks/s, GS discarded) = full speed without GS
 - [x] paraLLEl-GS integrated but opt-in: hangs Pascal GPUs into TDR resets
 - [x] GS usage survey (`VCS_GS_STATS`): see docs/ENGINE.md
-- [ ] Hardware OpenGL GS backend (`PS2X_GS=hw`, `src/lib/gs/gs_hw.cpp`): runs at
-      full speed, first frames recorded, picture still black - debugging
+- [~] Hardware OpenGL GS backend (`PS2X_GS=hw`, `src/lib/gs/gs_hw.cpp`): runs at
+      full speed and shows the loading screen. Fixed: overlapping render targets
+      (back buffer FBP 140 = FBP 0 + 448 lines), stale page cache for CLUT loads.
+- [ ] Loading-screen PSMT8 image is pixel-scrambled within small blocks (same in the
+      file decode test). The bytes the game uploads (512x512 T8) are not the XTX
+      file bytes: the game converts the PSP-format XTX on the EE first. Suspect a
+      mis-translated 128-bit / MMI instruction in that conversion. Next: find the
+      conversion routine (writer of the upload buffer, `VCS_WATCH`), unit-test it.
 - [ ] Bad function-pointer jump ~25 s into the game (also with GS discarded):
       targets 0x3F000000 / 0x01C1FF00 - memory corruption or a mis-translation
 

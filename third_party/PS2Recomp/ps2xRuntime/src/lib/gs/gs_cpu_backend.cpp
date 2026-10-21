@@ -593,6 +593,8 @@ void GSCpuBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
 
 void GSCpuBackend::LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
 {
+    // [gta-recomp] CLUT loads read VRAM directly on the GS: never through the (stale) texture page cache.
+    m_texturePageCache.Invalidate();
     const bool fourBit = isFourBitIndexedPsm(tex0.psm);
     const bool sixteenBit = tex0.cpsm == GS_PSM_CT16 || tex0.cpsm == GS_PSM_CT16S;
     const bool thirtyTwoBit = tex0.cpsm == GS_PSM_CT32 || tex0.cpsm == GS_PSM_CT24;
@@ -1166,6 +1168,7 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
 void GSCpuBackend::DecodeTexture(const GSDrawState &state, std::vector<uint32_t> &out)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    m_texturePageCache.Invalidate();
     const auto &tex = state.context.tex0;
     const int w = state.textureWidth, h = state.textureHeight;
     out.resize(static_cast<size_t>(w) * h);
@@ -1534,6 +1537,7 @@ void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
 void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    m_texturePageCache.Invalidate(); // [gta-recomp] uploaded pages must not be served from the old copy
     if (!data || sizeBytes == 0u || !m_vram || m_transferState.direction != 0u)
         return;
     if (m_transfer.trxreg.rrw == 0u || m_transfer.trxreg.rrh == 0u || m_transferState.totalPixels == 0u)

@@ -10,6 +10,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
+
+#include "runtime/gs/gs_cpu_backend.h"
 
 namespace vcs
 {
@@ -58,6 +61,41 @@ namespace vcs
                          (unsigned long long)div, (unsigned long long)(c.a / c.b),
                          (unsigned long long)mod, (unsigned long long)(c.a % c.b),
                          (unsigned long long)mul, (unsigned long long)(c.a * c.b));
+        }
+        // GS host->local PSMT8 upload, then T8 reads must give back the linear input
+        // (VCS_SELFTEST_XTX=<loading screen .XTX>: 512x512 indices at 0x4B0).
+        if (const char *xtx = std::getenv("VCS_SELFTEST_XTX"))
+        {
+            std::vector<uint8_t> file;
+            if (FILE *f = std::fopen(xtx, "rb"))
+            {
+                file.resize(263372);
+                file.resize(std::fread(file.data(), 1, file.size(), f));
+                std::fclose(f);
+            }
+            if (file.size() >= 0x4B0 + 512 * 512)
+            {
+                std::vector<uint8_t> vram(4u << 20u);
+                GSCpuBackend gs;
+                gs.Initialize(vram.data(), static_cast<uint32_t>(vram.size()));
+                GSTransferCommand t{};
+                t.bitbltbuf.dbp = 8960;
+                t.bitbltbuf.dbw = 8;
+                t.bitbltbuf.dpsm = GS_PSM_T8;
+                t.trxreg.rrw = 512;
+                t.trxreg.rrh = 512;
+                t.direction = 0;
+                gs.BeginTransfer(t);
+                gs.UploadImage(file.data() + 0x4B0, 512 * 512);
+                int bad = 0;
+                for (uint32_t y = 0; y < 512; ++y)
+                    for (uint32_t x = 0; x < 512; ++x)
+                        if (gs.ReadVram(GS_PSM_T8, 8960, 8, x, y) != file[0x4B0 + y * 512 + x] && bad++ < 4)
+                            std::fprintf(stderr, "[selftest] T8 mismatch at %u,%u: read %u want %u\n", x, y,
+                                         gs.ReadVram(GS_PSM_T8, 8960, 8, x, y), file[0x4B0 + y * 512 + x]);
+                std::fprintf(stderr, "[selftest] T8 upload/read round trip: %d mismatches\n", bad);
+                failures += bad ? 1 : 0;
+            }
         }
         std::fprintf(stderr, "[selftest] %d failure(s)\n", failures);
         return failures == 0;

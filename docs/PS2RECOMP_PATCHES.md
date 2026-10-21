@@ -25,3 +25,4 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRuntime/src/lib/vu/ps2_vu_code_log.cpp` (new) | Minimal code-write log (always "unknown" → full re-decode) | The hctp VU1 core expects it |
 | `ps2xRuntime/src/lib/ps2_runtime.cpp` | `advanceIopEeCycles` batches 4096 EE cycles before running the IOP | IOP scheduler scans ran at every guest call (34% of the frame) |
 | `ps2xRuntime/src/lib/gs/gs_gpu.cpp` | `PS2X_GS=null` discards all GS work | Profiling everything but the GS |
+| `ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp` | Invalidate the one-page texture cache before CLUT loads, whole-texture decodes and on uploads | CLUT loads read a stale cached page (wrong palettes: posterized colours) |
