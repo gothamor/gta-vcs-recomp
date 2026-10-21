@@ -532,6 +532,7 @@ private:
     R5900Context m_cpuContext;
     std::unique_ptr<EeScheduler> m_eeScheduler;
     std::unique_ptr<GSGpuRenderer> m_gpu; // [gta-recomp]
+    uint64_t m_iopPendingEeCycles = 0u;   // [gta-recomp] see advanceIopEeCycles
     mutable std::mutex m_eeKernelStateMutex;
     std::unordered_map<int, std::vector<EeExitHandlerRegistration>> m_eeExitHandlers;
     std::unordered_map<uint32_t, uint32_t> m_eeSyscallOverrides;

@@ -29,6 +29,8 @@ GSRendererMode gsRendererModeFromEnvironment()
         return GSRendererMode::Cpu;
     if (std::strcmp(value, "both") == 0)
         return GSRendererMode::Both;
+    if (std::strcmp(value, "null") == 0)
+        return GSRendererMode::Null;
     std::cerr << "[gpu-gs] PS2X_GS=" << value << " not understood (cpu, gpu or both); drawing on the CPU" << std::endl;
     return GSRendererMode::Cpu;
 }
@@ -44,6 +46,42 @@ const char *gsRendererModeName(GSRendererMode mode)
     default:
         return "cpu";
     }
+}
+
+namespace
+{
+    // [gta-recomp] Accepts everything, draws nothing.
+    class NullGpuRenderer final : public GSGpuRenderer
+    {
+    public:
+        const char *deviceName() const override { return "null (GS work discarded)"; }
+        void gif(uint8_t, const uint8_t *, uint32_t) override {}
+        void reg(uint8_t, uint64_t) override {}
+        void reset() override {}
+        void present(const uint64_t (&)[kPrivRegCount], uint64_t, bool) override {}
+        void kick() override {}
+        void snapshotVram(std::vector<uint8_t> &out) override { out.assign(4u << 20u, 0u); }
+        uint32_t readTransfer(uint8_t *dst, uint32_t maxBytes) override
+        {
+            std::memset(dst, 0, maxBytes);
+            return maxBytes;
+        }
+        bool waitPresentBacklog(uint32_t, const std::atomic<bool> &) override { return true; }
+        void wake() override {}
+        const GSGpuFrame *takeFrame(uint64_t &) override { return nullptr; }
+        void setOutputSize(uint32_t, uint32_t) override {}
+        void setSuperSampling(uint32_t) override {}
+        void setHighResolution(bool) override {}
+        void setFsr(bool) override {}
+        void setSharpness(float) override {}
+        GSGpuStatus status() const override { return {}; }
+        void shutdown() override {}
+    };
+}
+
+std::unique_ptr<GSGpuRenderer> makeNullGpuRenderer()
+{
+    return std::make_unique<NullGpuRenderer>();
 }
 
 GSPresentFilter gsPresentFilterFromEnvironment()

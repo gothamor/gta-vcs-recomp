@@ -33,6 +33,7 @@ enum class GSRendererMode : uint8_t
     Cpu,
     Gpu,
     Both,
+    Null, // [gta-recomp] PS2X_GS=null: discard all GS work (profiling the rest of the frame)
 };
 
 // How the picture is scaled to the window. Fsr = on the graphics card (its picture only; else Bilinear).
@@ -180,3 +181,4 @@ public:
 
 // nullptr when this build has no paraLLEl-GS or the device could not be set up; whyNot says which.
 std::unique_ptr<GSGpuRenderer> makeGpuRenderer(const GSGpuOptions &options, std::string &whyNot);
+std::unique_ptr<GSGpuRenderer> makeNullGpuRenderer(); // [gta-recomp]

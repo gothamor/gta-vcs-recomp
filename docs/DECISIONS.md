@@ -92,3 +92,10 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   stays default; `PS2X_GS=gpu` opts in to paraLLEl-GS for newer GPUs.
 - Next: a conventional hardware-rasterized GS backend (GSdx-HW style) behind the
   existing `GSRasterBackend` interface - broad GPU support, upscaling-friendly.
+
+## 2026-10-22 - Performance status (i7-7700K)
+- With GS work discarded (`PS2X_GS=null`) the game now runs at full speed
+  (60 VBlanks/s, 15% idle) after two changes: hctp's VU1 throughput mode
+  (13 -> 23 VBlanks/s) and batching IOP time (23 -> 60).
+- With the CPU GS renderer it is 2.9 VBlanks/s: the rasterizer is ~95% of the
+  frame. A GPU GS backend is the critical path.

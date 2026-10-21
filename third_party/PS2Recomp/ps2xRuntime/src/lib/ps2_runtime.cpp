@@ -409,6 +409,25 @@ static bool UploadGpuFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, u
 
 void PS2Runtime::presentGpuVBlank(uint64_t vsyncTick)
 {
+    // [gta-recomp] VCS_FPS=1: count game frames (display buffer flips) per second of host time.
+    static const bool s_fps = std::getenv("VCS_FPS") != nullptr;
+    if (s_fps)
+    {
+        static uint64_t s_lastFb = 0, s_flips = 0, s_vblanks = 0;
+        static auto s_since = std::chrono::steady_clock::now();
+        const uint64_t fb = m_memory.gs().dispfb1 ^ (m_memory.gs().dispfb2 << 1);
+        s_flips += fb != s_lastFb;
+        s_lastFb = fb;
+        ++s_vblanks;
+        const auto now = std::chrono::steady_clock::now();
+        const double secs = std::chrono::duration<double>(now - s_since).count();
+        if (secs >= 2.0)
+        {
+            std::fprintf(stderr, "[fps] %.1f game fps, %.1f vblanks/s\n", s_flips / secs, s_vblanks / secs);
+            s_flips = s_vblanks = 0;
+            s_since = now;
+        }
+    }
     if (!m_gpu)
         return;
     uint64_t regs[GSGpuRenderer::kPrivRegCount];
@@ -663,7 +682,16 @@ void PS2Runtime::notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransf
 
 void PS2Runtime::advanceIopEeCycles(uint64_t eeCycles) noexcept
 {
-    m_iopSubsystem->runEeCycles(eeCycles);
+    // [gta-recomp] Batch IOP time: the EE scheduler accounts cycles at every guest call, and running
+    // the IOP scheduler (thread scan, timers, DMA) that often was a third of the frame. ~14 us of
+    // emulated time per batch is far below anything the game can observe (RPCs are synchronous).
+    static constexpr uint64_t kIopBatchEeCycles = 4096u;
+    m_iopPendingEeCycles += eeCycles;
+    if (m_iopPendingEeCycles < kIopBatchEeCycles)
+        return;
+    const uint64_t cycles = m_iopPendingEeCycles;
+    m_iopPendingEeCycles = 0u;
+    m_iopSubsystem->runEeCycles(cycles);
 }
 
 void PS2Runtime::resetIop()
@@ -728,13 +756,14 @@ bool PS2Runtime::syncCoreSubsystems()
         if (mode != GSRendererMode::Cpu)
         {
             std::string whyNot;
-            m_gpu = makeGpuRenderer(GSGpuOptions::fromEnvironment(), whyNot);
+            m_gpu = mode == GSRendererMode::Null ? makeNullGpuRenderer()
+                                                 : makeGpuRenderer(GSGpuOptions::fromEnvironment(), whyNot);
             if (m_gpu)
                 std::cerr << "[gs] GPU renderer: " << m_gpu->deviceName() << " (" << gsRendererModeName(mode) << ")" << std::endl;
             else
                 std::cerr << "[gs] GPU renderer unavailable (" << whyNot << "), using the CPU renderer" << std::endl;
         }
-        m_gs.setGpuRenderer(m_gpu.get(), mode == GSRendererMode::Gpu);
+        m_gs.setGpuRenderer(m_gpu.get(), mode == GSRendererMode::Gpu || mode == GSRendererMode::Null);
     }
     m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
                                     { m_gs.processGIFPacket(data, size); });
