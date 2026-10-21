@@ -1,5 +1,6 @@
 #include "ps2_runtime.h"
 #include "runtime/gs/gs_gpu.h"
+#include "runtime/gs/gs_hw.h"
 #include "ps2_log.h"
 #include "ps2_stubs.h"
 #include "ps2_syscalls.h"
@@ -377,6 +378,26 @@ namespace
 // [gta-recomp] Shows the GPU renderer's newest picture. False when there is no GPU renderer.
 static bool UploadGpuFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
 {
+    if (GSHwBackendHandle *hw = rt->hwRenderer())
+    {
+        uint32_t id = 0, w = 0, h = 0;
+        if (hw->presenter().executeAndGetDisplay(id, w, h))
+        {
+            tex.id = id;
+            tex.width = static_cast<int>(w);
+            tex.height = static_cast<int>(h);
+            tex.mipmaps = 1;
+            tex.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+            outWidth = w;
+            outHeight = h;
+        }
+        else
+        {
+            outWidth = static_cast<uint32_t>(tex.width);
+            outHeight = static_cast<uint32_t>(tex.height);
+        }
+        return true;
+    }
     GSGpuRenderer *gpu = rt->gpuRenderer();
     if (!gpu)
         return false;
@@ -427,6 +448,12 @@ void PS2Runtime::presentGpuVBlank(uint64_t vsyncTick)
             s_flips = s_vblanks = 0;
             s_since = now;
         }
+    }
+    if (m_hw)
+    {
+        uint64_t hwRegs[15];
+        std::memcpy(hwRegs, &m_memory.gs(), sizeof(hwRegs));
+        m_hw->endFrame(hwRegs);
     }
     if (!m_gpu)
         return;
@@ -752,7 +779,15 @@ bool PS2Runtime::syncCoreSubsystems()
     // [gta-recomp] GPU GS renderer: PS2X_GS=gpu (default) | cpu | both
     if (!m_gpu)
     {
-        const GSRendererMode mode = gsRendererModeFromEnvironment();
+        const char *gsEnv = std::getenv("PS2X_GS");
+        if (gsEnv && std::strcmp(gsEnv, "hw") == 0 && !m_hw)
+        {
+            auto hw = makeHwRasterBackend(GSHwOptions::fromEnvironment());
+            m_hw = hw.get();
+            m_gs.setRasterBackend(std::move(hw));
+            std::cerr << "[gs] hardware (OpenGL) GS renderer" << std::endl;
+        }
+        const GSRendererMode mode = (gsEnv && std::strcmp(gsEnv, "hw") == 0) ? GSRendererMode::Cpu : gsRendererModeFromEnvironment();
         if (mode != GSRendererMode::Cpu)
         {
             std::string whyNot;

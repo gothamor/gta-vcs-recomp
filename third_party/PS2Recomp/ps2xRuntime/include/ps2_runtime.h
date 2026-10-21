@@ -293,12 +293,15 @@ inline void ps2TraceGuestRangeWrite(uint8_t *rdram,
 }
 
 class GSGpuRenderer; // [gta-recomp]
+class GSHwBackendHandle;
 
 class PS2Runtime
 {
 public:
     // [gta-recomp] GPU GS renderer (paraLLEl-GS), or null when the CPU renderer draws.
     GSGpuRenderer *gpuRenderer() const { return m_gpu.get(); }
+    // [gta-recomp] Hardware GS renderer (PS2X_GS=hw), owned by the GS front end; null otherwise.
+    GSHwBackendHandle *hwRenderer() const { return m_hw; }
     // EE scheduler, at each VBlankStart: hand the frame to the GPU renderer.
     void presentGpuVBlank(uint64_t vsyncTick);
     void shutdownGpuRenderer();
@@ -532,6 +535,7 @@ private:
     R5900Context m_cpuContext;
     std::unique_ptr<EeScheduler> m_eeScheduler;
     std::unique_ptr<GSGpuRenderer> m_gpu; // [gta-recomp]
+    GSHwBackendHandle *m_hw = nullptr; // [gta-recomp]
     uint64_t m_iopPendingEeCycles = 0u;   // [gta-recomp] see advanceIopEeCycles
     mutable std::mutex m_eeKernelStateMutex;
     std::unordered_map<int, std::vector<EeExitHandlerRegistration>> m_eeExitHandlers;

@@ -87,3 +87,22 @@ collision (line/sphere vs triangle). The tiny programs 1-3 are helpers too.
 **So the VU1 rendering microcode is not in the ELF as static MPG packets.**
 Candidates: `PS2/GAME.DTZ` (2 MB, compressed game data), or code sent at run
 time. To confirm: log VIF1 MPG uploads at run time (Phase 3).
+
+## GS usage (VCS_GS_STATS, title/intro scene)
+- Primitives: ~95% triangle strips; also triangles, fans, sprites, points.
+- Targets: CT32 colour (some CT16 for effects); Z24 depth (some Z32), test GEQUAL.
+- Blend: 84% `(Cs-Cd)*As+Cd`; also `(Cs-Cd)*FIX+Cd`, `Cs*FIX+Cd` (FIX up to 255),
+  `Cs*FIX`, `Cd-Cs*FIX`.
+- Alpha test GREATER (+KEEP) and GEQUAL with AFAIL=FB_ONLY; no DATE.
+- Textures: 83% PSMT4 + CT32 CLUT (world), CT32, T8, CT16; modulate/decal;
+  repeat/clamp/region clamp; bilinear. Fog on most world geometry.
+  CT32/CT16 textures inside render targets = post effects (framebuffer reuse).
+- COLCLAMP on, no dithering, no FBA, no PABE.
+- Display: PMODE 0x8027 = both circuits on the same buffer one line apart,
+  blended (anti-flicker); DISPFB FBP 0, FBW 10 (640), DBY 2 / 1; 640x445.
+
+## Data loaded at boot
+- `PS2/GAME.DTZ` = zlib -> 6.6 MB `GTAG` v1 memory image (header: size, then
+  table offsets), loaded at 0x016FE800 and relocated by FUN_00324A50; main
+  copies ~50 global pointers out of it. VU1 microcode (~14 KB) is uploaded from
+  data at run time, not from the ELF.

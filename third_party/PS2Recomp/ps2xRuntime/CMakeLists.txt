@@ -401,7 +401,7 @@ add_library(ps2_runtime STATIC
 # [gta-recomp] GS on the graphics card: paraLLEl-GS (Vulkan compute, LGPLv3+). Integration ported from
 # BigDaddyJRich/PS2Recomp (hctp branch, GPL-3.0). Without PS2X_PARALLEL_GS_DIR only the CPU renderer exists.
 set(PS2X_PARALLEL_GS_DIR "" CACHE PATH "paraLLEl-GS source tree (optional Vulkan GS renderer)")
-target_sources(ps2_runtime PRIVATE src/lib/gs/gs_gpu.cpp)
+target_sources(ps2_runtime PRIVATE src/lib/gs/gs_gpu.cpp src/lib/gs/gs_hw.cpp)
 if(PS2X_PARALLEL_GS_DIR AND EXISTS "${PS2X_PARALLEL_GS_DIR}/gs/gs_interface.hpp" AND WIN32)
     # paraLLEl-GS picks the static C runtime when none is set; everything else uses the DLL one
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")

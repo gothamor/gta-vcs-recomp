@@ -33,6 +33,11 @@ public:
     void SnapshotVram(std::vector<uint8_t> &out) const override;
     GSTransferSnapshot GetTransferSnapshot() const override;
 
+    // [gta-recomp] For the hardware renderer: the whole texture of `state` (TEX0/TEXA/current CLUT) as
+    // RGBA8 (PS2 values, 0x80 = 1.0), width x height = state.textureWidth x textureHeight.
+    void DecodeTexture(const GSDrawState &state, std::vector<uint32_t> &out);
+    uint64_t ClutHash(const GSTex0Reg &tex0) const;
+
 private:
     void ResetUnlocked();
     void LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &texclut);

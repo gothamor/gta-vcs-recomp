@@ -1,4 +1,5 @@
 #include "runtime/gs/gs_cpu_backend.h"
+#include "gs_stats.h"
 #include "runtime/gs/ps2_gs_common.h"
 #include "runtime/gs/ps2_gs_psmct16.h"
 #include "runtime/gs/ps2_gs_psmct32.h"
@@ -548,6 +549,8 @@ void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_vram || batch.vertexCount == 0u)
         return;
+    if (GSStats::instance().enabled()) // [gta-recomp]
+        GSStats::instance().count(batch);
     DrawPrimitive(batch);
 }
 
@@ -1157,6 +1160,57 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
            (static_cast<uint32_t>(g) << 8) |
            (static_cast<uint32_t>(b) << 16) |
            (static_cast<uint32_t>(a) << 24);
+}
+
+// [gta-recomp] Whole-texture decode for the hardware renderer (same texel path as SampleTexture).
+void GSCpuBackend::DecodeTexture(const GSDrawState &state, std::vector<uint32_t> &out)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto &tex = state.context.tex0;
+    const int w = state.textureWidth, h = state.textureHeight;
+    out.resize(static_cast<size_t>(w) * h);
+    for (int y = 0; y < h; ++y)
+    {
+        for (int x = 0; x < w; ++x)
+        {
+            u32 v = ReadTextureVramUnlocked(tex.psm, tex.tbp0, tex.tbw, x, y);
+            switch (tex.psm)
+            {
+            case GS_PSM_CT32:
+            case GS_PSM_Z32:
+            case GS_PSM_CT24:
+            case GS_PSM_Z24:
+                v = applyTexa(state.texa, tex.psm, v);
+                break;
+            case GS_PSM_CT16:
+            case GS_PSM_CT16S:
+            case GS_PSM_Z16:
+            case GS_PSM_Z16S:
+                v = applyTexa(state.texa, tex.psm, Rgba5551ToRgba8888(v));
+                break;
+            case GS_PSM_T8:
+            case GS_PSM_T8H:
+            case GS_PSM_T4:
+            case GS_PSM_T4HL:
+            case GS_PSM_T4HH:
+                v = LookupCLUT(state, static_cast<u8>(v), tex.cpsm, tex.csm, tex.csa, tex.psm);
+                break;
+            default:
+                v = 0xFFFF00FFu;
+                break;
+            }
+            out[static_cast<size_t>(y) * w + x] = v;
+        }
+    }
+}
+
+uint64_t GSCpuBackend::ClutHash(const GSTex0Reg &tex0) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    uint64_t h = 1469598103934665603ull;
+    for (uint16_t e : m_clut)
+        h = (h ^ e) * 1099511628211ull;
+    return h ^ (uint64_t(tex0.cpsm) << 56) ^ (uint64_t(tex0.csa) << 48) ^ (uint64_t(tex0.csm) << 40);
 }
 
 void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
