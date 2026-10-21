@@ -1,0 +1,29 @@
+# --- Game files: NEVER commit. Users bring their own disc/ISO. ---
+*.iso
+*.ISO
+*.bin
+*.cue
+*.chd
+SLUS_*
+SLES_*
+SCUS_*
+gamefiles/
+disc/
+
+# --- Generated from the user's own ELF: contains translated game code ---
+generated/
+*.gzf
+ghidra/project/
+ghidra/export/
+
+# --- Build outputs ---
+build/
+out/
+.vs/
+.vscode/
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.obj
+__pycache__/
