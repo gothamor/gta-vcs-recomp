@@ -11,6 +11,9 @@ endif()
 
 project(PS2RetroX)
 
+# [gta-recomp] subprojects use this instead of CMAKE_SOURCE_DIR so the tree can be add_subdirectory()d
+set(PS2X_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PS2X_BUILD_RECOMP "Build ps2xRecomp" ON)

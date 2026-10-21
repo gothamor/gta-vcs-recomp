@@ -9,6 +9,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace vcs
 {
@@ -53,6 +55,10 @@ namespace vcs
 
         const std::unordered_map<std::string, IsoEntry> &entries() const { return m_entries; }
 
+        // Children of a directory in on-disc order (leaf name, entry). Null if not a directory.
+        using Children = std::vector<std::pair<std::string, IsoEntry>>;
+        const Children *children(std::string_view dirPath) const;
+
         static std::string normalizePath(std::string_view path);
 
     private:
@@ -64,5 +70,6 @@ namespace vcs
         void *m_mapping = nullptr;
         std::string m_error;
         std::unordered_map<std::string, IsoEntry> m_entries; // key: normalizePath()
+        std::unordered_map<std::string, Children> m_children; // key: normalizePath() of the directory, "" = root
     };
 }

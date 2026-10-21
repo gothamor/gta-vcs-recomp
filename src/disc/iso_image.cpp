@@ -145,6 +145,7 @@ namespace vcs
             return false;
         }
         const uint8_t *dir = m_data + uint64_t(lba) * kSectorSize;
+        Children &kids = m_children[normalizePath(prefix)];
         uint32_t pos = 0;
         while (pos < size)
         {
@@ -163,12 +164,15 @@ namespace vcs
                 continue; // "." and ".."
             }
             std::string name(reinterpret_cast<const char *>(rec + 33), nameLen);
+            if (const size_t semi = name.find(';'); semi != std::string::npos)
+                name.resize(semi);
             IsoEntry entry;
             entry.lba = le32(rec + 2);
             entry.size = le32(rec + 10);
             entry.isDirectory = (rec[25] & 2) != 0;
             const std::string full = normalizePath(prefix.empty() ? name : prefix + "/" + name);
             m_entries[full] = entry;
+            kids.emplace_back(name, entry);
             if (entry.isDirectory && !indexDirectory(entry.lba, entry.size, full, depth + 1))
             {
                 return false;
@@ -203,6 +207,13 @@ namespace vcs
         m_file = nullptr;
         m_size = 0;
         m_entries.clear();
+        m_children.clear();
+    }
+
+    const IsoImage::Children *IsoImage::children(std::string_view dirPath) const
+    {
+        auto it = m_children.find(normalizePath(dirPath));
+        return it == m_children.end() ? nullptr : &it->second;
     }
 
     bool IsoImage::find(std::string_view path, IsoEntry &out) const

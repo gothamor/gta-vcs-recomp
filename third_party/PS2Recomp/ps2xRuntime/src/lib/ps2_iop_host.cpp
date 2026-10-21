@@ -287,8 +287,30 @@ std::string PS2IopHostAdapter::hostPath(ps2x::iop::HostPathKind kind) const
     }
 }
 
+namespace
+{
+    // [gta-recomp] cdrom0: paths resolve to "<prefix><lsn>:<size>" when a disc image is mapped;
+    // openHostFile() recognises the prefix. Never a valid host path.
+    constexpr std::string_view kDiscPathPrefix = "disc:";
+}
+
 std::string PS2IopHostAdapter::translateGuestPath(std::string_view path) const
 {
+    if (IPS2DiscImage *disc = ps2_disc::image())
+    {
+        std::string lower(path.substr(0, 7));
+        for (char &c : lower)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lower == "cdrom0:" || lower == "cdrom:\\" || lower.rfind("cdrom:", 0) == 0)
+        {
+            uint32_t lsn = 0u, size = 0u;
+            bool isDirectory = false;
+            const size_t colon = path.find(':');
+            if (!disc->findFile(path.substr(colon + 1u), lsn, size, isDirectory) || isDirectory)
+                return {};
+            return std::string(kDiscPathPrefix) + std::to_string(lsn) + ":" + std::to_string(size);
+        }
+    }
     const PS2Runtime::IoPaths &paths = PS2Runtime::getIoPaths();
     const PS2VfsMounts mounts{paths.hostRoot, paths.cdRoot, paths.mcRoot};
     std::filesystem::path hostPath;
@@ -302,6 +324,22 @@ uint64_t PS2IopHostAdapter::openHostFile(std::string_view path)
     if (path.empty())
     {
         return 0u;
+    }
+
+    if (path.rfind(kDiscPathPrefix, 0) == 0 && ps2_disc::image())
+    {
+        const std::string spec(path.substr(kDiscPathPrefix.size()));
+        const size_t sep = spec.find(':');
+        HostFile file;
+        file.onDisc = true;
+        file.discOffset = std::stoull(spec.substr(0, sep)) * 2048u;
+        file.size = std::stoull(spec.substr(sep + 1u));
+        std::lock_guard<std::mutex> lock(m_hostFileMutex);
+        uint64_t handle = m_nextHostFileHandle++;
+        if (handle == 0u)
+            handle = m_nextHostFileHandle++;
+        m_hostFiles.emplace(handle, file);
+        return handle;
     }
 
     const std::filesystem::path hostPath{std::string(path)};
@@ -338,7 +376,7 @@ bool PS2IopHostAdapter::hostFileSize(uint64_t handle, uint64_t &size) const
     size = 0u;
     std::lock_guard<std::mutex> lock(m_hostFileMutex);
     const auto it = m_hostFiles.find(handle);
-    if (it == m_hostFiles.end() || !it->second.stream)
+    if (it == m_hostFiles.end() || (!it->second.stream && !it->second.onDisc))
     {
         return false;
     }
@@ -360,6 +398,17 @@ bool PS2IopHostAdapter::readHostFile(uint64_t handle,
 
     std::lock_guard<std::mutex> lock(m_hostFileMutex);
     const auto it = m_hostFiles.find(handle);
+    if (it != m_hostFiles.end() && it->second.onDisc)
+    {
+        IPS2DiscImage *disc = ps2_disc::image();
+        if (!disc || offset > it->second.size)
+            return false;
+        const size_t count = static_cast<size_t>(std::min<uint64_t>(size, it->second.size - offset));
+        if (count && !disc->readBytes(it->second.discOffset + offset, count, destination))
+            return false;
+        bytesRead = count;
+        return true;
+    }
     if (it == m_hostFiles.end() || !it->second.stream)
     {
         return false;

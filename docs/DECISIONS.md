@@ -29,3 +29,30 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   - Disc I/O: memory-map the ISO, no per-read file opens.
   - Avoid per-instruction runtime dispatch in hot paths (e.g. indirect jumps
     through lookup tables) where we can resolve statically.
+
+## 2026-10-21 - Function map: Ghidra functions only, no label records
+- Ghidra's export script also emits every branch-target label (57,897 of them)
+  as a separate "function". With those, ps2_recomp produced 67k files / 572 MB
+  with each code chunk duplicated. Without them: 9,584 files / 243 MB, 0 errors.
+- ps2_recomp still discovers internal entry points itself and maps each to its
+  owner function (the function starts with a `switch (ctx->pc)` that jumps to the
+  resume label), so jump tables and thread resumes stay inside one C++ function.
+- BlackLine's archived VCS map (`gta.csv`) is for the PAL build SLES-54622, so its
+  addresses don't apply to SLUS-21590. Its function count (9,549) matches ours,
+  which is a good sanity check that Ghidra's boundaries are complete.
+
+## 2026-10-21 - Compiler: clang-cl + MSVC 2019 STL
+- The machine's VS 2022/2026 installs have no C++ toolset; VS 2019 Build Tools
+  (MSVC 14.29) do. We build with LLVM clang-cl 23 against that STL and the
+  10.0.19041 Windows SDK. clang-cl also handles the huge generated files better
+  than cl.exe. `tools/devenv.cmd` sets this up.
+- Baseline CPU: AVX2 (upstream's `/arch:AVX2`). Revisit if we want pre-Haswell
+  CPUs; the generated code mostly needs SSE4.1.
+
+## 2026-10-21 - Graphics plan
+1. Bring-up: upstream CPU GS backend (slow, but no extra work).
+2. Accurate + fast enough: paraLLEl-GS (Vulkan compute, LGPLv3+) for exact
+   output with supersampling, as hctp-recomp does.
+3. End state for performance and real hi-res/widescreen: native renderer fed by
+   high-level hooks on the game's VU1 render paths (VCS has only ~4.8 KB of VU
+   microcode + 4 small DVP overlays, so the set of programs is small).

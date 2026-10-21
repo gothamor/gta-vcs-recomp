@@ -18,8 +18,41 @@ until marked **confirmed**.
   PPSSPP fix both patch these for 60 fps - use as references.
 - The built-in 16:9 option is anamorphic Vert- (crops top/bottom).
 
+## Code map (SLUS_215.90)
+- 9,550 functions (Ghidra 12.1.4 + EE extension). 8,521 below `0x443000`
+  are game code; 1,029 from `0x443000` up are Sony SDK / libc / libgcc.
+- SDK libraries identified by ps2_analyzer's SCE symbol DB (see `game/vcs/vcs.toml`):
+  - `0x4431F8..` libgcc (`__divdi3`, `__muldi3`, soft-double `dpadd`...)
+  - `0x447670..` libgraph (`sceGsResetGraph`, `sceGsSwapDBuff`, `sceGsSyncV`)
+  - `0x448688..` libdma (`sceDmaSend`...)
+  - `0x448D98..` libpad (`scePadRead`... - libpad, not libpad2)
+  - `0x44E5F8..` libcdvd incl. **streaming** `sceCdStInit/StStart/StRead/StStop`
+  - `0x44F668..` libmc (`sceMcOpen/Read/Write/GetDir`...)
+  - `0x452320..` libmpeg (`sceMpegCreate`, `sceMpegDemuxPssRing`) + libipu
+  - `0x45C1D8..` libsdr (`sceSdRemoteInit`, `sceSdRemote`) - audio goes over SIF RPC to SDRDRV.IRX
+  - `0x467xxx` kernel syscall wrappers, `0x469E00..` libsif / RPC, `0x46B980..` libfileio (`sceOpen/sceRead`)
+  - `0x46EA98..` Deci2 (dev-kit debug channel; dead on retail)
+- `fiprintf` at `0x1A9EF0` lives inside game code (newlib linked in early).
+- Largest game functions (likely big state machines / script interpreter):
+  `0x141FE8` (41.7 KB), `0x13A0A0` (25 KB), `0x337208` (25 KB), `0x33F010` (20 KB).
+- Analyzer found only 2 jump tables; the recompiler reports ~1,150 unresolved
+  `jr` sites (switch tables) and falls back to dispatch through the function table.
+  Performance TODO: emit real C++ switches for these from Ghidra's switch analysis.
+
 ## Boot
-- Entry `0x001DD6A0` (crt0).
+- Entry `0x001DD6A0` is standard crt0: zero GPRs/FPRs, clear .bss
+  (`0x4CD100..0x74DF54`), set up gp/sp, then the SDK init and `main`.
+- `sceSifInitRpc`, then IOP modules are loaded from the disc in this order:
+  `SIO2MAN, LIBSD, SDRDRV, CDVDSTM, CDSTREAM, PADMAN, SIO2MAN (again), MCMAN, MCSERV`.
+  All nine run fine as real IRX code on the emulated IOP (SDRDRV prints
+  "SDR driver version 4.0.1"). `SDRDRV`, `CDVDSTM`, `MCMAN`, `MCSERV` stay resident (start=2).
+- `_lf_bind` (`0x46CD10`) polls for the ROM LOADFILE server - not present in the
+  recomp, stubbed to succeed.
+- **Disc indexing**: `FUN_002209F0(path)` walks `cdrom0:` recursively with
+  `sceDopen/sceDread/sceDclose`, and for each file (`st_mode & 0xF000 == 0x2000`)
+  calls `sceCdSearchFile`-like `0x44E480` and appends (name ptr, lsn, size) to a
+  table at `0x5038A8` (count at `0x486E8C`, string pool cursor at `0x486E88`).
+  So the game resolves every file to an LSN up front and then reads by sector.
 
 ## Sections still to fill
 - Main loop and frame limiter
@@ -31,3 +64,19 @@ until marked **confirmed**.
 - Audio: SDRDRV/LIBSD, VB streams
 - Threads and their priorities
 - Save/memory card format
+
+## VU microcode (confirmed from the ELF)
+All VU microcode is in `.vutext` as four VIF `MPG` packets (DVP overlays):
+
+| EE addr of MPG | VU code addr | Size (instr pairs) | DVP overlay |
+|---|---|---|---|
+| `0x48055C` | `0x000` | 245 | `.DVP.overlay..0x0.3273603939.50.0` |
+| `0x4810EC` | `0x400` | 4 | `..0x400.3422538243.196.0` |
+| `0x48146C` | `0x000` | 24 | `..0x0.3422538243.316.1` |
+| `0x48176C` | `0x200` | 20 | `..0x200.3422538243.453.2` |
+
+No other MPG packets in `.text/.data/.rodata/.vudata` (scan with VIF cmd 0x4A).
+So the whole VU1 renderer is essentially **one ~245-instruction program**
+(the other three are tiny; likely VU0 helpers or alternate entry stubs - TBD).
+This makes a native/HLE replacement of the VU1 path very tractable.
+`.vudata` (28 KB at `0x492000`) holds no microcode - probably VIF/GIF packet templates.

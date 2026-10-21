@@ -10,6 +10,7 @@
 #include "ps2_runtime.h"
 #include "runtime/ps2_disc_image.h"
 
+#include "debug/watchdog.h"
 #include "disc/iso_image.h"
 #include "util/sha1.h"
 
@@ -55,6 +56,18 @@ namespace
         }
 
         uint32_t totalSectors() const override { return m_iso.totalSectors(); }
+
+        bool listDirectory(std::string_view ps2Path, std::vector<DirEntry> &out) const override
+        {
+            const vcs::IsoImage::Children *kids = m_iso.children(ps2Path);
+            if (!kids)
+                return false;
+            out.clear();
+            out.reserve(kids->size());
+            for (const auto &[name, entry] : *kids)
+                out.push_back(DirEntry{name, entry.lba, entry.size, entry.isDirectory});
+            return true;
+        }
 
     private:
         const vcs::IsoImage &m_iso;
@@ -204,6 +217,7 @@ int main(int argc, char *argv[])
         paths.mcRoot = data / "mc0";
         PS2Runtime::setIoPaths(paths);
 
+        vcs::startWatchdog(runtime);
         runtime.run();
         std::cout.flush();
         std::cerr.flush();

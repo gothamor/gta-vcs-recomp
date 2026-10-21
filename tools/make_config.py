@@ -18,6 +18,8 @@ needs (resume points, jump targets) by itself.
 
     python tools/make_config.py ghidra/export/ghidra_export.toml build/analyzer/analyzer.toml
 """
+import glob
+import os
 import re
 import sys
 import tomllib
@@ -53,6 +55,21 @@ def filter_csv(src):
     print("wrote %s: %d functions (%d label records dropped)" % (CSV_OUT, kept, dropped))
 
 
+RUNTIME_KERNEL = "third_party/PS2Recomp/ps2xRuntime/src/lib/Kernel"
+
+
+def todo_handlers():
+    """Runtime stub handlers whose body is only TODO_NAMED (they throw when called)."""
+    todo = set()
+    for f in glob.glob(os.path.join(RUNTIME_KERNEL, "**", "*.cpp"), recursive=True):
+        src = open(f, encoding="utf-8", errors="replace").read()
+        for m in re.finditer(r"void\s+(\w+)\s*\(uint8_t\s*\*\s*rdram[^)]*\)\s*\{(.*?)\n    \}", src, re.S):
+            body = m.group(2)
+            if "TODO_NAMED" in body and body.count(";") <= 2:
+                todo.add(m.group(1))
+    return todo
+
+
 def main(ghidra_toml, analyzer_toml):
     g = tomllib.load(open(ghidra_toml, "rb"))
     filter_csv(g["general"]["ghidra_output"])
@@ -74,6 +91,12 @@ def main(ghidra_toml, analyzer_toml):
             dropped.append("%s@0x%08X" % (name, addr))
             continue
         stubs[addr] = name
+    # Never bind a function to a handler that only throws: recompile the game's own copy.
+    todo = todo_handlers()
+    for addr, name in list(stubs.items()):
+        if name in todo or name.lstrip("_") in todo:
+            print("  not stubbing %s@0x%08X (runtime handler is TODO)" % (name, addr))
+            del stubs[addr]
     for sel in ov.get("drop_stubs", []):
         name, _, addr = sel.partition("@")
         stubs.pop(int(addr, 16), None)

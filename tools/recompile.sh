@@ -10,17 +10,19 @@ ISO="${1:?usage: tools/recompile.sh <your VCS (USA) iso>}"
 mkdir -p build/elf
 python -I tools/vcs_disc.py elf "$ISO" build/elf/SLUS_215.90
 
-RECOMP=build/tools/ps2xRecomp/ps2_recomp.exe
-[ -x "$RECOMP" ] || RECOMP=build/release/third_party/PS2Recomp/ps2xRecomp/ps2_recomp.exe
-if [ ! -x "$RECOMP" ]; then
-  echo "Building the recompiler first..."
-  cmd //c "tools\\devenv.cmd cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl"
-  cmd //c "tools\\devenv.cmd cmake --build build/release --target ps2_recomp"
-  RECOMP=build/release/third_party/PS2Recomp/ps2xRecomp/ps2_recomp.exe
+# Always (re)build the recompiler from the main tree: it compiles in the runtime's
+# stub list (ps2_call_list.h), so a stale binary silently ignores new stubs.
+if [ ! -f build/release/build.ninja ]; then
+  cmd //c "tools\devenv.cmd cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF" > build/configure.log
 fi
+cmd //c "tools\devenv.cmd cmake --build build/release --target ps2_recomp" > build/build_recomp.log 2>&1 || { tail -20 build/build_recomp.log; exit 1; }
+RECOMP=build/release/third_party/PS2Recomp/ps2xRecomp/ps2_recomp.exe
 
-rm -rf generated/ee
-mkdir -p generated/ee
-"$RECOMP" game/vcs/vcs.toml > build/recomp.log 2>&1 || { tail -20 build/recomp.log; exit 1; }
+python -I tools/make_config.py ghidra/export/ghidra_export.toml build/analyzer/analyzer.toml 2>/dev/null   || echo "(analysis exports not present: using committed game/vcs/vcs.toml)"
+
+# Generate into a scratch dir, then copy only changed files so rebuilds stay incremental.
+rm -rf build/generated_fresh
+sed 's#^output = .*#output = "build/generated_fresh"#' game/vcs/vcs.toml > build/vcs_fresh.toml
+"$RECOMP" build/vcs_fresh.toml > build/recomp.log 2>&1 || { tail -20 build/recomp.log; exit 1; }
 grep -E "Warnings:" build/recomp.log || true
-echo "Generated $(ls generated/ee | wc -l) files in generated/ee"
+python -I tools/sync_generated.py build/generated_fresh generated/ee

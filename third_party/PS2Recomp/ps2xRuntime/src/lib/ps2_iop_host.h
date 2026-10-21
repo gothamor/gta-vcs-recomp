@@ -103,6 +103,8 @@ private:
     {
         std::FILE *stream = nullptr;
         uint64_t size = 0u;
+        bool onDisc = false;      // [gta-recomp] served from the mapped disc image
+        uint64_t discOffset = 0u; // byte offset of the file in the image
     };
     mutable std::mutex m_hostFileMutex;
     std::unordered_map<uint64_t, HostFile> m_hostFiles;

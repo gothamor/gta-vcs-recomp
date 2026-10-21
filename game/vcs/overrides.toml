@@ -1,0 +1,29 @@
+# Hand-made adjustments merged by tools/make_config.py into vcs.toml.
+
+# SDK functions the analyzer identified, but whose runtime handler is only a
+# TODO that throws. Recompile the game's own copy instead: the tty/Deci2 ones end
+# in the Deci2Call syscall, which the runtime implements (and logs the text).
+drop_stubs = [
+  "sceDmaPause@0x004489F8",
+  "sceTtyHandler@0x00468628",
+  "sceTtyWrite@0x004687C0",
+  "sceTtyRead@0x00468938",
+  "sceTtyInit@0x00468A08",
+  "sceDeci2Open@0x0046EA98",
+  "sceDeci2ReqSend@0x0046EAE8",
+  "sceDeci2Poll@0x0046EB18",
+  "sceDeci2ExRecv@0x0046EB48",
+  "sceDeci2ExSend@0x0046EB80",
+]
+
+# _lf_bind spins until the IOP ROM's LOADFILE RPC server (sid 0x80000006)
+# answers. Module loading is handled by the runtime's _sceSifLoadModule stub,
+# so there is no such server: report success.
+stubs = [
+  "ret0@0x0046CD10",
+  # libfileio directory API -> runtime (served from the mapped disc).
+  # FUN_002209F0 walks cdrom0: recursively with these at boot.
+  "sceDopen@0x0046C7B8",
+  "sceDread@0x0046C9E8",
+  "sceDclose@0x0046C880",
+]

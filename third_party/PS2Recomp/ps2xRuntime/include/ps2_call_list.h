@@ -464,6 +464,9 @@
     X(sceMpegSetDefaultPtsGap)                \
     X(sceMpegSetImageBuff)                    \
     X(sceOpen)                                \
+    X(sceDopen)                               \
+    X(sceDread)                               \
+    X(sceDclose)                              \
     X(scePadEnd)                              \
     X(scePadEnterPressMode)                   \
     X(scePadExitPressMode)                    \

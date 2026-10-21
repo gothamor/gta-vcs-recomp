@@ -35,7 +35,9 @@ if(VCS_HAVE_GENERATED)
     set_target_properties(ps2EntryRunner PROPERTIES OUTPUT_NAME "vcs")
     target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_SOURCE_DIR}/src")
     # Our own sources aren't generated code; keep them out of the unity batches.
+    # (windows.h in them also clashes with raylib inside a unity TU.)
     set_source_files_properties(${VCS_SOURCES} "${CMAKE_SOURCE_DIR}/src/main.cpp"
+        TARGET_DIRECTORY ps2EntryRunner
         PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE SKIP_PRECOMPILE_HEADERS TRUE)
 else()
     message(STATUS "No generated code in ${VCS_GENERATED_DIR}: building tools only. Run tools/recompile.sh first.")
