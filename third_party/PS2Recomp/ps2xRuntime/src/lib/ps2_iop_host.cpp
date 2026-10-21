@@ -1,4 +1,5 @@
 #include "ps2_iop_host.h"
+#include "runtime/ps2_disc_image.h"
 
 #include "ps2_runtime.h"
 #include "ps2_stubs.h"
@@ -529,4 +530,19 @@ void PS2IopHostAdapter::log(ps2x::iop::LogLevel level, std::string_view message)
         prefix = "[ps2xIOP:error]";
     }
     std::cerr << prefix << ' ' << message << std::endl;
+}
+
+// [gta-recomp] mapped disc image hooks for cdvdman
+bool PS2IopHostAdapter::findDiscFile(std::string_view path, uint32_t &lsn, uint32_t &size, bool &isDirectory) const
+{
+    IPS2DiscImage *disc = ps2_disc::image();
+    return disc && disc->findFile(path, lsn, size, isDirectory);
+}
+
+bool PS2IopHostAdapter::readDiscSectors(uint32_t lsn, uint32_t sectors, void *destination) const
+{
+    IPS2DiscImage *disc = ps2_disc::image();
+    if (!disc || static_cast<uint64_t>(lsn) + sectors > disc->totalSectors())
+        return false;
+    return disc->readBytes(static_cast<uint64_t>(lsn) * 2048u, static_cast<size_t>(sectors) * 2048u, destination);
 }

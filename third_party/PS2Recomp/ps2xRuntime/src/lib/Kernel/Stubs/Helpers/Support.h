@@ -1,4 +1,5 @@
 #include <algorithm>
+#include "runtime/ps2_disc_image.h"
 #include <cctype>
 
 namespace
@@ -183,6 +184,12 @@ namespace
 
     bool tryGetCdImageTotalSectors(uint64_t &totalSectorsOut)
     {
+        // [gta-recomp] mapped disc image
+        if (IPS2DiscImage *disc = ps2_disc::image())
+        {
+            totalSectorsOut = disc->totalSectors();
+            return true;
+        }
         const std::filesystem::path imagePath = getCdImagePath();
         if (imagePath.empty())
         {
@@ -339,6 +346,26 @@ namespace
             return true;
         }
 
+        // [gta-recomp] mapped disc image: real LSNs, no host files.
+        if (IPS2DiscImage *disc = ps2_disc::image())
+        {
+            uint32_t lsn = 0, size = 0;
+            bool isDirectory = false;
+            if (!disc->findFile(ps2Path, lsn, size, isDirectory) || isDirectory)
+            {
+                g_lastCdError = -1;
+                return false;
+            }
+            CdFileEntry entry;
+            entry.sizeBytes = size;
+            entry.baseLbn = lsn;
+            entry.sectors = sectorsForBytes(size);
+            g_cdFilesByKey.emplace(key, entry);
+            entryOut = entry;
+            g_lastCdError = 0;
+            return true;
+        }
+
         const std::filesystem::path root = getCdRootPath();
         std::filesystem::path path = cdHostPath(ps2Path);
         std::error_code ec;
@@ -434,6 +461,18 @@ namespace
 
     bool readCdSectors(uint32_t lbn, uint32_t sectors, uint8_t *dst, size_t byteCount)
     {
+        // [gta-recomp] mapped disc image: straight memcpy from the mapping.
+        if (IPS2DiscImage *disc = ps2_disc::image())
+        {
+            if (static_cast<uint64_t>(lbn) + sectors > disc->totalSectors())
+            {
+                g_lastCdError = -1;
+                return false;
+            }
+            const bool ok = disc->readBytes(static_cast<uint64_t>(lbn) * kCdSectorSize, byteCount, dst);
+            g_lastCdError = ok ? 0 : -1;
+            return ok;
+        }
         for (const auto &[key, entry] : g_cdFilesByKey)
         {
             const uint32_t endLbn = entry.baseLbn + entry.sectors;
@@ -475,6 +514,10 @@ namespace
 
     bool isResolvableCdLbn(uint32_t lbn)
     {
+        if (IPS2DiscImage *disc = ps2_disc::image()) // [gta-recomp]
+        {
+            return lbn < disc->totalSectors();
+        }
         for (const auto &[key, entry] : g_cdFilesByKey)
         {
             const uint32_t endLbn = entry.baseLbn + entry.sectors;

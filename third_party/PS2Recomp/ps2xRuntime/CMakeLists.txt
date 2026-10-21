@@ -388,6 +388,7 @@ add_library(ps2_runtime STATIC
     src/lib/ps2_pad.cpp
     src/lib/ps2_rom_device.cpp
     src/lib/ps2_vfs.cpp
+    src/lib/ps2_disc_image.cpp
     src/lib/ps2_runtime.cpp
     src/lib/ps2_vif1_interpreter.cpp
     src/lib/vu/ps2_vu1_core.cpp
@@ -437,14 +438,23 @@ target_sources(ps2_runtime PRIVATE
     ${KERNEL_SRC_FILES}
 )
 
-file(GLOB RUNNER_SRC_FILES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/*.cpp"
-)
+# [gta-recomp] Let a parent project supply the generated code, its own main()
+# and extra sources instead of copying them into src/runner.
+set(PS2X_RUNNER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/runner" CACHE PATH "Directory with generated runner sources")
+set(PS2X_RUNNER_EXTRA_SOURCES "" CACHE STRING "Extra sources compiled into ps2EntryRunner")
+set(PS2X_RUNNER_MAIN "" CACHE FILEPATH "Replacement main() source for ps2EntryRunner")
 
-set(RUNNER_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/main.cpp")
+file(GLOB RUNNER_SRC_FILES CONFIGURE_DEPENDS
+    "${PS2X_RUNNER_SOURCE_DIR}/*.cpp"
+)
+list(APPEND RUNNER_SRC_FILES ${PS2X_RUNNER_EXTRA_SOURCES})
+
+set(RUNNER_MAIN_CPP "${PS2X_RUNNER_SOURCE_DIR}/main.cpp")
 set(ROOT_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 
-if(EXISTS "${RUNNER_MAIN_CPP}")
+if(PS2X_RUNNER_MAIN)
+    list(APPEND RUNNER_SRC_FILES "${PS2X_RUNNER_MAIN}")
+elseif(EXISTS "${RUNNER_MAIN_CPP}")
     list(APPEND RUNNER_SRC_FILES "${RUNNER_MAIN_CPP}")
 elseif(EXISTS "${ROOT_MAIN_CPP}")
     list(APPEND RUNNER_SRC_FILES "${ROOT_MAIN_CPP}")
@@ -477,7 +487,9 @@ if(PS2X_ENABLE_RUNNER_PCH)
 
     foreach(PS2X_RUNNER_GENERATED_HEADER IN ITEMS
         "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_recompiled_functions.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_recompiled_stubs.h")
+        "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_recompiled_stubs.h"
+        "${PS2X_RUNNER_SOURCE_DIR}/ps2_recompiled_functions.h"
+        "${PS2X_RUNNER_SOURCE_DIR}/ps2_recompiled_stubs.h")
         if(EXISTS "${PS2X_RUNNER_GENERATED_HEADER}")
             list(APPEND PS2X_RUNNER_PCH_HEADERS "${PS2X_RUNNER_GENERATED_HEADER}")
         endif()
@@ -511,6 +523,7 @@ target_link_libraries(ps2EntryRunner
     PRIVATE
     ps2_runtime
 )
+target_include_directories(ps2EntryRunner PRIVATE "${PS2X_RUNNER_SOURCE_DIR}")
 
 if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_VITA AND NOT PS2X_IS_ANDROID)
     target_sources(ps2EntryRunner PRIVATE

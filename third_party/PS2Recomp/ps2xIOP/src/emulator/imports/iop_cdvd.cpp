@@ -600,6 +600,24 @@ namespace ps2x::iop::detail
                 return false;
 
             const std::string guestPath = memory.readString(nameAddress, 1024u);
+            {
+                // [gta-recomp] mapped disc image
+                uint32_t lsn = 0u, size = 0u;
+                bool isDirectory = false;
+                if (host.findDiscFile(guestPath, lsn, size, isDirectory))
+                {
+                    std::array<uint8_t, 32u> result{};
+                    writeLe32(result.data(), lsn);
+                    writeLe32(result.data() + 4u, size);
+                    std::string leaf = guestPath;
+                    const size_t slash = leaf.find_last_of("/\:");
+                    if (slash != std::string::npos)
+                        leaf.erase(0, slash + 1u);
+                    std::memcpy(result.data() + 8u, leaf.data(), std::min<size_t>(16u, leaf.size()));
+                    result[24u] = isDirectory ? 2u : 0u;
+                    return memory.writeRam(resultAddress, result.data(), result.size());
+                }
+            }
             IsoNode *node = findVirtualIsoNode(guestPath);
             if (!node)
                 return false;
@@ -667,8 +685,8 @@ namespace ps2x::iop::detail
             const size_t byteCount = static_cast<size_t>(byteCount64);
             std::vector<uint8_t> bytes(byteCount, 0u);
 
-            bool read = false;
-            const std::string imagePath = host.hostPath(HostPathKind::CdImage);
+            bool read = host.readDiscSectors(lsn, sectors, bytes.data()); // [gta-recomp]
+            const std::string imagePath = read ? std::string() : host.hostPath(HostPathKind::CdImage);
             if (!imagePath.empty())
             {
                 if (imageHandle == 0u)

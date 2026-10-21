@@ -71,6 +71,8 @@ public:
                       size_t size,
                       size_t &bytesRead) override;
     void closeHostFile(uint64_t handle) override;
+    bool findDiscFile(std::string_view path, uint32_t &lsn, uint32_t &size, bool &isDirectory) const override; // [gta-recomp]
+    bool readDiscSectors(uint32_t lsn, uint32_t sectors, void *destination) const override;               // [gta-recomp]
 
     int32_t memoryCard(const ps2x::iop::MemoryCardRequest &request) override;
 

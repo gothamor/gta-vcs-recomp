@@ -2,6 +2,7 @@
 
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_rom_device.h"
+#include "runtime/ps2_disc_image.h"
 
 #include <algorithm>
 #include <chrono>
@@ -105,6 +106,53 @@ namespace
         size_t m_position = 0u;
     };
 
+    // [gta-recomp] read-only file on the mapped disc image.
+    class DiscOpenFile final : public IPS2OpenFile
+    {
+    public:
+        DiscOpenFile(const IPS2DiscImage &disc, uint32_t lsn, uint32_t size)
+            : m_disc(disc), m_offset(static_cast<uint64_t>(lsn) * 2048u), m_size(size) {}
+
+        int64_t read(void *destination, size_t size) override
+        {
+            if (!destination && size != 0u)
+                return -1;
+            const size_t available = m_position < m_size ? m_size - m_position : 0u;
+            const size_t count = std::min(size, available);
+            if (count != 0u && !m_disc.readBytes(m_offset + m_position, count, destination))
+                return -1;
+            m_position += count;
+            return static_cast<int64_t>(count);
+        }
+
+        int64_t write(const void *, size_t) override
+        {
+            return -1;
+        }
+
+        int64_t seek(int64_t offset, int whence) override
+        {
+            int64_t base = 0;
+            if (whence == SEEK_CUR)
+                base = static_cast<int64_t>(m_position);
+            else if (whence == SEEK_END)
+                base = static_cast<int64_t>(m_size);
+            else if (whence != SEEK_SET)
+                return -1;
+            const int64_t position = base + offset;
+            if (position < 0 || static_cast<uint64_t>(position) > m_size)
+                return -1;
+            m_position = static_cast<size_t>(position);
+            return position;
+        }
+
+    private:
+        const IPS2DiscImage &m_disc;
+        uint64_t m_offset;
+        size_t m_size;
+        size_t m_position = 0u;
+    };
+
     const char *hostMode(uint32_t flags)
     {
         const bool read = (flags & PS2_FIO_O_RDONLY) != 0u || (flags & PS2_FIO_O_RDWR) == PS2_FIO_O_RDWR;
@@ -170,6 +218,16 @@ int32_t PS2Vfs::open(std::string_view path, uint32_t flags, const PS2VfsMounts &
         if (!rom.readFile(parsed.path, bytes))
             return -1;
         file = std::make_unique<MemoryOpenFile>(std::move(bytes));
+    }
+    else if (IPS2DiscImage *disc = ps2_disc::image(); disc && parsed.device == ps2x::iop::Ps2PathDevice::Cdrom)
+    {
+        if ((flags & PS2_FIO_O_RDWR) != PS2_FIO_O_RDONLY)
+            return -1;
+        uint32_t lsn = 0, size = 0;
+        bool isDirectory = false;
+        if (!disc->findFile(parsed.path, lsn, size, isDirectory) || isDirectory)
+            return -1;
+        file = std::make_unique<DiscOpenFile>(*disc, lsn, size);
     }
     else
     {
@@ -242,6 +300,17 @@ bool PS2Vfs::stat(std::string_view path, const PS2VfsMounts &mounts, const PS2Ro
     {
         if (!rom.fileSize(parsed.path, result.size))
             return false;
+        result.readOnly = true;
+        return true;
+    }
+    if (IPS2DiscImage *disc = ps2_disc::image(); disc && parsed.device == ps2x::iop::Ps2PathDevice::Cdrom)
+    {
+        uint32_t lsn = 0, size = 0;
+        bool isDirectory = false;
+        if (!disc->findFile(parsed.path, lsn, size, isDirectory))
+            return false;
+        result.directory = isDirectory;
+        result.size = size;
         result.readOnly = true;
         return true;
     }

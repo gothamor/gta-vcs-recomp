@@ -107,6 +107,19 @@ namespace ps2x::iop
                                   size_t &bytesRead) = 0;
         virtual void closeHostFile(uint64_t handle) = 0;
 
+        // [gta-recomp] Optional mapped disc image with real sector numbers.
+        // Hosts without one keep the default (cdvdman falls back to CdImage/CdRoot).
+        virtual bool findDiscFile(std::string_view path, uint32_t &lsn, uint32_t &size, bool &isDirectory) const
+        {
+            (void)path; (void)lsn; (void)size; (void)isDirectory;
+            return false;
+        }
+        virtual bool readDiscSectors(uint32_t lsn, uint32_t sectors, void *destination) const
+        {
+            (void)lsn; (void)sectors; (void)destination;
+            return false;
+        }
+
         virtual int32_t memoryCard(const MemoryCardRequest &request) = 0;
 
         virtual bool hasGuestFunction(uint32_t address) const = 0;
