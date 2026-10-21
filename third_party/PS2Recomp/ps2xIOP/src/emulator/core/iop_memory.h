@@ -22,7 +22,9 @@ namespace ps2x::iop::detail
         static constexpr uint32_t Spu2End = 0x1FA00000u;
         static constexpr uint32_t SifBase = 0x1D000000u;
         static constexpr uint32_t SifEnd = 0x1D001000u;
-        static constexpr uint32_t HeapBase = 0x00120000u;
+        // [gta-recomp] was 0x120000 (832 KB heap). VCS modules end near 0x5E000 and its
+        // streaming code wants ~1 MB more, as on a retail IOP where modules and heap share RAM.
+        static constexpr uint32_t HeapBase = 0x00080000u;
         static constexpr uint32_t HeapLimit = 0x001F0000u;
 
         struct Allocation

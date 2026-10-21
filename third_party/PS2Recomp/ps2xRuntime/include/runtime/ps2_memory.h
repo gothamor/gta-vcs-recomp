@@ -409,6 +409,10 @@ public:
     bool m_path3Masked = false;
     uint32_t m_vif1PendingPath2ImageQwc = 0u;
     bool m_vif1PendingPath2DirectHl = false;
+    // [gta-recomp] qwords of a DIRECT/DIRECTHL cut off by the end of a VIF1 buffer
+    uint32_t m_vif1DirectRemainQwc = 0u;
+    bool m_vif1DirectRemainHl = false;
+    void submitVif1DirectData(const uint8_t *data, uint32_t qwCount, bool directHl);
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
 
     struct PendingTransfer

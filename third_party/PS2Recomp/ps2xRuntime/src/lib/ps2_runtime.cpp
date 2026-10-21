@@ -27,6 +27,8 @@
 #include <atomic>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
+#include <mutex>
 #include <sstream>
 
 namespace ps2_stubs
@@ -373,6 +375,19 @@ namespace
         }
         return out;
     }
+}
+
+// [gta-recomp] Report each distinct unlisted mid-body entry once (see function_emitter.cpp).
+void ps2ReportUnlistedResume(const R5900Context *ctx, uint32_t functionStart)
+{
+    static std::mutex s_mutex;
+    static std::unordered_set<uint32_t> s_seen;
+    std::lock_guard<std::mutex> lock(s_mutex);
+    if (!s_seen.insert(ctx->pc).second || s_seen.size() > 64u)
+        return;
+    std::cerr << "[guest-branch:unlisted-resume] pc=0x" << std::hex << ctx->pc << " function=0x" << functionStart
+              << " ra=0x" << GPR_U32(ctx, 31) << " sp=0x" << GPR_U32(ctx, 29) << " trace=" << formatDispatchHistory()
+              << std::dec << std::endl;
 }
 
 // [gta-recomp] Shows the GPU renderer's newest picture. False when there is no GPU renderer.
@@ -1450,8 +1465,16 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
             << " vtbl[c]=0x" << vtableSlotC
             << " codeRegion=" << (m_memory.isCodeAddress(targetPc) ? "yes" : "no")
             << " policy=" << static_cast<uint32_t>(policy)
-            << " trace=" << formatDispatchHistory()
-            << std::dec;
+            << " trace=" << formatDispatchHistory();
+        // [gta-recomp] a corrupted saved $ra: show the stack slots just below $sp holding the bad target
+        oss << " stackHits=";
+        for (uint32_t off = 8u; off <= 0x400u; off += 4u)
+        {
+            uint32_t w = 0u;
+            if (readGuestU32Offset(sp - off, 0u, w) && w == targetPc)
+                oss << "0x" << (sp - off) << ",";
+        }
+        oss << std::dec;
 
         static std::mutex s_missingFunctionLogMutex;
         {

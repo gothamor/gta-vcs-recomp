@@ -24,6 +24,40 @@ namespace ps2recomp
             inst.function = SPECIAL_SLL;
             return inst;
         }
+
+        // [gta-recomp] Pure ALU/FPU/MMI instructions neither trap nor call into the runtime, so
+        // nothing can read ctx->pc while they run: skip the per-instruction pc store for them.
+        bool cannotObservePc(const Instruction &inst)
+        {
+            if (inst.isLoad || inst.isStore || inst.isMmio || inst.isBranch || inst.isJump)
+                return false;
+            switch (inst.opcode)
+            {
+            case 0x00: // SPECIAL
+                switch (inst.function)
+                {
+                case 0x00: case 0x02: case 0x03: case 0x04: case 0x06: case 0x07: // shifts
+                case 0x0A: case 0x0B:                                               // MOVZ/MOVN
+                case 0x10: case 0x11: case 0x12: case 0x13:                         // HI/LO moves
+                case 0x14: case 0x16: case 0x17:                                    // 64-bit shifts
+                case 0x18: case 0x19: case 0x1A: case 0x1B:                         // MULT/DIV (no traps)
+                case 0x21: case 0x23: case 0x24: case 0x25: case 0x26: case 0x27:   // ADDU SUBU AND OR XOR NOR
+                case 0x28: case 0x29: case 0x2A: case 0x2B: case 0x2D: case 0x2F:   // MFSA MTSA SLT SLTU DADDU DSUBU
+                case 0x38: case 0x3A: case 0x3B: case 0x3C: case 0x3E: case 0x3F:   // DSLL...DSRA32
+                    return true;
+                default:
+                    return false; // ADD/SUB/DADD/DSUB (overflow), SYSCALL, BREAK, SYNC, traps
+                }
+            case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E: case 0x0F: // ADDIU..LUI
+            case 0x19:                                                                  // DADDIU
+            case 0x1C:                                                                  // MMI
+                return true;
+            case 0x11: // COP1 (branches excluded above)
+                return true;
+            default:
+                return false;
+            }
+        }
     }
 
     FunctionEmitter::FunctionEmitter(CodeGenerator &codeGenerator)
@@ -99,6 +133,12 @@ namespace ps2recomp
             ss << "        default: break;\n";
             ss << "    }\n\n";
         }
+        // [gta-recomp] Entering mid-body at an address without a resume label would silently
+        // restart the function (re-running its prologue): report it.
+        ss << "    if (ctx->pc != 0x" << std::hex << function.start << "u && ctx->pc - 0x" << function.start
+           << "u < 0x" << (function.end - function.start) << "u) ps2ReportUnlistedResume(ctx, 0x" << function.start
+           << "u);\n"
+           << std::dec;
         ss << "    ctx->pc = 0x" << std::hex << function.start << "u;\n"
            << std::dec;
         ss << "\n";
@@ -200,8 +240,11 @@ namespace ps2recomp
                         continue;
                     }
 
-                    ss << "    ctx->pc = 0x" << std::hex << inst.address << "u;\n"
-                       << std::dec;
+                    if (!cannotObservePc(inst))
+                    {
+                        ss << "    ctx->pc = 0x" << std::hex << inst.address << "u;\n"
+                           << std::dec;
+                    }
                     const MemoryAccessHint memoryHint = resolveMemoryAccessHint(inst, constantRegisters);
                     ss << "    " << cg.translateInstruction(inst, memoryHint);
                     if (inst.isMmio)

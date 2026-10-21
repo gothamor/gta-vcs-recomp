@@ -106,3 +106,18 @@ time. To confirm: log VIF1 MPG uploads at run time (Phase 3).
   table offsets), loaded at 0x016FE800 and relocated by FUN_00324A50; main
   copies ~50 global pointers out of it. VU1 microcode (~14 KB) is uploaded from
   data at run time, not from the ELF.
+
+## Textures: `.XTX` (e.g. `LOADSC0..11.XTX`, the 12 loading screens)
+Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
+- `0x00` magic `"xet\0"`; `0x08` file size; `0x0C`/`0x10` offset of the trailing
+  relocation table (0x404B0); `0x60` name (`"loadsc0"`).
+- Pixels at **0xB0**: 512x512 linear PSMT8 indices (no swizzle).
+- CLUT at **0x400B0**: 256 x RGBA8888, alpha 0x80 = opaque (PS2 range), already in
+  **CSM1 order** (index bits 3 and 4 swapped), i.e. ready to upload as a 16x16 CT32 block.
+- Tail: relocation table (offsets of pointers inside the header).
+- The game uploads both unchanged: CLUT to CBP 13584 (16x16 CT32), then the
+  pixels to TBP 8960 (TBW 8, T8). Upload path: VIF1 chain, one DIRECT with
+  the BITBLTBUF/TRXPOS/TRXREG/TRXDIR + IMAGE GIFtag, then a REF DMAtag whose
+  upper half is `NOP; DIRECTHL n` carrying the data. (This split exposed the
+  upstream VIF bug in `docs/PS2RECOMP_PATCHES.md`.)
+- The legal screen (copyright text + logo) is also a 512x512 T8 upload.

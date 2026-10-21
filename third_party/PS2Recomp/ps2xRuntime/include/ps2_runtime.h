@@ -251,6 +251,8 @@ struct Ps2WriteWatch
 };
 inline Ps2WriteWatch g_ps2WriteWatch{};
 void ps2WriteWatchHit(uint32_t guestAddr, uint32_t size, uint64_t value, const char *op, const R5900Context *ctx);
+// [gta-recomp] generated code entered mid-body at a pc with no resume label
+void ps2ReportUnlistedResume(const R5900Context *ctx, uint32_t functionStart);
 
 inline void ps2TraceGuestWrite(uint8_t *rdram,
                                uint32_t guestAddr,

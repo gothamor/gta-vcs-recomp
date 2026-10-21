@@ -505,14 +505,24 @@ void main()
             f.draws.back().count += n;
         }
 
-        void LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut) override { m_cpu.LoadClut(tex0, texclut); }
+        void LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut) override
+        {
+            static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
+            if (debug && tex0.cld != 0u && m_loggedTransfers < 400u)
+            {
+                ++m_loggedTransfers;
+                std::fprintf(stderr, "[gs-hw] clut cld=%u cbp=%u cpsm=%u csm=%u csa=%u psm=%u\n", tex0.cld, tex0.cbp, tex0.cpsm, tex0.csm,
+                             tex0.csa, tex0.psm);
+            }
+            m_cpu.LoadClut(tex0, texclut);
+        }
 
         void BeginTransfer(const GSTransferCommand &command) override
         {
             m_transfer = command;
             m_cpu.BeginTransfer(command);
             static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
-            if (debug && command.direction == 2u && m_loggedTransfers < 20u)
+            if (debug && m_loggedTransfers < 400u)
             {
                 ++m_loggedTransfers;
                 std::fprintf(stderr, "[gs-hw] transfer dir=%u sbp=%u sbw=%u spsm=%u ss=%u,%u -> dbp=%u dbw=%u dpsm=%u ds=%u,%u size=%ux%u\n",
@@ -527,6 +537,22 @@ void main()
         void UploadImage(const uint8_t *data, uint32_t sizeBytes) override
         {
             static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
+            if (debug && m_transfer.bitbltbuf.dbp >= 13584u && m_transfer.bitbltbuf.dbp < 13600u && m_loggedTransfers < 400u)
+            {
+                std::fprintf(stderr, "[gs-hw]   data %u bytes: %02x%02x%02x%02x %02x%02x%02x%02x\n", sizeBytes, data[0], data[1], data[2],
+                             data[3], data[4], data[5], data[6], data[7]);
+                static int dumpedCluts = 0;
+                if (sizeBytes == 1024u && dumpedCluts < 8)
+                {
+                    char name[32];
+                    std::snprintf(name, sizeof(name), "hw_clut%d.bin", dumpedCluts++);
+                    if (FILE *f = std::fopen(name, "wb"))
+                    {
+                        std::fwrite(data, 1, sizeBytes, f);
+                        std::fclose(f);
+                    }
+                }
+            }
             if (debug && sizeBytes >= 65536u)
             {
                 uint64_t h = 1469598103934665603ull;
@@ -535,11 +561,12 @@ void main()
                 std::fprintf(stderr, "[gs-hw] upload %u bytes dpsm=%u fnv=%016llx first=%02x%02x%02x%02x%02x%02x%02x%02x\n", sizeBytes,
                              m_transfer.bitbltbuf.dpsm, static_cast<unsigned long long>(h), data[0], data[1], data[2], data[3], data[4],
                              data[5], data[6], data[7]);
-                static bool dumped = false;
-                if (!dumped && sizeBytes == 262144u)
+                static int dumped = 0;
+                if (dumped < 8 && sizeBytes == 262144u)
                 {
-                    dumped = true;
-                    if (FILE *f = std::fopen("hw_upload.bin", "wb"))
+                    char name[32];
+                    std::snprintf(name, sizeof(name), "hw_upload%d.bin", dumped++);
+                    if (FILE *f = std::fopen(name, "wb"))
                     {
                         std::fwrite(data, 1, sizeBytes, f);
                         std::fclose(f);
