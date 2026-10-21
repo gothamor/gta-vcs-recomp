@@ -4,6 +4,17 @@ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
 
 function(EnableFastReleaseMode TargetName)
     message("> Enabling optimization for: ${TargetName}")
+    # [gta-recomp] clang-cl rejects /Qspectre- and /GL//LTCG need MSVC's own
+    # linker; use plain optimisation flags there and leave LTO to IPO below.
+    if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_compile_options(${TargetName} PRIVATE
+            $<$<CONFIG:Release>:/O2 /Oi /Gy /Gw /GF /DNDEBUG /arch:AVX2 /GS->
+        )
+        if(IPO_SUPPORTED AND CMAKE_LINKER MATCHES "lld-link")
+            set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+        endif()
+        return()
+    endif()
     if(MSVC)
         target_compile_options(${TargetName} PRIVATE
             $<$<CONFIG:Release>:
