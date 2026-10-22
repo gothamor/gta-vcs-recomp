@@ -534,6 +534,7 @@ void GSCpuBackend::Reset()
 void GSCpuBackend::ResetUnlocked()
 {
     m_clut.fill(0u);
+    m_clutHashDirty = true;
     m_clutCbp.fill(0u);
     m_texturePageCache.Invalidate();
     m_transfer = {};
@@ -595,6 +596,7 @@ void GSCpuBackend::LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &t
 {
     // [gta-recomp] CLUT loads read VRAM directly on the GS: never through the (stale) texture page cache.
     m_texturePageCache.Invalidate();
+    m_clutHashDirty = true;
     const bool fourBit = isFourBitIndexedPsm(tex0.psm);
     const bool sixteenBit = tex0.cpsm == GS_PSM_CT16 || tex0.cpsm == GS_PSM_CT16S;
     const bool thirtyTwoBit = tex0.cpsm == GS_PSM_CT32 || tex0.cpsm == GS_PSM_CT24;
@@ -1210,10 +1212,15 @@ void GSCpuBackend::DecodeTexture(const GSDrawState &state, std::vector<uint32_t>
 uint64_t GSCpuBackend::ClutHash(const GSTex0Reg &tex0) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    uint64_t h = 1469598103934665603ull;
-    for (uint16_t e : m_clut)
-        h = (h ^ e) * 1099511628211ull;
-    return h ^ (uint64_t(tex0.cpsm) << 56) ^ (uint64_t(tex0.csa) << 48) ^ (uint64_t(tex0.csm) << 40);
+    if (m_clutHashDirty) // [gta-recomp] hashing 512 entries per paletted draw was ~17% of the frame
+    {
+        uint64_t h = 1469598103934665603ull;
+        for (uint16_t e : m_clut)
+            h = (h ^ e) * 1099511628211ull;
+        m_clutHashCache = h;
+        m_clutHashDirty = false;
+    }
+    return m_clutHashCache ^ (uint64_t(tex0.cpsm) << 56) ^ (uint64_t(tex0.csa) << 48) ^ (uint64_t(tex0.csm) << 40);
 }
 
 void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
@@ -1549,6 +1556,64 @@ void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
     const uint32_t rrw = m_transfer.trxreg.rrw;
     const uint32_t dsax = m_transfer.trxpos.dsax;
     uint32_t offset = 0u;
+
+    // [gta-recomp] Fast path: a fresh transfer whose data covers the whole rectangle (games stream ~10k textures/s
+    // this way): walk rows directly instead of a format switch and a div/mod per pixel. Same writes, same order.
+    if (m_transferState.copiedPixels == 0u)
+    {
+        const uint32_t rrh = m_transfer.trxreg.rrh;
+        const uint32_t dsay = m_transfer.trxpos.dsay;
+        const uint64_t pixels = static_cast<uint64_t>(rrw) * rrh;
+        auto *write = m_writeVramFuncs[dpsm & 0x3Fu];
+        bool done = false;
+        if ((dpsm == GS_PSM_CT32 || dpsm == GS_PSM_Z32) && sizeBytes >= pixels * 4u)
+        {
+            for (uint32_t y = 0; y < rrh; ++y)
+                for (uint32_t x = 0; x < rrw; ++x, offset += 4u)
+                {
+                    uint32_t value;
+                    std::memcpy(&value, data + offset, 4);
+                    write(m_vram, dbp, dbw, dsax + x, dsay + y, value);
+                }
+            done = true;
+        }
+        else if ((dpsm == GS_PSM_CT16 || dpsm == GS_PSM_CT16S || dpsm == GS_PSM_Z16 || dpsm == GS_PSM_Z16S) && sizeBytes >= pixels * 2u)
+        {
+            for (uint32_t y = 0; y < rrh; ++y)
+                for (uint32_t x = 0; x < rrw; ++x, offset += 2u)
+                {
+                    uint16_t value;
+                    std::memcpy(&value, data + offset, 2);
+                    write(m_vram, dbp, dbw, dsax + x, dsay + y, value);
+                }
+            done = true;
+        }
+        else if ((dpsm == GS_PSM_T8 || dpsm == GS_PSM_T8H) && sizeBytes >= pixels)
+        {
+            for (uint32_t y = 0; y < rrh; ++y)
+                for (uint32_t x = 0; x < rrw; ++x)
+                    write(m_vram, dbp, dbw, dsax + x, dsay + y, data[offset++]);
+            done = true;
+        }
+        else if ((dpsm == GS_PSM_T4 || dpsm == GS_PSM_T4HL || dpsm == GS_PSM_T4HH) && (rrw & 1u) == 0u && sizeBytes >= pixels / 2u)
+        {
+            for (uint32_t y = 0; y < rrh; ++y)
+                for (uint32_t x = 0; x < rrw; x += 2u)
+                {
+                    const uint8_t b = data[offset++];
+                    write(m_vram, dbp, dbw, dsax + x, dsay + y, b & 0x0Fu);
+                    write(m_vram, dbp, dbw, dsax + x + 1u, dsay + y, b >> 4u);
+                }
+            done = true;
+        }
+        if (done)
+        {
+            m_transferState.copiedPixels = m_transferState.totalPixels;
+            m_transferState.direction = 3u;
+            m_transferState.totalPixels = 0u;
+            return;
+        }
+    }
 
     auto advancePixel = [&](uint32_t count)
     {

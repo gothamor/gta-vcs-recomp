@@ -4,6 +4,8 @@
 #include "ps2_log.h"
 #include <atomic>
 #include <cstring>
+#include <set>
+#include <tuple>
 #include <limits>
 #include <stdexcept>
 #include <algorithm>
@@ -1540,6 +1542,25 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                         if (hasPayload)
                             appendData(dataAddr, tagQwc);
+                        { // [gta-recomp] PS2X_LOG_MPG_SOURCES=1: each distinct VU1 microcode upload sent as a REF payload
+                          // whose DMAtag carries the MPG VIFcode -> "src vu pairs" for tools/vu1_recomp.py
+                            static const bool logSources = std::getenv("PS2X_LOG_MPG_SOURCES") != nullptr;
+                            if (logSources && channelBase == 0x10009000u && transferTagData && hasPayload && (id == 3u || id == 0u || id == 4u))
+                            {
+                                const uint64_t upper = loadScalar<uint64_t>(tp, 8, 16, "dma tag hi", currentTagAddr);
+                                for (int half = 0; half < 2; ++half)
+                                {
+                                    const uint32_t code = static_cast<uint32_t>(upper >> (half * 32));
+                                    if (((code >> 24) & 0x7Fu) != 0x4Au)
+                                        continue;
+                                    const uint32_t pairs = ((code >> 16) & 0xFFu) ? ((code >> 16) & 0xFFu) : 256u;
+                                    const uint32_t vu = (code & 0xFFFFu) * 8u;
+                                    static std::set<std::tuple<uint32_t, uint32_t, uint32_t>> seen;
+                                    if (seen.insert({dataAddr, vu, pairs}).second)
+                                        std::fprintf(stderr, "[mpg-src] %08x %04x %u\n", dataAddr, vu, pairs);
+                                }
+                            }
+                        }
                         { // [gta-recomp] PS2X_DUMP_CHAIN=<n>: list every tag of the n-th VIF1 chain kick
                             static const long dumpKick = std::getenv("PS2X_DUMP_CHAIN") ? std::atol(std::getenv("PS2X_DUMP_CHAIN")) : -1;
                             static long kickIndex = 0;

@@ -76,6 +76,8 @@ private:
     std::array<ReadVramFunc, kPsmHandlerCount> m_readVramFuncs{};
     std::array<WriteVramFunc, kPsmHandlerCount> m_writeVramFuncs{};
     std::array<uint16_t, 512> m_clut{};
+    mutable uint64_t m_clutHashCache = 0;   // [gta-recomp] ClutHash of m_clut, valid unless m_clutHashDirty
+    mutable bool m_clutHashDirty = true;
     std::array<uint32_t, 2> m_clutCbp{};
     GSMem::TexturePageCache m_texturePageCache;
 

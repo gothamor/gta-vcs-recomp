@@ -1662,11 +1662,31 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
 
     m_vu0.reset();
     copyVu0ContextToState(ctx, m_vu0.state());
+    const auto statStart = std::chrono::steady_clock::now();
     m_vu0.execute(vu0Code, PS2_VU0_CODE_SIZE,
                   vu0Data, PS2_VU0_DATA_SIZE,
                   m_gs, &m_memory,
                   startPC, 0u, ctx->vu0_itop, 4096);
     copyVu0StateToContext(m_vu0.state(), ctx);
+    { // [gta-recomp] PS2X_TRACE_VU0=1: VU0 microprogram calls and host time per start address, every 5 s
+        static const bool trace = std::getenv("PS2X_TRACE_VU0") != nullptr;
+        if (trace)
+        {
+            static std::map<uint32_t, std::pair<uint64_t, double>> stats;
+            static auto last = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            auto &st = stats[startPC];
+            ++st.first;
+            st.second += std::chrono::duration<double, std::milli>(now - statStart).count();
+            if (now - last > std::chrono::seconds(5))
+            {
+                last = now;
+                for (const auto &[pc, v] : stats)
+                    std::fprintf(stderr, "[vu0] start=0x%04x calls=%llu host=%.1f ms\n", pc, static_cast<unsigned long long>(v.first), v.second);
+                stats.clear();
+            }
+        }
+    }
 }
 
 void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)

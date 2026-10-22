@@ -528,7 +528,9 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 uint32_t copyBytes = mpgBytes;
                 if (destAddr + copyBytes > PS2_VU1_CODE_SIZE)
                     copyBytes = PS2_VU1_CODE_SIZE - destAddr;
-                if (pos + copyBytes <= sizeBytes)
+                // [gta-recomp] Games (VCS) re-upload the same microcode every frame; only an actual change
+                // may invalidate the VU1 decode cache (a full re-decode per upload cost ~5% of the frame).
+                if (pos + copyBytes <= sizeBytes && std::memcmp(m_vu1Code + destAddr, data + pos, copyBytes) != 0)
                 {
                     std::memcpy(m_vu1Code + destAddr, data + pos, copyBytes);
                     ps2xLogMpgUpload(destAddr, instructionCount, data + pos, copyBytes);

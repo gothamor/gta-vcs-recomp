@@ -139,7 +139,11 @@ namespace vcs
                 lastReport = now;
                 std::vector<std::pair<uint32_t, uint64_t>> top(hits.begin(), hits.end());
                 std::sort(top.begin(), top.end(), [](auto &a, auto &b) { return a.second > b.second; });
-                std::fprintf(stderr, "[profile] %llu samples\n", static_cast<unsigned long long>(total));
+                uint64_t guestTotal = 0;
+                for (const auto &[pc, n] : hits)
+                    guestTotal += n;
+                std::fprintf(stderr, "[profile] %llu samples, %.1f%% in generated (guest) code\n", static_cast<unsigned long long>(total),
+                             100.0 * guestTotal / total);
                 for (size_t i = 0; i < top.size() && i < 15; ++i)
                     std::fprintf(stderr, "[profile]   %5.1f%%  guest 0x%08x\n", 100.0 * top[i].second / total, top[i].first);
                 // Resolve non-generated samples to host symbols (needs the PDB; see VCS_RUNTIME_DEBUG_INFO).
@@ -168,7 +172,7 @@ namespace vcs
                 }
                 std::vector<std::pair<std::string, uint64_t>> rest(byName.begin(), byName.end());
                 std::sort(rest.begin(), rest.end(), [](auto &a, auto &b) { return a.second > b.second; });
-                for (size_t i = 0; i < rest.size() && i < 12; ++i)
+                for (size_t i = 0; i < rest.size() && i < 30; ++i)
                     std::fprintf(stderr, "[profile]   %5.1f%%  host %s\n", 100.0 * rest[i].second / total, rest[i].first.c_str());
                 std::fflush(stderr);
                 hits.clear();

@@ -396,7 +396,15 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
 {
     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
     m_eeCycle += elapsed;
-    m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
+    // [gta-recomp] Batch timer updates (map lookup + per-timer divisions ran at every guest dispatch, ~6% of the
+    // frame): timer interrupts are now at most 512 EE cycles (<2 us of guest time) late.
+    static thread_local uint64_t timerPendingCycles = 0;
+    timerPendingCycles += elapsed;
+    if (timerPendingCycles >= 512u)
+    {
+        m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(timerPendingCycles);
+        timerPendingCycles = 0;
+    }
     m_runtime.advanceIopEeCycles(elapsed);
     if (m_pendingEeTimerInterrupts != 0u)
     {

@@ -26,3 +26,9 @@ sed 's#^output = .*#output = "build/generated_fresh"#' game/vcs/vcs.toml > build
 "$RECOMP" build/vcs_fresh.toml > build/recomp.log 2>&1 || { tail -20 build/recomp.log; exit 1; }
 grep -E "Warnings:" build/recomp.log || true
 python -I tools/sync_generated.py build/generated_fresh generated/ee
+
+# VU1 microcode -> C++ (runs instead of the VU1 interpreter while VU1 memory holds exactly that code)
+mkdir -p build/vu1
+python -I tools/vu1_recomp.py build/elf/SLUS_215.90 build/vu1/vu1_compiled.cpp game/vcs/vu1_uploads.txt | tail -1
+mkdir -p generated/vu1
+cmp -s build/vu1/vu1_compiled.cpp generated/vu1/vu1_compiled.cpp || cp build/vu1/vu1_compiled.cpp generated/vu1/vu1_compiled.cpp

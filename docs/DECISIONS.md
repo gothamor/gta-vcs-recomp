@@ -99,3 +99,20 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   (13 -> 23 VBlanks/s) and batching IOP time (23 -> 60).
 - With the CPU GS renderer it is 2.9 VBlanks/s: the rasterizer is ~95% of the
   frame. A GPU GS backend is the critical path.
+
+## 2026-10-22 - VU1 microcode compiled ahead of time
+- VCS uploads 22 distinct VU1 microcode blocks at run time (REF payloads from
+  `.text`, the MPG VIFcode in the DMAtag). `game/vcs/vu1_uploads.txt` lists their
+  ELF addresses; `tools/vu1_recomp.py` (vendored from BigDaddyJRich/hctp-recomp,
+  GPL-3.0, plus an uploads-list input) reads the bytes from the user's ELF at
+  build time and writes `generated/vu1/vu1_compiled.cpp` (never committed).
+- Pieces are split at every upload boundary because VCS overlays parts of its
+  big block with per-pass variants and a piece runs only while VU memory holds
+  all of its bytes. Result: 99.97% of VU1 pairs run compiled.
+- Verified with `PS2X_VU1_VERIFY=1`: registers, VU memory and XGKICK packets match
+  the accurate interpreter; only cycle counts differ (throughput variant).
+- Frame rate in game (i7-7700K): 11 -> ~35-50 VBlanks/s over this pass
+  (compiled VU1, CLUT hash cache, content-keyed textures, upload fast path,
+  batched timers). The EE thread is the single saturated thread. Next: VU0
+  microprograms 0x0CF8 (sector box clip) and 0x0EB8 (~25% of the EE thread;
+  they read MAC flags with pipeline timing, so they run on the exact path).

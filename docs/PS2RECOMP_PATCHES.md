@@ -56,3 +56,10 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRecomp/src/lib/vu_translation_helpers.cpp` | **Fix:** `VCALLMSR` starts the VU0 microprogram at CMSAR0 | Upstream read `ctx->vi[27]` (past the 16-entry VI array) for the address, so the program started at garbage. VCS's sector frustum test (`FUN_002F7528` -> `FUN_0030C8D4`: CTC2 CMSAR0, LQC2 box, VCALLMSR, CFC2 vi1/vi2) always returned 0 and no static world geometry was drawn |
 | `ps2xRuntime/src/lib/ps2_runtime.cpp` | `PS2X_VU1_DUMP=addr,...`: dump VU1 code/data before the 50th run of those programs | Microcode inspection |
 | `ps2xRuntime/src/lib/ps2_memory.cpp` | `PS2X_DUMP_CHAIN=<n>`: list every tag of the n-th VIF1 chain kick | Display-list inspection |
+| `ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp` | `MPG` only copies and invalidates the VU1 decode cache when the uploaded code differs | VCS re-uploads its microcode every frame (full re-decode each time) |
+| `ps2xRuntime/src/lib/gs/gs_cpu_backend.{h,cpp}` | `ClutHash` cached behind a dirty flag; fast path for whole-rectangle uploads (CT32/CT16/T8/T4: no per-pixel switch, div, mod) | ClutHash ran per paletted draw (17% of the frame); ~10k texture uploads/s |
+| `ps2xRuntime/src/lib/gs/gs_hw.cpp` | Textures that are an intact whole upload are keyed by upload content, not page generation; identical re-uploads to untouched pages are skipped; `PS2X_HW_UPSTATS=1` | VCS streams textures through shared VRAM every frame: every draw missed the cache and re-decoded |
+| `ps2xRuntime/src/lib/Kernel/EeScheduler.cpp` | EE timers advanced in batches of >= 512 EE cycles | Ran at every guest dispatch (~6%) |
+| `ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp` | `PS2X_VU1_VERIFY` reports data/register/packet differences before cycle-count ones | Cycle differences (expected for the throughput variant) hid everything else |
+| `ps2xRuntime/src/lib/ps2_memory.cpp` | `PS2X_LOG_MPG_SOURCES=1`: each distinct microcode upload as "ELF source, VU address, pairs" | Builds game/vcs/vu1_uploads.txt |
+| `ps2xRuntime/src/lib/ps2_runtime.cpp` | `PS2X_TRACE_VU0=1`: VU0 microprogram calls and host time per start address | Profiling |

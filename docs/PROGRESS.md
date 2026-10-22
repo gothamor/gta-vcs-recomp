@@ -40,7 +40,8 @@
 - [x] Static world (terrain, buildings) not drawn: VCALLMSR used vi[27] instead of
       CMSAR0, so the VU0 sector frustum test culled everything. Fixed; ground,
       buildings and the skyline render.
-- [ ] Game logic runs ~10 frames/s in game (target 30): profile
+- [~] In-game speed: 11 -> ~35-50 VBlanks/s (compiled VU1, texture/CLUT/upload/timer
+      fixes). Remaining: VU0 programs 0x0CF8 / 0x0EB8 (~25%), guest code (~23%)
 - [ ] Performance: per-instruction `ctx->pc` stores (emitter now skips them for
       pure ALU ops - needs a regenerate + test), `__restrict` for generated code
 

@@ -2308,8 +2308,6 @@ void VU1Interpreter::runVerified(uint8_t *vuCode, uint32_t codeSize,
         what = "clip";
     if (what.empty() && (a.pc != b.pc || a.ebit != b.ebit))
         what = "pc";
-    if (what.empty() && reference->m_cycle != m_cycle)
-        what = "cycles " + std::to_string(reference->m_cycle) + " vs " + std::to_string(m_cycle);
     if (what.empty() && std::memcmp(referenceData.data(), vuData, dataSize) != 0)
     {
         uint32_t at = 0u;
@@ -2319,6 +2317,9 @@ void VU1Interpreter::runVerified(uint8_t *vuCode, uint32_t codeSize,
     }
     if (what.empty() && referenceKicks != kicks)
         what = "xgkick packets (" + std::to_string(referenceKicks.size()) + " vs " + std::to_string(kicks.size()) + ")";
+    // [gta-recomp] cycles last: the compiled throughput variant legitimately finishes a few cycles early
+    if (what.empty() && reference->m_cycle != m_cycle)
+        what = "cycles " + std::to_string(reference->m_cycle) + " vs " + std::to_string(m_cycle);
     if (!what.empty() && ++mismatches <= 40u)
         std::fprintf(stderr, "[vu1verify] program %u (start pc 0x%x): differs in %s%c", programs, startPc, what.c_str(), 10);
     if ((programs & 0xFFFu) == 0u)

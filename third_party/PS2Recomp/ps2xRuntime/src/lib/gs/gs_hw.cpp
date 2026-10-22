@@ -575,8 +575,110 @@ void main()
                     }
                 }
             }
+            // [gta-recomp] Games re-send the same textures every frame. A whole-transfer upload identical to the last
+            // one to the same place, with nothing else written to those pages since, changes nothing: skip the
+            // swizzled write and keep the page generations (so cached GL textures stay valid).
+            const GSTransferCommand &t = m_transfer;
+            uint32_t first = 0, last = 0;
+            pageRange(t.bitbltbuf.dbp, t.bitbltbuf.dbw, t.bitbltbuf.dpsm, t.trxpos.dsax, t.trxpos.dsay, t.trxreg.rrw, t.trxreg.rrh,
+                      first, last);
+            const uint64_t bitsPerPixel = transferBitsPerPixel(t.bitbltbuf.dpsm);
+            const bool wholeTransfer = bitsPerPixel != 0u && last <= kPages &&
+                                       static_cast<uint64_t>(t.trxreg.rrw) * t.trxreg.rrh * bitsPerPixel / 8u == sizeBytes;
+            uint64_t uploadKey = 0, dataHash = 0;
+            { // PS2X_HW_UPSTATS=1: upload kinds every 5 s
+                static const bool stats = std::getenv("PS2X_HW_UPSTATS") != nullptr;
+                static uint64_t whole = 0, partial = 0, bytesWhole = 0, bytesPartial = 0;
+                static auto last = std::chrono::steady_clock::now();
+                if (stats)
+                {
+                    (wholeTransfer ? whole : partial) += 1;
+                    (wholeTransfer ? bytesWhole : bytesPartial) += sizeBytes;
+                    if (!wholeTransfer && partial < 20)
+                        std::fprintf(stderr, "[upload] partial: %u bytes, rect %ux%u psm %u (expects %llu)\n", sizeBytes, t.trxreg.rrw,
+                                     t.trxreg.rrh, t.bitbltbuf.dpsm,
+                                     static_cast<unsigned long long>(uint64_t(t.trxreg.rrw) * t.trxreg.rrh * bitsPerPixel / 8u));
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now - last > std::chrono::seconds(5))
+                    {
+                        last = now;
+                        std::fprintf(stderr, "[upload] whole %llu (%llu KB) partial %llu (%llu KB) skipped %llu\n",
+                                     (unsigned long long)whole, (unsigned long long)(bytesWhole >> 10), (unsigned long long)partial,
+                                     (unsigned long long)(bytesPartial >> 10), (unsigned long long)m_skippedUploads);
+                        whole = partial = bytesWhole = bytesPartial = 0;
+                        m_skippedUploads = 0;
+                    }
+                }
+            }
+            if (wholeTransfer)
+            {
+                uploadKey = mix64(mix64(0x51ull, t.bitbltbuf.dbp | (uint64_t(t.bitbltbuf.dbw) << 16) | (uint64_t(t.bitbltbuf.dpsm) << 24) |
+                                                     (uint64_t(t.trxpos.dsax) << 32) | (uint64_t(t.trxpos.dsay) << 48)),
+                                  t.trxreg.rrw | (uint64_t(t.trxreg.rrh) << 16) | (uint64_t(sizeBytes) << 32));
+                dataHash = hashBytes(data, sizeBytes);
+                auto it = m_uploads.find(uploadKey);
+                if (it != m_uploads.end() && it->second.hash == dataHash && it->second.first == first && it->second.gens.size() == last - first)
+                {
+                    bool untouched = true;
+                    for (uint32_t p = first; p < last && untouched; ++p)
+                        untouched = m_pageGen[p] == it->second.gens[p - first];
+                    if (untouched)
+                    {
+                        ++m_skippedUploads;
+                        return;
+                    }
+                }
+            }
             m_cpu.UploadImage(data, sizeBytes);
             touchTransferDest();
+            if (wholeTransfer)
+            {
+                UploadInfo &info = m_uploadAt[t.bitbltbuf.dbp];
+                info.hash = dataHash;
+                info.dbw = t.bitbltbuf.dbw;
+                info.dpsm = t.bitbltbuf.dpsm;
+                info.x = t.trxpos.dsax;
+                info.y = t.trxpos.dsay;
+                info.w = t.trxreg.rrw;
+                info.h = t.trxreg.rrh;
+                info.first = first;
+                info.gens.assign(m_pageGen + first, m_pageGen + last);
+                if (m_uploads.size() > 4096u)
+                    m_uploads.clear();
+                UploadRecord &rec = m_uploads[uploadKey];
+                rec.hash = dataHash;
+                rec.first = first;
+                rec.gens.assign(m_pageGen + first, m_pageGen + last);
+            }
+        }
+
+        static uint64_t transferBitsPerPixel(uint32_t psm)
+        {
+            switch (psm)
+            {
+            case GS_PSM_CT32: case GS_PSM_Z32: return 32u;
+            case GS_PSM_CT24: case GS_PSM_Z24: return 24u;
+            case GS_PSM_CT16: case GS_PSM_CT16S: case GS_PSM_Z16: case GS_PSM_Z16S: return 16u;
+            case GS_PSM_T8: case GS_PSM_T8H: return 8u;
+            case GS_PSM_T4: case GS_PSM_T4HL: case GS_PSM_T4HH: return 4u;
+            default: return 0u;
+            }
+        }
+
+        static uint64_t hashBytes(const uint8_t *data, uint32_t size)
+        {
+            uint64_t h = 0x9E3779B97F4A7C15ull ^ size;
+            uint32_t i = 0;
+            for (; i + 8u <= size; i += 8u)
+            {
+                uint64_t v;
+                std::memcpy(&v, data + i, 8);
+                h = (h ^ (v * 0xBF58476D1CE4E5B9ull)) * 0x94D049BB133111EBull;
+                h ^= h >> 29;
+            }
+            for (; i < size; ++i)
+                h = (h ^ data[i]) * 0x100000001B3ull;
+            return h;
         }
 
         void Flush() override { m_cpu.Flush(); }
@@ -879,8 +981,26 @@ void main()
                                   t.psm == GS_PSM_T4HH;
             if (paletted)
                 key = mix64(key, m_cpu.ClutHash(t));
-            for (uint32_t p = first; p < last && p < kPages; ++p)
-                key = mix64(key, m_pageGen[p]);
+            // [gta-recomp] Texture = an intact whole upload (same base/format/width, covers it, pages untouched since):
+            // key it by the upload's content instead of the page generations, so a texture that is streamed into a
+            // shared VRAM area every frame finds its decoded GL copy again.
+            bool contentKeyed = false;
+            if (auto up = m_uploadAt.find(t.tbp0); up != m_uploadAt.end())
+            {
+                const UploadInfo &u = up->second;
+                if (u.dpsm == t.psm && u.dbw == t.tbw && u.x == 0u && u.y == 0u && u.w >= d.textureWidth && u.h >= d.textureHeight &&
+                    first >= u.first && last <= u.first + u.gens.size())
+                {
+                    contentKeyed = true;
+                    for (uint32_t p = first; p < last && contentKeyed; ++p)
+                        contentKeyed = m_pageGen[p] == u.gens[p - u.first];
+                    if (contentKeyed)
+                        key = mix64(mix64(key ^ 0xC0FFEEull, u.hash), u.w | (uint64_t(u.h) << 16));
+                }
+            }
+            if (!contentKeyed)
+                for (uint32_t p = first; p < last && p < kPages; ++p)
+                    key = mix64(key, m_pageGen[p]);
             s.texKey = key;
             auto it = m_texLru.find(key);
             if (it != m_texLru.end())
@@ -1510,6 +1630,21 @@ void main()
         std::unique_ptr<Frame> m_frame;
         uint64_t m_frameIndex = 0;
         uint32_t m_pageGen[kPages]{};
+        struct UploadRecord // [gta-recomp] last whole-transfer upload per destination (see UploadImage)
+        {
+            uint64_t hash = 0;
+            uint32_t first = 0;
+            std::vector<uint32_t> gens;
+        };
+        std::unordered_map<uint64_t, UploadRecord> m_uploads;
+        struct UploadInfo // [gta-recomp] last whole upload per base pointer (content-keyed textures)
+        {
+            uint64_t hash = 0;
+            uint32_t dbw = 0, dpsm = 0, x = 0, y = 0, w = 0, h = 0, first = 0;
+            std::vector<uint32_t> gens;
+        };
+        std::unordered_map<uint32_t, UploadInfo> m_uploadAt;
+        uint64_t m_skippedUploads = 0;
         std::unordered_map<uint64_t, uint64_t> m_texLru;  // key -> last frame used
         std::unordered_map<uint32_t, RtInfo> m_rts;       // fbp -> extent (game thread's view)
 

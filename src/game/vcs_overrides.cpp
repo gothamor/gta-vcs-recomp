@@ -357,6 +357,21 @@ namespace
     void traceBoxClip(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t prog = GPR_U32(ctx, 4), box = GPR_U32(ctx, 5), out0 = GPR_U32(ctx, 6), out1 = GPR_U32(ctx, 7);
+        static bool dumped = false;
+        if (!dumped)
+        {
+            dumped = true;
+            if (FILE *f = std::fopen("vu0_code.bin", "wb"))
+            {
+                std::fwrite(runtime->memory().getVU0Code(), 1, PS2_VU0_CODE_SIZE, f);
+                std::fclose(f);
+            }
+            if (FILE *f = std::fopen("vu0_data.bin", "wb"))
+            {
+                std::fwrite(runtime->memory().getVU0Data(), 1, PS2_VU0_DATA_SIZE, f);
+                std::fclose(f);
+            }
+        }
         FUN_0030c8d4_0x30c8d4(rdram, ctx, runtime);
         static int samples = 0;
         static uint64_t calls = 0, allIn = 0;
@@ -383,6 +398,14 @@ namespace
         installCallCounters(runtime);
         if (std::getenv("VCS_TRACE_BOXCLIP"))
             runtime.replaceFunction(0x0030C8D4u, &traceBoxClip);
+        if (std::getenv("VCS_EXPERIMENT_NOCLIP")) // timing experiment only: every sector box "fully inside"
+            runtime.replaceFunction(0x0030C8D4u, [](uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+                                    {
+                                        const uint32_t v = 0x3Fu;
+                                        std::memcpy(rdram + (GPR_U32(ctx, 6) & 0x01FFFFFFu), &v, 4);
+                                        std::memcpy(rdram + (GPR_U32(ctx, 7) & 0x01FFFFFFu), &v, 4);
+                                        ctx->pc = GPR_U32(ctx, 31);
+                                    });
         if (std::getenv("VCS_TRACE_VISIBLE"))
             runtime.replaceFunction(0x003816F8u, &traceSphereVisible);
         if (std::getenv("VCS_TRACE_DMASEND"))
