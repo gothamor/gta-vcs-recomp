@@ -17,6 +17,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #if defined(_WIN32)
@@ -62,6 +63,7 @@ namespace ps2control
         };
         std::mutex g_queueMutex;
         std::deque<std::shared_ptr<Command>> g_queue;
+        std::unordered_map<std::string, CommandHandler> g_extraCommands; // [gta-recomp] addCommand (main thread)
 
         struct Release
         {
@@ -207,10 +209,29 @@ namespace ps2control
                 command->reply.set_value("ok");
                 quit();
             }
+            else if (auto extra = g_extraCommands.find(verb); extra != g_extraCommands.end())
+            {
+                std::string args;
+                std::getline(in >> std::ws, args);
+                auto once = std::make_shared<std::atomic<bool>>(false);
+                extra->second(args, [command, once](const std::string &answer) {
+                    if (!once->exchange(true))
+                        command->reply.set_value(answer);
+                });
+            }
             else
-                command->reply.set_value("error unknown command '" + verb + "' (ping, screenshot, key, press, perf, quit)");
+                command->reply.set_value("error unknown command '" + verb + "' (ping, screenshot, key, press, perf, quit" +
+                                         [] {
+                                             std::string names;
+                                             for (const auto &[name, handler] : g_extraCommands)
+                                                 names += ", " + name;
+                                             return names;
+                                         }() +
+                                         ")");
         }
     }
+
+    void addCommand(const std::string &verb, CommandHandler handler) { g_extraCommands[verb] = std::move(handler); }
 
     bool hiddenMode()
     {

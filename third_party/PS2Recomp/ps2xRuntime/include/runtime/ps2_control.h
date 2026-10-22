@@ -34,6 +34,13 @@ namespace ps2control
     // Main thread. start() after the window exists; pump() once per frame after drawing - it runs the queued
     // commands; `capture` renders the current picture into a PNG and returns "<w>x<h>" or "" on failure.
     void start();
+
+    // [gta-recomp] More commands, from the game layer (src/debug/rig.cpp). Register before start(). The handler
+    // runs on the main thread with the rest of the line; it answers through `reply` ("ok ..." / "error ..."),
+    // at once or later from any thread (e.g. after the game thread did the work). One answer per command.
+    using Reply = std::function<void(const std::string &answer)>;
+    using CommandHandler = std::function<void(const std::string &args, Reply reply)>;
+    void addCommand(const std::string &verb, CommandHandler handler);
     void pump(const std::function<std::string(const std::string &path)> &capture, const std::function<void()> &quit);
     void stop();
 }

@@ -5,6 +5,7 @@
 // unity batch (~9 min), while this file only needs a relink.
 // Once a binding is settled it can move to overrides.toml.
 #include "game_overrides.h"
+#include "debug/rig.h"
 #include "game/vcs_display.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -599,6 +600,7 @@ namespace
     {
         ps2perf::markGameFrame();
         vcs::applyDisplay(rdram); // widescreen preference / aspect (settings menu)
+        vcs::rig::onGameFrame(rdram, ctx, runtime); // automation rig jobs (debug/rig.h)
         FUN_002723e8_0x2723e8(rdram, ctx, runtime);
     }
 

@@ -14,6 +14,7 @@
 
 #include "debug/crash.h"
 #include "debug/profiler.h"
+#include "debug/rig.h"
 #include "debug/selftest.h"
 #include "debug/watchdog.h"
 #include "disc/iso_image.h"
@@ -330,6 +331,7 @@ int main(int argc, char *argv[])
         paths.mcRoot = data / "mc0";
         PS2Runtime::setIoPaths(paths);
 
+        vcs::rig::install(runtime); // control-channel automation commands (debug/rig.h)
         vcs::configureWatch();
         vcs::runSelfTest(runtime);
         vcs::startWatchdog(runtime);
