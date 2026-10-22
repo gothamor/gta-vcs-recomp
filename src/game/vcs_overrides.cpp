@@ -399,15 +399,46 @@ namespace
     // Each call is made as a guest tail call from scePadRead (pc = function, ra = scePadRead's return address),
     // so scheduler checkpoints inside the save unwind and resume normally; scePadRead's own result is lost
     // for those frames. Lets the save path be tested without playing to a safehouse.
+    //
+    // VCS_DUMP_RAM=<s>[,<s>...]: write all 32 MB of EE RAM to ram_<s>.bin at those seconds after boot
+    // (finding game structures by diffing snapshots).
     PS2Runtime::RecompiledFunction g_origPadRead = nullptr;
+    void dumpRamOnSchedule(const uint8_t *rdram)
+    {
+        static const char *env = std::getenv("VCS_DUMP_RAM");
+        static const auto start = std::chrono::steady_clock::now();
+        static size_t next = 0;
+        if (!env)
+            return;
+        const char *p = env;
+        for (size_t i = 0; i < next && p; ++i)
+            p = std::strchr(p, ',') ? std::strchr(p, ',') + 1 : nullptr;
+        if (!p || !*p)
+            return;
+        const int at = std::atoi(p);
+        if (std::chrono::steady_clock::now() - start < std::chrono::seconds(at))
+            return;
+        ++next;
+        char name[64];
+        std::snprintf(name, sizeof(name), "ram_%d.bin", at);
+        if (FILE *f = std::fopen(name, "wb"))
+        {
+            std::fwrite(rdram, 1, 32u * 1024u * 1024u, f);
+            std::fclose(f);
+            std::fprintf(stderr, "[ram] wrote %s\n", name);
+        }
+    }
+
     void testSaveOnPadRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static const auto start = std::chrono::steady_clock::now();
-        static const int delay = std::atoi(std::getenv("VCS_TEST_SAVE"));
+        static const char *saveEnv = std::getenv("VCS_TEST_SAVE");
+        static const int delay = saveEnv ? std::atoi(saveEnv) : 0;
         static int step = 0;
         constexpr uint32_t kCardManager = 0x00510480u, kSavingFlag = 0x0048A664u;
         g_origPadRead(rdram, ctx, runtime);
-        if (step > 3 || std::chrono::steady_clock::now() - start < std::chrono::seconds(delay))
+        dumpRamOnSchedule(rdram);
+        if (!saveEnv || step > 3 || std::chrono::steady_clock::now() - start < std::chrono::seconds(delay))
             return;
         uint32_t status = 0;
         std::memcpy(&status, rdram + kCardManager + 0x54u, 4);
@@ -417,15 +448,6 @@ namespace
             SET_GPR_U32(ctx, 5, 0u);
             ctx->pc = function;
         };
-        if (std::getenv("VCS_TEST_LOAD")) // load slot 1 instead (FUN_00277688(manager, slot), as FUN_0021cb98 does)
-        {
-            if (step++ == 0)
-            {
-                std::fprintf(stderr, "[mc-test] loading slot 1 (status %u)\n", status);
-                tailCall(0x00277688u);
-            }
-            return;
-        }
         switch (step++)
         {
         case 0:
@@ -450,26 +472,110 @@ namespace
         }
     }
 
+    // VCS_TRACE_SECTORS=1: why FUN_00240ED8(level, sector) skips sectors, every 5 s. It draws a sector only when
+    // the sector has a model index (+2) whose slot in the level's model table (*(level+0x1C))[idx*12] holds a
+    // loaded model; the culling result decides the rest.
+    uint64_t g_sectorCalls = 0; // FUN_00240ED8 calls, for VCS_TRACE_CELL
+    void traceSector(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        ++g_sectorCalls;
+        static uint64_t calls = 0, noSector = 0, noIndex = 0, notLoaded = 0, loaded = 0;
+        static auto last = std::chrono::steady_clock::now();
+        static std::map<uint32_t, uint32_t> missing; // model index -> count
+        const auto rd32 = [&](uint32_t a) { uint32_t v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
+        const uint32_t level = GPR_U32(ctx, 4), sector = GPR_U32(ctx, 5);
+        ++calls;
+        if (!sector)
+            ++noSector;
+        else
+        {
+            uint16_t idx = 0;
+            std::memcpy(&idx, rdram + ((sector + 2u) & 0x01FFFFFFu), 2);
+            if (!idx)
+                ++noIndex;
+            else if (!rd32(rd32(rd32(level + 0x1Cu)) + idx * 12u))
+            {
+                ++notLoaded;
+                ++missing[idx];
+            }
+            else
+                ++loaded;
+        }
+        FUN_00240ed8_0x240ed8(rdram, ctx, runtime);
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last < std::chrono::seconds(5))
+            return;
+        last = now;
+        std::fprintf(stderr, "[sector] %llu calls: no sector %llu, no model %llu, model not loaded %llu, loaded %llu; missing idx:",
+                     (unsigned long long)calls, (unsigned long long)noSector, (unsigned long long)noIndex,
+                     (unsigned long long)notLoaded, (unsigned long long)loaded);
+        int shown = 0;
+        for (const auto &[idx, n] : missing)
+            if (shown++ < 12)
+                std::fprintf(stderr, " %u(x%u)", idx, n);
+        std::fprintf(stderr, " [%zu distinct]\n", missing.size());
+        calls = noSector = noIndex = notLoaded = loaded = 0;
+        missing.clear();
+    }
+
+    // VCS_TRACE_CELL=1: the world is drawn relative to the "current" hex cell (*(level+0x248): grid x at +8, y at
+    // +0xC; FUN_00241F00 turns it into a world origin). Logs that cell every 2 s from the sector walk
+    // FUN_0023E748, and the focus position each time FUN_0023C188(level, pos) re-evaluates it.
+    void traceCellWalk(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static auto last = std::chrono::steady_clock::now();
+        const auto rd32 = [&](uint32_t a) { uint32_t v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
+        const uint32_t level = GPR_U32(ctx, 4);
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last > std::chrono::seconds(2))
+        {
+            last = now;
+            const uint32_t cur = rd32(level + 0x248u), next = rd32(level + 0x250u);
+            const int32_t gx = static_cast<int32_t>(rd32(cur + 8u)), gy = static_cast<int32_t>(rd32(cur + 0xCu));
+            const float ox = (gx + 0.5f - (gy & 1) * 0.5f) * 125.0f - 2400.0f, oy = (gy + 0.5f) * 108.25f - 2000.0f;
+            std::fprintf(stderr, "[cell] level=0x%x current=0x%x grid=(%d,%d) origin=(%.1f,%.1f) loaded=%u next=0x%x grid=(%d,%d) loaded=%u camera=(%.1f,%.1f,%.1f)\n",
+                         level, cur, gx, gy, ox, oy, rd32(cur + 0x18u), next, static_cast<int32_t>(rd32(next + 8u)),
+                         static_cast<int32_t>(rd32(next + 0xCu)), rd32(next + 0x18u), guestFloat(rdram, 0x006F4500u),
+                         guestFloat(rdram, 0x006F4504u), guestFloat(rdram, 0x006F4508u));
+        }
+        static uint64_t walks = 0, emptyWalks = 0, skippedGrid = 0;
+        static auto lastWalk = std::chrono::steady_clock::now();
+        const uint64_t before = g_sectorCalls;
+        if (static_cast<int32_t>(rd32(rd32(level + 0x248u) + 8u)) <= 0)
+            ++skippedGrid;
+        FUN_0023e748_0x23e748(rdram, ctx, runtime);
+        ++walks;
+        emptyWalks += (g_sectorCalls == before) ? 1u : 0u;
+        if (now - lastWalk > std::chrono::seconds(1))
+        {
+            lastWalk = now;
+            std::fprintf(stderr, "[cell] walks %llu, without sectors %llu, grid<=0 %llu\n", (unsigned long long)walks,
+                         (unsigned long long)emptyWalks, (unsigned long long)skippedGrid);
+            walks = emptyWalks = skippedGrid = 0;
+        }
+    }
+    void traceCellFocus(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t pos = GPR_U32(ctx, 5);
+        const float x = guestFloat(rdram, pos), y = guestFloat(rdram, pos + 4), z = guestFloat(rdram, pos + 8);
+        const int row = static_cast<int>((y + 2000.0f) * (1.0f / 108.25f));
+        const int col = static_cast<int>((x + 2400.0f) * 0.008f + (row & 1) * 0.5f);
+        std::fprintf(stderr, "[cell] focus (%.1f,%.1f,%.1f) -> grid (%d,%d)\n", x, y, z, col, row);
+        FUN_0023c188_0x23c188(rdram, ctx, runtime);
+    }
+
     void applyVcs(PS2Runtime &runtime)
     {
-        installCallCounters(runtime);
-        if (std::getenv("VCS_TEST_LOAD"))
+        if (std::getenv("VCS_TRACE_SECTORS"))
+            runtime.replaceFunction(0x00240ED8u, &traceSector);
+        if (std::getenv("VCS_TRACE_CELL"))
         {
-            // log what the load returns (only when it really returned, not when a checkpoint unwound it)
-            static PS2Runtime::RecompiledFunction original = runtime.lookupFunction(0x00277688u);
-            runtime.replaceFunction(0x00277688u, [](uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
-            {
-                const uint32_t ra = GPR_U32(ctx, 31);
-                original(rdram, ctx, rt);
-                if (ctx->pc == ra)
-                {
-                    uint32_t status = 0;
-                    std::memcpy(&status, rdram + 0x00510480u + 0x54u, 4);
-                    std::fprintf(stderr, "[mc-test] load returned %d, manager status %u\n", static_cast<int32_t>(GPR_U32(ctx, 2)), status);
-                }
-            });
+            runtime.replaceFunction(0x00240ED8u, &traceSector);
+            runtime.replaceFunction(0x0023E748u, &traceCellWalk);
+            runtime.replaceFunction(0x0023C188u, &traceCellFocus);
         }
-        if (std::getenv("VCS_TEST_SAVE"))
+        installCallCounters(runtime);
+        if (std::getenv("VCS_TEST_SAVE") || std::getenv("VCS_DUMP_RAM"))
         {
             g_origPadRead = runtime.lookupFunction(0x00449488u); // scePadRead: polled every frame
             if (g_origPadRead)

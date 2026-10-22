@@ -1588,6 +1588,26 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                                 std::fprintf(stderr, "[dma-range] ch=0x%08x tag@0x%08x id=%u qwc=%u data=0x%08x\n", channelBase,
                                              currentTagAddr, id, tagQwc, dataAddr);
                         }
+                        { // [gta-recomp] PS2X_DMA_HIST=1: VIF1 chain payload quadwords per 1 MB of guest RAM, every 5 s
+                            static const bool hist = std::getenv("PS2X_DMA_HIST") != nullptr;
+                            static uint64_t qwcByMb[32] = {};
+                            static auto last = std::chrono::steady_clock::now();
+                            if (hist && hasPayload && channelBase == 0x10009000u)
+                            {
+                                qwcByMb[(dataAddr >> 20) & 31u] += tagQwc;
+                                const auto now = std::chrono::steady_clock::now();
+                                if (now - last > std::chrono::seconds(5))
+                                {
+                                    last = now;
+                                    std::fprintf(stderr, "[dma-hist]");
+                                    for (uint32_t mb = 0; mb < 32u; ++mb)
+                                        if (qwcByMb[mb])
+                                            std::fprintf(stderr, " %02x:%llu", mb, static_cast<unsigned long long>(qwcByMb[mb]));
+                                    std::fprintf(stderr, "\n");
+                                    std::memset(qwcByMb, 0, sizeof(qwcByMb));
+                                }
+                            }
+                        }
                         if (irq && tieEnabled)
                             endChain = true;
                         if (endChain)

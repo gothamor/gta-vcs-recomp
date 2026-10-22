@@ -58,7 +58,10 @@
       to `%LOCALAPPDATA%/VCSRecomp/mc0` (verified with `VCS_TEST_SAVE`); boot finds the save
 - [ ] Memory card load: not verified - the frontend menu (Start/Load Game) does not appear
       on screen, so Load Game cannot be picked yet
-- [ ] Frontend menu rendering (title menu invisible; Return starts a new game blind)
+- [x] Frontend menus render (pause menu, LOAD/NEW/DELETE menu when a save exists)
+- [x] World vanishing when moving fast / driving: HW renderer never cleared the bottom half of
+      the Z buffer (see PS2RECOMP_PATCHES.md, gs_hw.cpp depth fill)
+- [ ] Water surface looks missing (dark grey where sea should be) - to check
 - [ ] Movies
 ## Phase 5 - stability
 ## Phase 6 - enhancements
@@ -83,6 +86,9 @@
 | `PS2X_AUDIO=0`, `PS2X_AUDIO_DUMP=f.wav`, `PS2X_AUDIO_STATS=1` | no audio output / record the SPU2 mix / underrun and fill stats |
 | `PS2X_IOP_REALTIME=0` | IOP time purely from EE cycles (audio slows with the game) |
 | `VCS_TEST_SAVE=s` | save to slot 1 through the game's code s seconds after boot |
+| `VCS_TRACE_SECTORS=1`, `VCS_TRACE_CELL=1` | world sector draw / current hex cell vs camera |
+| `VCS_DUMP_RAM=s,s,...` | write EE RAM to ram_<s>.bin at those seconds |
+| `PS2X_DMA_HIST=1` | VIF1 payload per MB of RAM every 5 s |
 | `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate a slow PC) |
 | `PS2X_VU0_VERIFY=1`, `PS2X_VU0_NATIVE=0` | check / disable native VU0 programs |
 | `PS2X_VU1_VERIFY=1`, `PS2X_VU1_COMPILED=0` | check / disable compiled VU1 code |

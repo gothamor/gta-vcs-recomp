@@ -69,6 +69,7 @@ namespace
         RtUpload,
         RtDrop,
         Clear,
+        DepthFill,
     };
 
     struct Cmd
@@ -102,6 +103,13 @@ namespace
         uint32_t rgba;
     };
 
+    // [gta-recomp] A flat colour draw into the memory of a depth buffer, as a depth clear of the rows it covers.
+    struct DepthFillCmd
+    {
+        uint32_t zbp, width, y0, y1; // depth-buffer pixels
+        float value;                 // 0..1, same scale as HwVertex::z
+    };
+
     struct Frame
     {
         std::vector<Cmd> cmds;
@@ -112,6 +120,7 @@ namespace
         std::vector<RtUpload> rtUploads;
         std::vector<uint32_t> rtDrops;
         std::vector<ClearCmd> clears;
+        std::vector<DepthFillCmd> depthFills;
         uint64_t privRegs[15]{};
         // Display from CPU VRAM when no render target holds the displayed buffer.
         std::vector<uint32_t> cpuDisplay;
@@ -495,6 +504,14 @@ void main()
             }
             if (!n)
                 return;
+            if (s.zte && s.ztst != 1u && s.zbp != s.fbp) // a depth buffer in real use (tested against)
+            {
+                DepthInfo &di = m_depthBufs[s.zbp];
+                di.zpsm = s.zpsm;
+                di.fbw = s.fbw;
+            }
+            if (depthFill(batch, s, out, n))
+                return;
             noteTarget(s.fbp, s.fbw, s.fpsm, out, n);
             Frame &f = *m_frame;
             if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != CmdType::Draw ||
@@ -505,6 +522,94 @@ void main()
             }
             f.vertices.insert(f.vertices.end(), out, out + n);
             f.draws.back().count += n;
+        }
+
+        struct DepthInfo // [gta-recomp] depth buffers seen in use (see depthFill)
+        {
+            uint32_t zpsm = 0, fbw = 1;
+        };
+
+        // [gta-recomp] Games clear Z by drawing a flat colour sprite into the depth buffer's memory. VCS (Z24 640x448
+        // at zbp 280) draws one 640x224 CT32 sprite with FBP = 280 and ZBP = 350, Z test ALWAYS, Z write on: the colour
+        // write clears the first half of the Z buffer's pages, its own depth write (Z 0 at page 350 onwards) the second
+        // half. Our depth buffers are GL textures, not VRAM, so both writes become depth clears of the rows of the real
+        // depth buffer whose pages they cover. Without this the bottom half of the Z buffer kept stale depth: the world
+        // vanished wherever the camera had moved (ground and sky gone when driving, after camera cuts).
+        bool depthFill(const GSPrimitiveBatch &batch, const HwState &s, const HwVertex *v, uint32_t n)
+        {
+            if (!depthBufferAt(s.fbp) || s.tme || s.abe || s.fbmsk != 0u)
+                return false;
+            if (s.fpsm != GS_PSM_CT32 && s.fpsm != GS_PSM_CT24 && s.fpsm != GS_PSM_CT16 && s.fpsm != GS_PSM_CT16S)
+                return false;
+            float y0 = 1e9f, y1 = -1e9f;
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                y0 = std::min(y0, v[i].y);
+                y1 = std::max(y1, v[i].y);
+            }
+            y0 = std::max(y0, static_cast<float>(s.scy0));
+            y1 = std::min(y1, static_cast<float>(s.scy1) + 1.0f);
+            if (y1 <= y0)
+                return true;
+            const GSVertex &last = batch.vertices[batch.vertexCount - 1u];
+            const uint32_t rgba = last.r | (uint32_t(last.g) << 8) | (uint32_t(last.b) << 16) | (uint32_t(last.a) << 24);
+            // the colour write
+            fillDepthPages(s.fbp, s.fbw, s.fpsm, y0, y1, [&](uint32_t zpsm) {
+                return (zpsm == GS_PSM_Z32) ? static_cast<float>(rgba / 4294967296.0)
+                     : (zpsm == GS_PSM_Z16 || zpsm == GS_PSM_Z16S) ? (rgba & 0xFFFFu) / 65536.0f
+                                                                   : (rgba & 0xFFFFFFu) / 16777216.0f;
+            });
+            // the draw's own depth write, when it lands inside a depth buffer too
+            if (s.zte && s.ztst == 1u && !s.zmsk)
+            {
+                const float z = v[n - 1u].z;
+                fillDepthPages(s.zbp, s.fbw, s.zpsm, y0, y1, [&](uint32_t) { return z; });
+            }
+            return true;
+        }
+
+        // The depth buffer whose pages contain `page`, if any.
+        const std::pair<const uint32_t, DepthInfo> *depthBufferAt(uint32_t page) const
+        {
+            for (const auto &entry : m_depthBufs)
+            {
+                uint32_t zpw, zph;
+                pageSize(entry.second.zpsm, zpw, zph);
+                const uint32_t perRow = std::max<uint32_t>(1u, (std::max<uint32_t>(entry.second.fbw, 1u) * 64u + zpw - 1u) / zpw);
+                if (page >= entry.first && page < entry.first + perRow * ((512u + zph - 1u) / zph))
+                    return &entry;
+            }
+            return nullptr;
+        }
+
+        // Rows y0..y1 of a buffer at `base` (width fbw, format psm) as a depth clear of the depth buffer holding them.
+        template <typename ValueFn>
+        void fillDepthPages(uint32_t base, uint32_t fbw, uint32_t psm, float y0, float y1, ValueFn value)
+        {
+            const auto *depth = depthBufferAt(base);
+            if (!depth)
+                return;
+            const DepthInfo &di = depth->second;
+            uint32_t pw, ph, zpw, zph;
+            pageSize(psm, pw, ph);
+            pageSize(di.zpsm, zpw, zph);
+            const uint32_t perRow = std::max<uint32_t>(1u, (std::max<uint32_t>(fbw, 1u) * 64u + pw - 1u) / pw);
+            const uint32_t depthPerRow = std::max<uint32_t>(1u, (std::max<uint32_t>(di.fbw, 1u) * 64u + zpw - 1u) / zpw);
+            const uint32_t pageFirst = base - depth->first + static_cast<uint32_t>(y0) / ph * perRow;
+            const uint32_t pageLast = base - depth->first + (static_cast<uint32_t>(y1) + ph - 1u) / ph * perRow; // exclusive
+            DepthFillCmd fill;
+            fill.zbp = depth->first;
+            fill.width = di.fbw * 64u;
+            fill.y0 = pageFirst / depthPerRow * zph;
+            fill.y1 = (pageLast + depthPerRow - 1u) / depthPerRow * zph;
+            fill.value = value(di.zpsm);
+            static int logged = 0;
+            if (std::getenv("PS2X_HW_DEBUG") && logged++ < 8)
+                std::fprintf(stderr, "[gs-hw] depth fill: base=%u fbw=%u psm=%u y=%.0f..%.0f -> zbp=%u zpsm=%u rows %u..%u value %f\n", base,
+                             fbw, psm, y0, y1, fill.zbp, di.zpsm, fill.y0, fill.y1, fill.value);
+            Frame &f = *m_frame;
+            f.cmds.push_back({CmdType::DepthFill, static_cast<uint32_t>(f.depthFills.size())});
+            f.depthFills.push_back(fill);
         }
 
         void LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut) override
@@ -1333,6 +1438,26 @@ void main()
                     m_gl.glClear(GL_COLOR_BUFFER_BIT);
                     break;
                 }
+                case CmdType::DepthFill:
+                {
+                    const DepthFillCmd &fill = f.depthFills[c.index];
+                    const auto it = m_glDepth.find(fill.zbp);
+                    if (it == m_glDepth.end() || !it->second.tex)
+                        break; // created (cleared) on first use
+                    m_gl.glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
+                    m_gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+                    m_gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, it->second.tex, 0);
+                    m_gl.glEnable(GL_SCISSOR_TEST);
+                    m_gl.glScissor(0, static_cast<GLint>(fill.y0 * m_scale), static_cast<GLsizei>(fill.width * m_scale),
+                                   static_cast<GLsizei>((fill.y1 - fill.y0) * m_scale));
+                    m_gl.glDepthMask(1);
+                    m_gl.glClearDepth(fill.value);
+                    m_gl.glClear(GL_DEPTH_BUFFER_BIT);
+                    if (m_logDraws)
+                        std::fprintf(stderr, "[draw] depth fill zbp=%u rows %u..%u width %u value %.6f\n", fill.zbp, fill.y0, fill.y1,
+                                     fill.width, fill.value);
+                    break;
+                }
                 case CmdType::Draw:
                 {
                     // [gta-recomp] F12 / PS2X_HW_DUMP: list every draw of the dumped frame (state + bounds)
@@ -1647,6 +1772,7 @@ void main()
         uint64_t m_skippedUploads = 0;
         std::unordered_map<uint64_t, uint64_t> m_texLru;  // key -> last frame used
         std::unordered_map<uint32_t, RtInfo> m_rts;       // fbp -> extent (game thread's view)
+        std::unordered_map<uint32_t, DepthInfo> m_depthBufs; // zbp -> format / width
 
         std::mutex m_queueMutex;
         std::condition_variable m_queueCv;

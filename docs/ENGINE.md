@@ -184,6 +184,16 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
 - Entities: `CCamera::IsSphereVisible` = `FUN_003816F8` (VU0 macro transform of the
   centre by the camera matrix, near/far at 0x4CD130 / 0x4CD12C, planes at cam+0xB60).
 - Level object `0x750340` (pointer at `0x48F4F8`).
+- The world is a hex grid of cells (125 x 108.25 units, odd rows offset by half a
+  cell; origin = ((x + 0.5 - (y & 1) / 2) * 125 - 2400, (y + 0.5) * 108.25 - 2000),
+  `FUN_00241F00`). Cell slots at `0x75036C` (+0xA0 each): grid x/y at +8/+0xC,
+  loaded flag +0x18, draw lists via +0x20. `level+0x248` = current cell,
+  `+0x250` = next one; `FUN_0023C820` (per frame) follows TheCamera
+  (`0x6F44D0`, position at +0x30) and `FUN_0023D740` swaps them. Each cell
+  streams ~0.3-0.5 MB of MAINLA.IMG in 6 pieces into `0xCB7A80..0x112A660`.
+  Fort Baxter is around cells (5..7, 16..18).
+- Z buffer: Z24 640x448 at zbp 280, cleared each frame by one 640x224 CT32
+  sprite at FBP 280 whose own Z write goes to ZBP 350 (the second half).
 - VU1 setup programs that never XGKICK (normal): 0x0148 (clear state), 0x0418
   (lighting dispatch via JALR table at VU mem 34..37), 0x0478 (matrices),
   0x2B50 (matrix copy).
@@ -206,6 +216,8 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   when a load was requested from the menu; it reads through `FUN_002759e8`
   (`sceMcRead`).
 - At boot the game reads `icon.sys` (964 bytes) to list the saves.
+- With a save on the card the game boots into a LOAD / NEW / DELETE menu over
+  the title flyover; without one Start begins a new game.
 - `VCS_TEST_SAVE=<s>` (src/game/vcs_overrides.cpp) runs the save sequence as
   guest tail calls from `scePadRead`. A direct host call of a guest function
   is not safe: a scheduler checkpoint inside it unwinds the call and the rest
