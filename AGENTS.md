@@ -59,6 +59,7 @@ python tools/rig.py start --save build/rig/saves/fortbaxter   # straight into ga
 python tools/rig.py player|scripts|peekf 0x4e4910 1|scm <hex>  # inspect / drive the running game
 python tools/tour.py OUT [--every 9 --limit 18]               # world tour (quick subset with --every/--limit)
 python tools/saves.py [OUT]                                   # save / Load Game / Delete Game through the menus
+python tools/soak.py [OUT] --hours 3                          # hours of autodrive: crash / hang / leak / falling
 ```
 
 The rig (`src/debug/rig.cpp`, `tools/rig.py`) drives the game through its own script VM: `Game.teleport`,

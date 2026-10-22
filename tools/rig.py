@@ -66,6 +66,8 @@ class Scm:
     RELEASE_WEATHER = 0x010A
     SET_CHAR_HEALTH = 0x014B
     REQUEST_MODEL = 0x0160
+    MARK_CHAR_AS_NO_LONGER_NEEDED = 0x0112
+    MARK_CAR_AS_NO_LONGER_NEEDED = 0x0113
     MARK_MODEL_AS_NO_LONGER_NEEDED = 0x0162
     SET_CHAR_PROOFS = 0x01B1
     WARP_CHAR_INTO_CAR = 0x021C
@@ -240,9 +242,11 @@ class Game:
                 S.op(S.WARP_CHAR_INTO_CAR, S.PLAYER, S.LOCAL0) + S.op(S.MARK_MODEL_AS_NO_LONGER_NEEDED, S.i(model)))
         return self.scm(code)
 
-    def autodrive(self, model=211, speed=30.0, style=2, driver=(4, 55)):
+    def autodrive(self, model=211, speed=30.0, style=2, driver=(4, 55), release=False):
         """A car with an AI driver (ped type / model) wandering the streets, the player in the passenger seat:
-        realistic driving at speed without steering it ourselves."""
+        realistic driving at speed without steering it ourselves. release: hand car and driver back to the game
+        (MARK_..._AS_NO_LONGER_NEEDED) so they become ordinary traffic and are removed once left behind - for long
+        runs that create many cars."""
         S = Scm
         _, (x, y, z), _ = self.player()
         car, drv = S.LOCAL0, b"\x0e"  # locals 0 and 1
@@ -253,6 +257,8 @@ class Game:
                 S.op(S.SET_CAR_PROOFS, car, S.i(1), S.i(1), S.i(1), S.i(1), S.i(1)) +
                 S.op(S.CAR_WANDER_RANDOMLY, car) + S.op(S.SET_CAR_CRUISE_SPEED, car, S.f(speed)) +
                 S.op(S.SET_CAR_DRIVING_STYLE, car, S.i(style)))
+        if release:
+            code += S.op(S.MARK_CAR_AS_NO_LONGER_NEEDED, car) + S.op(S.MARK_CHAR_AS_NO_LONGER_NEEDED, drv)
         return self.scm(code)
 
     def mission(self, index):
