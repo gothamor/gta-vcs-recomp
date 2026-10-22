@@ -553,31 +553,31 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
 #define FAST_WRITE128(addr, val) Ps2FastWrite128(rdram, (uint32_t)(addr), (val))
 
 #define READ8(addr) ([&]() -> uint8_t {                       \
-    uint32_t _addr = (uint32_t)(addr);                        \
+    uint32_t _addr = (uint32_t)(addr); ps2TraceGuestRead(_addr, 1u, ctx);                        \
     return PS2Runtime::isSpecialAddress(_addr)                \
         ? runtime->Load8(rdram, ctx, _addr)                   \
         : FAST_READ8(_addr); }())
 
 #define READ16(addr) ([&]() -> uint16_t {                     \
-    uint32_t _addr = (uint32_t)(addr);                        \
+    uint32_t _addr = (uint32_t)(addr); ps2TraceGuestRead(_addr, 2u, ctx);                        \
     return PS2Runtime::isSpecialAddress(_addr)                \
         ? runtime->Load16(rdram, ctx, _addr)                  \
         : FAST_READ16(_addr); }())
 
 #define READ32(addr) ([&]() -> uint32_t {                     \
-    uint32_t _addr = (uint32_t)(addr);                        \
+    uint32_t _addr = (uint32_t)(addr); ps2TraceGuestRead(_addr, 4u, ctx);                        \
     return PS2Runtime::isSpecialAddress(_addr)                \
         ? runtime->Load32(rdram, ctx, _addr)                  \
         : FAST_READ32(_addr); }())
 
 #define READ64(addr) ([&]() -> uint64_t {                     \
-    uint32_t _addr = (uint32_t)(addr);                        \
+    uint32_t _addr = (uint32_t)(addr); ps2TraceGuestRead(_addr, 8u, ctx);                        \
     return PS2Runtime::isSpecialAddress(_addr)                \
         ? runtime->Load64(rdram, ctx, _addr)                  \
         : FAST_READ64(_addr); }())
 
 #define READ128(addr) ([&]() -> __m128i {                     \
-    uint32_t _addr = (uint32_t)(addr);                        \
+    uint32_t _addr = (uint32_t)(addr); ps2TraceGuestRead(_addr, 16u, ctx);                        \
     return PS2Runtime::isSpecialAddress(_addr)                \
         ? runtime->Load128(rdram, ctx, _addr)                 \
         : FAST_READ128(_addr); }())

@@ -221,8 +221,18 @@ namespace
         FUN_0010d868_0x10d868(rdram, ctx, runtime);
     }
 
+    // Level loader FUN_0023BAF0(level, ...): reads <level>.LVZ, stores the WRLD image at level+0x1C
+    void traceLevelLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        std::fprintf(stderr, "[level] load level=0x%08x a1=0x%08x a2=0x%08x ra=0x%08x\n", GPR_U32(ctx, 4), GPR_U32(ctx, 5),
+                     GPR_U32(ctx, 6), GPR_U32(ctx, 31));
+        FUN_0023baf0_0x23baf0(rdram, ctx, runtime);
+    }
+
     void applyVcs(PS2Runtime &runtime)
     {
+        if (std::getenv("VCS_TRACE_FILES"))
+            runtime.replaceFunction(0x0023BAF0u, &traceLevelLoad);
         if (std::getenv("VCS_TRACE_SOUND"))
         {
             runtime.replaceFunction(0x0010E970u, &traceSoundCmd);

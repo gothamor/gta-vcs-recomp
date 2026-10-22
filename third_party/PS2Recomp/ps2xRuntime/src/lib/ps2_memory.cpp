@@ -1310,6 +1310,15 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 static const bool trace = std::getenv("PS2X_TRACE_VIF") != nullptr; // [gta-recomp]
                 static int reported = 0;
                 const uint32_t tadr = m_ioRegisters[channelBase + 0x30];
+                static uint32_t rangeLo = 0, rangeHi = 0;
+                static const bool rangeSet = [] {
+                    const char *e = std::getenv("PS2X_TRACE_DMA_RANGE");
+                    return e && std::sscanf(e, "%x,%x", &rangeLo, &rangeHi) == 2;
+                }();
+                static int rangeReported = 0;
+                if (rangeSet && ((madr >= rangeLo && madr < rangeHi) || (tadr >= rangeLo && tadr < rangeHi)) && rangeReported++ < 60)
+                    std::fprintf(stderr, "[dma-range] start ch=0x%08x chcr=0x%08x madr=0x%08x tadr=0x%08x qwc=%u\n", channelBase, value, madr,
+                                 tadr, qwc);
                 if (trace && (((madr | tadr) & 0x80000000u) != 0u) && reported++ < 40)
                     std::fprintf(stderr, "[dma] start ch=0x%08x chcr=0x%08x madr=0x%08x tadr=0x%08x qwc=%u\n", channelBase, value, madr, tadr, qwc);
             }

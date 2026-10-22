@@ -51,3 +51,5 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRecomp/src/lib/fpu_translator.cpp` | **Fix:** `SQRT.S fd, ft` reads the ft field | On the R5900 the operand is in ft (fs is always 0 - all 694 sqrt.s in VCS); upstream read fs, so every sqrtf returned sqrt($f0) (257 sites with ft != 0) |
 | `ps2xRuntime/src/lib/gs/gs_hw.cpp` | F12 (or `PS2X_HW_DUMP=<frame>`) lists the frame's draws (`[draw]` lines) and dumps render targets | Renderer debugging |
 | `ps2xRuntime/src/lib/ps2_memory.cpp`, `ps2_vif1_interpreter.cpp` | `PS2X_TRACE_VIF=1` (unknown VIFcodes, scratchpad DMA), `PS2X_TRACE_DMA_RANGE=lo,hi` (chain payloads from a guest range) | Finding where geometry comes from |
+| `ps2xRuntime/include/ps2_runtime.h`, `ps2_runtime_macros.h`, `src/debug/watch.cpp` | `VCS_RWATCH=lo,hi`: read watchpoint (each distinct reading pc once) in the READ8..READ128 macros | Find which code consumes a data structure |
+| `ps2xRuntime/src/lib/ps2_runtime.cpp`, `vu/ps2_vu1_core.cpp` | `PS2X_TRACE_VU1=1`: per VU1 program start: runs, XGKICKs, runs without a kick | Find microprograms that produce nothing |

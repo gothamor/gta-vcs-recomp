@@ -27,6 +27,7 @@
 #include <atomic>
 #include <thread>
 #include <unordered_map>
+#include <map>
 #include <unordered_set>
 #include <mutex>
 #include <sstream>
@@ -384,6 +385,31 @@ namespace
 // still on the stack (sp off by their sizes -> $ra loaded from someone's locals).
 static bool g_checkpointUnwind = false;
 void ps2ClearCheckpointUnwind() { g_checkpointUnwind = false; }
+
+// [gta-recomp] PS2X_TRACE_VU1=1: per VU1 program start address, runs / XGKICKs / where it stopped, every 5 s.
+extern uint64_t g_vu1XgkickCount;
+static void traceVu1Program(uint32_t startPc, uint64_t kicks, uint32_t endPc)
+{
+    static const bool trace = std::getenv("PS2X_TRACE_VU1") != nullptr;
+    if (!trace)
+        return;
+    struct Stat { uint64_t runs = 0, kicks = 0, zeroKick = 0; uint32_t lastEnd = 0; };
+    static std::map<uint32_t, Stat> stats;
+    static auto last = std::chrono::steady_clock::now();
+    Stat &st = stats[startPc];
+    ++st.runs;
+    st.kicks += kicks;
+    st.zeroKick += kicks == 0u ? 1u : 0u;
+    st.lastEnd = endPc;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last < std::chrono::seconds(5))
+        return;
+    last = now;
+    for (const auto &[pc, v] : stats)
+        std::fprintf(stderr, "[vu1] start=0x%04x runs=%llu kicks=%llu runsWithoutKick=%llu lastEnd=0x%04x\n", pc,
+                     (unsigned long long)v.runs, (unsigned long long)v.kicks, (unsigned long long)v.zeroKick, v.lastEnd);
+    stats.clear();
+}
 
 // [gta-recomp] Report each distinct unlisted mid-body entry once (see function_emitter.cpp).
 void ps2ReportUnlistedResume(const R5900Context *ctx, uint32_t functionStart)
@@ -837,9 +863,11 @@ bool PS2Runtime::syncCoreSubsystems()
                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
                                          (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+                                     const uint64_t kicksBefore = g_vu1XgkickCount;
                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                    m_gs, &m_memory, startPC, top, itop, 65536);
+                                     traceVu1Program(startPC, g_vu1XgkickCount - kicksBefore, m_vu1.state().pc);
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |

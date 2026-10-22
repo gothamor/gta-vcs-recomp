@@ -1189,10 +1189,13 @@ void VU1Interpreter::finishXgkick()
     m_xgkick.active = false;
 }
 
+uint64_t g_vu1XgkickCount = 0; // [gta-recomp] PS2X_TRACE_VU1 (ps2_runtime.cpp)
+
 void VU1Interpreter::startXgkick(uint32_t qwordAddress)
 {
     if (m_unit != Unit::VU1 || !m_activeVuData || m_activeVuDataSize < 16u)
         return;
+    ++g_vu1XgkickCount;
 
     const uint32_t sourceAddress = wrapVuDataAddress(qwordAddress * 16u);
     m_xgkick.clear();

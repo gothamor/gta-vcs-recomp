@@ -37,8 +37,14 @@
 - [x] Props near-invisible: VIF UNPACK V4-5 didn't expand RGBA5551. Fixed.
 - [x] Tilted horizon / broken camera maths: SQRT.S read the wrong register field
       (every sqrtf). Fixed: horizon level, palm trees and vehicles in place.
-- [ ] Static world (terrain, buildings, interior walls) still not drawn: the game
-      never DMAs from the WRLD image or the streamed sectors
+- [ ] Static world (terrain, buildings, interior walls) still not drawn. Known:
+      MAINLA.LVZ inflates byte-identical to zlib; MAINLA.IMG sectors stream in and
+      are instanced (FUN_0023E748 reads them, VCS_RWATCH); no DMA ever sources the
+      WRLD image or sector buffers directly (PS2X_TRACE_DMA_RANGE); VU1 fast mode
+      matches accurate mode (PS2X_VU1_VERIFY). VU1 programs at 0x0148, 0x0418,
+      0x0478, 0x2B50 run often but never XGKICK (PS2X_TRACE_VU1) - next: dump and
+      disassemble them (PS2X_DUMP_MPG_DIR) to see whether one is the building
+      renderer rejecting everything (clip/cull constants).
 - [ ] Performance: per-instruction `ctx->pc` stores (emitter now skips them for
       pure ALU ops - needs a regenerate + test), `__restrict` for generated code
 

@@ -8,6 +8,8 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
+#include <unordered_set>
 
 void ps2WriteWatchHit(uint32_t guestAddr, uint32_t size, uint64_t value, const char *op, const R5900Context *ctx)
 {
@@ -21,10 +23,33 @@ void ps2WriteWatchHit(uint32_t guestAddr, uint32_t size, uint64_t value, const c
                  ctx ? GPR_U32(ctx, 29) : 0u);
 }
 
+// VCS_RWATCH=<lo>,<hi>: report each distinct pc that reads the range (first 300).
+void ps2ReadWatchHit(uint32_t guestAddr, uint32_t size, const R5900Context *ctx)
+{
+    static std::mutex mutex;
+    static std::unordered_set<uint32_t> seen;
+    const uint32_t pc = ctx ? ctx->pc : 0u;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (seen.size() >= 300u || !seen.insert(pc).second)
+        return;
+    std::fprintf(stderr, "[rwatch] READ%u addr=0x%08x pc=0x%08x ra=0x%08x sp=0x%08x\n", size * 8u, guestAddr, pc,
+                 ctx ? GPR_U32(ctx, 31) : 0u, ctx ? GPR_U32(ctx, 29) : 0u);
+}
+
 namespace vcs
 {
     void configureWatch()
     {
+        if (const char *r = std::getenv("VCS_RWATCH"))
+        {
+            unsigned long long lo = 0, hi = 0;
+            if (std::sscanf(r, "%llx,%llx", &lo, &hi) == 2 && hi > lo)
+            {
+                g_ps2ReadWatch.lo = static_cast<uint32_t>(lo);
+                g_ps2ReadWatch.span = static_cast<uint32_t>(hi - lo);
+                std::fprintf(stderr, "[rwatch] armed 0x%08llx..0x%08llx\n", lo, hi);
+            }
+        }
         const char *env = std::getenv("VCS_WATCH");
         if (!env)
             return;

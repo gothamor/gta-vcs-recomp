@@ -255,6 +255,26 @@ void ps2WriteWatchHit(uint32_t guestAddr, uint32_t size, uint64_t value, const c
 // [gta-recomp] generated code entered mid-body at a pc with no resume label
 void ps2ReportUnlistedResume(const R5900Context *ctx, uint32_t functionStart);
 
+// [gta-recomp] Debug read watchpoint (VCS_RWATCH=lo,hi): each distinct reading pc is reported once.
+struct Ps2ReadWatch
+{
+    uint32_t lo = 0;
+    uint32_t span = 0; // 0 = disabled
+};
+inline Ps2ReadWatch g_ps2ReadWatch{};
+void ps2ReadWatchHit(uint32_t guestAddr, uint32_t size, const R5900Context *ctx);
+inline void ps2TraceGuestRead(uint32_t guestAddr, uint32_t size, const R5900Context *ctx)
+{
+#if PS2X_WRITE_WATCH
+    if (__builtin_expect((guestAddr & 0x1FFFFFFFu) - g_ps2ReadWatch.lo < g_ps2ReadWatch.span, 0))
+        ps2ReadWatchHit(guestAddr & 0x1FFFFFFFu, size, ctx);
+#else
+    (void)guestAddr;
+    (void)size;
+    (void)ctx;
+#endif
+}
+
 inline void ps2TraceGuestWrite(uint8_t *rdram,
                                uint32_t guestAddr,
                                uint32_t size,
