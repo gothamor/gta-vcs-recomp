@@ -104,26 +104,25 @@ namespace platform
         bool hidden = false; // not on the desktop or taskbar (scripted test runs)
     };
 
-    // Main thread. Creates the window with an OpenGL 3.3 core context (current on this thread; stage 1 of
-    // docs/NATIVE_RENDERER.md still draws with GL) and the Dear ImGui context.
+    // Main thread. Creates the window (no graphics API attached: the renderer makes its swapchain on
+    // nativeWindow()) and the Dear ImGui context with its input backend; the ImGui renderer belongs to the RHI.
     bool init(const WindowDesc &desc);
     void shutdown();
     bool ready();
+    void *nativeWindow(); // HWND on Windows
 
     // Main thread, once per host frame, in this order:
     //   pumpEvents()      events + input snapshot
-    //   beginFrame()      new Dear ImGui frame (overlays / debug UI may draw from here on)
-    //   ...the frame is drawn into the window's framebuffer...
-    //   renderUi()        Dear ImGui drawn over it
-    //   present()         swap and wait for the next 1/60 s
+    //   beginFrame()      new Dear ImGui frame (overlays / debug UI may draw from here on; the renderer's ImGui
+    //                     backend starts its frame just before)
+    //   endUiFrame()      Dear ImGui output finished (ImGui::GetDrawData), for the renderer to draw
+    //   ...the renderer draws and presents...
+    //   waitNextFrame()   sleeps until the next 1/60 s
     void pumpEvents();
     bool quitRequested(); // window closed
     void beginFrame();
-    void renderUi();
-    // The current frame's Dear ImGui output into the bound framebuffer at w x h (scaled from the window size);
-    // for off-screen screenshots, between renderUi and present.
-    void renderUiScaled(int width, int height);
-    void present();
+    void endUiFrame();
+    void waitNextFrame();
 
     void windowSize(int &width, int &height); // drawable pixels
 
@@ -141,7 +140,9 @@ namespace platform
     bool audioOpen(uint32_t rate, uint32_t bufferFrames, AudioFill fill);
     void audioClose();
 
-    // OpenGL entry points of the window's context (stage 1 GL code; null when missing).
+    // Stage 2 stopgap (docs/NATIVE_RENDERER.md), removed in stage 3: an OpenGL 3.3 core context on a hidden window,
+    // current on the main thread, for the OpenGL HW GS renderer. glProc: its entry points (null when missing).
+    bool glInit();
     void *glProc(const char *name);
 
     // PNG (8-bit RGB, rows top-down) - screenshots.

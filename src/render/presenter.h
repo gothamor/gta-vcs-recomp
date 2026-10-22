@@ -1,0 +1,47 @@
+// Shows the game's picture in the window through the RHI (stage 2 of docs/NATIVE_RENDERER.md): the swapchain, the
+// letterboxed picture, Dear ImGui on top, and off-screen screenshots. Main thread only.
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+namespace rhi
+{
+    class Device;
+    class Texture;
+}
+
+namespace present
+{
+    // A picture to show: made on the CPU (software GS, paraLLEl-GS readback) or copied from the OpenGL HW renderer.
+    struct Picture
+    {
+        std::shared_ptr<rhi::Texture> texture;
+        int width = 0;
+        int height = 0;
+        bool linear = false; // bilinear filtering when scaled
+    };
+
+    bool init(void *nativeWindow, int width, int height);
+    void shutdown();
+    rhi::Device *device();
+
+    Picture createPicture(int width, int height, bool linear);
+    void updatePicture(const Picture &picture, const void *rgba); // whole picture, rows top-down, tightly packed
+
+    // Stage 2 stopgap, removed in stage 3: copies the OpenGL HW renderer's picture (a texture in the platform layer's
+    // hidden GL context) into `picture` (resized as needed).
+    bool pictureFromGl(Picture &picture, uint32_t glTexture, int width, int height);
+
+    // Per host frame: beginFrame() before platform::beginFrame() (Dear ImGui renderer), drawWindow() after
+    // platform::endUiFrame(), then optional captures, then present().
+    void beginFrame();
+    // The window's back buffer (resized to windowWidth x windowHeight): black, the top-left src part of the picture
+    // letterboxed, the Dear ImGui output on top.
+    void drawWindow(const Picture &picture, int srcWidth, int srcHeight, int windowWidth, int windowHeight);
+    void present();
+
+    // The same picture and Dear ImGui output (scaled) rendered off-screen at width x height; RGB rows top-down.
+    bool capture(const Picture &picture, int srcWidth, int srcHeight, int width, int height, std::vector<uint8_t> &rgb);
+}

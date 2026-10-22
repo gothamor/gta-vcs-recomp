@@ -94,3 +94,4 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRuntime/src/lib/ps2_audio_out.cpp`, `include/runtime/ps2_audio_out.h` | SPU2 mix pulled by `platform::audioOpen`'s callback | Same |
 | `ps2xRuntime/src/lib/ps2_debug_panel.cpp` | No rlImGui: draws inside the platform layer's Dear ImGui frame | Same |
 | `ps2xRuntime/src/lib/ps2_audio.cpp` | Upstream's guessed libsd sample playback (raylib Sounds) is a logged no-op | VCS plays everything through the emulated SPU2; the path never triggered for it |
+| `ps2xRuntime/src/lib/ps2_runtime.cpp` | Stage 2: the window is drawn through `render/presenter.h` (RHI, D3D11); `PS2X_GS=hw` gets a hidden GL context (`platform::glInit`) and its picture is copied over (`present::pictureFromGl`); host frames paced by `platform::waitNextFrame` | docs/NATIVE_RENDERER.md stage 2 |

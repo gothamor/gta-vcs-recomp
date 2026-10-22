@@ -1,0 +1,36 @@
+# Renderer pieces on top of the RHI: the window presenter (stage 2 of docs/NATIVE_RENDERER.md).
+# HLSL shaders are compiled at build time with fxc into headers (DXBC for the D3D11 backend).
+file(GLOB VCS_FXC_CANDIDATES "C:/Program Files (x86)/Windows Kits/10/bin/10.*/x64/fxc.exe")
+list(SORT VCS_FXC_CANDIDATES COMPARE NATURAL ORDER DESCENDING)
+find_program(VCS_FXC fxc HINTS ${VCS_FXC_CANDIDATES})
+if(NOT VCS_FXC AND VCS_FXC_CANDIDATES)
+    list(GET VCS_FXC_CANDIDATES 0 VCS_FXC)
+endif()
+if(NOT VCS_FXC)
+    message(FATAL_ERROR "fxc.exe (Windows SDK) not found: install the Windows 10/11 SDK")
+endif()
+
+set(VCS_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+file(MAKE_DIRECTORY "${VCS_SHADER_OUT}")
+set(VCS_SHADER_HEADERS "")
+# vcs_shader(<file.hlsl> <entry> <profile> <array name> <output header>)
+function(vcs_shader source entry profile name header)
+    set(out "${VCS_SHADER_OUT}/${header}")
+    add_custom_command(
+        OUTPUT "${out}"
+        COMMAND "${VCS_FXC}" /nologo /O3 /T ${profile} /E ${entry} /Vn ${name} /Fh "${out}" "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
+        COMMENT "fxc ${source} ${entry}"
+        VERBATIM)
+    set(VCS_SHADER_HEADERS ${VCS_SHADER_HEADERS} "${out}" PARENT_SCOPE)
+endfunction()
+vcs_shader(shaders/present.hlsl vs_main vs_5_0 kPresentVS present_vs.h)
+vcs_shader(shaders/present.hlsl ps_main ps_5_0 kPresentPS present_ps.h)
+
+add_library(vcs_render STATIC
+    presenter.cpp
+    gl_bridge.cpp # stage 2 stopgap
+    ${VCS_SHADER_HEADERS}
+)
+target_include_directories(vcs_render PUBLIC "${CMAKE_SOURCE_DIR}/src" PRIVATE "${VCS_SHADER_OUT}")
+target_link_libraries(vcs_render PUBLIC vcs_rhi vcs_platform imgui)

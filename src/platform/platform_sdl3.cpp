@@ -4,7 +4,6 @@
 #include <SDL3/SDL.h>
 
 #include "imgui.h"
-#include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl3.h"
 
 #include <algorithm>
@@ -19,6 +18,7 @@ namespace platform
     namespace
     {
         SDL_Window *g_window = nullptr;
+        SDL_Window *g_glWindow = nullptr; // stage 2 stopgap: hidden, holds the OpenGL context
         SDL_GLContext g_gl = nullptr;
         bool g_quit = false;
         bool g_imgui = false;
@@ -165,12 +165,7 @@ namespace platform
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
             std::fprintf(stderr, "[platform] no audio: %s\n", SDL_GetError());
 
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-        SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE;
+        SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
         if (desc.hidden)
             flags |= SDL_WINDOW_HIDDEN;
         g_window = SDL_CreateWindow(desc.title, desc.width, desc.height, flags);
@@ -179,22 +174,14 @@ namespace platform
             std::fprintf(stderr, "[platform] SDL_CreateWindow: %s\n", SDL_GetError());
             return false;
         }
-        g_gl = SDL_GL_CreateContext(g_window);
-        if (!g_gl)
-        {
-            std::fprintf(stderr, "[platform] OpenGL 3.3 context: %s\n", SDL_GetError());
-            return false;
-        }
-        SDL_GL_MakeCurrent(g_window, g_gl);
-        SDL_GL_SetSwapInterval(0); // paced by present() instead, also when the window is hidden
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
         ImGui::StyleColorsDark();
-        g_imgui = ImGui_ImplSDL3_InitForOpenGL(g_window, g_gl) && ImGui_ImplOpenGL3_Init("#version 330");
+        g_imgui = ImGui_ImplSDL3_InitForOther(g_window);
         if (!g_imgui)
-            std::fprintf(stderr, "[platform] Dear ImGui backends failed\n");
+            std::fprintf(stderr, "[platform] Dear ImGui input backend failed\n");
         return true;
     }
 
@@ -205,7 +192,6 @@ namespace platform
         audioClose();
         if (g_imgui)
         {
-            ImGui_ImplOpenGL3_Shutdown();
             ImGui_ImplSDL3_Shutdown();
             g_imgui = false;
         }
@@ -217,6 +203,9 @@ namespace platform
         if (g_gl)
             SDL_GL_DestroyContext(g_gl);
         g_gl = nullptr;
+        if (g_glWindow)
+            SDL_DestroyWindow(g_glWindow);
+        g_glWindow = nullptr;
         if (g_window)
             SDL_DestroyWindow(g_window);
         g_window = nullptr;
@@ -224,6 +213,17 @@ namespace platform
     }
 
     bool ready() { return g_window != nullptr; }
+
+    void *nativeWindow()
+    {
+        if (!g_window)
+            return nullptr;
+#if defined(_WIN32)
+        return SDL_GetPointerProperty(SDL_GetWindowProperties(g_window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+#else
+        return nullptr;
+#endif
+    }
 
     void pumpEvents()
     {
@@ -285,32 +285,18 @@ namespace platform
     {
         if (!g_imgui)
             return;
-        ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
     }
 
-    void renderUi()
+    void endUiFrame()
     {
-        if (!g_imgui)
-            return;
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        if (g_imgui)
+            ImGui::Render();
     }
 
-    void renderUiScaled(int width, int height)
+    void waitNextFrame()
     {
-        ImDrawData *data = g_imgui ? ImGui::GetDrawData() : nullptr;
-        if (!data || !data->Valid || data->DisplaySize.x <= 0.0f || data->DisplaySize.y <= 0.0f)
-            return;
-        ImDrawData scaled = *data;
-        scaled.FramebufferScale = ImVec2(width / data->DisplaySize.x, height / data->DisplaySize.y);
-        ImGui_ImplOpenGL3_RenderDrawData(&scaled);
-    }
-
-    void present()
-    {
-        SDL_GL_SwapWindow(g_window);
         // 60 host frames per second, as raylib's SetTargetFPS(60) did
         constexpr uint64_t kPeriodNs = 1000000000ull / 60u;
         const uint64_t now = SDL_GetTicksNS();
@@ -361,6 +347,24 @@ namespace platform
         if (g_audio)
             SDL_DestroyAudioStream(g_audio);
         g_audio = nullptr;
+    }
+
+    bool glInit()
+    {
+        if (g_gl)
+            return true;
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        g_glWindow = SDL_CreateWindow("gl", 16, 16, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+        g_gl = g_glWindow ? SDL_GL_CreateContext(g_glWindow) : nullptr;
+        if (!g_gl)
+        {
+            std::fprintf(stderr, "[platform] OpenGL 3.3 context: %s\n", SDL_GetError());
+            return false;
+        }
+        SDL_GL_MakeCurrent(g_glWindow, g_gl);
+        return true;
     }
 
     void *glProc(const char *name) { return reinterpret_cast<void *>(SDL_GL_GetProcAddress(name)); }

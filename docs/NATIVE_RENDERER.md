@@ -1,6 +1,6 @@
 # Native renderer plan (D3D11)
 
-Status: **approved** (2026-10-22). Stages 0 and 1 done; next is stage 2.
+Status: **approved** (2026-10-22). Stages 0-2 done; next is stage 3.
 
 Goal: get from today's emulated GS (raylib + OpenGL 3.3) to a native renderer that
 draws the game's models directly, on D3D11, as fast as possible. Windows only for
@@ -145,7 +145,7 @@ Result:
   implemented in this tree, so nothing had to be dropped: `PS2X_GS=gpu` reads frames
   back as before (still not to be run on the GTX 1080 Ti, TDR).
 
-### Stage 2 - RHI + D3D11 device and presentation (M)
+### Stage 2 - RHI + D3D11 device and presentation (M) - done 2026-10-22
 
 - `rhi.h` + `rhi_d3d11`, swapchain and present on the SDL window (no GL context).
 - The CPU renderer and paraLLEl-GS readback frames are shown by uploading into an
@@ -153,6 +153,27 @@ Result:
 - `PS2X_GS=hw` (still GL) temporarily presents by reading back into the D3D11 path,
   or stays on a GL window for this stage only - whichever is less throwaway.
 - Done when: CPU renderer, perf overlay, debug panel and screenshots work on D3D11.
+
+Result:
+- `src/rhi/rhi.h` (textures, buffers, samplers, immutable pipelines with blend /
+  depth / dual-source factors, explicit passes, copies, readback, swapchain, the
+  Dear ImGui renderer hook) and `src/rhi/d3d11/rhi_d3d11.cpp` (FL 11_0, flip-model
+  `FLIP_DISCARD` swapchain, `PS2X_D3D_DEBUG=1` for the debug layer, PIX markers via
+  `ID3DUserDefinedAnnotation`). Only that file includes D3D / DXGI headers.
+- `src/render/presenter.{h,cpp}`: letterboxed picture + Dear ImGui into the back
+  buffer, off-screen captures; `shaders/present.hlsl` compiled by fxc at build time
+  (`src/render/CMakeLists.txt`, `vcs_shader()`). The platform window has no GL any
+  more; ImGui uses `imgui_impl_sdl3` (input) + `imgui_impl_dx11` (through the RHI).
+- Chosen stopgap for the still-OpenGL HW renderer: a hidden GL 3.3 context
+  (`platform::glInit`, only with `PS2X_GS=hw`) and `src/render/gl_bridge.cpp`, which
+  reads the display texture back through two pixel-pack buffers (shown one host
+  frame later) and uploads it. A synchronous `glReadPixels` first cost ~4% game fps
+  on the flyover; the asynchronous one is within run-to-run noise.
+- Scene captures: static 0.02 / 0.02 vs the raylib baseline; flyover 17.2-18.0 game
+  fps (baseline 17.9-18.2; runs vary by ~1 fps), main-thread GL time 3.7 ms (3.2
+  before: the readback). Resizing, minimise / restore, hidden runs, the F3 overlay
+  and `PS2X_GS=cpu` checked. `PS2X_GS=gpu` not run (TDR on the dev GPU).
+- Display latency with `PS2X_GS=hw` is one host frame (16.7 ms) higher until stage 3.
 
 ### Stage 3 - GS HW backend executor on the RHI (M)
 

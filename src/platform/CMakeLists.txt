@@ -1,5 +1,5 @@
-# Host platform layer (docs/NATIVE_RENDERER.md): SDL3 window / input / audio, the Dear ImGui context, and the
-# stage 1 OpenGL presentation. The runtime links it through ps2_host_backend (PS2X_HOST_PLATFORM_TARGET).
+# Host platform layer (docs/NATIVE_RENDERER.md): SDL3 window / input / audio and the Dear ImGui context with its
+# input backend. The runtime links it (with src/render) through ps2_host_backend (PS2X_HOST_PLATFORM_TARGET).
 include(FetchContent)
 
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -33,12 +33,11 @@ add_library(imgui STATIC
     "${imgui_SOURCE_DIR}/imgui_demo.cpp"
 )
 target_include_directories(imgui PUBLIC "${imgui_SOURCE_DIR}")
+set(VCS_IMGUI_BACKENDS_DIR "${imgui_SOURCE_DIR}/backends" CACHE INTERNAL "")
 
 add_library(vcs_platform STATIC
     platform_sdl3.cpp
-    gl_present.cpp
     "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
-    "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp"
 )
 target_include_directories(vcs_platform PUBLIC "${CMAKE_SOURCE_DIR}/src" PRIVATE "${imgui_SOURCE_DIR}/backends")
 target_link_libraries(vcs_platform PUBLIC imgui PRIVATE SDL3::SDL3-static)
