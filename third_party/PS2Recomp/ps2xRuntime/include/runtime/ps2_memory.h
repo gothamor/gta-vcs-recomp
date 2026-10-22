@@ -425,6 +425,22 @@ public:
     std::vector<PendingTransfer> m_pendingGifTransfers;
     std::vector<PendingTransfer> m_pendingVif0Transfers;
     std::vector<PendingTransfer> m_pendingVif1Transfers;
+    // [gta-recomp] chain gather buffers kept with their capacity (see takeChainBuffer)
+    std::vector<std::vector<uint8_t>> m_chainBufferPool;
+    std::vector<uint8_t> takeChainBuffer()
+    {
+        if (m_chainBufferPool.empty())
+            return {};
+        std::vector<uint8_t> buffer = std::move(m_chainBufferPool.back());
+        m_chainBufferPool.pop_back();
+        buffer.clear();
+        return buffer;
+    }
+    void recycleChainBuffer(std::vector<uint8_t> &&buffer)
+    {
+        if (buffer.capacity() != 0u && m_chainBufferPool.size() < 4u)
+            m_chainBufferPool.push_back(std::move(buffer));
+    }
     std::mutex m_completedDmacMutex;
     std::vector<uint32_t> m_completedDmacCauses;
 

@@ -1,6 +1,7 @@
 // [gta-recomp] Hardware (OpenGL 3.3) GS renderer. See runtime/gs/gs_hw.h.
 #include "runtime/ps2_perf.h" // [gta-recomp]
 #include "runtime/gs/gs_hw.h"
+#include "runtime/gs/ps2_gs_memory.h" // [gta-recomp] RectBlocks (lazy uploads)
 #include "runtime/gs/gs_cpu_backend.h"
 
 extern "C" bool IsKeyDown(int key); // raylib (window owner)
@@ -528,9 +529,7 @@ void main()
             {
                 f.cmds.push_back({CmdType::Draw, static_cast<uint32_t>(f.draws.size())});
                 f.draws.push_back({s, static_cast<uint32_t>(f.vertices.size()), 0u});
-                ps2perf::add(ps2perf::Counter::Draws); // [gta-recomp]
             }
-            ps2perf::add(ps2perf::Counter::Vertices, n);
             f.vertices.insert(f.vertices.end(), out, out + n);
             f.draws.back().count += n;
         }
@@ -642,11 +641,20 @@ void main()
                 std::fprintf(stderr, "[gs-hw] clut cld=%u cbp=%u cpsm=%u csm=%u csa=%u psm=%u\n", tex0.cld, tex0.cbp, tex0.cpsm, tex0.csm,
                              tex0.csa, tex0.psm);
             }
+            if (tex0.cld != 0u)
+            {
+                const bool eightBit = tex0.psm == GS_PSM_T8 || tex0.psm == GS_PSM_T8H;
+                if (materializeRectKeepTransfer(tex0.cpsm, tex0.cbp, 1u, 0u, 0u, eightBit ? 16u : 8u, eightBit ? 16u : 2u))
+                    ++m_lazyWhy[0];
+            }
             m_cpu.LoadClut(tex0, texclut);
+            ++m_texStateVersion;
         }
 
         void BeginTransfer(const GSTransferCommand &command) override
         {
+            if (command.direction != 0u) // local -> host / local -> local read VRAM right away
+                materializeAll();
             m_transfer = command;
             m_cpu.BeginTransfer(command);
             static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
@@ -755,7 +763,18 @@ void main()
                     }
                 }
             }
-            m_cpu.UploadImage(data, sizeBytes);
+            const uint32_t dpsm = t.bitbltbuf.dpsm;
+            if (wholeTransfer && sizeBytes != 0u && lazyUploadsEnabled() &&
+                (dpsm == GS_PSM_T4 || dpsm == GS_PSM_T8 || dpsm == GS_PSM_CT32 || dpsm == GS_PSM_CT16) && !overlapsRenderTarget(first, last))
+            {
+                deferUpload(data, sizeBytes);
+            }
+            else
+            {
+                if (prepareDirectUpload() && ++m_lazyWhy[2])
+                    m_cpu.BeginTransfer(m_transfer); // replaying queued uploads replaced the CPU backend's transfer state
+                m_cpu.UploadImage(data, sizeBytes);
+            }
             touchTransferDest();
             if (wholeTransfer)
             {
@@ -814,6 +833,7 @@ void main()
 
         bool ClearFramebuffer(const GSContext &context, uint32_t rgba) override
         {
+            materializeAllKeepTransfer();
             HwState s{};
             s.fbp = context.frame.fbp;
             s.fbw = context.frame.fbw;
@@ -831,18 +851,289 @@ void main()
 
         uint32_t ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes) override
         {
+            materializeAllKeepTransfer();
             return m_cpu.ConsumeLocalToHostBytes(dst, maxBytes);
         }
         uint32_t ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const override
         {
+            const_cast<HwBackend *>(this)->materializeAllKeepTransfer();
             return m_cpu.ReadVram(psm, base, bw, x, y);
         }
         void WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value) override
         {
+            materializeAllKeepTransfer();
             m_cpu.WriteVram(psm, base, bw, x, y, value);
         }
-        void SnapshotVram(std::vector<uint8_t> &out) const override { m_cpu.SnapshotVram(out); }
-        GSTransferSnapshot GetTransferSnapshot() const override { return m_cpu.GetTransferSnapshot(); }
+        void SnapshotVram(std::vector<uint8_t> &out) const override
+        {
+            const_cast<HwBackend *>(this)->materializeAllKeepTransfer();
+            m_cpu.SnapshotVram(out);
+        }
+        GSTransferSnapshot GetTransferSnapshot() const override
+        {
+            const_cast<HwBackend *>(this)->materializeAllKeepTransfer();
+            return m_cpu.GetTransferSnapshot();
+        }
+
+        // ---- [gta-recomp] lazy texture uploads ---------------------------------------------------------------------
+        // VCS re-sends its T4/T8 model textures into shared VRAM every frame (~20 MB/s). The GPU side finds them in
+        // its content-keyed texture cache, so the swizzled copy in CPU VRAM is only needed when something reads those
+        // bytes: a texture decode on a cache miss, a CLUT load, a readback, a local transfer, a clear. Whole T4/T8
+        // uploads (not over a render target) are therefore queued and written into CPU VRAM - in order, together with
+        // every earlier queued upload overlapping them - only when such a read touches their 256-byte blocks. Blocks,
+        // not pages: VCS keeps each texture's CLUT in the same page. A queued upload whose blocks have all been
+        // completely overwritten by later uploads is dropped (the steady state: the same slots refilled each frame).
+        // PS2X_HW_LAZY_UPLOADS=0 writes every upload immediately (as before).
+        static constexpr uint32_t kBlocks = 16384u; // 4 MiB / 256 B
+
+        struct PendingUpload
+        {
+            GSTransferCommand cmd;
+            std::vector<uint8_t> data;
+            std::vector<uint16_t> blocks; // touched
+            uint32_t live = 0;            // blocks not yet completely overwritten by a later upload
+            bool done = false;            // written or dropped
+        };
+
+        static bool lazyUploadsEnabled()
+        {
+            static const bool on = [] {
+                const char *v = std::getenv("PS2X_HW_LAZY_UPLOADS");
+                return !(v && v[0] == '0');
+            }();
+            return on;
+        }
+
+        bool overlapsRenderTarget(uint32_t first, uint32_t last) const
+        {
+            for (const auto &[fbp, rt] : m_rts)
+                if (first < fbp + rt.pageRows * rt.fbw && last > fbp)
+                    return true;
+            return false;
+        }
+
+        // Blocks of a rectangle; formats RectBlocks does not know count as their whole pages.
+        void rectBlocks(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, uint32_t w, uint32_t h, std::vector<uint16_t> &touched,
+                        std::vector<uint16_t> *full)
+        {
+            if (GSMem::RectBlocks(psm, bp, bw, x, y, w, h, touched, full))
+                return;
+            uint32_t first, last;
+            pageRange(bp, bw, psm, x, y, w, h, first, last);
+            for (uint32_t pg = first; pg < last; ++pg)
+                for (uint32_t b = 0; b < 32u; ++b)
+                    touched.push_back(static_cast<uint16_t>(((pg * 32u) + b) % kBlocks));
+        }
+
+        PendingUpload *pendingById(uint64_t id)
+        {
+            if (id < m_pendingFrontId || id - m_pendingFrontId >= m_pendingUploads.size())
+                return nullptr;
+            PendingUpload &u = m_pendingUploads[static_cast<size_t>(id - m_pendingFrontId)];
+            return u.done ? nullptr : &u;
+        }
+
+        void retire(PendingUpload &u)
+        {
+            u.done = true;
+            for (uint16_t b : u.blocks)
+                --m_blockPending[b];
+            m_pendingBytes -= u.data.size();
+            std::vector<uint8_t>().swap(u.data);
+            while (!m_pendingUploads.empty() && m_pendingUploads.front().done)
+            {
+                m_pendingUploads.pop_front();
+                ++m_pendingFrontId;
+            }
+        }
+
+        void deferUpload(const uint8_t *data, uint32_t sizeBytes)
+        {
+            const GSTransferCommand &t = m_transfer;
+            m_scratchTouched.clear();
+            m_scratchFull.clear();
+            rectBlocks(t.bitbltbuf.dpsm, t.bitbltbuf.dbp, t.bitbltbuf.dbw, t.trxpos.dsax, t.trxpos.dsay, t.trxreg.rrw, t.trxreg.rrh,
+                       m_scratchTouched, &m_scratchFull);
+            // blocks this upload overwrites completely: earlier queued writers of them lose those blocks
+            for (uint16_t b : m_scratchFull)
+            {
+                for (uint64_t id : m_blockWriters[b])
+                    if (PendingUpload *old = pendingById(id))
+                        if (old->live && --old->live == 0u)
+                        {
+                            retire(*old);
+                            ++m_lazyDropped;
+                        }
+                m_blockWriters[b].clear();
+            }
+            PendingUpload pu;
+            pu.cmd = t;
+            pu.data.assign(data, data + sizeBytes);
+            pu.blocks = m_scratchTouched;
+            std::sort(pu.blocks.begin(), pu.blocks.end());
+            pu.blocks.erase(std::unique(pu.blocks.begin(), pu.blocks.end()), pu.blocks.end());
+            pu.live = static_cast<uint32_t>(pu.blocks.size());
+            const uint64_t id = m_pendingFrontId + m_pendingUploads.size();
+            for (uint16_t b : pu.blocks)
+            {
+                ++m_blockPending[b];
+                m_blockWriters[b].push_back(id);
+            }
+            m_pendingBytes += sizeBytes;
+            m_pendingUploads.push_back(std::move(pu));
+            ++m_lazyDeferred;
+            if (m_pendingUploads.size() > 16384u || m_pendingBytes > (64u << 20))
+                materializeAll(); // bounded memory; deferring carries on afterwards
+            reportLazyStats();
+        }
+
+        // Writes the queued uploads touching `blocks` - and, to keep the order, every earlier queued upload overlapping
+        // those - into CPU VRAM. True if anything was written.
+        bool materializeBlocks(const std::vector<uint16_t> &blocks, bool all = false)
+        {
+            if (m_pendingBytes == 0u && m_pendingUploads.empty())
+                return false;
+            bool any = all;
+            for (size_t i = 0; i < blocks.size() && !any; ++i)
+                any = m_blockPending[blocks[i]] != 0u;
+            if (!any)
+                return false;
+            // wanted blocks: m_wantStamp[b] == stamp (no 16 KB clear per call)
+            if (++m_wantGeneration == 0u)
+            {
+                std::fill(m_wantStamp.begin(), m_wantStamp.end(), 0u);
+                m_wantGeneration = 1u;
+            }
+            const uint32_t stamp = m_wantGeneration;
+            auto wanted = [&](uint16_t b) { return all || m_wantStamp[b] == stamp; };
+            for (uint16_t b : blocks)
+                m_wantStamp[b] = stamp;
+            std::vector<uint8_t> &take = m_scratchTake;
+            take.assign(m_pendingUploads.size(), 0u);
+            for (bool changed = true; changed;)
+            {
+                changed = false;
+                for (size_t i = 0; i < m_pendingUploads.size(); ++i)
+                {
+                    const PendingUpload &u = m_pendingUploads[i];
+                    if (take[i] || u.done)
+                        continue;
+                    bool hit = false;
+                    for (size_t k = 0; k < u.blocks.size() && !hit; ++k)
+                        hit = wanted(u.blocks[k]);
+                    if (!hit)
+                        continue;
+                    take[i] = 1u;
+                    changed = true;
+                    for (uint16_t b : u.blocks)
+                        m_wantStamp[b] = stamp;
+                }
+            }
+            bool wrote = false;
+            for (size_t i = 0; i < take.size(); ++i)
+            {
+                if (!take[i])
+                    continue;
+                PendingUpload &u = m_pendingUploads[i];
+                m_cpu.BeginTransfer(u.cmd);
+                m_cpu.UploadImage(u.data.data(), static_cast<uint32_t>(u.data.size()));
+                u.done = true;
+                for (uint16_t b : u.blocks)
+                    --m_blockPending[b];
+                m_pendingBytes -= u.data.size();
+                std::vector<uint8_t>().swap(u.data);
+                ++m_lazyWritten;
+                wrote = true;
+            }
+            while (!m_pendingUploads.empty() && m_pendingUploads.front().done)
+            {
+                m_pendingUploads.pop_front();
+                ++m_pendingFrontId;
+            }
+            return wrote;
+        }
+
+        // Before an upload that is written straight away: queued uploads it overwrites completely are dropped; queued
+        // uploads it only partly overwrites, or that keep other live blocks, are written first (in order), so a later
+        // write of theirs cannot land on top of this one. True if anything was written.
+        bool prepareDirectUpload()
+        {
+            if (m_pendingUploads.empty())
+                return false;
+            const GSTransferCommand &t = m_transfer;
+            m_scratchTouched.clear();
+            m_scratchFull.clear();
+            rectBlocks(t.bitbltbuf.dpsm, t.bitbltbuf.dbp, t.bitbltbuf.dbw, t.trxpos.dsax, t.trxpos.dsay, t.trxreg.rrw, t.trxreg.rrh,
+                       m_scratchTouched, &m_scratchFull);
+            for (uint16_t b : m_scratchFull)
+            {
+                if (!m_blockPending[b])
+                    continue;
+                for (uint64_t id : m_blockWriters[b])
+                    if (PendingUpload *old = pendingById(id))
+                        if (old->live && --old->live == 0u)
+                        {
+                            retire(*old);
+                            ++m_lazyDropped;
+                        }
+                m_blockWriters[b].clear();
+            }
+            // whatever is still queued on these blocks (partly covered, or alive elsewhere) goes out first
+            return materializeBlocks(m_scratchTouched);
+        }
+
+        bool materializeRect(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+        {
+            if (m_pendingUploads.empty())
+                return false;
+            m_scratchRead.clear();
+            rectBlocks(psm, bp, bw, x, y, w, h, m_scratchRead, nullptr);
+            return materializeBlocks(m_scratchRead);
+        }
+
+        bool materializeAll()
+        {
+            if (m_pendingUploads.empty())
+                return false;
+            static const std::vector<uint16_t> none;
+            return materializeBlocks(none, true);
+        }
+
+        // Outside an upload: afterwards the CPU backend's transfer state is put back to the current transfer (an
+        // upload that has not received its data yet - the usual case between GIF packets).
+        bool materializeRectKeepTransfer(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+        {
+            if (!materializeRect(psm, bp, bw, x, y, w, h))
+                return false;
+            if (m_transfer.direction == 0u)
+                m_cpu.BeginTransfer(m_transfer);
+            return true;
+        }
+        void materializeAllKeepTransfer()
+        {
+            if (materializeAll())
+            {
+                ++m_lazyWhy[3];
+                if (m_transfer.direction == 0u)
+                    m_cpu.BeginTransfer(m_transfer);
+            }
+        }
+
+        void reportLazyStats()
+        {
+            static const bool stats = std::getenv("PS2X_HW_UPSTATS") != nullptr;
+            static auto lastReport = std::chrono::steady_clock::now();
+            if (!stats || std::chrono::steady_clock::now() - lastReport < std::chrono::seconds(5))
+                return;
+            lastReport = std::chrono::steady_clock::now();
+            std::fprintf(stderr, "[upload] lazy: deferred %llu, written later %llu, made obsolete %llu, queued now %zu (%zu KB); forced by clut %llu, decode %llu, direct upload %llu, other %llu\n",
+                         (unsigned long long)m_lazyDeferred, (unsigned long long)m_lazyWritten, (unsigned long long)m_lazyDropped,
+                         m_pendingUploads.size(), m_pendingBytes >> 10, (unsigned long long)m_lazyWhy[0], (unsigned long long)m_lazyWhy[1],
+                         (unsigned long long)m_lazyWhy[2], (unsigned long long)m_lazyWhy[3]);
+            m_lazyDeferred = m_lazyWritten = m_lazyDropped = 0;
+            for (uint64_t &w : m_lazyWhy)
+                w = 0;
+        }
 
         // ---- frame hand-over (game thread) -------------------------------------------------------------------
         void endFrame(const uint64_t (&privRegs)[15]) override
@@ -897,6 +1188,9 @@ void main()
                         f.cpuDisplay[static_cast<size_t>(y) * w + x] = v | 0xFF000000u;
                     }
             }
+            ps2perf::add(ps2perf::Counter::Draws, f.draws.size()); // [gta-recomp] once per frame, not per primitive
+            ps2perf::add(ps2perf::Counter::Vertices, f.vertices.size());
+            ps2perf::add(ps2perf::Counter::TexUploads, f.textures.size());
             ++m_frameIndex;
             {
                 std::unique_lock<std::mutex> lock(m_queueMutex);
@@ -904,7 +1198,40 @@ void main()
                 m_queueCv.wait_for(lock, std::chrono::milliseconds(100), [&] { return m_queue.size() < 3u; });
                 m_queue.push_back(std::move(m_frame));
             }
-            m_frame = std::make_unique<Frame>();
+            m_frame = takeFreeFrame();
+        }
+
+        // [gta-recomp] Frames are recycled with their vectors' capacity: building each from empty vectors cost
+        // reallocation copies on the game thread and page frees on the main thread (~10% of a busy frame).
+        std::unique_ptr<Frame> takeFreeFrame()
+        {
+            std::unique_ptr<Frame> frame;
+            {
+                std::lock_guard<std::mutex> lock(m_queueMutex);
+                if (!m_freeFrames.empty())
+                {
+                    frame = std::move(m_freeFrames.back());
+                    m_freeFrames.pop_back();
+                }
+            }
+            if (!frame)
+                return std::make_unique<Frame>();
+            Frame &f = *frame;
+            f.cmds.clear();
+            f.vertices.clear();
+            f.draws.clear();
+            f.textures.clear(); // owns pixel vectors; their memory goes with them
+            f.texDeletes.clear();
+            f.rtUploads.clear();
+            f.rtDrops.clear();
+            f.clears.clear();
+            f.depthFills.clear();
+            std::memset(f.privRegs, 0, sizeof(f.privRegs));
+            f.cpuDisplay.clear();
+            f.cpuDisplayW = f.cpuDisplayH = 0;
+            f.displayFromRt = false;
+            f.displayFbp = f.displayX = f.displayY = f.displayW = f.displayH = 0;
+            return frame;
         }
 
         GSHwPresenter &presenter() override { return *this; }
@@ -974,6 +1301,10 @@ void main()
                     }
                 }
                 restoreRaylibState(static_cast<GLuint>(prevFbo), prevViewport);
+                std::lock_guard<std::mutex> lock(m_queueMutex);
+                for (auto &frame : frames)
+                    if (m_freeFrames.size() < 6u)
+                        m_freeFrames.push_back(std::move(frame));
             }
             if (!m_displayTex)
                 return false;
@@ -1069,6 +1400,50 @@ void main()
         // Texture source: a render target (GPU) or decoded CPU VRAM (cached).
         bool bindTexture(const GSDrawState &d, HwState &s)
         {
+            // [gta-recomp] Consecutive primitives mostly use the same texture: reuse the last binding while the texture
+            // registers and everything the key depends on (page generations, CLUT, render targets) are unchanged.
+            // Recomputing it per primitive (page-generation hash, CLUT hash, cache lookup) was ~4% of a busy frame.
+            const GSTex0Reg &t = d.context.tex0;
+            TexBindInput in;
+            std::memset(&in, 0, sizeof(in)); // compared bytewise, padding included
+            in.version = m_texStateVersion;
+            in.tbp0 = t.tbp0;
+            in.cbp = t.cbp;
+            in.tbw = t.tbw;
+            in.psm = t.psm;
+            in.cpsm = t.cpsm;
+            in.csm = t.csm;
+            in.csa = t.csa;
+            in.ta0 = d.texa.ta0;
+            in.ta1 = d.texa.ta1;
+            in.aem = d.texa.aem ? 1u : 0u;
+            in.w = d.textureWidth;
+            in.h = d.textureHeight;
+            if (m_bindCacheValid && std::memcmp(&in, &m_bindIn, sizeof(in)) == 0)
+            {
+                s.texIsRt = m_bindOut.texIsRt;
+                s.rtFbp = m_bindOut.rtFbp;
+                s.rtOx = m_bindOut.rtOx;
+                s.rtOy = m_bindOut.rtOy;
+                s.texKey = m_bindOut.texKey;
+                if (!s.texIsRt && m_bindTouchedFrame != m_frameIndex)
+                {
+                    m_texLru[s.texKey] = m_frameIndex;
+                    m_bindTouchedFrame = m_frameIndex;
+                }
+                return m_bindResult;
+            }
+            const bool result = bindTextureUncached(d, s);
+            m_bindIn = in;
+            m_bindOut = s;
+            m_bindResult = result;
+            m_bindTouchedFrame = m_frameIndex;
+            m_bindCacheValid = true;
+            return result;
+        }
+
+        bool bindTextureUncached(const GSDrawState &d, HwState &s)
+        {
             const GSTex0Reg &t = d.context.tex0;
             const uint32_t texStart = t.tbp0 * 256u;
             if (t.psm == GS_PSM_CT32 || t.psm == GS_PSM_CT24 || t.psm == GS_PSM_CT16 || t.psm == GS_PSM_CT16S)
@@ -1146,9 +1521,10 @@ void main()
             tc.key = key;
             tc.w = d.textureWidth;
             tc.h = d.textureHeight;
+            if (materializeRectKeepTransfer(t.psm, t.tbp0, t.tbw, 0u, 0u, d.textureWidth, d.textureHeight))
+                ++m_lazyWhy[1];
             m_cpu.DecodeTexture(d, tc.pixels);
             f.cmds.push_back({CmdType::TexCreate, static_cast<uint32_t>(f.textures.size())});
-            ps2perf::add(ps2perf::Counter::TexUploads); // [gta-recomp]
             f.textures.push_back(std::move(tc));
             m_texLru[key] = m_frameIndex;
             if (m_texLru.size() > kMaxTextures)
@@ -1167,13 +1543,17 @@ void main()
                     break;
                 f.cmds.push_back({CmdType::TexDelete, static_cast<uint32_t>(f.texDeletes.size())});
                 f.texDeletes.push_back(byAge[i].first);
+                ++m_texStateVersion;
                 m_texLru.erase(byAge[i].first);
             }
         }
 
         void noteTarget(uint32_t fbp, uint32_t fbw, uint32_t psm, const HwVertex *v, uint32_t n)
         {
-            RtInfo &rt = m_rts[fbp];
+            auto found = m_rts.find(fbp);
+            if (found == m_rts.end())
+                ++m_texStateVersion; // a new render target: textures there now come from it
+            RtInfo &rt = found != m_rts.end() ? found->second : m_rts[fbp];
             rt.fbw = std::max(rt.fbw, fbw);
             rt.psm = psm;
             float maxY = 0.0f;
@@ -1182,11 +1562,14 @@ void main()
             uint32_t pw, ph;
             pageSize(psm, pw, ph);
             const uint32_t rows = std::min<uint32_t>(32u, (static_cast<uint32_t>(std::max(maxY, 0.0f)) + ph) / ph);
+            if (rows > rt.pageRows)
+                ++m_texStateVersion;
             rt.pageRows = std::max(rt.pageRows, std::max<uint32_t>(rows, 1u));
         }
 
         void touchTransferDest()
         {
+            ++m_texStateVersion;
             const GSTransferCommand &t = m_transfer;
             uint32_t first, last;
             pageRange(t.bitbltbuf.dbp, t.bitbltbuf.dbw, t.bitbltbuf.dpsm, t.trxpos.dsax, t.trxpos.dsay, t.trxreg.rrw,
@@ -1794,11 +2177,35 @@ void main()
         uint64_t m_skippedUploads = 0;
         std::unordered_map<uint64_t, uint64_t> m_texLru;  // key -> last frame used
         std::unordered_map<uint32_t, RtInfo> m_rts;       // fbp -> extent (game thread's view)
+        struct TexBindInput // [gta-recomp] bindTexture cache (see there)
+        {
+            uint64_t version;
+            uint32_t tbp0, cbp;
+            uint16_t w, h;
+            uint8_t tbw, psm, cpsm, csm, csa, ta0, ta1, aem;
+        };
+        uint64_t m_texStateVersion = 1;
+        TexBindInput m_bindIn{};
+        HwState m_bindOut{};
+        bool m_bindResult = false, m_bindCacheValid = false;
+        uint64_t m_bindTouchedFrame = 0;
+        std::deque<PendingUpload> m_pendingUploads;       // [gta-recomp] lazy uploads, in submission order
+        uint64_t m_pendingFrontId = 0;                    // id of m_pendingUploads.front()
+        std::vector<uint16_t> m_blockPending = std::vector<uint16_t>(kBlocks, 0u); // queued uploads touching each block
+        std::vector<std::vector<uint64_t>> m_blockWriters = std::vector<std::vector<uint64_t>>(kBlocks); // their ids
+        std::vector<uint16_t> m_scratchTouched, m_scratchFull, m_scratchRead;
+        std::vector<uint32_t> m_wantStamp = std::vector<uint32_t>(kBlocks, 0u);
+        uint32_t m_wantGeneration = 0;
+        std::vector<uint8_t> m_scratchTake;
+        size_t m_pendingBytes = 0;
+        uint64_t m_lazyDeferred = 0, m_lazyWritten = 0, m_lazyDropped = 0;
+        uint64_t m_lazyWhy[4]{}; // what forced queued uploads out: clut load, texture decode, direct upload, other
         std::unordered_map<uint32_t, DepthInfo> m_depthBufs; // zbp -> format / width
 
         std::mutex m_queueMutex;
         std::condition_variable m_queueCv;
         std::deque<std::unique_ptr<Frame>> m_queue;
+        std::vector<std::unique_ptr<Frame>> m_freeFrames; // executed frames for reuse (m_queueMutex)
 
         // main thread
         Gl m_gl;

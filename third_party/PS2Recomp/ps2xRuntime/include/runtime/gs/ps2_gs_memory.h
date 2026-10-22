@@ -4,6 +4,7 @@
 #include <cstring>
 #include <type_traits>
 #include <array>
+#include <vector>
 #include <span>
 
 #include "types.h"
@@ -261,6 +262,9 @@ namespace GSMem
 		// writes the pixel
 		static constexpr void Write(const PageLookupTableT& table, u8* data, u32 block, u32 bw, u32 x, u32 y, PackedT value);
 
+		// [gta-recomp] writes the pixel at a pixel address from Address()
+		static constexpr void WriteAddress(u8* data, u32 pixel_addr, PackedT value);
+
 		// reads the pixel
 		static constexpr auto Read(const PageLookupTableT& table, const u8* data, u32 block, u32 bw, u32 x, u32 y, TexturePageCache* cache = nullptr) -> PackedT;
 
@@ -461,7 +465,12 @@ namespace GSMem
 	template<PixelStorageMode psm>
 	constexpr void PixelStorageTraits<psm>::Write(const PageLookupTableT& table, u8* data, u32 block, u32 bw, u32 x, u32 y, PackedT value)
 	{
-		const u32 pixel_addr = Address(table, block, bw, x, y);
+		WriteAddress(data, Address(table, block, bw, x, y), value);
+	}
+
+	template<PixelStorageMode psm>
+	constexpr void PixelStorageTraits<psm>::WriteAddress(u8* data, u32 pixel_addr, PackedT value)
+	{
 		const u32 bits = pixel_addr * UnpackedBitWidth(psm) + BitOffset();
 		const u32 byte_addr = (bits / 8) & (MEMORY_SIZE - sizeof(PackedT));
 		const u32 shift = bits % 8;
@@ -562,6 +571,19 @@ namespace GSMem
 	void WriteP4HL(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 value);
 
 	void WriteNull(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 value);
+
+	// [gta-recomp] Whole-rectangle uploads (w x h at x,y; src packed as the GS receives it: 4 / 2 / 1 bytes per pixel,
+	// T4 two pixels per byte low nibble first, w even). Same result as the per-pixel writers, but they address with one
+	// 128x128 slice of the page table instead of the 32-slice table (1 MB for T4) - the per-pixel version spent its
+	// time in cache misses. Return false (nothing written) if the start-up self-check found an address mismatch.
+	bool WriteRectCT32(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h, const u8* src);
+	bool WriteRectCT16(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h, const u8* src);
+	bool WriteRectP8(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h, const u8* src);
+	bool WriteRectP4(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h, const u8* src);
+
+	// [gta-recomp] The 256-byte VRAM blocks (0..16383) a w x h rectangle at x,y of a buffer touches, and those it covers
+	// completely (every byte written). CT32 / CT16 / T8 / T4 only: false for other formats.
+	bool RectBlocks(u32 psm, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h, std::vector<u16>& touched, std::vector<u16>* full);
 
 	u32 ReadCT32(u8* data, u32 bp, u32 bw, u32 x, u32 y);
 	u32 ReadZ32(u8* data, u32 bp, u32 bw, u32 x, u32 y);

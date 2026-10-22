@@ -1370,7 +1370,9 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     // views over the city exceed that - the tail of the chain (peds, vehicles, the HUD) was dropped, so
                     // they flickered out in busy views. Hardware has no limit; this only stops a corrupt looping chain.
                     static const int kMaxChainTags = std::getenv("PS2X_DMA_MAX_TAGS") ? std::atoi(std::getenv("PS2X_DMA_MAX_TAGS")) : (1 << 20);
-                    std::vector<uint8_t> chainBuf;
+                    // [gta-recomp] Reuse a chain buffer from earlier transfers: VCS's per-frame VIF1 chain gathers
+                    // several MB; a fresh vector each time cost reallocation copies and OS page frees (~5% of a frame).
+                    std::vector<uint8_t> chainBuf = takeChainBuffer();
 
                     auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
                     {
@@ -1866,6 +1868,8 @@ void PS2Memory::processPendingTransfers()
             }
         }
     }
+    for (auto &p : m_pendingGifTransfers)
+        recycleChainBuffer(std::move(p.chainData));
     m_pendingGifTransfers.clear();
 
     const bool hadVif0 = !m_pendingVif0Transfers.empty();
@@ -1924,6 +1928,8 @@ void PS2Memory::processPendingTransfers()
             }
         }
     }
+    for (auto &p : m_pendingVif0Transfers)
+        recycleChainBuffer(std::move(p.chainData));
     m_pendingVif0Transfers.clear();
 
     const bool hadVif1 = !m_pendingVif1Transfers.empty();
@@ -1982,6 +1988,8 @@ void PS2Memory::processPendingTransfers()
             }
         }
     }
+    for (auto &p : m_pendingVif1Transfers)
+        recycleChainBuffer(std::move(p.chainData));
     m_pendingVif1Transfers.clear();
 
     if (m_gifArbiter)

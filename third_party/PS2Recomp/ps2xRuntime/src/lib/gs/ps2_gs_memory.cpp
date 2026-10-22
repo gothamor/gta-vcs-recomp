@@ -2,6 +2,9 @@
 
 #include "runtime/gs/ps2_gs_memory.h"
 
+#include <cstdio>
+#include <cstring>
+
 namespace GSMem
 {
     using C32Traits  = PixelStorageTraits<C32>;
@@ -322,6 +325,121 @@ namespace GSMem
 
     void WriteNull(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 value)
     {
+    }
+
+    // [gta-recomp] Whole-rectangle uploads, see the header. The page table is linear in the base block:
+    // table[block][y][x] == block * PixelsPerBlock + table[0][y][x], so slice 0 is enough.
+    namespace
+    {
+        template <PixelStorageMode psm>
+        u32 sliceAddress(const typename PixelStorageTraits<psm>::PageLookupTableT& table, u32 bp, u32 bw, u32 x, u32 y)
+        {
+            using T = PixelStorageTraits<psm>;
+            constexpr auto pe = T::PageExtent();
+            return static_cast<u32>(T::PageId(bp, bw, x, y)) * static_cast<u32>(T::PixelsPerPage()) +
+                   (bp % static_cast<u32>(T::BlocksPerPage())) * static_cast<u32>(T::PixelsPerBlock()) + table[0][y % pe.y][x % pe.x];
+        }
+
+        // Compares sliceAddress with Address on pseudo-random inputs once.
+        template <PixelStorageMode psm>
+        bool sliceMatches(const typename PixelStorageTraits<psm>::PageLookupTableT& table)
+        {
+            u32 seed = 0x12345678u;
+            auto next = [&] { seed = seed * 1664525u + 1013904223u; return seed >> 8; };
+            for (int i = 0; i < 20000; ++i)
+            {
+                const u32 bp = next() % 16384u, bw = 1u + next() % 16u, x = next() % 1024u, y = next() % 1024u;
+                if (sliceAddress<psm>(table, bp, bw, x, y) != PixelStorageTraits<psm>::Address(table, bp, bw, x, y))
+                {
+                    std::fprintf(stderr, "[gs] rect upload self-check failed for psm 0x%x (bp=%u bw=%u x=%u y=%u): per-pixel path kept\n",
+                                 static_cast<unsigned>(psm), bp, bw, x, y);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        template <PixelStorageMode psm, typename Fetch>
+        bool writeRect(const typename PixelStorageTraits<psm>::PageLookupTableT& table, u8* data, u32 bp, u32 bw, u32 x0, u32 y0, u32 w,
+                       u32 h, Fetch fetch)
+        {
+            static const bool ok = sliceMatches<psm>(table);
+            if (!ok)
+                return false;
+            using T = PixelStorageTraits<psm>;
+            constexpr auto pe = T::PageExtent();
+            const u32 blockBase = (bp % static_cast<u32>(T::BlocksPerPage())) * static_cast<u32>(T::PixelsPerBlock());
+            u32 i = 0;
+            for (u32 y = y0; y < y0 + h; ++y)
+            {
+                const auto& row = table[0][y % pe.y];
+                for (u32 x = x0; x < x0 + w; ++x, ++i)
+                {
+                    const u32 addr = static_cast<u32>(T::PageId(bp, bw, x, y)) * static_cast<u32>(T::PixelsPerPage()) + blockBase + row[x % pe.x];
+                    T::WriteAddress(data, addr, static_cast<typename T::PackedT>(fetch(i)));
+                }
+            }
+            return true;
+        }
+    }
+
+    namespace
+    {
+        template <PixelStorageMode psm>
+        void rectBlocks(const typename PixelStorageTraits<psm>::PageLookupTableT& table, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h,
+                        std::vector<u16>& touched, std::vector<u16>* full)
+        {
+            using T = PixelStorageTraits<psm>;
+            constexpr auto pe = T::PageExtent();
+            constexpr auto be = T::BlockExtent();
+            constexpr u32 bwPx = pe.x / be.x, bhPx = pe.y / be.y; // block size in pixels
+            const u32 x0 = x - x % bwPx, y0 = y - y % bhPx;
+            for (u32 by = y0; by < y + h; by += bhPx)
+                for (u32 bx = x0; bx < x + w; bx += bwPx)
+                {
+                    const u32 pixel = PixelStorageTraits<psm>::Address(table, bp, bw, bx, by);
+                    const u32 byte = static_cast<u32>((static_cast<uint64_t>(pixel) * UnpackedBitWidth(psm)) / 8u) & (MEMORY_SIZE - 1u);
+                    const u16 block = static_cast<u16>(byte >> 8);
+                    touched.push_back(block);
+                    if (full && bx >= x && by >= y && bx + bwPx <= x + w && by + bhPx <= y + h)
+                        full->push_back(block);
+                }
+        }
+    }
+
+    bool RectBlocks(u32 psm, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h, std::vector<u16>& touched, std::vector<u16>* full)
+    {
+        if (w == 0u || h == 0u)
+            return true;
+        bw = bw ? bw : 1u;
+        switch (static_cast<PixelStorageMode>(psm & 0x3Fu))
+        {
+        case C32: rectBlocks<C32>(PageTableC32, bp, bw, x, y, w, h, touched, full); return true;
+        case C16: rectBlocks<C16>(PageTableC16, bp, bw, x, y, w, h, touched, full); return true;
+        case P8: rectBlocks<P8>(PageTableP8, bp, bw, x, y, w, h, touched, full); return true;
+        case P4: rectBlocks<P4>(PageTableP4, bp, bw, x, y, w, h, touched, full); return true;
+        default: return false;
+        }
+    }
+
+    bool WriteRectCT32(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h, const u8* src)
+    {
+        return writeRect<C32>(PageTableC32, data, bp, bw, x, y, w, h, [src](u32 i) { u32 v; std::memcpy(&v, src + i * 4u, 4); return v; });
+    }
+
+    bool WriteRectCT16(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h, const u8* src)
+    {
+        return writeRect<C16>(PageTableC16, data, bp, bw, x, y, w, h, [src](u32 i) { u16 v; std::memcpy(&v, src + i * 2u, 2); return v; });
+    }
+
+    bool WriteRectP8(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h, const u8* src)
+    {
+        return writeRect<P8>(PageTableP8, data, bp, bw, x, y, w, h, [src](u32 i) { return src[i]; });
+    }
+
+    bool WriteRectP4(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 w, u32 h, const u8* src)
+    {
+        return writeRect<P4>(PageTableP4, data, bp, bw, x, y, w, h, [src](u32 i) { return static_cast<u8>((src[i >> 1] >> ((i & 1u) * 4u)) & 0x0Fu); });
     }
 
     u32 ReadCT32(u8* data, u32 bp, u32 bw, u32 x, u32 y)

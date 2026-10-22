@@ -65,7 +65,17 @@
       Cost: full frames are 7-14k tags; the title flyover dropped from ~45 to ~16 game fps.
       First perf recording: render submit (VIF/VU1/GS recording) 41 ms of a 61 ms frame,
       game code 15 ms, IOP 0.7 ms, GL execution 2.5 ms on the main thread.
-- [ ] Performance: render submit is the bottleneck now (see above)
+- [~] Performance: render submit (title flyover, frames 10-60 s, ~245k vertices/frame):
+      | step | render ms | game fps |
+      |---|---|---|
+      | start (full DMA chains) | 44.6 | 15.8 |
+      | recycle HW frame records, chain buffers; perf counters per frame | 39.1 | 17.5 |
+      | slice-addressed texture uploads | 39.9* | 16.9 |
+      | lazy uploads (block level) | 36.8 | 18.3 |
+      | texture binding cache | 33.9 | 19.3 |
+      (* flyover load varies run to run; compare per-vertex.) Next: HwBackend::Submit (7%),
+      VIF1 unpack (5%), compiled-VU1 pipeline bookkeeping (runLoop / progressXgkick /
+      commitReadyPipelines ~8%), GS::writeRegisterPacked (4%), lazy-upload closure (3%).
 - [ ] Whole screen goes black for a few frames now and then (reported 2026-10-22 after the
       DMA chain fix; not investigated yet)
 - [ ] Water surface looks missing (dark grey where sea should be) - to check
@@ -98,6 +108,7 @@
 | `PS2X_DMA_HIST=1` | VIF1 payload per MB of RAM every 5 s |
 | `VCS_TRACE_PACKETS=1` | peak use of the game's DMA packet buffer |
 | F3 / F4, `PS2X_PERF_LOG=f.csv` | perf overlay / CSV recording (see CONTROLS.md); `python tools/perf_report.py f.csv` |
+| `PS2X_HW_LAZY_UPLOADS=0`, `PS2X_HW_UPSTATS=1` | write texture uploads immediately / upload stats |
 | `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate a slow PC) |
 | `PS2X_VU0_VERIFY=1`, `PS2X_VU0_NATIVE=0` | check / disable native VU0 programs |
 | `PS2X_VU1_VERIFY=1`, `PS2X_VU1_COMPILED=0` | check / disable compiled VU1 code |

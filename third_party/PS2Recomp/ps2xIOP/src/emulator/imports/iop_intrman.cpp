@@ -6,6 +6,13 @@
 #include "../core/iop_memory.h"
 #include "../services/iop_rpc.h"
 
+// [gta-recomp] PS2X_TRACE_SPU, read once (getenv in these paths showed up in profiles)
+static bool traceSpuEnabled()
+{
+    static const bool enabled = std::getenv("PS2X_TRACE_SPU") != nullptr;
+    return enabled;
+}
+
 namespace ps2x::iop::detail
 {
     IopIntrman::IopIntrman(IopMemory &memory) noexcept
@@ -37,7 +44,7 @@ namespace ps2x::iop::detail
             return true;
         case 4: // RegisterIntrHandler
             m_handlers[static_cast<int>(a0)] = {a2, a3, cpu.gpr[28]};
-            if (std::getenv("PS2X_TRACE_SPU")) // [gta-recomp]
+            if (traceSpuEnabled()) // [gta-recomp]
                 std::fprintf(stderr, "[intr] RegisterIntrHandler irq=%u mode=%u handler=0x%x arg=0x%x\n", a0, a1, a2, a3);
             setV0(0u);
             return true;

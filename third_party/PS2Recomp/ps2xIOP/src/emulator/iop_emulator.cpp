@@ -29,6 +29,13 @@
 #include <sstream>
 #include <utility>
 
+// [gta-recomp] PS2X_TRACE_SPU, read once (getenv in these paths showed up in profiles)
+static bool traceSpuEnabled()
+{
+    static const bool enabled = std::getenv("PS2X_TRACE_SPU") != nullptr;
+    return enabled;
+}
+
 namespace ps2x::iop::detail
 {
     namespace
@@ -467,7 +474,7 @@ namespace ps2x::iop::detail
             }
             cpu.gpr[31] = kCallReturnSentinel;
             runCpu(cpu, budget);
-            if (cpu.pc != kCallReturnSentinel && std::getenv("PS2X_TRACE_SPU")) // [gta-recomp] budget ran out or the callee blocked
+            if (cpu.pc != kCallReturnSentinel && traceSpuEnabled()) // [gta-recomp] budget ran out or the callee blocked
                 std::fprintf(stderr, "[iop] call 0x%x did not return: pc=0x%x ra=0x%x stopped=%d yielded=%d budget=%u\n", address, cpu.pc,
                              cpu.gpr[31], cpu.stopped ? 1 : 0, cpu.yielded ? 1 : 0, budget);
             return cpu.gpr[2];
@@ -666,7 +673,7 @@ namespace ps2x::iop::detail
             if (callContextWaitDepth >= 4u)
                 return;
             static int traced = 0;
-            if (std::getenv("PS2X_TRACE_SPU") && traced++ < 12)
+            if (traceSpuEnabled() && traced++ < 12)
                 std::fprintf(stderr, "[iop] call-context wait from cycle %llu to %llu (depth %u)\n", (unsigned long long)totalCycles,
                              (unsigned long long)wakeCycle, callContextWaitDepth);
             ++callContextWaitDepth;

@@ -1566,7 +1566,19 @@ void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
         const uint64_t pixels = static_cast<uint64_t>(rrw) * rrh;
         auto *write = m_writeVramFuncs[dpsm & 0x3Fu];
         bool done = false;
-        if ((dpsm == GS_PSM_CT32 || dpsm == GS_PSM_Z32) && sizeBytes >= pixels * 4u)
+        // slice-addressed whole-rectangle writers (GSMem::WriteRect*) for the common formats
+        if (dpsm == GS_PSM_CT32 && sizeBytes >= pixels * 4u)
+            done = GSMem::WriteRectCT32(m_vram, dbp, dbw, dsax, dsay, rrw, rrh, data);
+        else if (dpsm == GS_PSM_CT16 && sizeBytes >= pixels * 2u)
+            done = GSMem::WriteRectCT16(m_vram, dbp, dbw, dsax, dsay, rrw, rrh, data);
+        else if (dpsm == GS_PSM_T8 && sizeBytes >= pixels)
+            done = GSMem::WriteRectP8(m_vram, dbp, dbw, dsax, dsay, rrw, rrh, data);
+        else if (dpsm == GS_PSM_T4 && (rrw & 1u) == 0u && sizeBytes >= pixels / 2u)
+            done = GSMem::WriteRectP4(m_vram, dbp, dbw, dsax, dsay, rrw, rrh, data);
+        if (done)
+        {
+        }
+        else if ((dpsm == GS_PSM_CT32 || dpsm == GS_PSM_Z32) && sizeBytes >= pixels * 4u)
         {
             for (uint32_t y = 0; y < rrh; ++y)
                 for (uint32_t x = 0; x < rrw; ++x, offset += 4u)

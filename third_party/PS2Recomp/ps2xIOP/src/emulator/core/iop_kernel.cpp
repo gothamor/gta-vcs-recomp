@@ -7,6 +7,13 @@
 
 #include <algorithm>
 
+// [gta-recomp] PS2X_TRACE_SPU, read once (getenv in these paths showed up in profiles)
+static bool traceSpuEnabled()
+{
+    static const bool enabled = std::getenv("PS2X_TRACE_SPU") != nullptr;
+    return enabled;
+}
+
 namespace ps2x::iop::detail
 {
     namespace
@@ -665,7 +672,7 @@ namespace ps2x::iop::detail
     {
         {
             static int traced = 0;
-            if (std::getenv("PS2X_TRACE_SPU") && (m_currentThread == nullptr || &m_currentThread->cpu != &cpu) && traced++ < 10)
+            if (traceSpuEnabled() && (m_currentThread == nullptr || &m_currentThread->cpu != &cpu) && traced++ < 10)
                 std::fprintf(stderr, "[iop] delay in %s (current thread %d)\n", m_currentThread ? "foreign cpu" : "no thread",
                              m_currentThread ? static_cast<int>(m_currentThread->id) : -1);
         }

@@ -128,7 +128,9 @@ namespace vcs
                     auto it = std::upper_bound(map.begin(), map.end(), rip,
                                                [](uintptr_t v, const HostFn &f) { return v < f.host; });
                     // Generated functions are at most a few hundred KB of host code each.
-                    if (it != map.begin() && rip - std::prev(it)->host < 0x100000)
+                    // (not past the last one: whatever the linker placed after it - e.g. compiled VU1 code - was
+                    // counted as that function before)
+                    if (it != map.begin() && it != map.end() && rip - std::prev(it)->host < 0x100000)
                         ++hits[std::prev(it)->guest];
                     else
                         ++other[rip];
