@@ -1540,6 +1540,21 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                         if (hasPayload)
                             appendData(dataAddr, tagQwc);
+                        { // [gta-recomp] PS2X_DUMP_CHAIN=<n>: list every tag of the n-th VIF1 chain kick
+                            static const long dumpKick = std::getenv("PS2X_DUMP_CHAIN") ? std::atol(std::getenv("PS2X_DUMP_CHAIN")) : -1;
+                            static long kickIndex = 0;
+                            static uint32_t lastStartTag = 0xFFFFFFFFu;
+                            if (dumpKick >= 0 && channelBase == 0x10009000u)
+                            {
+                                if (tagsProcessed == 1)
+                                    ++kickIndex;
+                                if (kickIndex == dumpKick)
+                                    std::fprintf(stderr, "[chain] tag@0x%08x id=%u qwc=%u addr=0x%08x data=0x%08x upper=%08x %08x\n", currentTagAddr,
+                                                 id, tagQwc, addr, dataAddr, static_cast<uint32_t>(loadScalar<uint64_t>(tp, 8, 16, "dma tag hi", currentTagAddr)),
+                                                 static_cast<uint32_t>(loadScalar<uint64_t>(tp, 8, 16, "dma tag hi", currentTagAddr) >> 32));
+                            }
+                            (void)lastStartTag;
+                        }
                         { // [gta-recomp] PS2X_TRACE_DMA_RANGE=lo,hi: report chain tags/payloads inside a guest range
                             static uint32_t rangeLo = 0, rangeHi = 0;
                             static const bool rangeSet = [] {

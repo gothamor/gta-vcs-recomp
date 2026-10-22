@@ -863,6 +863,33 @@ bool PS2Runtime::syncCoreSubsystems()
                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
                                          (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+                                     { // [gta-recomp] PS2X_VU1_DUMP=418,478,...: dump VU1 code+data before the 50th run of these programs
+                                         static std::map<uint32_t, uint32_t> dumpRuns = []
+                                         {
+                                             std::map<uint32_t, uint32_t> m;
+                                             if (const char *e = std::getenv("PS2X_VU1_DUMP"))
+                                                 for (const char *p = e; *p;)
+                                                 {
+                                                     char *end = nullptr;
+                                                     const unsigned long v = std::strtoul(p, &end, 16);
+                                                     if (end == p)
+                                                         break;
+                                                     m[static_cast<uint32_t>(v)] = 0u;
+                                                     p = *end ? end + 1 : end;
+                                                 }
+                                             return m;
+                                         }();
+                                         auto it = dumpRuns.find(startPC);
+                                         if (it != dumpRuns.end() && ++it->second == 50u)
+                                         {
+                                             char name[64];
+                                             std::snprintf(name, sizeof(name), "vu1_code_%04x.bin", startPC);
+                                             if (FILE *f = std::fopen(name, "wb")) { std::fwrite(m_memory.getVU1Code(), 1, PS2_VU1_CODE_SIZE, f); std::fclose(f); }
+                                             std::snprintf(name, sizeof(name), "vu1_data_%04x.bin", startPC);
+                                             if (FILE *f = std::fopen(name, "wb")) { std::fwrite(m_memory.getVU1Data(), 1, PS2_VU1_DATA_SIZE, f); std::fclose(f); }
+                                             std::fprintf(stderr, "[vu1] dumped program 0x%04x (top=0x%x itop=0x%x)\n", startPC, top, itop);
+                                         }
+                                     }
                                      const uint64_t kicksBefore = g_vu1XgkickCount;
                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,

@@ -53,3 +53,6 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRuntime/src/lib/ps2_memory.cpp`, `ps2_vif1_interpreter.cpp` | `PS2X_TRACE_VIF=1` (unknown VIFcodes, scratchpad DMA), `PS2X_TRACE_DMA_RANGE=lo,hi` (chain payloads from a guest range) | Finding where geometry comes from |
 | `ps2xRuntime/include/ps2_runtime.h`, `ps2_runtime_macros.h`, `src/debug/watch.cpp` | `VCS_RWATCH=lo,hi`: read watchpoint (each distinct reading pc once) in the READ8..READ128 macros | Find which code consumes a data structure |
 | `ps2xRuntime/src/lib/ps2_runtime.cpp`, `vu/ps2_vu1_core.cpp` | `PS2X_TRACE_VU1=1`: per VU1 program start: runs, XGKICKs, runs without a kick | Find microprograms that produce nothing |
+| `ps2xRecomp/src/lib/vu_translation_helpers.cpp` | **Fix:** `VCALLMSR` starts the VU0 microprogram at CMSAR0 | Upstream read `ctx->vi[27]` (past the 16-entry VI array) for the address, so the program started at garbage. VCS's sector frustum test (`FUN_002F7528` -> `FUN_0030C8D4`: CTC2 CMSAR0, LQC2 box, VCALLMSR, CFC2 vi1/vi2) always returned 0 and no static world geometry was drawn |
+| `ps2xRuntime/src/lib/ps2_runtime.cpp` | `PS2X_VU1_DUMP=addr,...`: dump VU1 code/data before the 50th run of those programs | Microcode inspection |
+| `ps2xRuntime/src/lib/ps2_memory.cpp` | `PS2X_DUMP_CHAIN=<n>`: list every tag of the n-th VIF1 chain kick | Display-list inspection |

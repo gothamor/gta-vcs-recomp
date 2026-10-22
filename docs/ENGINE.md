@@ -158,3 +158,23 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   under investigation, possibly the SQRT.S fix.
 - In-world draws are mostly MODULATE + alpha test GREATER 8, fogged, vertex
   colours from V4-5 unpacks.
+
+## Renderer (found while fixing the missing world)
+- One VIF1 DMA chain per frame, kicked at `0x27245C` (D1_CHCR = 0x145, chain +
+  TTE); TADR alternates between static root lists `0x480D20` / `0x480DE0`.
+- Models are prebuilt packets in the model heap, entered with CALL tags and
+  ended by RET; CALL tags are written by the RSL mesh code (`0x2F62B8..0x2FB690`,
+  `FUN_003298D8`). VU1 microcode sits inside `.text` and is uploaded each frame
+  by REF tags with `MPG` VIFcodes (`0x2AC130`, `0x2F13D0`, `0x368730`, ...).
+- World sectors: `FUN_0023E748(level, pass)` (3 passes per frame; takes a lock,
+  scrolls water UVs at level+0x5D0/0x5D4) walks the sector slots at
+  level+0x248.., and per entry calls `FUN_00240ED8`, which culls with
+  `FUN_002F7528` = unit box transformed by the sector matrix, tested by a VU0
+  microprogram (CMSAR0 0x19F, param VI15 = 0xDC) via `FUN_0030C8D4`; result 0 =
+  culled, 1 = inside, 2 = partly. Visible sectors go to `FUN_002409C8`.
+- Entities: `CCamera::IsSphereVisible` = `FUN_003816F8` (VU0 macro transform of the
+  centre by the camera matrix, near/far at 0x4CD130 / 0x4CD12C, planes at cam+0xB60).
+- Level object `0x750340` (pointer at `0x48F4F8`).
+- VU1 setup programs that never XGKICK (normal): 0x0148 (clear state), 0x0418
+  (lighting dispatch via JALR table at VU mem 34..37), 0x0478 (matrices),
+  0x2B50 (matrix copy).
