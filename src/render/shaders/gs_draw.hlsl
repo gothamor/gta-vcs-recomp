@@ -92,7 +92,7 @@ struct WorldIn
     uint col : COLOR0;      // the V4-5 colour's expanded bytes
 };
 
-// VCS prelit world (VU1 0x0030 with stages 0x0da / 0x4e0 / 0x2b6): see docs/ENGINE.md
+// VCS prelit world (VU1 0x0030 with stages 0x0da / 0x4e0 / 0x2b6): see docs/game-internals.md
 VSOut vs_world(WorldIn i)
 {
     VSOut o = (VSOut)0;
@@ -113,7 +113,7 @@ struct LitIn
     float3 nrm : NORMAL;     // skinned normal
 };
 
-// VCS lit / skinned models (VU1 0x0030 with stages 0x5a5 / 0x0da / 0x4ff / 0x2b6): see docs/ENGINE.md
+// VCS lit / skinned models (VU1 0x0030 with stages 0x5a5 / 0x0da / 0x4ff / 0x2b6): see docs/game-internals.md
 VSOut vs_lit(LitIn i)
 {
     VSOut o = (VSOut)0;

@@ -1,5 +1,5 @@
 // VCS world geometry pipeline (VU1 program 0x0030 with the prelit-world stage table), reimplemented in C++ - the
-// reference for a native (GPU) version. See docs/ENGINE.md "VU1 renderer pipeline" for what each routine does.
+// reference for a native (GPU) version. See docs/game-internals.md "VU1 renderer pipeline" for what each routine does.
 //
 // PS2X_HLE_VERIFY=1: for every world packet, predict the VU1's decision (culled / clipper / fast path) and the fast
 // path's output (ST, RGBA, XYZF per vertex), let the VU1 run, and compare. Reports every 10 s on stderr.

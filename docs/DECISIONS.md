@@ -155,3 +155,14 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   Stream refills (DMA bytes, IRQs per second) are the same at 20 and 60
   VBlanks/s: CDSTREAM feeds music from the IOP side, not per game frame.
   `PS2X_IOP_REALTIME=0` turns it off.
+
+## 2026-10-22 - Native port roadmap decisions (docs/NATIVE_PORT_ROADMAP.md)
+The user's choices on the roadmap's open questions:
+- Start with milestone 1 (automation / coverage rig), then milestone 2 (correctness sweep), and
+  carry the roadmap out autonomously, committing at milestones and major changes.
+- Movies: FFmpeg as the decoder.
+- 60 fps: a settings-menu option, off by default (30 fps stays the authentic default).
+- IOP retirement (milestone 6): do it.
+- Windows only for now; milestone 9 (portability / distribution) is out of scope until further notice.
+- Game knowledge goes into docs/game-internals.md (successor of ENGINE.md, each fact with how it was
+  found); AGENTS.md is the working contract for agents.

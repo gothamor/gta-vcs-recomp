@@ -1,0 +1,107 @@
+# AGENTS.md - working on the GTA: Vice City Stories native port
+
+Read this first. It is the contract for anyone (human or AI agent) changing this repository. The
+detailed knowledge lives in `docs/`:
+
+| Doc | What's in it |
+|---|---|
+| [docs/game-internals.md](docs/game-internals.md) | Everything known about how the game works inside: code map, boot, camera, renderer, VU1 pipeline, 2D, streaming, sound, memory card - with addresses and how each fact was found |
+| [docs/NATIVE_PORT_ROADMAP.md](docs/NATIVE_PORT_ROADMAP.md) | The plan to completion (milestones 1-8) and what "done" means |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | Status per area, open bugs, and the table of debug switches (`PS2X_*`, `VCS_*`) |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Why things are the way they are; the user's decisions |
+| [docs/PS2RECOMP_PATCHES.md](docs/PS2RECOMP_PATCHES.md) | Every change to the vendored PS2Recomp runtime, with the reason |
+| [docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md) | The D3D11 renderer: layers, stages, HLE method |
+| [docs/SETTINGS_MENU_WIDESCREEN.md](docs/SETTINGS_MENU_WIDESCREEN.md) | Settings registry / menu, Hor+ widescreen |
+| [docs/DISC.md](docs/DISC.md), [docs/CONTROLS.md](docs/CONTROLS.md) | Disc layout; keyboard / gamepad mapping |
+
+**When you learn something about the game, write it into docs/game-internals.md in the same change.**
+Record addresses and how you found them. When something is weird, use judgment, fix or work around it,
+and write it down (game-internals for the game, PS2RECOMP_PATCHES for the runtime, DECISIONS for
+choices).
+
+## What the project is
+
+- GTA: Vice City Stories (PS2, SLUS-21590 USA) statically recompiled to C++ (PS2Recomp, vendored and
+  heavily modified in `third_party/PS2Recomp`), turned step by step into a native port: native D3D11
+  rendering of the game's models (`src/game/vcs_hle_world.cpp`), SDL3 platform layer, settings menu.
+- Windows only for now (SDL3 + our RHI keep macOS / Linux possible later; not in scope).
+- Distribution is source-only, bring your own disc. **Never commit game code or data**: no ISO, no
+  ELF, no generated C++ (`generated/`), no disassembly listings, no extracted assets. Analysis dumps go
+  to `build/analysis/` (ignored). Function maps (names + addresses) and docs describing behaviour are
+  fine.
+- Authentic by default; every enhancement is an option (settings registry, `src/settings`).
+
+## Layout
+
+| Path | What |
+|---|---|
+| `src/main.cpp` | Launcher: ISO, settings registration, runtime start |
+| `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`) |
+| `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders, the RHI (D3D11 only under `rhi_d3d11/`), SDL3 platform layer |
+| `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2) |
+| `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch |
+| `third_party/PS2Recomp/ps2xRuntime` | The runtime (EE, VIF, VU1, GS HW backend, IOP host, stubs); our changes marked `[gta-recomp]` |
+| `game/vcs/` | Recompiler config, function map, VU1 upload list |
+| `tools/` | Python 3 tools (standard library only) - see below |
+
+## Build and run
+
+```
+python tools/build.py                       # rebuild after code changes (--reconfigure after adding files)
+python tools/build.py --recompile [ISO]     # disc -> generated C++ -> build (slow)
+python tools/run.py 60 name                 # run 60 s, log to build/run/name.log (visible window)
+python tools/run.py 60 name --control       # + control channel for tools/gamectl.py
+python tools/scenes.py capture OUT          # reference scenes from an empty card (screenshots + perf)
+python tools/scenes.py compare REF NEW      # picture / perf diff of two captures
+python tools/gamectl.py press F2|screenshot f.png|perf|quit
+```
+
+- Test runs are **visible** (the user is fine with the window showing). Use `--hidden` only when asked.
+- `VCS_DATA_DIR=<dir>` gives a run its own memory card / cache. **Never run tests against the user's
+  card** (`%LOCALAPPDATA%/VCSRecomp/mc0`) when they could write to it; copy it with
+  `robocopy /E /COPY:DAT /DCOPY:T` (keeps creation times, which the card order depends on).
+- `vcs.ini` next to `vcs.exe` holds the user's settings; environment overrides (`VCS_ASPECT=169`)
+  apply to one run without touching it.
+- Rebuild costs: a change to `ps2_memory.h`, `gs_backend.h`, `ps2_hle_survey.h` or anything the
+  generated code includes rebuilds everything (~6-10 min); runtime-only changes ~1 min; `src/` only
+  seconds. Prefer `src/game/vcs_overrides.cpp` for experiments.
+
+## Rules that keep things working
+
+1. **Reference first.** A native replacement of an emulated path is checked against it (bit-exact
+   where possible: `PS2X_HLE_VERIFY=1`; picture diff via scenes otherwise) and keeps a switch back
+   (`PS2X_HLE=0`-style). The emulated path is never deleted.
+2. **Hooks on recompiled functions** (DECISIONS.md): a generated function may return to the EE
+   scheduler mid-body and be resumed through the function table, bypassing a wrapper. A hook may work
+   *before* calling the original or replace it entirely; never rely on code after the original
+   returns. Never call a guest function directly from host code expecting it to run to the end -
+   chain it as a guest tail call (see `VCS_TEST_SAVE`).
+3. **Floating point**: no FP contraction in generated / VU code; VU maths rounds toward zero
+   (`FE_TOWARDZERO` where reproducing it). Bit-exactness depends on both.
+4. **Never run `PS2X_GS=gpu`** (paraLLEl-GS) on the dev machine: it hangs the GTX 1080 Ti into a TDR
+   reset and blanks the user's screen. Use `PS2X_GS=hw` (default via run.py).
+5. **Patch scripts**: shell heredocs on this machine turn `\n` inside Python strings into real
+   newlines and corrupt C++ string literals. Use the Edit tool, or write the script to a file first.
+6. **Scripts are Python 3, standard library only**, runnable from any shell; extend `tools/*.py`
+   (shared helpers in `tools/toolchain.py`) instead of adding shell scripts.
+7. **Runtime changes** in `third_party/PS2Recomp` get a `[gta-recomp]` marker and a row in
+   PS2RECOMP_PATCHES.md.
+8. **Commit** at every milestone / major change, with a message that says why. End commit messages
+   with the attribution line the environment asks for.
+
+## Recognising old problems
+
+- Wrong colours on every texture: data shifted by VIFcodes (VIF1 DIRECT continuation, fixed).
+- Stuck on a loading screen, no crash: an IOP-side wait (`VCS_TRACE_DELAY`, `PS2X_TRACE_SPU`).
+- Thread "returns" to a float bit pattern (`0x3F333333`...): a saved `$ra` overwritten - the
+  checkpoint-unwind class of bug (`VCS_WATCH=lo,hi,...`).
+- Saves written but never found: card directory order (game-internals.md 10c).
+- First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
+
+## Working style for long autonomous runs
+
+- Follow docs/NATIVE_PORT_ROADMAP.md milestone by milestone without pausing for routine decisions;
+  record decisions in DECISIONS.md and progress / numbers in PROGRESS.md.
+- Measure before and after anything on the hot path (perf lines from `gamectl.py perf`, scenes'
+  `perf_*.txt`); keep the numbers in the docs.
+- Keep the regression rig (milestone 1) green; add a check when you fix a bug so it stays fixed.

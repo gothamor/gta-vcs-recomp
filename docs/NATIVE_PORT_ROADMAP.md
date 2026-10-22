@@ -1,6 +1,7 @@
 # Native port roadmap
 
-Status: **proposed** (2026-10-22), for review. Follows NATIVE_RENDERER.md (stages 0-6 done) and
+Status: **approved** (2026-10-22): start with milestones 1-2; FFmpeg for movies; 60 fps as an option,
+off by default; IOP retirement yes; Windows only - milestone 9 out of scope for now (DECISIONS.md). Follows NATIVE_RENDERER.md (stages 0-6 done) and
 SETTINGS_MENU_WIDESCREEN.md (v1 done).
 
 The goal: GTA: Vice City Stories playable from the first mission to the credits as a native PC
@@ -149,7 +150,7 @@ widescreen HUD anchored properly; MSAA / AF / resolution settings in the menu.
 
 ### Milestone 4 - Frame rate (M-L)
 
-- Map the main loop, frame limiter and CTimer time step (ENGINE.md "sections still to fill").
+- Map the main loop, frame limiter and CTimer time step (game-internals.md "sections still to fill").
 - **60 fps option**: run the game's update at 60 by changing the limiter, then fix what breaks at
   the shorter step (known GTA trouble spots: physics at high fps, animations, script waits, particle
   rates, the camera). Each fix gated behind the option, so 30 fps stays authentic.

@@ -20,7 +20,7 @@
 - [x] VU1: hctp's throughput-mode VU1 core (13 -> 23 VBlanks/s, GS discarded)
 - [x] IOP time batching (23 -> 60 VBlanks/s, GS discarded) = full speed without GS
 - [x] paraLLEl-GS integrated but opt-in: hangs Pascal GPUs into TDR resets
-- [x] GS usage survey (`VCS_GS_STATS`): see docs/ENGINE.md
+- [x] GS usage survey (`VCS_GS_STATS`): see docs/game-internals.md
 - [~] Hardware GS backend (`PS2X_GS=hw`, `src/lib/gs/gs_hw.cpp`; D3D11 since stage 3 of NATIVE_RENDERER.md, was OpenGL): runs at
       full speed and shows the loading screen. Fixed: overlapping render targets
       (back buffer FBP 140 = FBP 0 + 448 lines), stale page cache for CLUT loads.
@@ -91,7 +91,7 @@
       native renderer; not yet known whether it is new). Collision needs a look: whether the
       collision sectors / models are streamed in at those spots (CDSTREAM reads, IMG offsets),
       VU0 programs used by collision (`0x0000` in .vutext looked like line/sphere vs triangle
-      tests, docs/ENGINE.md "VU microcode"), and float edge cases in the recompiled code
+      tests, docs/game-internals.md "VU microcode"), and float edge cases in the recompiled code
       (FP contraction, round-to-zero, denormals). Compare with PS2X_HLE=0 to rule the renderer out.
 ## Phase 6 - enhancements
 

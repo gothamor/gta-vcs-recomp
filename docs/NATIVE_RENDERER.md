@@ -244,7 +244,7 @@ about the same as before (the game thread's render submit is still the cost).
 ### Stage 4 - Packet-level HLE groundwork (L) - done 2026-10-22
 
 Where to hook: the VIF1 DMA chain, not the recompiled game functions. Per
-ENGINE.md, each frame's chain CALLs prebuilt model packets in the model heap
+game-internals.md, each frame's chain CALLs prebuilt model packets in the model heap
 (0x1200000-0x17FFFFF), with per-instance data (matrices, lighting) uploaded
 before each CALL and VU1 programs uploaded by REF+MPG. Game code stays untouched;
 recognised packets are drawn natively, everything else falls through.
@@ -253,7 +253,7 @@ recognised packets are drawn natively, everything else falls through.
    (MSCAL address + which upload is resident), the VIF unpack layout (formats,
    addresses, counts), the preceding uploads, and the GS state it ends up with.
    Output a coverage report: share of vertices / GS time per (program, layout).
-   This decides the order of stages 5-7 and documents each program in ENGINE.md.
+   This decides the order of stages 5-7 and documents each program in game-internals.md.
 2. **Dispatcher**: in the DMA/VIF1 path, at a CALL into a packet whose program has
    a registered handler (`src/game/`, registered like the native VU0 programs),
    the handler consumes the packet and emits a native draw; VIF/VU1/GS work for it
@@ -279,7 +279,7 @@ packets, and the VU memory at MSCAL holds everything a draw needs):
 - `PS2X_HLE_SURVEY=1` (runtime `ps2_hle_survey.{h,cpp}`): per VU1 program / stage variant / UNPACK
   layout, calls, GS vertices and VU1 time; CALLed packets recorded as segments of the flattened
   chain; sample dumps for reverse engineering. `tools/vudis.py` disassembles VU code.
-  Finding: VU1 program 0x0030 (a dispatcher into stage routines, docs/ENGINE.md) makes ~95% of
+  Finding: VU1 program 0x0030 (a dispatcher into stage routines, docs/game-internals.md) makes ~95% of
   all GS vertices.
 - MSCAL hooks (`ps2hle::setMscalHooks`): a game handler runs before each VU1 program and may skip
   it; `ps2hle::gs()` + `GS::submitNative` record a native draw with the frontend's current GS state
@@ -308,7 +308,7 @@ packets, and the VU memory at MSCAL holds everything a draw needs):
 ### Stage 5 - World sectors (L) - prelit world pipeline done 2026-10-22
 
 - Biggest vertex share; mostly MODULATE, alpha test GREATER 8, fogged, PSMT4 +
-  CT32 CLUT, vertex colours from V4-5 unpacks (ENGINE.md, GS usage / level data).
+  CT32 CLUT, vertex colours from V4-5 unpacks (game-internals.md, GS usage / level data).
 - Includes the water UV scroll pass and the three per-frame sector passes
   (`FUN_0023E748`).
 - Done when: captures match, render submit time on the flyover drops measurably
@@ -316,7 +316,7 @@ packets, and the VU memory at MSCAL holds everything a draw needs):
 
 ### Stage 6 - Peds and vehicles (L) - skinned / lit models (table 0x16) done 2026-10-22
 
-Result: the lit pass (docs/ENGINE.md "Lit models") is reproduced in C++ (`vcs_hle_world.cpp`:
+Result: the lit pass (docs/game-internals.md "Lit models") is reproduced in C++ (`vcs_hle_world.cpp`:
 4-bone skinning, clip test on skinned positions, transform, fog, 4 directional lights + ambient)
 and checked bit-exact against the VU1 (`PS2X_HLE_VERIFY=1`, together with the world: 1,448,812
 packets / 65.3M vertices) except two lanes the lit transform's software pipeline leaves
@@ -367,7 +367,7 @@ Only possible cleanly once the 3D scene is native:
 - Native-resolution 3D independent of the PS2 framebuffer size (GS path keeps
   `PS2X_HW_SCALE`), MSAA, anisotropic filtering, higher-precision depth.
 - Widescreen: projection change in the camera code + HUD aspect handling
-  (ENGINE.md "Camera and projection" / "HUD" sections still to fill).
+  (game-internals.md "Camera and projection" / "HUD" sections still to fill).
 - Each as an option that defaults to authentic output.
 
 ## Verification
