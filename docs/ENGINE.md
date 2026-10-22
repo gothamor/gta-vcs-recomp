@@ -203,6 +203,59 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   (lighting dispatch via JALR table at VU mem 34..37), 0x0478 (matrices),
   0x2B50 (matrix copy).
 
+## VU1 renderer pipeline (found with PS2X_HLE_SURVEY, stage 4 of NATIVE_RENDERER.md)
+
+Survey over the reference script (`build/analysis/hle_survey_stage4.txt`, ~20 VIF1 chains/s):
+VU1 program **0x0030** produces ~95% of all GS vertices (3.0-3.5M/s) and ~88% of VU1 time
+(~17 ms per game frame on the EE thread). 0x02c0 (V4-32 x4 per call: sprites / particles /
+text) ~3%; 0x0418, 0x0478, 0x01e0, 0x03a8, 0x0148, 0x2b50 never kick (setup: lights, matrices,
+state). Disassemble with `python tools/vudis.py <vucode.bin> --start 0x30 --to-ebit`
+(samples: `PS2X_HLE_SURVEY_DUMP=2 PS2X_HLE_SURVEY_DUMP_EVERY=40000`).
+
+**0x0030 is a dispatcher**, not a renderer: `JR` to instruction `[38].x` inside itself, then a
+chain of `JALR vi15` calls whose targets / `vi01` parameters come from VU data qwords 38-41
+(set per batch by the setup programs). Stage tables seen (instruction indices):
+
+| entry | stages (vi01) | used by |
+|---|---|---|
+| 0x19 | 0x0da, 0x4e0 (0x9c), 0x2b6 | prelit world: V3-16 pos @1, V2-8 uv @0x48, V4-5 colour @0x8f (+ V4-32 matrix @0x2c x3 in some) |
+| 0x16 | 0x5a5 (0xa8), 0x0da, 0x4ff (0x9c), 0x2b6 | lit models: V3-16 pos, V2-8 uv @0x55, V3-8 normal @0x2b, V4-32 @0x7f |
+| 0x13 | 0x0da, 0x4ff (0x9c), 0x2b6, 0x5b1 (0xa8), 0x2b2 | lit models, second pass (env map?) |
+
+Code at 0x2700.. (instr 0x4e0..) is swapped by per-pass MPG uploads (game/vcs/vu1_uploads.txt:
+0x2700 x 54/102/158/138/18 pairs), so the survey keys programs by the code at the start PC *and*
+0x2700-0x2fff (`code` column).
+
+VU data layout used by the world pipeline (qwords; "top" = XTOP double buffer):
+- 28-31: combined world -> GS window matrix (rows; includes the viewport scale / 2048 offset).
+- 42: position scale (1/32768 for int16), 43: position offset (folded into the matrix).
+- 44-46: 3x3 matrix for the V2-8 texture coordinates, applied with I = 1/255.
+- 47: input offsets inside the buffer: .x positions (1), .z uv (0x48), .w colours (0x8f).
+- 48: .z = mask applied to TOP, .w = output buffer offset (0xd6).
+- 49 / 50: GIF tags for the kick (PACKED, NREG 3: ST, RGBAQ, XYZF2; PRIM strip with IIP TME FGE
+  ABE); NLOOP = vertex count written by MFIR from `[pos-1].w`. 51: default RGBA (255,255,255,128).
+- 52: .x = transform routine (0x0e9 normal / first call 0x0da path), .y flags (bit 1 fog,
+  bit 0 extra pass at 0x1440), .z = kick variant (698 / 711). 53: fog (.z bias 255.6, .w scale
+  -0.128 per unit of w).
+- 0x9c-0x9e (vi01 of stage 0x4e0): colour scale (time-of-day tint), offset, clamp (255).
+
+Routines (byte addresses):
+- 0x0748 (normal path): `BAL 0x0c38` = clip test over the packet (vi05 = OR of clip flags,
+  vi06 != 0: culled); none outside -> `B 0x06f0` (fast path below); some -> clipper 0x11f8 + 0x13d8.
+- 0x06f0: `BAL 0x07f0` (transform), `BAL 0x1048` (fog), `BAL 0x1360` (optional pass).
+- 0x07f0: per vertex `p = M * (itof(pos) * scale + offset)`, `Q = 1/p.w`, XYZ = FTOI4(p.xyz * Q),
+  STQ = (uvMatrix * itof(uv) / 255) * Q with .w = p.w; writes ST, RGBA (from 51), XYZF per vertex
+  (3 qwords). Pads short packets to 7 vertices (pipeline depth).
+- 0x1048: fog F = clamp(53.z + 53.w * w, 0, 255), FTOI4 into the XYZF qword's w (F field).
+- 0x2700 (stage 0x4e0, world variant): RGBA = MINI(itof(V4-5 colour) * [0x9c] + [0x9d], [0x9e]),
+  FTOI0 into the RGBA qword.
+- 0x15b0 (stage 0x2b6): GIF tag from [49] with NLOOP patched, `XGKICK`.
+
+So a native (GPU) world draw needs per packet: the static vertex streams (cacheable per packet
+address), the matrix 28-31 (+42/43), uv matrix 44-46, colour scale/offset/clamp 0x9c-0x9e, fog
+53 and the GIF tag 49 (prim) - all in VU data at MSCAL time. Packets that cross the clip volume
+go through the VU clipper (0x11f8/0x13d8); a GPU version would clip in hardware instead.
+
 ## Memory card (found while testing saves)
 - libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`), files live in
   `%LOCALAPPDATA%/VCSRecomp/mc0` (set in `src/main.cpp`).

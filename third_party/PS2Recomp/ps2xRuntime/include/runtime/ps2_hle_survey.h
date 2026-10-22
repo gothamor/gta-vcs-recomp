@@ -7,7 +7,8 @@
 //
 // PS2X_HLE_SURVEY=1 prints a report every 10 s to stderr and writes it to hle_survey.txt (working directory).
 // PS2X_HLE_SURVEY_DUMP=n also writes up to n samples per (program, layout) to hle_samples/: the packet's VIF bytes,
-// VU1 data memory before and after the program, and VU1 code memory.
+// VU1 data memory before and after the program, and VU1 code memory. PS2X_HLE_SURVEY_DUMP_EVERY=n samples every
+// n-th call of a layout instead of the first ones (which are boot screens).
 #pragma once
 
 #include <cstdint>

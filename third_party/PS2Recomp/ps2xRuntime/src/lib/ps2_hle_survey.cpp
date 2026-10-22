@@ -141,8 +141,12 @@ namespace ps2hle
     void beforeMscal(const ChainSegment *segment, uint32_t startPc, const uint8_t *vuCode, const uint8_t *vuData,
                      const uint8_t *stream, uint32_t streamSize)
     {
+        // VCS's renderer at 0x0030 is a dispatcher into stages swapped by per-pass uploads (0x2700..0x2fff): key the
+        // program by the code at the start PC and that region
         uint32_t codeHash = 0x811C9DC5u;
         for (uint32_t i = startPc; i < std::min(startPc + 512u, kVuCodeBytes); ++i)
+            codeHash = (codeHash ^ vuCode[i]) * 16777619u;
+        for (uint32_t i = 0x2700u; i < 0x3000u; ++i)
             codeHash = (codeHash ^ vuCode[i]) * 16777619u;
         ProgramStats &p = g_programs[(uint64_t(startPc) << 32) | codeHash];
         p.pc = startPc;
@@ -163,8 +167,10 @@ namespace ps2hle
         l.vectors += g_layoutVectors;
 
         static const uint32_t maxSamples = std::getenv("PS2X_HLE_SURVEY_DUMP") ? std::atoi(std::getenv("PS2X_HLE_SURVEY_DUMP")) : 0u;
+        // PS2X_HLE_SURVEY_DUMP_EVERY=n: sample calls n, 2n, ... of each layout (default 1: the first ones, i.e. boot)
+        static const uint64_t every = std::max(1, std::getenv("PS2X_HLE_SURVEY_DUMP_EVERY") ? std::atoi(std::getenv("PS2X_HLE_SURVEY_DUMP_EVERY")) : 1);
         g_dumpAfter = false;
-        if (l.samples < maxSamples)
+        if (l.samples < maxSamples && l.calls % every == 0u)
         {
             std::filesystem::create_directories("hle_samples");
             char base[96];
