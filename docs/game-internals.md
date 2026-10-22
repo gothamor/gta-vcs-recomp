@@ -239,8 +239,11 @@ the next (30 fps). In order:
 **Evening black frames**: between about 20:00 and 22:15 (the window moves with the weather) most frames come out
 black - everything but the last text - with normal draw counts. Same with the VU1 path (`PS2X_HLE=0`), so not the
 native renderer. The passes, their order, sources and targets are identical at noon and 20:00 (above), so the
-difference is in the values (texture coordinates of a copy, alpha, a self-copy reading what it writes). Under
-investigation; `PS2X_HW_SKIP` (1: skip render-target reads, 4: native only) exists for bisecting it.
+difference is in the values. The copies' texture coordinates are identical too (the self-copy reads 140 at a
++0.94 texel offset, the trails pass reads 384 at +0.5), so the copy chain is not it; next suspects are the
+time-of-day inputs (sky colours, the prelit tint VU data 0x9C-0x9E, lighting constants) around 20:00. Skipping all
+render-target reads (`PS2X_HW_SKIP=1`) blacks out noon as well, as expected: the picture reaches FBP 140 / 0 only
+through those copies.
 
 ## 7. Textures: `.XTX`
 

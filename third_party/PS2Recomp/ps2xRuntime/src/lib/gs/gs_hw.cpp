@@ -327,12 +327,12 @@ namespace
         if (s.texIsRt) // [gta-recomp] which render target a frame copy / screen effect reads, and where in it
             std::fprintf(stderr, "[draw]   src rt fbp=%u at %u,%u tex %ux%u tbw? st=(%.1f,%.1f)\n", s.rtFbp, s.rtOx, s.rtOy, s.tw, s.th,
                          d.count ? f.vertices[d.first].s : 0.0f, d.count ? f.vertices[d.first].t : 0.0f);
-        if (d.count <= 24) // [gta-recomp] small draws (overlays, fades): every vertex
-            for (uint32_t i = 0; i < d.count; ++i)
+        if (d.count <= 24 || s.texIsRt) // [gta-recomp] small draws (overlays, fades) and copies: their vertices
+            for (uint32_t i = 0; i < std::min<uint32_t>(d.count, 24u); ++i)
             {
                 const HwVertex &v = f.vertices[d.first + i];
-                std::fprintf(stderr, "[draw]   v%u (%.1f, %.1f, %.6f) rgba %02x %02x %02x %02x\n", i, v.x, v.y, v.z, v.r, v.g, v.b,
-                             v.a);
+                std::fprintf(stderr, "[draw]   v%u (%.1f, %.1f, %.6f) rgba %02x %02x %02x %02x stq %.2f %.2f %.3f\n", i, v.x, v.y, v.z,
+                             v.r, v.g, v.b, v.a, v.s, v.t, v.q);
             }
     }
 
