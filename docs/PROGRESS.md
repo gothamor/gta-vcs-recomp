@@ -86,6 +86,17 @@
       render-target drops (RtDrop) around the black frames.
 - [ ] Water surface looks missing (dark grey where sea should be) - to check
 - [ ] Movies
+## Milestone 1 - automation and coverage rig (NATIVE_PORT_ROADMAP.md), started 2026-10-22
+- [x] Control-channel extension (`ps2control::addCommand`) and the rig (`src/debug/rig.cpp`, `tools/rig.py`):
+      memory peek / poke / search / dump, pause, frame counter
+- [x] Script VM mapped (game-internals.md 11): `scm` runs our bytecode as a game script; teleport (area, scene
+      load, ground find), time, weather, invincibility, health, mission launch (game's own loader) all work
+- [x] Player ped, current area (interior) found (game-internals.md 12)
+- [x] World tour (`tools/tour.py`): grid over the map, classes ok / water / relocated / falling / dark / slow /
+      error, map image, screenshots, perf; restarts the game on a crash
+- [ ] Detectors in-process (black frames per frame, falling, unconverted draws), drive loops, mission smoke
+      tests, soak, one-command regression suite with baselines
+
 ## Phase 5 - stability
 - [ ] Vic falls through the world in some places (reported by the user 2026-10-22, after the
       native renderer; not yet known whether it is new). Collision needs a look: whether the
@@ -140,6 +151,8 @@
 | **F2** (or gamepad Back + Start) | settings menu (docs/SETTINGS_MENU_WIDESCREEN.md); its values live in vcs.ini next to vcs.exe |
 | `display.aspect=43\|1610\|169` in vcs.ini, `VCS_ASPECT=...` for one run | aspect ratio (Hor+ widescreen) |
 | `display.hud=0\|1` | widescreen HUD: keep 4:3 in the middle / stretch |
+| `python tools/rig.py start --save DIR`, `python tools/rig.py <command>` | automation rig: start from a card copy; peek / poke / findvec / dump / scm / scripts / player / pause |
+| `python tools/tour.py [OUT] [--step 250] [--every K]` | world tour over the map (classes, map.png, screenshots, perf) |
 | `display.scale=<1..8>` (old `scale=` still read) | internal render resolution, as `PS2X_HW_SCALE` (the environment wins) |
 | `python tools/vudis.py code.bin --start 0x30 --to-ebit` | VU microcode disassembler |
 | `python tools/sendkey.py Return`, `python tools/screenshot.py f.png` | key press / screenshot (control channel if open, else the window) |

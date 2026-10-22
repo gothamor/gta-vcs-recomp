@@ -322,13 +322,101 @@ keeps its order in a hidden `.ps2x-order` file (PS2RECOMP_PATCHES.md).
   `scePadRead`. A direct host call of a guest function is not safe: a scheduler checkpoint inside it
   unwinds the call and the rest of the routine never runs.
 
-## 11. Open questions / next research targets
+## 11. Scripts: MAIN.SCM and the script VM
+
+Found 2026-10-22 for the automation rig (`src/debug/rig.cpp`, `tools/rig.py`) from a RAM dump at the Fort Baxter
+save (`rig.py` `dump`), a read watch on the script (`VCS_RWATCH`), and disassembly. Opcode *names* come from the
+Sanny Builder Library's VCS database (`vcs.json`); every number we use was checked against the handler table
+below (e.g. 0x0023 terminates, 0x0289 loads a mission, 0x0238 names a script).
+
+### 11a. MAIN.SCM layout
+
+`MAIN.SCM` (root of the disc, 1,876,562 bytes):
+- Header: u32 main-section size (0x3CAE3), u32 largest mission size (0x96A9).
+- From file offset 8 the script itself; segments are separated by `GOTO` (opcode 0x0002, int32 target):
+  globals (file 0x0F..0x63F4) -> segment 2: u8 0, u32 count 1092, 1092 x u16 (a model-id table; searched by
+  `FUN_00255188`) -> segment 3: u8 0, u16 0x14E2, u16 0x0419, u32 0x96A9, u32 **101 missions**, 101 x u32 mission
+  start IPs -> main code from file 0x7814 (`SCRIPT_NAME "MAIN"`).
+- Missions follow the main section in the file; mission n is IP `table[n]`..`table[n+1]` (file offset = IP + 8),
+  loaded on demand. Names (their `SCRIPT_NAME`): 0-5 `INITPU INITCG INITGA INITOB INITPLA INITGEN` (the main
+  script launches these six at start), side activities (`PARAMED VIG FIRETRK CHOPLIF TAXI` races, trials...) and the
+  story chains `JER_A* PHI_A* MAR_A* LOU_A*/B* LAN_B*/C* UMB_B* BRY_B* MEN_C* REN_C* GON_C* DIA_C*` (45..100).
+- `INITPLA` creates the player: `CREATE_PLAYER 0` at (-1710.7, -306.7, 14.86) into **global 0x2A5**, then
+  `SET_CHAR_HEADING` on that same global - VCS uses one handle for the player and the player's char.
+
+### 11b. In memory
+
+| What | Where |
+|---|---|
+| ScriptSpace | `*(0x48741C)` = `0x1DE0800` = MAIN.SCM file offset 8; an IP is an offset from it |
+| Model table / mission table (segments 2, 3) | `*(0x487420)` (count `0x4CD3CC`); mission IPs copied to `0x7404D0[101]` by `FUN_0025b420` |
+| Mission count / largest mission size | u16 `0x4CD3EE` (101) / u32 `0x4CD3E8` |
+| Mission space offset | `*(0x4CD3D8)` (where `LOAD_AND_LAUNCH_MISSION_INTERNAL` reads the mission to) |
+| A mission is running | u8 `0x4CD3E7` |
+| MAIN.SCM file handle | `*(0x487418)` (kept open; missions are read from the disc) |
+| Script id counter | `0x48742C` |
+| Active / idle script lists | `0x4CD3C4` / `0x4CD3C8` (doubly linked: +0 next, +4 prev; insert at head) |
+| Script parameters (CollectParameters output) | `0x50DEF8` |
+| Opcode table | `0x4BEAF0`: 8-byte GCC pointer-to-member entries {s16 delta, u16 valid, u32 handler}, 1381 opcodes, 1338 with handlers |
+
+`CRunningScript` (0x218 bytes, pool around `0x738948`): +0 next, +4 prev, +8 id, +0x10 IP, +0x14 16-word stack
+(gosub), +0x54 0x6A-word local variables (timers at locals 0x68 / 0x69), +0x1FC local frame base, +0x200 wake
+time, +0x208 active, +0x20A mission script, +0x20C NOT flag of the current condition, +0x20D, +0x20F name (8
+chars; `Init` writes `"id%02i"`), +0x217 "is the mission" (cleared by terminate).
+
+Functions: `FUN_002551d0` Init, `FUN_00255950(ip)` StartNewScript (idle -> active, id, Init, IP, +0x208 = 1),
+`FUN_002558f0` / `FUN_00255928` list remove / add, `FUN_002560d8` ProcessOneCommand (u16 opcode at IP, bit 15 =
+NOT, dispatch through the table), `FUN_00254b90(script, &ip, n, out)` CollectParameters, `FUN_00254ff8` variable
+address, `FUN_003b2208` LOAD_AND_LAUNCH_MISSION_INTERNAL (seek MAIN.SCM to `table[n] + 8`, read into the mission
+space, StartNewScript, mark it the mission, clear the mission locals), `FUN_003b1d68` TERMINATE_THIS_SCRIPT.
+
+58 scripts run at the Fort Baxter save: `storysc` (story), `pager`, `rampage`, `usj` (unique jumps), the
+vehicle-mission monitors (`paramon`, `vigmon`, `firemon`, `taximon`...), `ga_*` (gang), `safehou`...
+
+### 11c. Bytecode encoding
+
+- Opcode: u16 little-endian; bit 15 = NOT for conditions.
+- Argument = type byte + data (`FUN_00254b90`, jump table `0x4AE120`): 0 end of a variable argument list,
+  1 / 2 zero (int / float), 3 / 4 / 5 float with only its top 1 / 2 / 3 bytes stored, 6 int32, 7 int8, 8 int16,
+  9 float32, 10 NUL-terminated string. A byte >= 0x0B is a variable (`FUN_00254ff8`): 0x0B / 0x0C the two timers,
+  0x0D-0x6C local variable (byte - 0x0D + frame base), 0x6D-0xCC local arrays, 0xCD-0xE5 global
+  ((byte - 0xCD) << 8 | next byte; address ScriptSpace + 4 * index), >= 0xE6 global arrays.
+- Example (the rig's teleport): `EA 02 01` SET_AREA_VISIBLE 0, `53 02 09 x 09 y 09 z` LOAD_SCENE,
+  `44 00 CF A5 09 x 09 y 09 z` SET_CHAR_COORDINATES $PLAYER (z <= -100 finds the ground), `23 00` terminate.
+
+### 11d. Running our own scripts (the rig's `scm` command)
+
+A host-side copy of StartNewScript at the frame kick (between frames, never during script processing) takes an
+idle script, initialises it, puts our bytecode in its own locals 0x30.. (`+0x114`, 176 bytes; locals 0..0x2F
+stay free for outputs) and sets the IP to that address minus ScriptSpace (the interpreter adds them with 32-bit
+wrap-around, so code outside the script space works). The game's interpreter then runs it like any script; it ends
+with `TERMINATE_THIS_SCRIPT` and the rig answers when +0x208 drops to 0. Missions start the same way, with the
+game's own `LOAD_AND_LAUNCH_MISSION_INTERNAL` (refuse while `0x4CD3E7` is set).
+
+## 12. Player, areas and the world
+
+- **Player ped**: `*(0x4E4910)` = `CWorld::Players[0].m_pPed` (`FUN_00237fb0(ped)` returns `&Players[0]` for the
+  player's ped). The ped object starts with its matrix: right (+0), forward (+0x10), up (+0x20), position (+0x30),
+  each row with a word after it. Found by searching RAM for vectors near the camera that moved when the player
+  walked (`findvec`), then the pointers to the object (`findu32`).
+- **TheCamera** `0x6F44D0`: +0x30 is the point it follows (the player); it also holds pointers to the player ped
+  (+0xE0, +0x350, +0x7F8).
+- **Current area** (interior): `CGame::currArea` = `0x489F7C`, set by `SET_AREA_VISIBLE` (opcode 0x02EA, handler
+  `0x1e31a8`, then `FUN_003cc0d0`). 0 = outdoors. The Fort Baxter save loads with **area 2** (the barracks), so a
+  teleport outside must set area 0 first (the user's guess, confirmed by reading the global). VCS has no
+  SET_CHAR_AREA_VISIBLE in the opcode database.
+- Teleports are clamped to the map: about x -2178..1564, y ..1926. Some points (e.g. (400, -800) at the start of
+  the story) make the game move the player back into the sea north of Fort Baxter after ~1.5 s - not understood
+  yet (story restrictions or an out-of-map rescue).
+- `SET_CHAR_COORDINATES` with z = -100 puts the player on the ground (or a roof: (-1400, 1250) landed at z 84).
+
+## 13. Open questions / next research targets
 
 - Main loop, frame limiter, CTimer (section 4) - milestone 4 (60 fps).
-- Player / ped / vehicle structures and the player pointer - milestone 1 (teleport, state).
-- `MAIN.SCM` and the script VM (CRunningScript list, mission start, mission-passed flags) - milestone 1
-  (mission launcher).
-- Cheat handlers (weapons, health, vehicles, weather) - milestone 1.
+- Vehicle structure, "in vehicle" / "in water" ped flags.
+- Why some teleports are moved back (section 12).
+- Mission-passed flags (storyline globals) - for reaching late-game states.
+- Cheat handlers (weapons, health, vehicles, weather) - the script commands cover these for now.
 - Collision: VU0 program 0 (section 6c), collision streaming - the fall-through bug.
 - HUD / font / sprite call sites (CHud, CFont, CSprite2d, CSprite) - milestone 3 (2D at the RW level).
 - Sound driver command protocol in full (section 9) - milestone 6.

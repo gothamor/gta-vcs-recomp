@@ -54,7 +54,15 @@ python tools/run.py 60 name --control       # + control channel for tools/gamect
 python tools/scenes.py capture OUT          # reference scenes from an empty card (screenshots + perf)
 python tools/scenes.py compare REF NEW      # picture / perf diff of two captures
 python tools/gamectl.py press F2|screenshot f.png|perf|quit
+python tools/rig.py start --save build/rig/saves/fortbaxter   # straight into gameplay from a card copy
+python tools/rig.py player|scripts|peekf 0x4e4910 1|scm <hex>  # inspect / drive the running game
+python tools/tour.py OUT [--every 9 --limit 18]               # world tour (quick subset with --every/--limit)
 ```
+
+The rig (`src/debug/rig.cpp`, `tools/rig.py`) drives the game through its own script VM: `Game.teleport`,
+`set_time`, `weather`, `invincible`, `mission(n)` and raw `scm(bytes)` (assembler: `rig.Scm`, VCS opcode numbers
+from the Sanny Builder Library, checked against the handler table - game-internals.md 11). `build/rig/saves/` holds
+card copies to start from (never the user's live card).
 
 - Test runs are **visible** (the user is fine with the window showing). Use `--hidden` only when asked.
 - `VCS_DATA_DIR=<dir>` gives a run its own memory card / cache. **Never run tests against the user's

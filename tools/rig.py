@@ -65,6 +65,7 @@ class Scm:
     LOAD_ALL_MODELS_NOW = 0x0228
     LOAD_SCENE = 0x0253
     LAUNCH_MISSION = 0x0289
+    SET_AREA_VISIBLE = 0x02EA  # CGame::currArea (0x489F7C): 0 = outdoors, interiors have their own numbers
     REQUEST_COLLISION = 0x0303
 
     @staticmethod
@@ -117,6 +118,26 @@ class Game:
         gamectl.wait(timeout=90)
         return cls(proc, os.path.join(ROOT, "build", "run", name + ".log"))
 
+    def alive(self):
+        return self.proc is None or self.proc.poll() is None
+
+    def wait_ingame(self, timeout=120.0, settle=4.0):
+        """Wait until the player exists and game frames advance (a loaded save is playable), then `settle` s more."""
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if not self.alive():
+                raise RuntimeError("the game exited while loading")
+            try:
+                f0 = int(self.cmd("frames"))
+                self.player()
+                time.sleep(1.0)
+                if int(self.cmd("frames")) > f0 + 10 and not self.player()[2]:
+                    time.sleep(settle)
+                    return
+            except Exception:
+                time.sleep(1.0)
+        raise RuntimeError("not in game after %.0f s" % timeout)
+
     def cmd(self, line, timeout=70.0):
         reply = gamectl.send(line, timeout=timeout)
         if not reply.startswith("ok"):
@@ -149,9 +170,15 @@ class Game:
             out.append((int(sid), name, int(ip, 16), mission == "1"))
         return out
 
-    def teleport(self, x, y, z, heading=None):
+    def area(self):
+        """CGame::currArea: 0 outdoors, otherwise the interior the game is showing."""
+        return self.u32(0x489F7C)
+
+    def teleport(self, x, y, z, heading=None, area=0):
+        """To (x, y, z) - z <= -100 finds the ground - in interior `area` (0 = outdoors). The area has to be set: a
+        save loads inside an interior (the barracks are area 2), and outdoors drawn with an interior area is black."""
         S = Scm
-        code = S.op(S.LOAD_SCENE, S.f(x), S.f(y), S.f(z)) + S.op(S.SET_CHAR_COORDINATES, S.PLAYER, S.f(x), S.f(y), S.f(z))
+        code = S.op(S.SET_AREA_VISIBLE, S.i(area)) + S.op(S.LOAD_SCENE, S.f(x), S.f(y), S.f(z)) + S.op(S.SET_CHAR_COORDINATES, S.PLAYER, S.f(x), S.f(y), S.f(z))
         if heading is not None:
             code += S.op(S.SET_CHAR_HEADING, S.PLAYER, S.f(heading))
         return self.scm(code)
