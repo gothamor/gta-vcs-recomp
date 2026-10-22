@@ -54,7 +54,12 @@
       voices confirmed by ear. IOP time follows the wall clock, so audio no longer stutters
       when the game drops below 60 VBlanks/s (0 underruns at 20-60 VBlanks/s).
 - [ ] Audio: reverb, noise, pitch modulation, Gaussian interpolation, exact volume sweeps
-- [ ] Memory card, movies
+- [x] Memory card save: the game's own save routine writes its folder, icons and slot file
+      to `%LOCALAPPDATA%/VCSRecomp/mc0` (verified with `VCS_TEST_SAVE`); boot finds the save
+- [ ] Memory card load: not verified - the frontend menu (Start/Load Game) does not appear
+      on screen, so Load Game cannot be picked yet
+- [ ] Frontend menu rendering (title menu invisible; Return starts a new game blind)
+- [ ] Movies
 ## Phase 5 - stability
 ## Phase 6 - enhancements
 
@@ -77,6 +82,7 @@
 | `PS2X_TRACE_SPU2=1` | SPU2 key-ons, DMA bytes, IRQs, peak level per 5 s |
 | `PS2X_AUDIO=0`, `PS2X_AUDIO_DUMP=f.wav`, `PS2X_AUDIO_STATS=1` | no audio output / record the SPU2 mix / underrun and fill stats |
 | `PS2X_IOP_REALTIME=0` | IOP time purely from EE cycles (audio slows with the game) |
+| `VCS_TEST_SAVE=s` | save to slot 1 through the game's code s seconds after boot |
 | `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate a slow PC) |
 | `PS2X_VU0_VERIFY=1`, `PS2X_VU0_NATIVE=0` | check / disable native VU0 programs |
 | `PS2X_VU1_VERIFY=1`, `PS2X_VU1_COMPILED=0` | check / disable compiled VU1 code |

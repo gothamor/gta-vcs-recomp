@@ -393,9 +393,88 @@ namespace
                          static_cast<unsigned long long>(allIn));
     }
 
+    // VCS_TEST_SAVE=<s>: <s> seconds after boot, save to slot 1 through the game's own memory card code, in the
+    // order FUN_00108128 (the safehouse save menu's action) uses: FUN_00276bf0(card manager 0x510480, 0) scans
+    // the card, the "saving" flag at 0x48A664 goes up, FUN_002778a8(manager, slot) saves, the flag goes down.
+    // Each call is made as a guest tail call from scePadRead (pc = function, ra = scePadRead's return address),
+    // so scheduler checkpoints inside the save unwind and resume normally; scePadRead's own result is lost
+    // for those frames. Lets the save path be tested without playing to a safehouse.
+    PS2Runtime::RecompiledFunction g_origPadRead = nullptr;
+    void testSaveOnPadRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static const auto start = std::chrono::steady_clock::now();
+        static const int delay = std::atoi(std::getenv("VCS_TEST_SAVE"));
+        static int step = 0;
+        constexpr uint32_t kCardManager = 0x00510480u, kSavingFlag = 0x0048A664u;
+        g_origPadRead(rdram, ctx, runtime);
+        if (step > 3 || std::chrono::steady_clock::now() - start < std::chrono::seconds(delay))
+            return;
+        uint32_t status = 0;
+        std::memcpy(&status, rdram + kCardManager + 0x54u, 4);
+        const auto tailCall = [&](uint32_t function)
+        {
+            SET_GPR_U32(ctx, 4, kCardManager);
+            SET_GPR_U32(ctx, 5, 0u);
+            ctx->pc = function;
+        };
+        if (std::getenv("VCS_TEST_LOAD")) // load slot 1 instead (FUN_00277688(manager, slot), as FUN_0021cb98 does)
+        {
+            if (step++ == 0)
+            {
+                std::fprintf(stderr, "[mc-test] loading slot 1 (status %u)\n", status);
+                tailCall(0x00277688u);
+            }
+            return;
+        }
+        switch (step++)
+        {
+        case 0:
+            std::fprintf(stderr, "[mc-test] scanning the card (status %u)\n", status);
+            tailCall(0x00276BF0u);
+            break;
+        case 1:
+        {
+            std::fprintf(stderr, "[mc-test] scan done (status %u); saving to slot 1\n", status);
+            const uint32_t one = 1u;
+            std::memcpy(rdram + kSavingFlag, &one, 4);
+            tailCall(0x002778A8u);
+            break;
+        }
+        case 2:
+        {
+            const uint32_t zero = 0u;
+            std::memcpy(rdram + kSavingFlag, &zero, 4);
+            std::fprintf(stderr, "[mc-test] save done, manager status %u\n", status);
+            break;
+        }
+        }
+    }
+
     void applyVcs(PS2Runtime &runtime)
     {
         installCallCounters(runtime);
+        if (std::getenv("VCS_TEST_LOAD"))
+        {
+            // log what the load returns (only when it really returned, not when a checkpoint unwound it)
+            static PS2Runtime::RecompiledFunction original = runtime.lookupFunction(0x00277688u);
+            runtime.replaceFunction(0x00277688u, [](uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+            {
+                const uint32_t ra = GPR_U32(ctx, 31);
+                original(rdram, ctx, rt);
+                if (ctx->pc == ra)
+                {
+                    uint32_t status = 0;
+                    std::memcpy(&status, rdram + 0x00510480u + 0x54u, 4);
+                    std::fprintf(stderr, "[mc-test] load returned %d, manager status %u\n", static_cast<int32_t>(GPR_U32(ctx, 2)), status);
+                }
+            });
+        }
+        if (std::getenv("VCS_TEST_SAVE"))
+        {
+            g_origPadRead = runtime.lookupFunction(0x00449488u); // scePadRead: polled every frame
+            if (g_origPadRead)
+                runtime.replaceFunction(0x00449488u, &testSaveOnPadRead);
+        }
         if (std::getenv("VCS_TRACE_BOXCLIP"))
             runtime.replaceFunction(0x0030C8D4u, &traceBoxClip);
         if (std::getenv("VCS_EXPERIMENT_NOCLIP")) // timing experiment only: every sector box "fully inside"

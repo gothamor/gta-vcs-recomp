@@ -63,7 +63,6 @@ until marked **confirmed**.
 - Streaming: CDSTREAM.IRX protocol, IMG archives, LVZ
 - Audio: SDRDRV/LIBSD, VB streams
 - Threads and their priorities
-- Save/memory card format
 
 ## VU microcode (confirmed from the ELF)
 All VU microcode is in `.vutext` as four VIF `MPG` packets (DVP overlays):
@@ -188,3 +187,26 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
 - VU1 setup programs that never XGKICK (normal): 0x0148 (clear state), 0x0418
   (lighting dispatch via JALR table at VU mem 34..37), 0x0478 (matrices),
   0x2B50 (matrix copy).
+
+## Memory card (found while testing saves)
+- libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`), files live in
+  `%LOCALAPPDATA%/VCSRecomp/mc0` (set in `src/main.cpp`).
+- Card manager object `0x510480`; its status word `+0x54` reads 27 (`0x1B`)
+  when the card is idle / the last operation was fine.
+- `FUN_00108128` = the save menu's "save to slot" action (slot byte at
+  `0x4818AC`): `FUN_00276bf0(mgr, 0)` scans the card (8 slots, `SAVESLOTn`),
+  the flag at `0x48A664` goes up, `FUN_002778a8(mgr, slot)` saves, flag down.
+- `FUN_002778a8`: creates `BASLUS-21590GTA40001/` with `icon.sys` and
+  `vcsicon.ico` if missing, then writes the slot file (named after the
+  mission, e.g. `1 In the beginning`, 98,304 bytes) and the
+  `BASLUS-21590GTA40001` file (179,350 bytes).
+- `FUN_00277688(mgr, slot)` checks the card and free space before a save
+  (0 ok, 2 not enough space, 3 error); the game calls it at boot.
+- Load: `FUN_003adae0()` (generic load) runs from world init `FUN_00255308`
+  when a load was requested from the menu; it reads through `FUN_002759e8`
+  (`sceMcRead`).
+- At boot the game reads `icon.sys` (964 bytes) to list the saves.
+- `VCS_TEST_SAVE=<s>` (src/game/vcs_overrides.cpp) runs the save sequence as
+  guest tail calls from `scePadRead`. A direct host call of a guest function
+  is not safe: a scheduler checkpoint inside it unwinds the call and the rest
+  of the routine never runs.
