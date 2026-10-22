@@ -348,6 +348,7 @@ add_library(ps2_runtime STATIC
     src/lib/ps2_audio_out.cpp
     src/lib/ps2_perf.cpp
     src/lib/ps2_control.cpp
+    src/lib/ps2_hle_survey.cpp
     src/lib/ps2_runtime.cpp
     src/lib/ps2_vif1_interpreter.cpp
     src/lib/vu/ps2_vu1_core.cpp

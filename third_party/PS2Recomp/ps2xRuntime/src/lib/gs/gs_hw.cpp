@@ -8,6 +8,7 @@
 
 #include "render/gs_shaders.h" // [gta-recomp] D3D11 (RHI) execution
 #include "rhi/rhi.h"
+#include "runtime/ps2_hle_survey.h"
 
 #include <algorithm>
 #include <array>
@@ -919,6 +920,7 @@ namespace
             }
             f.vertices.insert(f.vertices.end(), out, out + n);
             f.draws.back().count += n;
+            ps2hle::g_gsVerticesRecorded += n; // [gta-recomp] PS2X_HLE_SURVEY
         }
 
         struct DepthInfo // [gta-recomp] depth buffers seen in use (see depthFill)

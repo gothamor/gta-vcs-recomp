@@ -1431,6 +1431,11 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                     int tagsProcessed = 0;
                     uint32_t lastTagUpper = (chcr >> 16) & 0xFFFFu;
+                    // [gta-recomp] CALLed packets as segments of the flattened stream (runtime/ps2_hle_survey.h)
+                    const bool trackSegments = channelBase == 0x10009000u && ps2hle::surveyEnabled();
+                    std::vector<ps2hle::ChainSegment> segments;
+                    size_t openSegments[2] = {};
+                    int openDepth = 0;
 
                     while (tagsProcessed < kMaxChainTags)
                     {
@@ -1549,6 +1554,16 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                         if (hasPayload)
                             appendData(dataAddr, tagQwc);
+                        if (trackSegments)
+                        {
+                            if (id == 5u && openDepth < 2)
+                            {
+                                openSegments[openDepth++] = segments.size();
+                                segments.push_back({static_cast<uint32_t>(chainBuf.size()), static_cast<uint32_t>(chainBuf.size()), addr});
+                            }
+                            else if (id == 6u && openDepth > 0)
+                                segments[openSegments[--openDepth]].end = static_cast<uint32_t>(chainBuf.size());
+                        }
                         { // [gta-recomp] PS2X_LOG_MPG_SOURCES=1: each distinct VU1 microcode upload sent as a REF payload
                           // whose DMAtag carries the MPG VIFcode -> "src vu pairs" for tools/vu1_recomp.py
                             static const bool logSources = std::getenv("PS2X_LOG_MPG_SOURCES") != nullptr;
@@ -1661,6 +1676,12 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         pt.srcAddr = 0;
                         pt.qwc = 0;
                         pt.chainData = std::move(chainBuf);
+                        if (trackSegments)
+                        {
+                            while (openDepth > 0) // a packet that never returned runs to the end
+                                segments[openSegments[--openDepth]].end = static_cast<uint32_t>(pt.chainData.size());
+                            pt.segments = std::move(segments);
+                        }
                         if (channelBase == 0x1000A000)
                         {
                             m_pendingGifTransfers.push_back(std::move(pt));
@@ -1937,7 +1958,11 @@ void PS2Memory::processPendingTransfers()
     {
         if (!p.chainData.empty())
         {
+            m_vif1Segments = p.segments.empty() ? nullptr : &p.segments;
             processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
+            m_vif1Segments = nullptr;
+            if (ps2hle::surveyEnabled())
+                ps2hle::onChainEnd();
         }
         else if (p.qwc > 0)
         {

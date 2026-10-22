@@ -369,6 +369,22 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         return;
 
     uint32_t pos = 0;
+    // [gta-recomp] PS2X_HLE_SURVEY: the CALLed packet (segment) the VIFcode at `at` belongs to
+    const bool survey = ps2hle::surveyEnabled();
+    size_t segCursor = 0;
+    auto segmentAt = [&](uint32_t at) -> const ps2hle::ChainSegment *
+    {
+        if (!m_vif1Segments)
+            return nullptr;
+        const auto &segs = *m_vif1Segments;
+        while (segCursor < segs.size() && segs[segCursor].end <= at)
+            ++segCursor;
+        const ps2hle::ChainSegment *inner = nullptr;
+        for (size_t i = segCursor; i < segs.size() && segs[i].begin <= at; ++i) // nested CALLs follow their parent
+            if (at < segs[i].end)
+                inner = &segs[i];
+        return inner;
+    };
 
     while (pos + 4 <= sizeBytes)
     {
@@ -470,8 +486,12 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
             vif1_regs.stat ^= (1u << 7); // toggle DBF
 
+            if (survey)
+                ps2hle::beforeMscal(segmentAt(pos - 4u), startPC, m_vu1Code, m_vu1Data, data, sizeBytes);
             if (m_vu1MscalCallback)
                 m_vu1MscalCallback(startPC, runTop, runItop);
+            if (survey)
+                ps2hle::afterMscal(m_vu1Data);
             continue;
         }
         else if (opcode == VIF_MSCNT)
@@ -619,6 +639,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             uint32_t vuAddr = (uint32_t)imm & 0x3FFu;
             if ((imm & 0x8000u) != 0u)
                 vuAddr = (vuAddr + (vif1_regs.tops & 0x3FFu)) & 0x3FFu;
+            if (survey)
+                ps2hle::onUnpack(segmentAt(pos - 4u), opcode, num, imm);
 
             const bool zeroExtend = (imm & 0x4000u) != 0u;
 
