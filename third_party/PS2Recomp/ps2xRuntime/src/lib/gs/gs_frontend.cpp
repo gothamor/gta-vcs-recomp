@@ -1351,6 +1351,13 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
     }
     case GS_REG_PRMODECONT:
     {
+        { // [gta-recomp] PS2X_TRACE_PRMODE=1: PRMODECONT changes (attributes from PRIM vs PRMODE)
+            static const bool trace = std::getenv("PS2X_TRACE_PRMODE") != nullptr;
+            static int logged = 0;
+            if (trace && ((value & 1) != 0) != m_prmodecont && logged++ < 200)
+                std::fprintf(stderr, "[gs] PRMODECONT %d -> %d (PRMODE ctxt=%d, PRIM ctxt=%d)\n", m_prmodecont ? 1 : 0,
+                             static_cast<int>(value & 1), m_prmodeRegister.ctxt ? 1 : 0, m_primRegister.ctxt ? 1 : 0);
+        }
         m_prmodecont = (value & 1) != 0;
         const GSPrimType type = m_primRegister.type;
         m_prim = m_prmodecont ? m_primRegister : m_prmodeRegister;

@@ -1364,7 +1364,10 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     uint32_t asr1 = m_ioRegisters[channelBase + 0x50];
                     uint32_t asp = (chcr >> 4) & 0x3u;
                     const bool tieEnabled = (chcr & (1u << 7)) != 0u;
-                    const int kMaxChainTags = 4096;
+                    // [gta-recomp] Was 4096: VCS kicks one VIF1 chain per frame with a CALL/RET pair per model, and
+                    // views over the city exceed that - the tail of the chain (peds, vehicles, the HUD) was dropped, so
+                    // they flickered out in busy views. Hardware has no limit; this only stops a corrupt looping chain.
+                    const int kMaxChainTags = 1 << 20;
                     std::vector<uint8_t> chainBuf;
 
                     auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
@@ -1612,6 +1615,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                             endChain = true;
                         if (endChain)
                             break;
+                    }
+                    if (tagsProcessed >= kMaxChainTags)
+                    {
+                        static int reported = 0;
+                        if (reported++ < 8)
+                            std::fprintf(stderr, "[dma] chain on 0x%08x stopped after %d tags (tag at 0x%08x)\n", channelBase,
+                                         tagsProcessed, tagAddr);
                     }
 
                     m_ioRegisters[channelBase + 0x30] = tagAddr;

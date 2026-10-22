@@ -192,8 +192,13 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   (`0x6F44D0`, position at +0x30) and `FUN_0023D740` swaps them. Each cell
   streams ~0.3-0.5 MB of MAINLA.IMG in 6 pieces into `0xCB7A80..0x112A660`.
   Fort Baxter is around cells (5..7, 16..18).
-- Z buffer: Z24 640x448 at zbp 280, cleared each frame by one 640x224 CT32
-  sprite at FBP 280 whose own Z write goes to ZBP 350 (the second half).
+- Z buffer: Z24 640x448 at zbp 280, cleared each frame by 40 column strips
+  (640x224 CT32 in total) at FBP 280 whose own Z write goes to ZBP 350 (the
+  second half).
+- DMA packet buffer `0x520F90`: two halves of 0xE6670 bytes; `FUN_00476770`
+  returns the bytes used, draw code skips work when < 0x12C00 are left. Peak
+  use seen: ~400 KB.
+- The frame's VIF1 chain can exceed 4096 tags (CALL/RET per model).
 - VU1 setup programs that never XGKICK (normal): 0x0148 (clear state), 0x0418
   (lighting dispatch via JALR table at VU mem 34..37), 0x0478 (matrices),
   0x2B50 (matrix copy).

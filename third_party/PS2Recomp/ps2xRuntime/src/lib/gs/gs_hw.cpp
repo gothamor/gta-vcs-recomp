@@ -302,10 +302,12 @@ noperspective out vec3 vStq;
 noperspective out vec4 vCol;
 flat out vec4 vColFlat;
 noperspective out float vFog;
+noperspective out float vDepth;
 void main()
 {
     vec2 p = aPos.xy / uTargetSize * 2.0 - 1.0;
     gl_Position = vec4(p, aPos.z * 2.0 - 1.0, 1.0);
+    vDepth = aPos.z;
     gl_PointSize = 1.0;
     vStq = aStq;
     vCol = aCol;
@@ -319,6 +321,7 @@ noperspective in vec3 vStq;
 noperspective in vec4 vCol;
 flat in vec4 vColFlat;
 noperspective in float vFog;
+noperspective in float vDepth;
 layout(location = 0, index = 0) out vec4 oColor;
 layout(location = 0, index = 1) out vec4 oBlend;
 uniform int uTme, uTfx, uTcc, uFst, uLinear, uIip, uFge;
@@ -365,6 +368,10 @@ vec4 sampleTex(vec2 uv)
 }
 void main()
 {
+    // [gta-recomp] GS Z is Z24/Z32 / 2^n: ~1e-3 for near objects, far less for distant ones. Going through
+    // NDC (z * 2 - 1) rounded those next to -1 and collapsed distant objects onto the cleared depth 0, where the
+    // sky fill (GEQUAL against z 0) overwrote them; write the interpolated GS depth directly instead.
+    gl_FragDepth = vDepth;
     vec4 vc = floor((uIip == 1 ? vCol : vColFlat) * 255.0 + 0.5);
     vec4 c = vc;
     if (uTme == 1)
@@ -509,6 +516,7 @@ void main()
                 DepthInfo &di = m_depthBufs[s.zbp];
                 di.zpsm = s.zpsm;
                 di.fbw = s.fbw;
+                di.height = std::max<uint32_t>(di.height, std::min<uint32_t>(s.scy1 + 1u, 1024u));
             }
             if (depthFill(batch, s, out, n))
                 return;
@@ -526,7 +534,7 @@ void main()
 
         struct DepthInfo // [gta-recomp] depth buffers seen in use (see depthFill)
         {
-            uint32_t zpsm = 0, fbw = 1;
+            uint32_t zpsm = 0, fbw = 1, height = 1; // height: lowest scissor row + 1 of the draws using it
         };
 
         // [gta-recomp] Games clear Z by drawing a flat colour sprite into the depth buffer's memory. VCS (Z24 640x448
@@ -541,12 +549,18 @@ void main()
                 return false;
             if (s.fpsm != GS_PSM_CT32 && s.fpsm != GS_PSM_CT24 && s.fpsm != GS_PSM_CT16 && s.fpsm != GS_PSM_CT16S)
                 return false;
-            float y0 = 1e9f, y1 = -1e9f;
+            float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
             for (uint32_t i = 0; i < n; ++i)
             {
+                x0 = std::min(x0, v[i].x);
+                x1 = std::max(x1, v[i].x);
                 y0 = std::min(y0, v[i].y);
                 y1 = std::max(y1, v[i].y);
             }
+            // VCS draws the clear as 40 narrow column strips; each clears whole rows here (the strips together
+            // cover them anyway), so the x extent is not checked
+            (void)x0;
+            (void)x1;
             y0 = std::max(y0, static_cast<float>(s.scy0));
             y1 = std::min(y1, static_cast<float>(s.scy1) + 1.0f);
             if (y1 <= y0)
@@ -576,7 +590,7 @@ void main()
                 uint32_t zpw, zph;
                 pageSize(entry.second.zpsm, zpw, zph);
                 const uint32_t perRow = std::max<uint32_t>(1u, (std::max<uint32_t>(entry.second.fbw, 1u) * 64u + zpw - 1u) / zpw);
-                if (page >= entry.first && page < entry.first + perRow * ((512u + zph - 1u) / zph))
+                if (page >= entry.first && page < entry.first + perRow * ((entry.second.height + zph - 1u) / zph))
                     return &entry;
             }
             return nullptr;
@@ -610,6 +624,10 @@ void main()
             Frame &f = *m_frame;
             f.cmds.push_back({CmdType::DepthFill, static_cast<uint32_t>(f.depthFills.size())});
             f.depthFills.push_back(fill);
+            static int extra = 0; // a clear is two fills per frame; more would be a misread draw
+            if (f.depthFills.size() > 2u && std::getenv("PS2X_HW_DEBUG") && extra++ < 20)
+                std::fprintf(stderr, "[gs-hw] unexpected depth fill #%zu this frame: base=%u fbw=%u psm=%u rows %u..%u\n", f.depthFills.size(),
+                             base, fbw, psm, fill.y0, fill.y1);
         }
 
         void LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut) override

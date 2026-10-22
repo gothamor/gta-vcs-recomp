@@ -61,6 +61,7 @@
 - [x] Frontend menus render (pause menu, LOAD/NEW/DELETE menu when a save exists)
 - [x] World vanishing when moving fast / driving: HW renderer never cleared the bottom half of
       the Z buffer (see PS2RECOMP_PATCHES.md, gs_hw.cpp depth fill)
+- [x] Vic / vehicles / HUD flickering out in busy views: DMA chains were cut at 4096 tags
 - [ ] Water surface looks missing (dark grey where sea should be) - to check
 - [ ] Movies
 ## Phase 5 - stability
@@ -89,6 +90,7 @@
 | `VCS_TRACE_SECTORS=1`, `VCS_TRACE_CELL=1` | world sector draw / current hex cell vs camera |
 | `VCS_DUMP_RAM=s,s,...` | write EE RAM to ram_<s>.bin at those seconds |
 | `PS2X_DMA_HIST=1` | VIF1 payload per MB of RAM every 5 s |
+| `VCS_TRACE_PACKETS=1` | peak use of the game's DMA packet buffer |
 | `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate a slow PC) |
 | `PS2X_VU0_VERIFY=1`, `PS2X_VU0_NATIVE=0` | check / disable native VU0 programs |
 | `PS2X_VU1_VERIFY=1`, `PS2X_VU1_COMPILED=0` | check / disable compiled VU1 code |

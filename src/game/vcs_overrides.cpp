@@ -564,8 +564,37 @@ namespace
         FUN_0023c188_0x23c188(rdram, ctx, runtime);
     }
 
+    // VCS_TRACE_PACKETS=1: FUN_00476770(buffer) returns the bytes used in the current half of a double-buffered DMA
+    // packet buffer (halves of 0xE6670). Draw code skips work once fewer than ~0x12C00 bytes are left; log the
+    // peak use and how often that limit was reached, every 2 s.
+    void tracePacketUse(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static std::map<uint32_t, uint32_t> peak;
+        static uint64_t calls = 0, nearFull = 0;
+        static auto last = std::chrono::steady_clock::now();
+        const uint32_t buffer = GPR_U32(ctx, 4);
+        FUN_00476770_0x476770(rdram, ctx, runtime);
+        const uint32_t used = GPR_U32(ctx, 2);
+        ++calls;
+        nearFull += (0xE6670u - used <= 0x12BFFu) ? 1u : 0u;
+        uint32_t &p = peak[buffer];
+        p = std::max(p, used);
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last < std::chrono::seconds(2))
+            return;
+        last = now;
+        std::fprintf(stderr, "[packets] %llu checks, %llu near full; peak use:", (unsigned long long)calls, (unsigned long long)nearFull);
+        for (const auto &[b, u] : peak)
+            std::fprintf(stderr, " 0x%x=%u KB", b, u >> 10);
+        std::fprintf(stderr, " (of %u KB)\n", 0xE6670u >> 10);
+        peak.clear();
+        calls = nearFull = 0;
+    }
+
     void applyVcs(PS2Runtime &runtime)
     {
+        if (std::getenv("VCS_TRACE_PACKETS"))
+            runtime.replaceFunction(0x00476770u, &tracePacketUse);
         if (std::getenv("VCS_TRACE_SECTORS"))
             runtime.replaceFunction(0x00240ED8u, &traceSector);
         if (std::getenv("VCS_TRACE_CELL"))
