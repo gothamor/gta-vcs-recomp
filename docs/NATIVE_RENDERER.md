@@ -1,7 +1,16 @@
 # Native renderer plan (D3D11)
 
-Status: **approved** (2026-10-22). Stages 0-4 done; stage 5 (prelit world) and stage 6 (skinned / lit models,
-stage table 0x16) done. Next: the remaining VU1 pipelines (second lit pass 0x13, the lit world variant, sprites).
+Status: **approved** (2026-10-22). Stages 0-6 done (world, skinned and rigid lit models native); stage 7 left
+deliberately on the VU1 (small: see there); stage 8 partly (internal resolution works with native draws and can be
+set in vcs.ini; widescreen, MSAA and anisotropic filtering are not done - reasons in stage 8).
+
+Overall, VU path (stage 3) -> native (stage 6), reference script, i7-7700K / GTX 1080 Ti:
+
+| phase | game fps | render submit ms/frame |
+|---|---|---|
+| flyover 10-44 s | 18.2 -> 28.3 | 36.7 -> 12.1 |
+| cutscene 55-86 s | 18.8 -> 30.0 (cap) | 38.1 -> 11.4 |
+| gameplay 100-125 s | 29.9 -> 29.9 (cap) | 10.6 -> 5.3 |
 
 Goal: get from today's emulated GS (raylib + OpenGL 3.3) to a native renderer that
 draws the game's models directly, on D3D11, as fast as possible. Windows only for
@@ -325,12 +334,35 @@ mesh (also covered by `PS2X_HLE_LIT=0`).
 - Skinning, the lighting dispatch program (0x0418, JALR table), vehicle env maps /
   specular, damage states, shadows if they go through the same programs.
 
-### Stage 7 - Remaining programs (M-L)
+### Stage 7 - Remaining programs (M-L) - left on the VU1 for now
+
+Survey with everything above native (`build/scenes/survey4`): what still runs on the VU1 is
+program 0x02c0 (sprites / particles / text: ~15 ms of VU1 per second, ~0.5 ms per game frame) and
+the second lit pass (stage table 0x13: 0x0da, 0x4ff, 0x2b6, then 0x5b1 / 0x2b2 - probably an
+environment-map pass over the skinned buffer; ~140 calls/s). Most of the remaining time the survey
+attributes to 0x0030 is now the native handlers' own CPU work (1.4-3.3 us per packet). Both stay
+on the exact VU path until a profile says otherwise; the method for adding them is the one above
+(survey sample -> vudis.py -> C++ reference checked with PS2X_HLE_VERIFY -> vertex shader).
+
 
 - Particles, water, shadows, sky, 2D sprites drawn through VU1. Whatever the
   coverage report shows is left; anything rare can stay emulated.
 
-### Stage 8 - Enhancements (M each, optional order)
+### Stage 8 - Enhancements (M each, optional order) - internal resolution done
+
+- Internal resolution: native draws render into the same scaled render targets as the GS path, so
+  `PS2X_HW_SCALE` (or `scale=<1..8>` in vcs.ini next to vcs.exe) raises the whole picture's
+  resolution; checked at 3x (gameplay still at the 30 fps cap). Native draws keep the PS2's
+  1/16-pixel vertex snapping (~0.2 px at 3x).
+- Widescreen is not done: it needs the game's own camera / frustum changed on the EE side - sectors
+  and peds outside a 4:3 view are culled before the VU1 (VU0 box clip, CCamera::IsSphereVisible),
+  so widening only the native draws' matrices would leave the screen edges empty. Next step: find
+  the projection setup in the camera code (docs/ENGINE.md "Camera and projection" is still open).
+- MSAA / anisotropic filtering are not done: the GS emulation samples textures with explicit
+  texel loads (to reproduce the GS wrap / clamp modes and render-target textures) and reads render
+  targets back as textures, which an MSAA target would need resolving for at every such use.
+  Higher internal resolution is the supersampling route that works today.
+
 
 Only possible cleanly once the 3D scene is native:
 - Native-resolution 3D independent of the PS2 framebuffer size (GS path keeps

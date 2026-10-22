@@ -125,6 +125,26 @@ namespace
         return {};
     }
 
+    // vcs.ini settings besides iso=: scale=<1..8> (internal render resolution, as PS2X_HW_SCALE; the environment wins)
+    void applyIniSettings(const fs::path &ini)
+    {
+        std::ifstream in(ini);
+        std::string line;
+        while (std::getline(in, line))
+        {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+                line.pop_back();
+            if (line.rfind("scale=", 0) == 0 && !std::getenv("PS2X_HW_SCALE"))
+            {
+#if defined(_WIN32)
+                _putenv_s("PS2X_HW_SCALE", line.substr(6).c_str());
+#else
+                setenv("PS2X_HW_SCALE", line.substr(6).c_str(), 0);
+#endif
+            }
+        }
+    }
+
     fs::path firstIsoIn(const fs::path &dir)
     {
         std::error_code ec;
@@ -182,6 +202,7 @@ int main(int argc, char *argv[])
     vcs::installCrashHandlers();
     try
     {
+        applyIniSettings(exeDirectory() / "vcs.ini");
         const fs::path isoPath = locateIso(argc, argv);
         if (isoPath.empty())
         {
