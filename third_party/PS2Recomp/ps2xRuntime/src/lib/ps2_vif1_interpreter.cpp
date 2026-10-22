@@ -495,6 +495,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             hle.itop = runItop;
             hle.vuCode = m_vu1Code;
             hle.vuData = m_vu1Data;
+            hle.codeGeneration = m_vu1CodeGeneration.load(std::memory_order_relaxed);
             hle.segment = segment;
             if (survey)
                 ps2hle::beforeMscal(segment, startPC, m_vu1Code, m_vu1Data, data, sizeBytes);

@@ -14,8 +14,14 @@
 #include <cstdint>
 #include <vector>
 
+class GS;
+
 namespace ps2hle
 {
+    // The GS frontend, for handlers that draw natively (GS::submitNative). Set by the runtime.
+    void setGs(GS *gs);
+    GS *gs();
+
     // A CALLed packet in a flattened VIF1 chain: bytes [begin, end) of the stream, entered at guest `target`.
     struct ChainSegment
     {
@@ -46,6 +52,7 @@ namespace ps2hle
         uint32_t itop = 0;
         const uint8_t *vuCode = nullptr;
         uint8_t *vuData = nullptr;
+        uint64_t codeGeneration = 0;          // changes whenever VU1 code memory does (cache code checks by it)
         const ChainSegment *segment = nullptr; // only with PS2X_HLE_SURVEY
     };
     using MscalBefore = bool (*)(const MscalContext &);

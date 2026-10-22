@@ -1,6 +1,7 @@
 # Native renderer plan (D3D11)
 
-Status: **approved** (2026-10-22). Stages 0-3 done: D3D11 only, no OpenGL or raylib. Next is stage 4.
+Status: **approved** (2026-10-22). Stages 0-4 done; stage 5 (world) done for the prelit world pipeline, which is
+most of the frame. Next: the lit-model pipelines (stage 6).
 
 Goal: get from today's emulated GS (raylib + OpenGL 3.3) to a native renderer that
 draws the game's models directly, on D3D11, as fast as possible. Windows only for
@@ -231,7 +232,7 @@ Result:
 At this point the game runs on D3D11 with no OpenGL or raylib left. Frame rate is
 about the same as before (the game thread's render submit is still the cost).
 
-### Stage 4 - Packet-level HLE groundwork (L)
+### Stage 4 - Packet-level HLE groundwork (L) - done 2026-10-22
 
 Where to hook: the VIF1 DMA chain, not the recompiled game functions. Per
 ENGINE.md, each frame's chain CALLs prebuilt model packets in the model heap
@@ -263,7 +264,39 @@ recognised packets are drawn natively, everything else falls through.
 - Done when: dispatcher, survey report and A/B switch exist, and one simple program
   is converted end to end with matching captures.
 
-### Stage 5 - World sectors (L)
+Result (what was built differs from the plan above in one way: the hook point is the VU1
+program start (MSCAL), not the DMA CALL - most world geometry arrives through REF tags, not CALLed
+packets, and the VU memory at MSCAL holds everything a draw needs):
+- `PS2X_HLE_SURVEY=1` (runtime `ps2_hle_survey.{h,cpp}`): per VU1 program / stage variant / UNPACK
+  layout, calls, GS vertices and VU1 time; CALLed packets recorded as segments of the flattened
+  chain; sample dumps for reverse engineering. `tools/vudis.py` disassembles VU code.
+  Finding: VU1 program 0x0030 (a dispatcher into stage routines, docs/ENGINE.md) makes ~95% of
+  all GS vertices.
+- MSCAL hooks (`ps2hle::setMscalHooks`): a game handler runs before each VU1 program and may skip
+  it; `ps2hle::gs()` + `GS::submitNative` record a native draw with the frontend's current GS state
+  (PRIM written as the skipped kick's GIFtag would).
+- `GSNativeDraw` / HW backend: native draw commands in the same frame list as emulated draws
+  (order, render targets, depth, texture cache, blend / alpha-test logic all shared); static vertex
+  data cached on the GPU by content hash (MeshCreate / MeshDelete, LRU of 12000).
+- `src/game/vcs_hle_world.cpp`: the prelit world pipeline (stage table 0x19, routines 0x0da /
+  0x2700-variant / 0x2b6, both entries 0x0e9 = clip test first and 0x0de = sector already known
+  inside) reimplemented in C++ and checked against the VU1 with `PS2X_HLE_VERIFY=1`: 607,917
+  fast-path packets / 29.2M vertices bit-identical and every cull decision right - after matching
+  the VU's round-toward-zero arithmetic. Native drawing (default; `PS2X_HLE=0` = VU1 path):
+  culled packets are skipped, the rest drawn by `vs_world` (gs_draw.hlsl), which does the VU's
+  transform / 12.4 snapping / STQ / colour / fog on the GPU; packets the VU would send through its
+  clipper are clipped by the GPU at the clip test's near / far planes (SV_ClipDistance).
+- Flyover 10-44 s: **17.9 -> 27.1 game fps**; render submit 37.5 -> 14.5 ms per frame; median frame
+  33.7 ms = the game's own 30 fps cap (it now waits for VBlank 7 ms a frame); VU1 programs per frame
+  1455 -> 400; GS-emulated vertices 287k -> 66k.
+- Oddity found on the way: the VU path's clipper output (GIF tag 50: context 2, no fog) did not
+  appear on screen - interiors where the camera sits inside the room (the intro cutscene's office)
+  were black. Native GPU clipping draws them (with context 1 and fog, as the unclipped path
+  would). Not investigated further in the emulated path.
+- Remaining VU1 work: the lit-model pipelines (stage tables 0x16 / 0x13: peds, vehicles, props with
+  normals; ~10% of vertices) and sprites / particles (0x02c0).
+
+### Stage 5 - World sectors (L) - prelit world pipeline done 2026-10-22
 
 - Biggest vertex share; mostly MODULATE, alpha test GREATER 8, fogged, PSMT4 +
   CT32 CLUT, vertex colours from V4-5 unpacks (ENGINE.md, GS usage / level data).

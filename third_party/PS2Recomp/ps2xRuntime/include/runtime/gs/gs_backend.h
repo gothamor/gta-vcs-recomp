@@ -5,10 +5,37 @@
 #include <cstdint>
 #include <vector>
 
+// [gta-recomp] A draw whose untransformed vertices a game's packet-level HLE handler supplies; the renderer runs
+// the matching vertex program on the GPU (docs/NATIVE_RENDERER.md, stage 4+). The GS state is the frontend's current
+// one, as for a primitive the VU would have kicked.
+struct GSNativeDraw
+{
+    enum Kind : uint32_t
+    {
+        VcsWorld = 1, // render/shaders/gs_draw.hlsl vs_world: prelit world (float3 pos, float3 uv, uint rgba; 32 bytes)
+    };
+    uint32_t kind = 0;
+    uint64_t meshKey = 0;           // content hash of the vertex data
+    const void *vertices = nullptr; // vertexCount * vertexStride bytes (read only when the mesh is not cached)
+    uint32_t vertexStride = 0;
+    uint32_t vertexCount = 0;
+    uint32_t drawCount = 0;         // vertices drawn (a strip)
+    float constants[60] = {};       // the vertex program's parameters (layout per kind)
+    uint32_t constantCount = 0;
+};
+
 class GSRasterBackend
 {
 public:
     virtual ~GSRasterBackend() = default;
+
+    // [gta-recomp] false: not supported (the caller lets the VU run instead)
+    virtual bool SubmitNative(const GSDrawState &state, const GSNativeDraw &draw)
+    {
+        (void)state;
+        (void)draw;
+        return false;
+    }
 
     virtual void Initialize(uint8_t *vram, uint32_t vramSize) = 0;
     virtual void Reset() = 0;

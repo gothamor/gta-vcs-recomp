@@ -214,9 +214,13 @@ namespace ps2hle
 
     namespace
     {
+        GS *g_gs = nullptr;
         MscalBefore g_before = nullptr;
         MscalAfter g_after = nullptr;
     }
+
+    void setGs(GS *gs) { g_gs = gs; }
+    GS *gs() { return g_gs; }
 
     void setMscalHooks(MscalBefore before, MscalAfter after)
     {

@@ -20,6 +20,7 @@
 #include "runtime/ps2_audio_out.h"
 #include "runtime/ps2_perf.h"
 #include "runtime/ps2_control.h"
+#include "runtime/ps2_hle_survey.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -867,6 +868,7 @@ bool PS2Runtime::syncCoreSubsystems()
     }
 
     m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
+    ps2hle::setGs(&m_gs); // [gta-recomp] packet-level HLE draws through it
     // [gta-recomp] GPU GS renderer: PS2X_GS=gpu (default) | cpu | both
     if (!m_gpu)
     {

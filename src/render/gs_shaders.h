@@ -8,6 +8,7 @@ namespace render
     struct GsShaders
     {
         rhi::ShaderCode drawVS;
+        rhi::ShaderCode worldVS;      // native VCS world draws
         rhi::ShaderCode drawPS;       // one colour output
         rhi::ShaderCode drawPSDual;   // + blend factor as the second output (Src1Alpha blending)
         rhi::ShaderCode quadVS;

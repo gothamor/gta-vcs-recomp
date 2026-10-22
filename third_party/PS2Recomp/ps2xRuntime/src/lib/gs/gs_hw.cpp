@@ -71,6 +71,9 @@ namespace
         RtDrop,
         Clear,
         DepthFill,
+        MeshCreate, // [gta-recomp] packet-level HLE (GSNativeDraw)
+        MeshDelete,
+        NativeDraw,
     };
 
     struct Cmd
@@ -111,6 +114,22 @@ namespace
         float value;                 // 0..1, same scale as HwVertex::z
     };
 
+    // [gta-recomp] static vertex data of a native draw, kept on the GPU by content
+    struct MeshCreate
+    {
+        uint64_t key = 0;
+        uint32_t stride = 0, count = 0;
+        std::vector<uint8_t> bytes;
+    };
+
+    struct NativeDrawCmd
+    {
+        HwState s;
+        uint64_t meshKey = 0;
+        uint32_t kind = 0, drawCount = 0;
+        float constants[64] = {}; // the kind's 60 + (XYOFFSET x, y in pixels, Z scale, 0)
+    };
+
     struct Frame
     {
         std::vector<Cmd> cmds;
@@ -122,6 +141,10 @@ namespace
         std::vector<uint32_t> rtDrops;
         std::vector<ClearCmd> clears;
         std::vector<DepthFillCmd> depthFills;
+        std::vector<MeshCreate> meshes;
+        std::vector<uint64_t> meshDeletes;
+        std::vector<NativeDrawCmd> nativeDraws;
+        uint64_t nativeVertices = 0;
         uint64_t privRegs[15]{};
         // Display from CPU VRAM when no render target holds the displayed buffer.
         std::vector<uint32_t> cpuDisplay;
@@ -310,6 +333,7 @@ namespace
             const render::GsShaders &sh = render::gsShaders();
             m_drawCb = m_dev.createBuffer({sizeof(DrawConstants), rhi::BufferUsage::Constant, true, "gs draw constants"});
             m_quadCb = m_dev.createBuffer({sizeof(QuadConstants), rhi::BufferUsage::Constant, true, "gs quad constants"});
+            m_worldCb = m_dev.createBuffer({64u * sizeof(float), rhi::BufferUsage::Constant, true, "gs native draw constants"});
             m_point = m_dev.createSampler({rhi::Filter::Nearest, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
             m_linear = m_dev.createSampler({rhi::Filter::Linear, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
             rhi::PipelineDesc q;
@@ -326,7 +350,7 @@ namespace
             q.depth = {true, true, rhi::Compare::Always};
             q.name = "gs fill depth";
             m_fillDepth = m_dev.createPipeline(q);
-            m_ready = m_drawCb && m_quadCb && m_point && m_linear && m_blit && m_fillColor && m_fillDepth;
+            m_ready = m_drawCb && m_quadCb && m_worldCb && m_point && m_linear && m_blit && m_fillColor && m_fillDepth;
         }
 
         bool ready() const { return m_ready; }
@@ -382,8 +406,26 @@ namespace
                 case CmdType::Draw:
                     if (logDraws)
                         logDraw(f, f.draws[c.index]);
-                    draw(f.draws[c.index]);
+                    draw(f.draws[c.index].s, f.draws[c.index].first, f.draws[c.index].count, nullptr);
                     break;
+                case CmdType::MeshCreate:
+                {
+                    const MeshCreate &m = f.meshes[c.index];
+                    m_meshes[m.key] = m_dev.createBuffer({m.bytes.size(), rhi::BufferUsage::Vertex, false, "gs native mesh"}, m.bytes.data());
+                    break;
+                }
+                case CmdType::MeshDelete:
+                    m_meshes.erase(f.meshDeletes[c.index]);
+                    break;
+                case CmdType::NativeDraw:
+                {
+                    const NativeDrawCmd &n = f.nativeDraws[c.index];
+                    if (logDraws)
+                        std::fprintf(stderr, "[draw] native kind=%u n=%u mesh=%016llx fbp=%u zbp=%u tme=%u abe=%u fge=%u\n", n.kind, n.drawCount,
+                                     (unsigned long long)n.meshKey, n.s.fbp, n.s.zbp, n.s.tme, n.s.abe, n.s.fge);
+                    draw(n.s, 0, n.drawCount, &n);
+                    break;
+                }
                 }
             }
             endPass();
@@ -637,16 +679,32 @@ namespace
             {
                 const render::GsShaders &sh = render::gsShaders();
                 rhi::PipelineDesc d;
-                d.vertex = sh.drawVS;
                 d.pixel = dual ? sh.drawPSDual : sh.drawPS;
-                d.attributes = {
-                    {"POSITION", 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(HwVertex, x))},
-                    {"TEXCOORD", 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(HwVertex, s))},
-                    {"COLOR", 0, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(HwVertex, r))},
-                    {"TEXCOORD", 1, rhi::VertexFormat::Float1, static_cast<uint32_t>(offsetof(HwVertex, fog))},
-                };
-                d.stride = sizeof(HwVertex);
-                d.topology = mode == 1 ? rhi::Topology::Lines : mode == 2 ? rhi::Topology::Points : rhi::Topology::Triangles;
+                if (mode == 3)
+                {
+                    // [gta-recomp] native VCS world draw (GSNativeDraw::VcsWorld): 32-byte vertices, transformed on the GPU
+                    d.vertex = sh.worldVS;
+                    d.attributes = {
+                        {"POSITION", 0, rhi::VertexFormat::Float3, 0},
+                        {"TEXCOORD", 0, rhi::VertexFormat::Float3, 12},
+                        {"COLOR", 0, rhi::VertexFormat::UInt1, 24},
+                    };
+                    d.stride = 32;
+                    d.topology = rhi::Topology::TriangleStrip;
+                    d.depthClip = false; // the PS2 clip planes come as clip distances
+                }
+                else
+                {
+                    d.vertex = sh.drawVS;
+                    d.attributes = {
+                        {"POSITION", 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(HwVertex, x))},
+                        {"TEXCOORD", 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(HwVertex, s))},
+                        {"COLOR", 0, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(HwVertex, r))},
+                        {"TEXCOORD", 1, rhi::VertexFormat::Float1, static_cast<uint32_t>(offsetof(HwVertex, fog))},
+                    };
+                    d.stride = sizeof(HwVertex);
+                    d.topology = mode == 1 ? rhi::Topology::Lines : mode == 2 ? rhi::Topology::Points : rhi::Topology::Triangles;
+                }
                 d.blend.enable = b.enable;
                 d.blend.srcColor = b.src;
                 d.blend.dstColor = b.dst;
@@ -663,10 +721,17 @@ namespace
             return *p;
         }
 
-        void draw(const DrawCmd &dc)
+        void draw(const HwState &s, uint32_t first, uint32_t count, const NativeDrawCmd *native)
         {
-            const HwState &s = dc.s;
-            if (!dc.count || !m_vb)
+            rhi::Buffer *vertices = m_vb.get();
+            if (native)
+            {
+                auto mesh = m_meshes.find(native->meshKey);
+                vertices = mesh != m_meshes.end() ? mesh->second.get() : nullptr;
+                if (vertices)
+                    m_dev.updateBuffer(*m_worldCb, native->constants, sizeof(native->constants));
+            }
+            if (!count || !vertices)
                 return;
             Rt &rt = rtFor(s.fbp, s.fbw, s.scy1 + 1u);
             const bool depthOn = s.zte != 0u;
@@ -752,10 +817,21 @@ namespace
             bool zwrite = depthOn && !s.zmsk;
 
             // pass 1: pixels passing the alpha test (or all of them)
+            auto submit = [&](rhi::Pipeline &pipeline)
+            {
+                m_dev.setPipeline(pipeline);
+                m_dev.setVertexBuffer(*vertices);
+                m_dev.updateBuffer(*m_drawCb, &c, sizeof(c));
+                m_dev.setConstants(0, *m_drawCb);
+                if (native)
+                    m_dev.setConstants(1, *m_worldCb);
+                m_dev.setTexture(0, tex, nullptr);
+                m_dev.draw(count, first);
+            };
             if (s.ate && s.atst != 1u && s.afail != 0u)
             {
                 // AFAIL other than KEEP: draw the passing pixels normally, the failing ones with the AFAIL mask
-                submit(dc, c, tex, drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode));
+                submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode));
                 c.atstArefAfailRt[2] = 1;
                 if (s.afail == 1u) zwrite = false;                      // FB_ONLY
                 else if (s.afail == 2u) mask = 0;                       // ZB_ONLY
@@ -765,17 +841,7 @@ namespace
             {
                 c.linearIipFgeAte[3] = 0; // no alpha test (ATST ALWAYS)
             }
-            submit(dc, c, tex, drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode));
-        }
-
-        void submit(const DrawCmd &dc, const DrawConstants &c, rhi::Texture *tex, rhi::Pipeline &pipeline)
-        {
-            m_dev.setPipeline(pipeline);
-            m_dev.setVertexBuffer(*m_vb);
-            m_dev.updateBuffer(*m_drawCb, &c, sizeof(c));
-            m_dev.setConstants(0, *m_drawCb);
-            m_dev.setTexture(0, tex, nullptr);
-            m_dev.draw(dc.count, dc.first);
+            submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode));
         }
 
         // a draw that samples its own target reads a copy (D3D cannot sample a bound render target)
@@ -793,7 +859,8 @@ namespace
         rhi::Device &m_dev;
         uint32_t m_scale;
         bool m_ready = false;
-        std::unique_ptr<rhi::Buffer> m_vb, m_drawCb, m_quadCb;
+        std::unique_ptr<rhi::Buffer> m_vb, m_drawCb, m_quadCb, m_worldCb;
+        std::unordered_map<uint64_t, std::unique_ptr<rhi::Buffer>> m_meshes; // native draws' vertex data
         size_t m_vbCapacity = 0;
         std::unique_ptr<rhi::Sampler> m_point, m_linear;
         std::unique_ptr<rhi::Pipeline> m_blit, m_fillColor, m_fillDepth;
@@ -1577,8 +1644,8 @@ namespace
                         f.cpuDisplay[static_cast<size_t>(y) * w + x] = v | 0xFF000000u;
                     }
             }
-            ps2perf::add(ps2perf::Counter::Draws, f.draws.size()); // [gta-recomp] once per frame, not per primitive
-            ps2perf::add(ps2perf::Counter::Vertices, f.vertices.size());
+            ps2perf::add(ps2perf::Counter::Draws, f.draws.size() + f.nativeDraws.size()); // [gta-recomp] once per frame
+            ps2perf::add(ps2perf::Counter::Vertices, f.vertices.size() + f.nativeVertices);
             ps2perf::add(ps2perf::Counter::TexUploads, f.textures.size());
             ++m_frameIndex;
             {
@@ -1615,12 +1682,91 @@ namespace
             f.rtDrops.clear();
             f.clears.clear();
             f.depthFills.clear();
+            f.meshes.clear();
+            f.meshDeletes.clear();
+            f.nativeDraws.clear();
+            f.nativeVertices = 0;
             std::memset(f.privRegs, 0, sizeof(f.privRegs));
             f.cpuDisplay.clear();
             f.cpuDisplayW = f.cpuDisplayH = 0;
             f.displayFromRt = false;
             f.displayFbp = f.displayX = f.displayY = f.displayW = f.displayH = 0;
             return frame;
+        }
+
+        // [gta-recomp] packet-level HLE: a draw the GPU transforms (see GSNativeDraw)
+        bool SubmitNative(const GSDrawState &state, const GSNativeDraw &draw) override
+        {
+            if (draw.kind != GSNativeDraw::VcsWorld || !draw.drawCount || !draw.vertexCount || draw.constantCount > 60u)
+                return false;
+            GSPrimitiveBatch batch{};
+            batch.state = state;
+            HwState s{};
+            if (!buildState(batch, s))
+                return true; // ZTST NEVER: nothing drawn
+            s.mode = 3;      // native strip (pipeline / merge key only)
+            if (s.zte && s.ztst != 1u && s.zbp != s.fbp)
+            {
+                DepthInfo &di = m_depthBufs[s.zbp];
+                di.zpsm = s.zpsm;
+                di.fbw = s.fbw;
+                di.height = std::max<uint32_t>(di.height, std::min<uint32_t>(s.scy1 + 1u, 1024u));
+            }
+            HwVertex extent{};
+            extent.y = static_cast<float>(s.scy1); // the scissor bounds what the draw can touch
+            noteTarget(s.fbp, s.fbw, s.fpsm, &extent, 1);
+            Frame &f = *m_frame;
+            auto lru = m_meshLru.find(draw.meshKey);
+            if (lru == m_meshLru.end())
+            {
+                MeshCreate mc;
+                mc.key = draw.meshKey;
+                mc.stride = draw.vertexStride;
+                mc.count = draw.vertexCount;
+                const auto *bytes = static_cast<const uint8_t *>(draw.vertices);
+                mc.bytes.assign(bytes, bytes + size_t(draw.vertexStride) * draw.vertexCount);
+                f.cmds.push_back({CmdType::MeshCreate, static_cast<uint32_t>(f.meshes.size())});
+                f.meshes.push_back(std::move(mc));
+                m_meshLru[draw.meshKey] = m_frameIndex;
+                if (m_meshLru.size() > kMaxMeshes)
+                    evictMeshes();
+            }
+            else
+            {
+                lru->second = m_frameIndex;
+            }
+            NativeDrawCmd nd;
+            nd.s = s;
+            nd.meshKey = draw.meshKey;
+            nd.kind = draw.kind;
+            nd.drawCount = draw.drawCount;
+            std::memcpy(nd.constants, draw.constants, sizeof(float) * draw.constantCount);
+            const float zs = (s.zpsm == GS_PSM_Z32) ? (1.0f / 4294967296.0f)
+                           : (s.zpsm == GS_PSM_Z16 || s.zpsm == GS_PSM_Z16S) ? (1.0f / 65536.0f)
+                                                                             : (1.0f / 16777216.0f);
+            nd.constants[60] = state.context.xyoffset.ofx / 16.0f;
+            nd.constants[61] = state.context.xyoffset.ofy / 16.0f;
+            nd.constants[62] = zs;
+            f.cmds.push_back({CmdType::NativeDraw, static_cast<uint32_t>(f.nativeDraws.size())});
+            f.nativeDraws.push_back(nd);
+            f.nativeVertices += draw.drawCount;
+            ps2hle::g_gsVerticesRecorded += draw.drawCount;
+            return true;
+        }
+
+        void evictMeshes()
+        {
+            std::vector<std::pair<uint64_t, uint64_t>> byAge(m_meshLru.begin(), m_meshLru.end());
+            std::sort(byAge.begin(), byAge.end(), [](auto &a, auto &b) { return a.second < b.second; });
+            Frame &f = *m_frame;
+            for (size_t i = 0; i < byAge.size() / 4; ++i)
+            {
+                if (byAge[i].second == m_frameIndex)
+                    break;
+                f.cmds.push_back({CmdType::MeshDelete, static_cast<uint32_t>(f.meshDeletes.size())});
+                f.meshDeletes.push_back(byAge[i].first);
+                m_meshLru.erase(byAge[i].first);
+            }
         }
 
         GSHwPresenter &presenter() override { return *this; }
@@ -1996,6 +2142,7 @@ namespace
         };
         static constexpr uint32_t kPages = 512u; // 4 MiB / 8 KiB
         static constexpr size_t kMaxTextures = 3000u;
+        static constexpr size_t kMaxMeshes = 12000u; // [gta-recomp] native draws' vertex data (~3-10 KB each)
 
         uint32_t m_scale;
         GSCpuBackend m_cpu;
@@ -2019,6 +2166,7 @@ namespace
         std::unordered_map<uint32_t, UploadInfo> m_uploadAt;
         uint64_t m_skippedUploads = 0;
         std::unordered_map<uint64_t, uint64_t> m_texLru;  // key -> last frame used
+        std::unordered_map<uint64_t, uint64_t> m_meshLru; // [gta-recomp] native draws' meshes: key -> last frame used
         std::unordered_map<uint32_t, RtInfo> m_rts;       // fbp -> extent (game thread's view)
         struct TexBindInput // [gta-recomp] bindTexture cache (see there)
         {

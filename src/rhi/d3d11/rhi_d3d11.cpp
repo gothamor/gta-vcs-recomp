@@ -470,7 +470,7 @@ namespace rhi
                 D3D11_RASTERIZER_DESC rd{};
                 rd.FillMode = D3D11_FILL_SOLID;
                 rd.CullMode = D3D11_CULL_NONE;
-                rd.DepthClipEnable = TRUE;
+                rd.DepthClipEnable = desc.depthClip ? TRUE : FALSE;
                 rd.ScissorEnable = TRUE; // beginPass sets the scissor to the whole target
                 if (FAILED(m_device->CreateBlendState(&bd, &p->blend)) || FAILED(m_device->CreateDepthStencilState(&dd, &p->depth)) ||
                     FAILED(m_device->CreateRasterizerState(&rd, &p->raster)))

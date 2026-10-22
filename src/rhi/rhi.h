@@ -195,6 +195,7 @@ namespace rhi
         BlendState blend;
         DepthState depth;
         bool scissor = false;
+        bool depthClip = true; // false: depth outside 0..1 is not clipped (clip distances still apply)
         const char *name = nullptr;
     };
 

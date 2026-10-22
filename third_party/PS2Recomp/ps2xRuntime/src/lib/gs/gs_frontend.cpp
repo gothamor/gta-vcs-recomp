@@ -1751,6 +1751,16 @@ void GS::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_
         m_backend->WriteVram(psm, base, bw, x, y, value);
 }
 
+bool GS::submitNative(uint64_t prim, const GSNativeDraw &draw)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (!m_backend || m_gpuOnly)
+        return false;
+    writeRegisterUnlocked(GS_REG_PRIM, prim);
+    const GSPrimitiveBatch batch = buildDrawBatch(0);
+    return m_backend->SubmitNative(batch.state, draw);
+}
+
 GSPrimitiveBatch GS::buildDrawBatch(int vertexCount) const
 {
     GSPrimitiveBatch batch{};
