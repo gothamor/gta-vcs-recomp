@@ -40,8 +40,9 @@
 - [x] Static world (terrain, buildings) not drawn: VCALLMSR used vi[27] instead of
       CMSAR0, so the VU0 sector frustum test culled everything. Fixed; ground,
       buildings and the skyline render.
-- [~] In-game speed: 11 -> ~35-50 VBlanks/s (compiled VU1, texture/CLUT/upload/timer
-      fixes). Remaining: VU0 programs 0x0CF8 / 0x0EB8 (~25%), guest code (~23%)
+- [~] In-game speed: 11 -> ~46-67 VBlanks/s (compiled VU1, native VU0 box clip /
+      matrix programs, texture/CLUT/upload/timer fixes, no FP contraction).
+      Remaining: guest code ~31%, T4 swizzle ~9%, DMA chain copies ~7.5%
 - [ ] Performance: per-instruction `ctx->pc` stores (emitter now skips them for
       pure ALU ops - needs a regenerate + test), `__restrict` for generated code
 
@@ -67,6 +68,11 @@
 | `VCS_SELFTEST=1` | recompiled libgcc helpers vs native |
 | `VCS_TRACE_DELAY=1`, `VCS_TRACE_SOUND=1` | DelayThread calls; EE sound driver commands |
 | `PS2X_TRACE_SPU=1`, `PS2X_TRACE_IOP_DMA=1` | IOP SPU2/DMA/interrupt tracing |
+| `PS2X_VU0_VERIFY=1`, `PS2X_VU0_NATIVE=0` | check / disable native VU0 programs |
+| `PS2X_VU1_VERIFY=1`, `PS2X_VU1_COMPILED=0` | check / disable compiled VU1 code |
+| `PS2X_TRACE_VU0=1`, `PS2X_TRACE_VU1=1`, `PS2X_VU1_STAT=1` | VU program statistics |
+| `VCS_COUNT_CALLS=addr,...` | calls per 5 s of guest functions |
+| `VCS_RWATCH=lo,hi` | which code reads a guest range |
 | `PS2X_HW_DUMP=<frame>` | dump HW render targets + display as PPM |
 | `tools/sendkey.ps1 -Key Return` | press a key in the game window |
 | `python tools/eedis.py <elf> <addr or name>` | EE disassembly with function names |

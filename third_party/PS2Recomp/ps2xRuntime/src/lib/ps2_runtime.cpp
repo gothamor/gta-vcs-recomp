@@ -15,6 +15,7 @@
 #include "ps2_host_backend.h"
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
+#include "runtime/ps2_vu0_native.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -29,6 +30,9 @@
 #include <unordered_map>
 #include <map>
 #include <unordered_set>
+#include <cfenv>
+#include <string>
+#include <vector>
 #include <mutex>
 #include <sstream>
 
@@ -1646,6 +1650,117 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                        exception == EXCEPTION_TLB_REFILL);
 }
 
+// ---- [gta-recomp] native VU0 programs (runtime/ps2_vu0_native.h) ----------------------------------------------
+namespace
+{
+    struct Vu0NativeEntry
+    {
+        uint32_t startPc = 0;
+        uint32_t codeBytes = 0;
+        uint64_t codeHash = 0;
+        Ps2Vu0NativeFn fn = nullptr;
+        const char *name = "";
+        std::vector<uint8_t> verifiedCode; // the bytes once the hash matched: later checks are a memcmp
+        uint64_t verifyRuns = 0, verifyMismatches = 0;
+    };
+
+    std::vector<Vu0NativeEntry> &vu0Natives()
+    {
+        static std::vector<Vu0NativeEntry> natives;
+        return natives;
+    }
+
+    const Vu0NativeEntry *findVu0Native(uint32_t startPc, const uint8_t *vu0Code)
+    {
+        static const bool disabled = []
+        {
+            const char *e = std::getenv("PS2X_VU0_NATIVE");
+            return e && e[0] == '0';
+        }();
+        if (disabled)
+            return nullptr;
+        for (Vu0NativeEntry &entry : vu0Natives())
+        {
+            if (entry.startPc != startPc || startPc + entry.codeBytes > PS2_VU0_CODE_SIZE)
+                continue;
+            const uint8_t *code = vu0Code + startPc;
+            if (!entry.verifiedCode.empty())
+            {
+                if (std::memcmp(entry.verifiedCode.data(), code, entry.codeBytes) == 0)
+                    return &entry;
+                continue;
+            }
+            if (ps2Vu0CodeHash(code, entry.codeBytes) == entry.codeHash)
+            {
+                entry.verifiedCode.assign(code, code + entry.codeBytes);
+                std::fprintf(stderr, "[vu0native] running %s natively (VU0 0x%04x, %u bytes)\n", entry.name, startPc, entry.codeBytes);
+                return &entry;
+            }
+        }
+        return nullptr;
+    }
+
+    // PS2X_VU0_VERIFY=1: native result (a) vs interpreter (b): VF1..31, VI1..15, ACC, VU0 data
+    void verifyVu0Native(const Vu0NativeEntry &entryConst, const R5900Context &a, const uint8_t *aData, const R5900Context &b,
+                         const uint8_t *bData)
+    {
+        Vu0NativeEntry &entry = const_cast<Vu0NativeEntry &>(entryConst);
+        ++entry.verifyRuns;
+        std::string what;
+        char buf[160];
+        for (int r = 1; r < 32 && what.empty(); ++r)
+            if (std::memcmp(&a.vu0_vf[r], &b.vu0_vf[r], 16) != 0)
+            {
+                alignas(16) uint32_t x[4], y[4];
+                std::memcpy(x, &a.vu0_vf[r], 16);
+                std::memcpy(y, &b.vu0_vf[r], 16);
+                std::snprintf(buf, sizeof(buf), "vf%d native %08x %08x %08x %08x interp %08x %08x %08x %08x", r, x[0], x[1], x[2], x[3], y[0],
+                              y[1], y[2], y[3]);
+                what = buf;
+            }
+        for (int r = 1; r < 16 && what.empty(); ++r)
+            if (a.vi[r] != b.vi[r])
+            {
+                std::snprintf(buf, sizeof(buf), "vi%d native %04x interp %04x", r, a.vi[r], b.vi[r]);
+                what = buf;
+            }
+        if (what.empty() && std::memcmp(&a.vu0_acc, &b.vu0_acc, 16) != 0)
+            what = "acc";
+        if (what.empty() && std::memcmp(aData, bData, PS2_VU0_DATA_SIZE) != 0)
+        {
+            uint32_t at = 0;
+            while (aData[at] == bData[at])
+                ++at;
+            std::snprintf(buf, sizeof(buf), "data at 0x%x", at);
+            what = buf;
+        }
+        if (!what.empty() && ++entry.verifyMismatches <= 20u)
+            std::fprintf(stderr, "[vu0verify] %s run %llu differs: %s\n", entry.name, static_cast<unsigned long long>(entry.verifyRuns), what.c_str());
+        if ((entry.verifyRuns % 20000u) == 0u)
+            std::fprintf(stderr, "[vu0verify] %s: %llu runs, %llu differed\n", entry.name, static_cast<unsigned long long>(entry.verifyRuns),
+                         static_cast<unsigned long long>(entry.verifyMismatches));
+    }
+}
+
+uint64_t ps2Vu0CodeHash(const uint8_t *code, uint32_t bytes)
+{
+    uint64_t h = 1469598103934665603ull;
+    for (uint32_t i = 0; i < bytes; ++i)
+        h = (h ^ code[i]) * 1099511628211ull;
+    return h;
+}
+
+void ps2RegisterVu0Native(uint32_t startPc, uint32_t codeBytes, uint64_t codeHash, Ps2Vu0NativeFn fn, const char *name)
+{
+    Vu0NativeEntry entry;
+    entry.startPc = startPc;
+    entry.codeBytes = codeBytes;
+    entry.codeHash = codeHash;
+    entry.fn = fn;
+    entry.name = name;
+    vu0Natives().push_back(std::move(entry));
+}
+
 void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
 {
     (void)rdram;
@@ -1660,14 +1775,40 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
         return;
     }
 
-    m_vu0.reset();
-    copyVu0ContextToState(ctx, m_vu0.state());
     const auto statStart = std::chrono::steady_clock::now();
-    m_vu0.execute(vu0Code, PS2_VU0_CODE_SIZE,
-                  vu0Data, PS2_VU0_DATA_SIZE,
-                  m_gs, &m_memory,
-                  startPC, 0u, ctx->vu0_itop, 4096);
-    copyVu0StateToContext(m_vu0.state(), ctx);
+    const Vu0NativeEntry *native = findVu0Native(startPC, vu0Code);
+    static const bool verifyNative = std::getenv("PS2X_VU0_VERIFY") != nullptr;
+    if (native && !verifyNative)
+    {
+        // [gta-recomp] native replacement (see runtime/ps2_vu0_native.h), run in the VU's rounding mode
+        const int rounding = std::fegetround();
+        std::fesetround(FE_TOWARDZERO);
+        native->fn(ctx, vu0Data, PS2_VU0_DATA_SIZE);
+        std::fesetround(rounding);
+    }
+    else
+    {
+        R5900Context nativeCtx;
+        std::vector<uint8_t> nativeData;
+        if (native)
+        {
+            nativeCtx = *ctx;
+            nativeData.assign(vu0Data, vu0Data + PS2_VU0_DATA_SIZE);
+            const int rounding = std::fegetround();
+            std::fesetround(FE_TOWARDZERO);
+            native->fn(&nativeCtx, nativeData.data(), PS2_VU0_DATA_SIZE);
+            std::fesetround(rounding);
+        }
+        m_vu0.reset();
+        copyVu0ContextToState(ctx, m_vu0.state());
+        m_vu0.execute(vu0Code, PS2_VU0_CODE_SIZE,
+                      vu0Data, PS2_VU0_DATA_SIZE,
+                      m_gs, &m_memory,
+                      startPC, 0u, ctx->vu0_itop, 4096);
+        copyVu0StateToContext(m_vu0.state(), ctx);
+        if (native)
+            verifyVu0Native(*native, nativeCtx, nativeData.data(), *ctx, vu0Data);
+    }
     { // [gta-recomp] PS2X_TRACE_VU0=1: VU0 microprogram calls and host time per start address, every 5 s
         static const bool trace = std::getenv("PS2X_TRACE_VU0") != nullptr;
         if (trace)

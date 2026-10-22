@@ -116,3 +116,19 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   batched timers). The EE thread is the single saturated thread. Next: VU0
   microprograms 0x0CF8 (sector box clip) and 0x0EB8 (~25% of the EE thread;
   they read MAC flags with pipeline timing, so they run on the exact path).
+
+## 2026-10-22 - Native VU0 programs; no FP contraction
+- VU0 programs 0x0CF8 (sector box clip) and 0x0EB8 (3x matrix product) ran
+  ~160k times / 5 s on the interpreter's exact path (they read MAC flags):
+  ~25% of the EE thread. They are now C++ (`src/game/vcs_vu0_native.cpp`),
+  transcribed pair by pair with the flag latency spelled out, using the same
+  per-lane maths as the compiled VU1 code. Registered by code hash.
+- Verification (`PS2X_VU0_VERIFY=1`) first showed 1-ulp differences: the
+  *interpreter* was wrong - /arch:AVX2 let clang fuse `acc + a * b` into FMA
+  (one rounding). The PS2 rounds product and sum separately. The runtime and
+  runner now build with -ffp-contract=off; after that, 4.2 million live calls
+  matched exactly (VF, VI, ACC, VU0 memory), and compiled VU1 still matches.
+- In game (i7-7700K): ~46-67 VBlanks/s (was 35-50 before, 11 at the start of
+  the performance work). Remaining top costs: generated game code ~31%, T4
+  texture swizzle (WriteP4) ~9%, DMA chain copy (memmove) ~7.5%, HW backend
+  recording ~7%, scheduler checkpoints ~4%.

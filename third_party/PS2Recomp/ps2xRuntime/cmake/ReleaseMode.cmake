@@ -8,9 +8,11 @@ function(EnableFastReleaseMode TargetName)
     # linker; use plain optimisation flags there and leave LTO to IPO below.
     # LTO is opt-in (PS2X_LTO=THIN|FULL): with full LTO every relink of the
     # 150 MB game re-codegens everything, which kills iteration time.
+    # -ffp-contract=off: /arch:AVX2 enables FMA and clang would fuse `a + b * c` into one rounding; the PS2's
+    # FMACs (VU and EE FPU) round the product and the sum separately.
     if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         target_compile_options(${TargetName} PRIVATE
-            $<$<CONFIG:Release>:/O2 /Oi /Gy /Gw /GF /DNDEBUG /arch:AVX2 /GS- /clang:-fno-math-errno>
+            $<$<CONFIG:Release>:/O2 /Oi /Gy /Gw /GF /DNDEBUG /arch:AVX2 /GS- /clang:-fno-math-errno /clang:-ffp-contract=off>
         )
         if(PS2X_LTO STREQUAL "THIN")
             target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
