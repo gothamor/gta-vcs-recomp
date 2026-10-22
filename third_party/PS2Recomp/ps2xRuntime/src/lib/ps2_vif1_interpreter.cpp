@@ -486,10 +486,23 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
             vif1_regs.stat ^= (1u << 7); // toggle DBF
 
+            const ps2hle::MscalBefore hleBefore = ps2hle::mscalBefore(); // [gta-recomp] game HLE / checkers
+            const ps2hle::MscalAfter hleAfter = ps2hle::mscalAfter();
+            const ps2hle::ChainSegment *segment = survey ? segmentAt(pos - 4u) : nullptr;
+            ps2hle::MscalContext hle;
+            hle.startPc = startPC;
+            hle.top = runTop;
+            hle.itop = runItop;
+            hle.vuCode = m_vu1Code;
+            hle.vuData = m_vu1Data;
+            hle.segment = segment;
             if (survey)
-                ps2hle::beforeMscal(segmentAt(pos - 4u), startPC, m_vu1Code, m_vu1Data, data, sizeBytes);
-            if (m_vu1MscalCallback)
+                ps2hle::beforeMscal(segment, startPC, m_vu1Code, m_vu1Data, data, sizeBytes);
+            const bool handled = hleBefore && hleBefore(hle);
+            if (!handled && m_vu1MscalCallback)
                 m_vu1MscalCallback(startPC, runTop, runItop);
+            if (!handled && hleAfter)
+                hleAfter(hle);
             if (survey)
                 ps2hle::afterMscal(m_vu1Data);
             continue;

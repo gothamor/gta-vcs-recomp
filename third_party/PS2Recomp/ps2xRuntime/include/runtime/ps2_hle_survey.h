@@ -35,4 +35,22 @@ namespace ps2hle
                      const uint8_t *stream, uint32_t streamSize);
     void afterMscal(const uint8_t *vuData);
     void onChainEnd(); // end of one flattened chain (one frame's worth for VCS)
+
+    // A game's hooks around VU1 programs started by MSCAL (game thread): `before` may handle the program itself and
+    // return true (the VU1 run is then skipped); `after` runs after a VU1 run that was not skipped. Checkers use the
+    // pair to compare their own result with the VU1's.
+    struct MscalContext
+    {
+        uint32_t startPc = 0;
+        uint32_t top = 0;  // TOP / ITOP the program sees
+        uint32_t itop = 0;
+        const uint8_t *vuCode = nullptr;
+        uint8_t *vuData = nullptr;
+        const ChainSegment *segment = nullptr; // only with PS2X_HLE_SURVEY
+    };
+    using MscalBefore = bool (*)(const MscalContext &);
+    using MscalAfter = void (*)(const MscalContext &);
+    void setMscalHooks(MscalBefore before, MscalAfter after);
+    MscalBefore mscalBefore();
+    MscalAfter mscalAfter();
 }

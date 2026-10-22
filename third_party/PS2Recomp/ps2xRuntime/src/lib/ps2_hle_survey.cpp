@@ -212,6 +212,21 @@ namespace ps2hle
         g_verts0 = g_gsVerticesRecorded;
     }
 
+    namespace
+    {
+        MscalBefore g_before = nullptr;
+        MscalAfter g_after = nullptr;
+    }
+
+    void setMscalHooks(MscalBefore before, MscalAfter after)
+    {
+        g_before = before;
+        g_after = after;
+    }
+
+    MscalBefore mscalBefore() { return g_before; }
+    MscalAfter mscalAfter() { return g_after; }
+
     void onChainEnd()
     {
         ++g_chains;
