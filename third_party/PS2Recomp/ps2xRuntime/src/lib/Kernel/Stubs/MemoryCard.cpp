@@ -1,6 +1,18 @@
 #include "Common.h"
 #include "MemoryCard.h"
 
+#include <fstream>
+
+#if defined(_WIN32) // [gta-recomp] file creation times (card directory order)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace ps2_stubs
 {
     namespace
@@ -250,6 +262,182 @@ namespace ps2_stubs
                 resolved /= std::filesystem::path(guestPath.substr(1));
             }
             return resolved.lexically_normal();
+        }
+
+        // [gta-recomp] Card directory order. A real card lists a folder's entries in its directory-table order:
+        // creation order, with a deleted entry's slot reused by the next file created there. Games depend on it - VCS
+        // skips the first five entries of its save folder (".", "..", its data file, icon.sys, the icon) and looks
+        // for its save slots after them - but a host folder has no such order, so each card folder keeps it in
+        // kMcOrderFile (hidden from the guest): one name per line, an empty line for a freed slot. Entries it does
+        // not know (copied in by hand, or written before it existed) go after the known ones, oldest first.
+        constexpr const char *kMcOrderFile = ".ps2x-order";
+
+        std::vector<std::string> readMcOrder(const std::filesystem::path &dir)
+        {
+            std::vector<std::string> names;
+            std::ifstream in(dir / kMcOrderFile, std::ios::binary);
+            std::string line;
+            while (std::getline(in, line))
+            {
+                if (!line.empty() && line.back() == '\r')
+                {
+                    line.pop_back();
+                }
+                names.push_back(line);
+            }
+            return names;
+        }
+
+        void writeMcOrder(const std::filesystem::path &dir, std::vector<std::string> names)
+        {
+            while (!names.empty() && names.back().empty())
+            {
+                names.pop_back();
+            }
+            std::ofstream out(dir / kMcOrderFile, std::ios::binary | std::ios::trunc);
+            for (const std::string &name : names)
+            {
+                out << name << '\n';
+            }
+        }
+
+        // Creation time where the host has one (Windows), else the last write.
+        uint64_t mcCreationTime(const std::filesystem::directory_entry &entry)
+        {
+#if defined(_WIN32)
+            WIN32_FILE_ATTRIBUTE_DATA data{};
+            if (GetFileAttributesExW(entry.path().c_str(), GetFileExInfoStandard, &data))
+            {
+                return (static_cast<uint64_t>(data.ftCreationTime.dwHighDateTime) << 32) | data.ftCreationTime.dwLowDateTime;
+            }
+#endif
+            std::error_code ec;
+            return static_cast<uint64_t>(entry.last_write_time(ec).time_since_epoch().count());
+        }
+
+        // A card folder's entries (without "." / "..") in card order; records entries it did not know yet.
+        std::vector<std::filesystem::directory_entry> listMcDirOrdered(const std::filesystem::path &dir)
+        {
+            std::vector<std::filesystem::directory_entry> onDisk;
+            std::error_code ec;
+            for (const auto &entry : std::filesystem::directory_iterator(
+                     dir, std::filesystem::directory_options::skip_permission_denied, ec))
+            {
+                if (ec)
+                {
+                    break;
+                }
+                if (entry.path().filename() != kMcOrderFile)
+                {
+                    onDisk.push_back(entry);
+                }
+            }
+
+            std::vector<std::string> order = readMcOrder(dir);
+            const size_t knownCount = order.size();
+            std::vector<std::filesystem::directory_entry> result;
+            std::vector<bool> placed(onDisk.size(), false);
+            bool changed = false;
+            for (std::string &name : order)
+            {
+                if (name.empty())
+                {
+                    continue;
+                }
+                bool found = false;
+                for (size_t i = 0; i < onDisk.size(); ++i)
+                {
+                    if (!placed[i] && onDisk[i].path().filename().string() == name)
+                    {
+                        placed[i] = true;
+                        result.push_back(onDisk[i]);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    name.clear(); // removed behind the card's back: its slot is free
+                    changed = true;
+                }
+            }
+
+            std::vector<std::filesystem::directory_entry> unknown;
+            for (size_t i = 0; i < onDisk.size(); ++i)
+            {
+                if (!placed[i])
+                {
+                    unknown.push_back(onDisk[i]);
+                }
+            }
+            std::sort(unknown.begin(), unknown.end(),
+                      [](const std::filesystem::directory_entry &lhs, const std::filesystem::directory_entry &rhs)
+                      {
+                          const uint64_t a = mcCreationTime(lhs), b = mcCreationTime(rhs);
+                          return a != b ? a < b : lhs.path().filename().string() < rhs.path().filename().string();
+                      });
+            for (const auto &entry : unknown)
+            {
+                result.push_back(entry);
+                order.push_back(entry.path().filename().string());
+                changed = true;
+            }
+            if (changed || order.size() != knownCount)
+            {
+                writeMcOrder(dir, order);
+            }
+            return result;
+        }
+
+        // Before a new entry is created: it takes the folder's first free slot, or goes last.
+        void reserveMcOrderSlot(const std::filesystem::path &hostPath)
+        {
+            const std::filesystem::path dir = hostPath.parent_path();
+            listMcDirOrdered(dir); // records what is there
+            std::vector<std::string> order = readMcOrder(dir);
+            const std::string name = hostPath.filename().string();
+            if (std::find(order.begin(), order.end(), name) != order.end())
+            {
+                return;
+            }
+            auto slot = std::find(order.begin(), order.end(), std::string{});
+            if (slot != order.end())
+            {
+                *slot = name;
+            }
+            else
+            {
+                order.push_back(name);
+            }
+            writeMcOrder(dir, order);
+        }
+
+        // After an entry was deleted (from) or renamed (from -> to, same folder): its slot is freed or keeps the new name.
+        void updateMcOrderSlot(const std::filesystem::path &from, const std::string &to)
+        {
+            const std::filesystem::path dir = from.parent_path();
+            std::vector<std::string> order = readMcOrder(dir);
+            auto it = std::find(order.begin(), order.end(), from.filename().string());
+            if (it == order.end())
+            {
+                return;
+            }
+            *it = to;
+            writeMcOrder(dir, order);
+        }
+
+        // An empty card folder may still hold its order file.
+        bool isMcDirEmpty(const std::filesystem::path &dir)
+        {
+            std::error_code ec;
+            for (const auto &entry : std::filesystem::directory_iterator(dir, ec))
+            {
+                if (entry.path().filename() != kMcOrderFile)
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         bool localtimeSafeMc(const std::time_t *value, std::tm *out)
@@ -606,13 +794,15 @@ namespace ps2_stubs
                         std::error_code ec;
                         if (std::filesystem::exists(hostPath, ec) && !ec)
                         {
-                            if (std::filesystem::is_directory(hostPath, ec) &&
-                                !std::filesystem::is_empty(hostPath, ec))
+                            const bool isDir = std::filesystem::is_directory(hostPath, ec);
+                            if (isDir && !isMcDirEmpty(hostPath))
                             {
                                 result = kMcResultNotEmpty;
                             }
-                            else if (std::filesystem::remove(hostPath, ec) && !ec)
+                            else if ((!isDir || (std::filesystem::remove(hostPath / kMcOrderFile, ec), true)) &&
+                                     std::filesystem::remove(hostPath, ec) && !ec)
                             {
+                                updateMcOrderSlot(hostPath, {}); // [gta-recomp] slot freed
                                 result = kMcResultSucceed;
                             }
                             else
@@ -779,24 +969,8 @@ namespace ps2_stubs
                         appendSpecial(".");
                         appendSpecial("..");
 
-                        std::vector<std::filesystem::directory_entry> dirEntries;
-                        for (const auto &entry : std::filesystem::directory_iterator(
-                                 hostDir, std::filesystem::directory_options::skip_permission_denied, ec))
-                        {
-                            if (ec)
-                            {
-                                break;
-                            }
-                            dirEntries.push_back(entry);
-                        }
-
-                        std::sort(dirEntries.begin(), dirEntries.end(),
-                                  [](const std::filesystem::directory_entry &lhs,
-                                     const std::filesystem::directory_entry &rhs)
-                                  {
-                                      return toLowerAscii(lhs.path().filename().string()) <
-                                             toLowerAscii(rhs.path().filename().string());
-                                  });
+                        // [gta-recomp] in card order (see kMcOrderFile), not sorted by name
+                        const std::vector<std::filesystem::directory_entry> dirEntries = listMcDirOrdered(hostDir);
 
                         for (const auto &entry : dirEntries)
                         {
@@ -962,7 +1136,8 @@ namespace ps2_stubs
                     {
                         result = std::filesystem::is_directory(hostPath, ec) ? kMcResultSucceed : kMcResultDeniedPermit;
                     }
-                    else if (std::filesystem::create_directory(hostPath, ec) && !ec)
+                    else if (std::filesystem::exists(hostPath.parent_path(), ec) && !ec &&
+                             (reserveMcOrderSlot(hostPath), std::filesystem::create_directory(hostPath, ec)) && !ec)
                     {
                         result = kMcResultSucceed;
                     }
@@ -1022,6 +1197,10 @@ namespace ps2_stubs
                     }
                     else
                     {
+                        if (!exists)
+                        {
+                            reserveMcOrderSlot(hostPath); // [gta-recomp] card directory order
+                        }
                         FILE *file = openMcHostFile(hostPath, flags);
                         if (!file)
                         {
@@ -1040,6 +1219,8 @@ namespace ps2_stubs
             }
             setMcCommandResultLocked(kMcCmdOpen, result);
         }
+        RUNTIME_LOG("[MC] Open port=" << port << " '" << path << "' flags=0x" << std::hex << flags << std::dec
+                                      << " -> " << result); // [gta-recomp] MC trace
         setReturnS32(ctx, 0);
     }
 
@@ -1110,6 +1291,18 @@ namespace ps2_stubs
                     {
                         std::filesystem::rename(oldHostPath, newHostPath, ec);
                         result = ec ? kMcResultDeniedPermit : kMcResultSucceed;
+                        if (!ec) // [gta-recomp] card directory order
+                        {
+                            if (oldHostPath.parent_path() == newHostPath.parent_path())
+                            {
+                                updateMcOrderSlot(oldHostPath, newHostPath.filename().string());
+                            }
+                            else
+                            {
+                                updateMcOrderSlot(oldHostPath, {});
+                                reserveMcOrderSlot(newHostPath);
+                            }
+                        }
                     }
                 }
             }

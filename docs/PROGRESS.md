@@ -56,8 +56,10 @@
 - [ ] Audio: reverb, noise, pitch modulation, Gaussian interpolation, exact volume sweeps
 - [x] Memory card save: the game's own save routine writes its folder, icons and slot file
       to `%LOCALAPPDATA%/VCSRecomp/mc0` (verified with `VCS_TEST_SAVE`); boot finds the save
-- [ ] Memory card load: not verified - the frontend menu (Start/Load Game) does not appear
-      on screen, so Load Game cannot be picked yet
+- [x] Memory card load (2026-10-22): the game finds its saves at start-up and loads the newest
+      ("Load Successful", back at the save point) since `sceMcGetDir` lists folders in card order
+      (PS2RECOMP_PATCHES.md); before, saves were written but never seen. Load Game menu and saving
+      over an existing slot not checked by hand yet
 - [x] Frontend menus render (pause menu, LOAD/NEW/DELETE menu when a save exists)
 - [x] World vanishing when moving fast / driving: HW renderer never cleared the bottom half of
       the Z buffer (see PS2RECOMP_PATCHES.md, gs_hw.cpp depth fill)
