@@ -1891,6 +1891,16 @@ void EeScheduler::processEvent(const EeEvent &event)
         requestStop();
         break;
     case EeEventType::VBlankStart:
+    {
+        // [gta-recomp] PS2X_SLOW_VBLANK_MS=n: stall the EE thread n ms per VBlank (simulates a slow host)
+        static const int slowMs = []
+        {
+            const char *v = std::getenv("PS2X_SLOW_VBLANK_MS");
+            return v ? std::atoi(v) : 0;
+        }();
+        if (slowMs > 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(slowMs));
+    }
         ++m_vsyncTick;
         m_runtime.presentGpuVBlank(m_vsyncTick); // [gta-recomp]
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);

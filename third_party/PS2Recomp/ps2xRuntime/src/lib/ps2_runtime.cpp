@@ -777,8 +777,8 @@ void PS2Runtime::advanceIopEeCycles(uint64_t eeCycles) noexcept
     // [gta-recomp] Keep IOP time (and so the SPU2 sample clock) up with the wall clock. On hardware the IOP and SPU2
     // run in real time however slowly the EE game loop goes; here IOP time is derived from accounted EE cycles, so
     // whenever the EE fell below full speed the SPU2 produced too few samples and the audio stuttered. Each batch
-    // may add up to 2 ms of extra IOP time while IOP time trails the host clock; a lag over 250 ms (a stall, a
-    // debugger) is forgiven rather than replayed. PS2X_IOP_REALTIME=0 restores pure EE-derived time.
+    // brings IOP time up to the host clock (at most 50 ms at once); a lag over 1 s (a stall, a debugger) is
+    // forgiven rather than replayed. PS2X_IOP_REALTIME=0 restores pure EE-derived time.
     static const bool realtime = []
     {
         const char *v = std::getenv("PS2X_IOP_REALTIME");
@@ -788,8 +788,8 @@ void PS2Runtime::advanceIopEeCycles(uint64_t eeCycles) noexcept
     {
         using Clock = std::chrono::steady_clock;
         static constexpr uint64_t kEeHz = 294912000u;
-        static constexpr uint64_t kMaxExtra = kEeHz / 500u;  // 2 ms per batch
-        static constexpr uint64_t kMaxLag = kEeHz / 4u;      // 250 ms
+        static constexpr uint64_t kMaxExtra = kEeHz / 20u; // 50 ms per batch
+        static constexpr uint64_t kMaxLag = kEeHz;         // 1 s
         static Clock::time_point origin = Clock::now();
         static uint64_t given = 0u; // EE-cycle equivalents handed to the IOP since `origin`
         const auto hostNs = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - origin).count();

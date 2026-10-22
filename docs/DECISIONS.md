@@ -139,11 +139,16 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   CDSTREAM.IRX drives libsd directly, and its streaming depends on SPU2 IRQ
   addresses and DMA-complete callbacks, which an HLE layer would have to fake.
 - The mix (48 kHz stereo, one frame per 768 IOP cycles) goes to a raylib audio
-  stream through a ring buffer. The callback resamples by +-8% steered to an
-  ~80 ms fill, so small production jitter is absorbed without gaps or drops.
+  stream through a ring buffer with an adaptive target fill (60 ms, +30 ms per
+  underrun, max 250 ms). Drift is absorbed by resampling within +-0.5%. A first
+  version resampled by up to +-8%: when the buffer ran low the music audibly
+  slowed down, which the user heard as "audio slows down with the frame rate".
 - IOP time was derived only from accounted EE cycles, so when the EE ran below
   full speed the SPU2 produced 70-90% of real-time audio and playback stuttered
   in step with the frame rate. On hardware the IOP/SPU2 keep real time whatever
-  the EE does, so each IOP batch may now add up to 2 ms of IOP time while it
-  trails the host clock (lag > 250 ms is forgiven). Measured: 100% production
-  and 0 underruns at 35-55 VBlanks/s. `PS2X_IOP_REALTIME=0` turns it off.
+  the EE does, so each IOP batch now brings IOP time up to the host clock (at
+  most 50 ms at once; lag > 1 s is forgiven). Measured: 100% production and 0
+  underruns at 20-60 VBlanks/s (slow host simulated with PS2X_SLOW_VBLANK_MS).
+  Stream refills (DMA bytes, IRQs per second) are the same at 20 and 60
+  VBlanks/s: CDSTREAM feeds music from the IOP side, not per game frame.
+  `PS2X_IOP_REALTIME=0` turns it off.

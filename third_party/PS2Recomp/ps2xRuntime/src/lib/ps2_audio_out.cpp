@@ -1,9 +1,10 @@
 // [gta-recomp] Host audio output for the SPU2 mix: a ring buffer filled in IOP time (PS2IopHostAdapter::audioSamples)
 // and drained by a raylib audio stream callback at 48 kHz stereo.
-// The emulator produces audio in bursts and not exactly in real time, so the callback resamples with a playback rate
-// steered by the buffer fill (target ~80 ms, rate 0.92..1.08, linear interpolation): no hard gaps when the buffer runs
-// a little low, no dropped chunks when it runs a little high. After a real underrun playback waits for ~40 ms of
-// audio before resuming (one short gap instead of a crackle). PS2X_AUDIO_STATS=1 prints underruns / fill every 5 s.
+// The emulator produces audio in bursts (IOP time is caught up with the host clock once per IOP batch), so the
+// buffer keeps a target fill that adapts: it starts at 60 ms, grows by 30 ms after every underrun (max 250 ms) and
+// shrinks back by ~1 ms per second. Clock drift is absorbed by resampling within +-0.5% (inaudible), never by the
+// large pitch swings an earlier version used. After an underrun playback waits for the target fill before
+// resuming (one short gap instead of a crackle). PS2X_AUDIO_STATS=1 prints underruns / fill every 5 s.
 #include "runtime/ps2_audio_out.h"
 
 #include "raylib.h"
@@ -20,15 +21,17 @@ namespace
 {
     constexpr uint32_t kRate = 48000u;
     constexpr size_t kCapacityFrames = kRate;             // 1 s ring
-    constexpr double kTargetFrames = kRate * 0.08;        // aim for ~80 ms queued
-    constexpr size_t kResumeFrames = kRate * 4 / 100;     // re-prime after an underrun (40 ms)
-    constexpr size_t kMaxQueuedFrames = kRate * 30 / 100; // hard latency cap (300 ms)
+    constexpr double kMinTargetFrames = kRate * 0.06;     // 60 ms
+    constexpr double kMaxTargetFrames = kRate * 0.25;     // 250 ms
+    constexpr double kMaxRateOffset = 0.005;              // +-0.5% resampling for drift
+    constexpr size_t kMaxQueuedFrames = kRate * 40 / 100; // hard latency cap (400 ms)
 
     std::mutex g_mutex;
     std::vector<int16_t> g_ring(kCapacityFrames * 2u);
     size_t g_read = 0, g_write = 0, g_queued = 0;
     double g_frac = 0.0; // fractional position between g_read and g_read + 1
     double g_rate = 1.0; // smoothed playback rate
+    double g_target = kMinTargetFrames; // adaptive target fill
     bool g_primed = false;
     int16_t g_last[2] = {0, 0};
     AudioStream g_stream{};
@@ -36,6 +39,7 @@ namespace
     FILE *g_dump = nullptr; // PS2X_AUDIO_DUMP=<file.wav>: everything the SPU2 produced
     uint32_t g_dumpFrames = 0;
     uint64_t g_underrunFrames = 0, g_underruns = 0, g_droppedFrames = 0, g_playedFrames = 0, g_pushedFrames = 0;
+    double g_minRate = 2.0, g_maxRate = 0.0;
 
     void writeWavHeader(FILE *f, uint32_t frames)
     {
@@ -66,11 +70,14 @@ namespace
     {
         int16_t *out = static_cast<int16_t *>(buffer);
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (!g_primed && g_queued >= kResumeFrames)
+        if (!g_primed && g_queued >= g_target)
             g_primed = true;
+        g_target = std::max(kMinTargetFrames, g_target - frames / 1000.0);
         // steer the rate toward the target fill, smoothed so the pitch never jumps
-        const double wanted = std::clamp(1.0 + (static_cast<double>(g_queued) - kTargetFrames) / (kTargetFrames * 5.0), 0.92, 1.08);
+        const double wanted = 1.0 + std::clamp((static_cast<double>(g_queued) - g_target) / (kRate * 4.0), -kMaxRateOffset, kMaxRateOffset);
         g_rate += (wanted - g_rate) * 0.1;
+        g_minRate = std::min(g_minRate, g_rate);
+        g_maxRate = std::max(g_maxRate, g_rate);
         for (unsigned int i = 0; i < frames; ++i)
         {
             if (!g_primed || g_queued < 2u)
@@ -79,6 +86,7 @@ namespace
                 {
                     g_primed = false;
                     ++g_underruns;
+                    g_target = std::min(kMaxTargetFrames, g_target + kRate * 0.03);
                 }
                 // hold the last sample and fade it out instead of clicking to zero
                 for (int c = 0; c < 2; ++c)
@@ -117,10 +125,12 @@ namespace
             return;
         const double secs = std::chrono::duration<double>(now - last).count();
         last = now;
-        std::fprintf(stderr, "[audio] produced %.0f%% of real time; played %llu, underruns %llu (%llu frames), dropped %llu; queued %.0f ms, rate %.3f\n",
+        std::fprintf(stderr, "[audio] produced %.0f%% of real time; played %llu, underruns %llu (%llu frames), dropped %llu; queued %.0f / target %.0f ms, rate %.4f (%.4f..%.4f)\n",
                      g_pushedFrames * 100.0 / (secs * kRate), static_cast<unsigned long long>(g_playedFrames),
                      static_cast<unsigned long long>(g_underruns), static_cast<unsigned long long>(g_underrunFrames),
-                     static_cast<unsigned long long>(g_droppedFrames), g_queued * 1000.0 / kRate, g_rate);
+                     static_cast<unsigned long long>(g_droppedFrames), g_queued * 1000.0 / kRate, g_target * 1000.0 / kRate, g_rate, g_minRate, g_maxRate);
+        g_minRate = 2.0;
+        g_maxRate = 0.0;
         g_playedFrames = g_underruns = g_underrunFrames = g_droppedFrames = g_pushedFrames = 0;
     }
 }
