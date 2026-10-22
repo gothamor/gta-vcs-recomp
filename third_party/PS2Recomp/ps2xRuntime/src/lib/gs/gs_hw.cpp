@@ -167,6 +167,13 @@ namespace
     };
 
     // GS page geometry per PSM: 8 KiB pages.
+    // [gta-recomp] PS2X_HW_LOG_DROPS, read once (it is tested per upload - thousands of times a second)
+    bool logDrops()
+    {
+        static const bool on = std::getenv("PS2X_HW_LOG_DROPS") != nullptr;
+        return on;
+    }
+
     void pageSize(uint32_t psm, uint32_t &w, uint32_t &h)
     {
         switch (psm)
@@ -1206,14 +1213,15 @@ namespace
             fill.y1 = (pageLast + depthPerRow - 1u) / depthPerRow * zph;
             fill.value = value(di.zpsm);
             static int logged = 0;
-            if (std::getenv("PS2X_HW_DEBUG") && logged++ < 8)
+            static const bool hwDebug = std::getenv("PS2X_HW_DEBUG") != nullptr; // [gta-recomp] read once
+            if (hwDebug && logged++ < 8)
                 std::fprintf(stderr, "[gs-hw] depth fill: base=%u fbw=%u psm=%u y=%.0f..%.0f -> zbp=%u zpsm=%u rows %u..%u value %f\n", base,
                              fbw, psm, y0, y1, fill.zbp, di.zpsm, fill.y0, fill.y1, fill.value);
             Frame &f = *m_frame;
             f.cmds.push_back({CmdType::DepthFill, static_cast<uint32_t>(f.depthFills.size())});
             f.depthFills.push_back(fill);
             static int extra = 0; // a clear is two fills per frame; more would be a misread draw
-            if (f.depthFills.size() > 2u && std::getenv("PS2X_HW_DEBUG") && extra++ < 20)
+            if (f.depthFills.size() > 2u && hwDebug && extra++ < 20)
                 std::fprintf(stderr, "[gs-hw] unexpected depth fill #%zu this frame: base=%u fbw=%u psm=%u rows %u..%u\n", f.depthFills.size(),
                              base, fbw, psm, fill.y0, fill.y1);
         }
@@ -2281,7 +2289,7 @@ namespace
             {
                 ++m_texStateVersion;
                 static int logged = 0;
-                if (rows > 15u && logged < 40 && std::getenv("PS2X_HW_LOG_DROPS"))
+                if (rows > 15u && logged < 40 && logDrops())
                 {
                     ++logged;
                     std::fprintf(stderr, "[gs-hw] rt fbp=%u fbw=%u grows to %u page rows: draw of %u vertices, max y %.0f, scissor %u\n", fbp,
@@ -2351,7 +2359,7 @@ namespace
                     else
                     {
                         static int logged = 0; // [gta-recomp] which uploads drop render targets (evening black frames)
-                        if (logged < 200 && std::getenv("PS2X_HW_LOG_DROPS"))
+                        if (logged < 200 && logDrops())
                         {
                             ++logged;
                             std::fprintf(stderr,
@@ -2390,7 +2398,7 @@ namespace
             {
                 if (rt.recentRows && rt.recentRows < rt.pageRows)
                 {
-                    if (std::getenv("PS2X_HW_LOG_DROPS"))
+                    if (logDrops())
                         std::fprintf(stderr, "[gs-hw] rt fbp=%u trimmed %u -> %u page rows\n", fbp, rt.pageRows, rt.recentRows);
                     rt.pageRows = rt.recentRows;
                     ++m_texStateVersion;
@@ -2470,7 +2478,7 @@ namespace
             static uint64_t patches = 0, blocks = 0;
             ++patches;
             blocks += count;
-            if (std::getenv("PS2X_HW_LOG_DROPS") && (patches & (patches - 1)) == 0) // powers of two
+            if (logDrops() && (patches & (patches - 1)) == 0) // powers of two
                 std::fprintf(stderr, "[gs-hw] patched %llu uploads into targets (%llu blocks; last: fbp %u, %u blocks)\n",
                              static_cast<unsigned long long>(patches), static_cast<unsigned long long>(blocks), fbp, count);
             Frame &f = *m_frame;

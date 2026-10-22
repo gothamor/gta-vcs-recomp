@@ -112,13 +112,12 @@ Findings so far (rig runs; details in game-internals.md):
       (game-internals.md 6g). Regression check: `tools/regress.py` step "evening".
 - [x] After a death the world near the hospital drew only lights for ~40 s - it was the evening black frames
       (fixed with them; checked 2026-10-23: drawn from the first frame after the respawn fade).
-- [ ] Driving: 36-54 ms per frame (game code ~20 ms, render submit ~15 ms) - below 30 fps in traffic.
-- [x] **Falling through the world** (the user's report; the tour's "falling" points in Downtown): fixed
-      2026-10-23. The runtime's CVT.W.S rounded to nearest; the EE truncates. The world streaming's hex-cell
-      choice came out one cell off at places, so the wrong cell's geometry and collision were loaded under the
-      player (game-internals.md 6b). Every float -> int conversion in the game was affected.
-- [ ] With `PS2X_HLE=0` the noon picture is much darker (luma 18 vs 92 native) - the VU path regressed or the
-      native path is too bright; compare against the scenes baseline.
+- [ ] Frame time in busy scenes: 35-39 ms (game code ~18 ms, render submit ~16 ms), drive loop mean 39 ms (was
+      54 before the render-target fix). Profile (busy street, 2026-10-23): VIF1 processing 8%, T4 texture
+      swizzle 7%, scheduler checkpoints 4%, the VU1 interpreter for the programs still on it (sprites 0x02c0, the
+      env-map pass) ~8% together - milestones 3 and 7.
+- [x] The VU path's darker noon picture was another symptom of the dropped render targets: after the fix native
+      and VU path agree (hospital, luma 90 / 95 at 12:00, 73 / 76 at 20:00).
 - [x] Black flashes at teleports / car warps are the game's own load transitions (not bugs).
 - [x] "Relocations" after loading: the safehouse script (rig.Game.prime).
 
