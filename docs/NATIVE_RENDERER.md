@@ -354,10 +354,9 @@ on the exact VU path until a profile says otherwise; the method for adding them 
   `PS2X_HW_SCALE` (or `scale=<1..8>` in vcs.ini next to vcs.exe) raises the whole picture's
   resolution; checked at 3x (gameplay still at the 30 fps cap). Native draws keep the PS2's
   1/16-pixel vertex snapping (~0.2 px at 3x).
-- Widescreen is not done: it needs the game's own camera / frustum changed on the EE side - sectors
-  and peds outside a 4:3 view are culled before the VU1 (VU0 box clip, CCamera::IsSphereVisible),
-  so widening only the native draws' matrices would leave the screen edges empty. Next step: find
-  the projection setup in the camera code (docs/ENGINE.md "Camera and projection" is still open).
+- Widescreen is not done yet; planned in docs/SETTINGS_MENU_WIDESCREEN.md. The game has its own
+  widescreen mode (aspect global 0x487488, preference at *(0x48F3D0)+0x30, a HUD that follows it),
+  which drives the camera, culling and both renderers - so no projection patching is needed.
 - MSAA / anisotropic filtering are not done: the GS emulation samples textures with explicit
   texel loads (to reproduce the GS wrap / clamp modes and render-target textures) and reads render
   targets back as textures, which an MSAA target would need resolving for at every such use.

@@ -77,10 +77,20 @@
       VIF1 unpack (5%), compiled-VU1 pipeline bookkeeping (runLoop / progressXgkick /
       commitReadyPipelines ~8%), GS::writeRegisterPacked (4%), lazy-upload closure (3%).
 - [ ] Whole screen goes black for a few frames now and then (reported 2026-10-22 after the
-      DMA chain fix; not investigated yet)
+      DMA chain fix; not investigated yet). Still seen by the user after the native renderer
+      (2026-10-22): objects and the world turn black for a few frames. To check first: whether
+      it follows native draws (PS2X_HLE=0 run for comparison), the prelit colour stage inputs
+      (0x9c-0x9e tint) and lighting constants at those moments, texture cache misses, and
+      render-target drops (RtDrop) around the black frames.
 - [ ] Water surface looks missing (dark grey where sea should be) - to check
 - [ ] Movies
 ## Phase 5 - stability
+- [ ] Vic falls through the world in some places (reported by the user 2026-10-22, after the
+      native renderer; not yet known whether it is new). Collision needs a look: whether the
+      collision sectors / models are streamed in at those spots (CDSTREAM reads, IMG offsets),
+      VU0 programs used by collision (`0x0000` in .vutext looked like line/sphere vs triangle
+      tests, docs/ENGINE.md "VU microcode"), and float edge cases in the recompiled code
+      (FP contraction, round-to-zero, denormals). Compare with PS2X_HLE=0 to rule the renderer out.
 ## Phase 6 - enhancements
 
 ## Useful switches
