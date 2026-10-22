@@ -86,7 +86,7 @@ namespace ps2_stubs
         {
             for (int i = 0; i < 4; ++i)
             {
-                if (IsGamepadAvailable(i))
+                if (platform::gamepadConnected())
                 {
                     return i;
                 }
@@ -96,7 +96,7 @@ namespace ps2_stubs
 
         void applyGamepadState(PadInputState &state)
         {
-            if (!IsWindowReady())
+            if (!platform::ready())
             {
                 return;
             }
@@ -107,40 +107,39 @@ namespace ps2_stubs
                 return;
             }
 
-            // Raylib mapping (PS2 -> raylib buttons/axes):
-            // D-Pad -> LEFT_FACE_*, Cross/Circle/Square/Triangle -> RIGHT_FACE_*
-            // L1/R1 -> TRIGGER_1, L2/R2 -> TRIGGER_2, L3/R3 -> THUMB
-            // Select/Start -> MIDDLE_LEFT/MIDDLE_RIGHT
-            state.lx = axisToByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_X));
-            state.ly = axisToByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_Y));
-            state.rx = axisToByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_X));
-            state.ry = axisToByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_Y));
+            // Gamepad mapping (PS2 -> platform::GamepadButton / GamepadAxis, positions not labels):
+            // D-Pad -> DPAD_*, Cross/Circle/Square/Triangle -> SOUTH/EAST/WEST/NORTH
+            // L1/R1 -> shoulders, L2/R2 -> trigger axes, L3/R3 -> stick clicks, Select/Start -> BACK/START
+            state.lx = axisToByte(platform::gamepadAxis(platform::AXIS_LEFT_X));
+            state.ly = axisToByte(platform::gamepadAxis(platform::AXIS_LEFT_Y));
+            state.rx = axisToByte(platform::gamepadAxis(platform::AXIS_RIGHT_X));
+            state.ry = axisToByte(platform::gamepadAxis(platform::AXIS_RIGHT_Y));
 
-            setButton(state, kPadBtnUp, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP));
-            setButton(state, kPadBtnDown, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN));
-            setButton(state, kPadBtnLeft, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT));
-            setButton(state, kPadBtnRight, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT));
+            setButton(state, kPadBtnUp, platform::gamepadButton(platform::GAMEPAD_DPAD_UP));
+            setButton(state, kPadBtnDown, platform::gamepadButton(platform::GAMEPAD_DPAD_DOWN));
+            setButton(state, kPadBtnLeft, platform::gamepadButton(platform::GAMEPAD_DPAD_LEFT));
+            setButton(state, kPadBtnRight, platform::gamepadButton(platform::GAMEPAD_DPAD_RIGHT));
 
-            setButton(state, kPadBtnCross, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN));
-            setButton(state, kPadBtnCircle, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT));
-            setButton(state, kPadBtnSquare, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT));
-            setButton(state, kPadBtnTriangle, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_UP));
+            setButton(state, kPadBtnCross, platform::gamepadButton(platform::GAMEPAD_SOUTH));
+            setButton(state, kPadBtnCircle, platform::gamepadButton(platform::GAMEPAD_EAST));
+            setButton(state, kPadBtnSquare, platform::gamepadButton(platform::GAMEPAD_WEST));
+            setButton(state, kPadBtnTriangle, platform::gamepadButton(platform::GAMEPAD_NORTH));
 
-            setButton(state, kPadBtnL1, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1));
-            setButton(state, kPadBtnR1, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1));
-            setButton(state, kPadBtnL2, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_2));
-            setButton(state, kPadBtnR2, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_2));
+            setButton(state, kPadBtnL1, platform::gamepadButton(platform::GAMEPAD_LEFT_SHOULDER));
+            setButton(state, kPadBtnR1, platform::gamepadButton(platform::GAMEPAD_RIGHT_SHOULDER));
+            setButton(state, kPadBtnL2, (platform::gamepadAxis(platform::AXIS_LEFT_TRIGGER) > 0.3f));
+            setButton(state, kPadBtnR2, (platform::gamepadAxis(platform::AXIS_RIGHT_TRIGGER) > 0.3f));
 
-            setButton(state, kPadBtnL3, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_THUMB));
-            setButton(state, kPadBtnR3, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_THUMB));
+            setButton(state, kPadBtnL3, platform::gamepadButton(platform::GAMEPAD_LEFT_STICK));
+            setButton(state, kPadBtnR3, platform::gamepadButton(platform::GAMEPAD_RIGHT_STICK));
 
-            setButton(state, kPadBtnSelect, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE_LEFT));
-            setButton(state, kPadBtnStart, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT));
+            setButton(state, kPadBtnSelect, platform::gamepadButton(platform::GAMEPAD_BACK));
+            setButton(state, kPadBtnStart, platform::gamepadButton(platform::GAMEPAD_START));
         }
 
         void applyKeyboardState(PadInputState &state, bool allowAnalog)
         {
-            if (!IsWindowReady())
+            if (!platform::ready())
             {
                 return;
             }
@@ -149,25 +148,25 @@ namespace ps2_stubs
             // D-Pad: arrows, Square/Cross/Circle/Triangle: Z/X/C/V
             // L1/R1: Q/E, L2/R2: 1/3, Start/Select: Enter/RightShift
             // L3/R3: LeftCtrl/RightCtrl, Analog left: WASD
-            setButton(state, kPadBtnUp, IsKeyDown(KEY_UP));
-            setButton(state, kPadBtnDown, IsKeyDown(KEY_DOWN));
-            setButton(state, kPadBtnLeft, IsKeyDown(KEY_LEFT));
-            setButton(state, kPadBtnRight, IsKeyDown(KEY_RIGHT));
+            setButton(state, kPadBtnUp, platform::keyDown(platform::KEY_UP));
+            setButton(state, kPadBtnDown, platform::keyDown(platform::KEY_DOWN));
+            setButton(state, kPadBtnLeft, platform::keyDown(platform::KEY_LEFT));
+            setButton(state, kPadBtnRight, platform::keyDown(platform::KEY_RIGHT));
 
-            setButton(state, kPadBtnSquare, IsKeyDown(KEY_Z));
-            setButton(state, kPadBtnCross, IsKeyDown(KEY_X));
-            setButton(state, kPadBtnCircle, IsKeyDown(KEY_C));
-            setButton(state, kPadBtnTriangle, IsKeyDown(KEY_V));
+            setButton(state, kPadBtnSquare, platform::keyDown(platform::KEY_Z));
+            setButton(state, kPadBtnCross, platform::keyDown(platform::KEY_X));
+            setButton(state, kPadBtnCircle, platform::keyDown(platform::KEY_C));
+            setButton(state, kPadBtnTriangle, platform::keyDown(platform::KEY_V));
 
-            setButton(state, kPadBtnL1, IsKeyDown(KEY_Q));
-            setButton(state, kPadBtnR1, IsKeyDown(KEY_E));
-            setButton(state, kPadBtnL2, IsKeyDown(KEY_ONE));
-            setButton(state, kPadBtnR2, IsKeyDown(KEY_THREE));
+            setButton(state, kPadBtnL1, platform::keyDown(platform::KEY_Q));
+            setButton(state, kPadBtnR1, platform::keyDown(platform::KEY_E));
+            setButton(state, kPadBtnL2, platform::keyDown(platform::KEY_ONE));
+            setButton(state, kPadBtnR2, platform::keyDown(platform::KEY_THREE));
 
-            setButton(state, kPadBtnStart, IsKeyDown(KEY_ENTER));
-            setButton(state, kPadBtnSelect, IsKeyDown(KEY_RIGHT_SHIFT));
-            setButton(state, kPadBtnL3, IsKeyDown(KEY_LEFT_CONTROL));
-            setButton(state, kPadBtnR3, IsKeyDown(KEY_RIGHT_CONTROL));
+            setButton(state, kPadBtnStart, platform::keyDown(platform::KEY_ENTER));
+            setButton(state, kPadBtnSelect, platform::keyDown(platform::KEY_RIGHT_SHIFT));
+            setButton(state, kPadBtnL3, platform::keyDown(platform::KEY_LEFT_CONTROL));
+            setButton(state, kPadBtnR3, platform::keyDown(platform::KEY_RIGHT_CONTROL));
 
             if (!allowAnalog)
             {
@@ -176,13 +175,13 @@ namespace ps2_stubs
 
             float ax = 0.0f;
             float ay = 0.0f;
-            if (IsKeyDown(KEY_D))
+            if (platform::keyDown(platform::KEY_D))
                 ax += 1.0f;
-            if (IsKeyDown(KEY_A))
+            if (platform::keyDown(platform::KEY_A))
                 ax -= 1.0f;
-            if (IsKeyDown(KEY_S))
+            if (platform::keyDown(platform::KEY_S))
                 ay += 1.0f;
-            if (IsKeyDown(KEY_W))
+            if (platform::keyDown(platform::KEY_W))
                 ay -= 1.0f;
 
             if (ax != 0.0f || ay != 0.0f)
@@ -661,9 +660,9 @@ namespace ps2_stubs
             {
                 const int gamepad = findFirstGamepad();
                 const bool gamepadStartPressed =
-                    (gamepad >= 0) && IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT);
+                    (gamepad >= 0) && platform::gamepadButton(platform::GAMEPAD_START);
                 const bool startPressed = (data[2] != 0xFFu || data[3] != 0xFFu ||
-                                           IsKeyDown(KEY_ENTER) || gamepadStartPressed);
+                                           platform::keyDown(platform::KEY_ENTER) || gamepadStartPressed);
                 if (startPressed)
                 {
                     const uint32_t guestButtons =
@@ -671,7 +670,7 @@ namespace ps2_stubs
                         static_cast<uint32_t>(static_cast<uint8_t>(data[3] ^ 0xFFu));
                     std::printf("[padread] port=%d slot=%d data2=0x%02x data3=0x%02x guestButtons=0x%04x enter=%d gamepadStart=%d\n",
                                 port, slot, data[2], data[3], guestButtons,
-                                IsKeyDown(KEY_ENTER) ? 1 : 0, gamepadStartPressed ? 1 : 0);
+                                platform::keyDown(platform::KEY_ENTER) ? 1 : 0, gamepadStartPressed ? 1 : 0);
                     ++g_padReadLogCount;
                 }
             }

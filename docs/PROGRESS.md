@@ -50,7 +50,7 @@
 - [x] Input: keyboard + mouse + gamepad (docs/CONTROLS.md), verified in game: after the
       intro cutscene the player controls Vic at Fort Baxter (HUD, radar, mission marker)
 - [x] Audio: SPU2 emulation (`ps2xIOP/.../iop_spu2.cpp`: 2x24 ADPCM voices, ADSR, loops,
-      IRQ address, AutoDMA, IOP DMA 4/7) mixed to a 48 kHz raylib stream. Music, SFX and
+      IRQ address, AutoDMA, IOP DMA 4/7) mixed to a 48 kHz host audio stream (SDL3 since stage 1 of NATIVE_RENDERER.md). Music, SFX and
       voices confirmed by ear. IOP time follows the wall clock, so audio no longer stutters
       when the game drops below 60 VBlanks/s (0 underruns at 20-60 VBlanks/s).
 - [ ] Audio: reverb, noise, pitch modulation, Gaussian interpolation, exact volume sweeps

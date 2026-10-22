@@ -5,7 +5,7 @@
 // thread owns every Vulkan object: it creates the instance, the device and the GS interface, runs all the work and
 // destroys them before it ends (Granite and paraLLEl-GS are single-threaded APIs). At each presentation it scans out
 // the picture, copies it back and publishes it to the main thread's mailbox.
-// Nothing here includes raylib (windows.h and raylib share names such as CloseWindow / Rectangle / LoadImage).
+// Nothing here includes the platform layer's window code.
 
 #include "runtime/gs/gs_gpu.h"
 
@@ -53,7 +53,7 @@ bool vulkanPresentWanted()
         const std::string mode = renderer ? renderer : "";
         if (mode == "cpu")
             return false;
-        // [gta-recomp] Our window is raylib/OpenGL: read pictures back unless PS2X_PRESENT=vulkan.
+        // [gta-recomp] Our window is OpenGL (platform layer): read pictures back unless PS2X_PRESENT=vulkan.
         (void)mode;
         return present && std::string(present) == "vulkan";
     }();
@@ -1035,7 +1035,7 @@ namespace
             m_lastFrameWidth = width;
             m_lastFrameHeight = height;
             if (m_sharedPresent && g_sharedStopped.load(std::memory_order_acquire))
-                m_sharedPresent = false; // the window fell back to raylib's: read back as before
+                m_sharedPresent = false; // the window fell back to OpenGL: read back as before
             if (m_sharedPresent && shareFrame(frame, cmd, *source, width, height))
             {
                 frame.internalWidth = scanout.internal_width;

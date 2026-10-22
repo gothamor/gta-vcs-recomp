@@ -25,11 +25,11 @@ namespace ps2control
     bool physicalInputOn();   // false when hidden or PS2X_INPUT=injected
 
     // Keyboard state for the game and the debug keys: physical (when allowed) or injected through the control channel.
-    // `key` is a raylib KeyboardKey.
+    // `key` is a platform::Key (platform/platform.h).
     bool keyDown(int key);
     bool keyPressed(int key); // main thread, once per frame (edges of physical or injected presses)
 
-    // Main thread. start() after the window exists; pump() once per frame after EndDrawing - it runs the queued
+    // Main thread. start() after the window exists; pump() once per frame after drawing - it runs the queued
     // commands; `capture` renders the current picture into a PNG and returns "<w>x<h>" or "" on failure.
     void start();
     void pump(const std::function<std::string(const std::string &path)> &capture, const std::function<void()> &quit);

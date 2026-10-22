@@ -2,7 +2,7 @@
 #include "runtime/ps2_control.h"
 #include "runtime/ps2_perf.h"
 
-#include "raylib.h"
+#include "platform/platform.h"
 
 #include <algorithm>
 #include <array>
@@ -26,8 +26,6 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#define NOGDI  // Rectangle (raylib)
-#define NOUSER // CloseWindow, ShowCursor (raylib)
 #include <winsock2.h>
 #include <ws2tcpip.h>
 using SocketHandle = SOCKET;
@@ -77,31 +75,31 @@ namespace ps2control
         std::thread g_server;
         SocketHandle g_listen = kNoSocket;
 
-        // raylib KeyboardKey for a name: letters, digits, F1-F12 and the names below (case-insensitive).
+        // platform::Key for a name: letters, digits, F1-F12 and the names below (case-insensitive).
         int keyFromName(std::string name)
         {
             for (char &c : name)
                 c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             struct Named { const char *name; int key; };
             static const Named named[] = {
-                {"return", KEY_ENTER}, {"enter", KEY_ENTER}, {"start", KEY_ENTER}, {"shift", KEY_LEFT_SHIFT}, {"shiftkey", KEY_LEFT_SHIFT},
-                {"cross", KEY_LEFT_SHIFT}, {"space", KEY_SPACE}, {"square", KEY_SPACE}, {"triangle", KEY_F}, {"ctrl", KEY_LEFT_CONTROL},
-                {"controlkey", KEY_LEFT_CONTROL}, {"circle", KEY_LEFT_CONTROL}, {"escape", KEY_ESCAPE}, {"esc", KEY_ESCAPE},
-                {"backspace", KEY_BACKSPACE}, {"back", KEY_BACKSPACE}, {"select", KEY_BACKSPACE}, {"tab", KEY_TAB}, {"up", KEY_UP},
-                {"down", KEY_DOWN}, {"left", KEY_LEFT}, {"right", KEY_RIGHT},
+                {"return", platform::KEY_ENTER}, {"enter", platform::KEY_ENTER}, {"start", platform::KEY_ENTER}, {"shift", platform::KEY_LEFT_SHIFT}, {"shiftkey", platform::KEY_LEFT_SHIFT},
+                {"cross", platform::KEY_LEFT_SHIFT}, {"space", platform::KEY_SPACE}, {"square", platform::KEY_SPACE}, {"triangle", platform::KEY_F}, {"ctrl", platform::KEY_LEFT_CONTROL},
+                {"controlkey", platform::KEY_LEFT_CONTROL}, {"circle", platform::KEY_LEFT_CONTROL}, {"escape", platform::KEY_ESCAPE}, {"esc", platform::KEY_ESCAPE},
+                {"backspace", platform::KEY_BACKSPACE}, {"back", platform::KEY_BACKSPACE}, {"select", platform::KEY_BACKSPACE}, {"tab", platform::KEY_TAB}, {"up", platform::KEY_UP},
+                {"down", platform::KEY_DOWN}, {"left", platform::KEY_LEFT}, {"right", platform::KEY_RIGHT},
             };
             for (const Named &n : named)
                 if (name == n.name)
                     return n.key;
             if (name.size() == 1 && std::isalpha(static_cast<unsigned char>(name[0])))
-                return KEY_A + (name[0] - 'a');
+                return platform::KEY_A + (name[0] - 'a');
             if (name.size() == 1 && std::isdigit(static_cast<unsigned char>(name[0])))
-                return KEY_ZERO + (name[0] - '0');
+                return platform::KEY_ZERO + (name[0] - '0');
             if (name.size() >= 2 && name[0] == 'f')
             {
                 const int n = std::atoi(name.c_str() + 1);
                 if (n >= 1 && n <= 12)
-                    return KEY_F1 + n - 1;
+                    return platform::KEY_F1 + n - 1;
             }
             return -1;
         }
@@ -233,14 +231,14 @@ namespace ps2control
     {
         if (key >= 0 && key < kKeys && g_injected[key].load(std::memory_order_relaxed))
             return true;
-        return physicalInputOn() && IsKeyDown(key);
+        return physicalInputOn() && platform::keyDown(key);
     }
 
     bool keyPressed(int key)
     {
         if (key >= 0 && key < kKeys && g_injectedEdge[key])
             return true;
-        return physicalInputOn() && IsKeyPressed(key);
+        return physicalInputOn() && platform::keyPressed(key);
     }
 
     void start()

@@ -1,6 +1,6 @@
 # Native renderer plan (D3D11)
 
-Status: **proposed, under review** (2026-10-22). Nothing here is implemented yet.
+Status: **approved** (2026-10-22). Stages 0 and 1 done; next is stage 2.
 
 Goal: get from today's emulated GS (raylib + OpenGL 3.3) to a native renderer that
 draws the game's models directly, on D3D11, as fast as possible. Windows only for
@@ -113,7 +113,7 @@ switch. Sizes are relative (S < M < L < XL).
 - `PS2X_HW_DUMP` render-target dumps were left out of the script: the frame number
   they key on drifts between runs; use them by hand when a scene differs.
 
-### Stage 1 - SDL3 platform layer, raylib removed, still OpenGL (M)
+### Stage 1 - SDL3 platform layer, raylib removed, still OpenGL (M) - done 2026-10-22
 
 - SDL3 window with a GL 3.3 context; the HW backend's GL executor keeps working
   unchanged. The final present becomes a small GL blit (temporary, deleted in stage 3).
@@ -126,6 +126,24 @@ switch. Sizes are relative (S < M < L < XL).
   window present (`gs_vulkan_present`), which is built on raylib's GLFW window.
 - Done when: raylib and rlImGui are gone from the build, stage 0 captures match,
   audio/input/saves behave as before.
+
+Result:
+- `src/platform/`: `platform.h` (window, events, keyboard / mouse / gamepad snapshot
+  readable from any thread, audio pull callback, 60/s frame pacing, Dear ImGui frame,
+  PNG writer), `platform_sdl3.cpp` (SDL 3.4.18, static, FetchContent),
+  `gl_present.{h,cpp}` (the stage 1 GL stopgap: letterboxed frame quad, textures,
+  off-screen capture). The runtime gets it through `PS2X_HOST_PLATFORM_TARGET`.
+- Scene captures vs the raylib baseline: static scenes 0.03 (loading) and 0.17
+  (pause map: the REC marker's font); moving scenes show the same pictures a second
+  or two apart. Flyover 10-44 s: 17.9 game fps, render 37.4 ms, GL 3.2 ms, host
+  59.9 fps - unchanged. Audio: 0-2 underruns per run, as before.
+- Behaviour changes: Escape no longer closes the window (raylib's default exit key);
+  L2 / R2 on a gamepad trigger at 30% travel (raylib needed ~65%); screenshots scale
+  the overlay instead of laying it out again; window size still 640x448, screenshots
+  at least 960x672 (bigger windows give bigger, letterboxed shots).
+- The paraLLEl-GS Vulkan window present (`gs_vulkan_present.h`) was never
+  implemented in this tree, so nothing had to be dropped: `PS2X_GS=gpu` reads frames
+  back as before (still not to be run on the GTX 1080 Ti, TDR).
 
 ### Stage 2 - RHI + D3D11 device and presentation (M)
 

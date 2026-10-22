@@ -15,11 +15,11 @@ struct ImDrawData;
 class GSGpuRenderer;
 
 // The game's window shown through Vulkan: the default with the graphics card renderer (PS2X_GS=gpu, the default);
-// PS2X_PRESENT=opengl = raylib's window as before, =vulkan = asked for in any mode. The CPU renderer and
-// PS2X_GS=both (the two compared) keep raylib's window.
+// PS2X_PRESENT=opengl = the OpenGL window as before, =vulkan = asked for in any mode. The CPU renderer and
+// PS2X_GS=both (the two compared) keep the OpenGL window.
 bool vulkanPresentWanted();
 
-// The window couldn't be shown through Vulkan (raylib's window instead): the drawing thread reads its pictures back
+// The window couldn't be shown through Vulkan (the OpenGL window instead): the drawing thread reads its pictures back
 // again rather than sharing them. Before the first picture is shown.
 void stopSharedPictures();
 

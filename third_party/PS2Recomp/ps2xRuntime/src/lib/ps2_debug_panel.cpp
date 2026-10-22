@@ -12,8 +12,7 @@
 
 #if defined(PS2X_ENABLE_DEBUG_UI) && !defined(PLATFORM_VITA)
 #include "imgui.h"
-#include "rlImGui.h"
-#include "raylib.h"
+#include "platform/platform.h"
 #endif
 
 #include <algorithm>
@@ -2181,7 +2180,7 @@ void PS2DebugPanel::initialize()
 #if defined(PS2X_ENABLE_DEBUG_UI) && !defined(PLATFORM_VITA)
     if (!m_initialized)
     {
-        rlImGuiSetup(true);
+        // [gta-recomp] the platform layer owns the Dear ImGui context and frame
         m_initialized = true;
     }
 #endif
@@ -2192,7 +2191,6 @@ void PS2DebugPanel::shutdown()
 #if defined(PS2X_ENABLE_DEBUG_UI) && !defined(PLATFORM_VITA)
     if (m_initialized)
     {
-        rlImGuiShutdown();
         m_initialized = false;
     }
 #endif
@@ -2206,7 +2204,7 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
         return;
     }
 
-    if (IsKeyPressed(KEY_F1))
+    if (platform::keyPressed(platform::KEY_F1))
     {
         toggleVisible();
     }
@@ -2216,7 +2214,6 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
         return;
     }
 
-    rlImGuiBegin();
 
     ImGui::SetNextWindowSize(ImVec2(780.0f, 620.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Runtime Debugger", &m_visible, ImGuiWindowFlags_MenuBar))
@@ -2303,7 +2300,6 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
     }
     ImGui::End();
 
-    rlImGuiEnd();
 #else
     (void)runtime;
 #endif

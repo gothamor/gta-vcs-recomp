@@ -1300,7 +1300,7 @@ void main()
                         since = now;
                     }
                 }
-                restoreRaylibState(static_cast<GLuint>(prevFbo), prevViewport);
+                restoreHostState(static_cast<GLuint>(prevFbo), prevViewport);
                 std::lock_guard<std::mutex> lock(m_queueMutex);
                 for (auto &frame : frames)
                     if (m_freeFrames.size() < 6u)
@@ -2129,7 +2129,7 @@ void main()
             }
         }
 
-        void restoreRaylibState(GLuint prevFbo, const GLint (&viewport)[4])
+        void restoreHostState(GLuint prevFbo, const GLint (&viewport)[4])
         {
             m_gl.glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
             m_gl.glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);

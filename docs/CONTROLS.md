@@ -1,6 +1,7 @@
 # Controls
 
-Keyboard, mouse and a gamepad (XInput / SDL-style, via raylib) all drive the
+Keyboard, mouse and a gamepad (anything SDL3 knows: Xbox, DualShock / DualSense,
+Switch Pro, ...) all drive the
 same PS2 controller (DualShock 2, analog mode), so they can be mixed.
 
 | PS2 | Keyboard / mouse | Gamepad |

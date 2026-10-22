@@ -1,5 +1,5 @@
 // [gta-recomp] Host audio output for the SPU2 mix: a ring buffer filled in IOP time (PS2IopHostAdapter::audioSamples)
-// and drained by a raylib audio stream callback at 48 kHz stereo.
+// and drained by the platform layer's audio callback (SDL3 audio stream) at 48 kHz stereo.
 // The emulator produces audio in bursts (IOP time is caught up with the host clock once per IOP batch), so the
 // buffer keeps a target fill that adapts: it starts at 60 ms, grows by 30 ms after every underrun (max 250 ms) and
 // shrinks back by ~1 ms per second. Clock drift is absorbed by resampling within +-0.5% (inaudible), never by the
@@ -8,7 +8,7 @@
 #include "runtime/ps2_audio_out.h"
 #include "runtime/ps2_control.h"
 
-#include "raylib.h"
+#include "platform/platform.h"
 
 #include <algorithm>
 #include <atomic>
@@ -36,7 +36,6 @@ namespace
     double g_target = kMinTargetFrames; // adaptive target fill
     bool g_primed = false;
     int16_t g_last[2] = {0, 0};
-    AudioStream g_stream{};
     bool g_started = false;
     FILE *g_dump = nullptr; // PS2X_AUDIO_DUMP=<file.wav>: everything the SPU2 produced
     uint32_t g_dumpFrames = 0;
@@ -70,9 +69,8 @@ namespace
 
     int16_t at(size_t frame, int channel) { return g_ring[(frame % kCapacityFrames) * 2u + channel]; }
 
-    void callback(void *buffer, unsigned int frames)
+    void callback(int16_t *out, uint32_t frames)
     {
-        int16_t *out = static_cast<int16_t *>(buffer);
         std::lock_guard<std::mutex> lock(g_mutex);
         if (!g_primed && g_queued >= g_target)
             g_primed = true;
@@ -145,13 +143,9 @@ void ps2AudioInit()
 {
     const char *setting = std::getenv("PS2X_AUDIO");
     const bool muted = setting ? setting[0] == '0' : ps2control::hiddenMode(); // hidden test runs are silent by default
-    if (g_started || muted || !IsAudioDeviceReady())
+    if (g_started || muted || !platform::audioAvailable())
         return;
-    SetAudioStreamBufferSizeDefault(1024);
-    g_stream = LoadAudioStream(kRate, 16, 2);
-    SetAudioStreamCallback(g_stream, &callback);
-    PlayAudioStream(g_stream);
-    g_started = true;
+    g_started = platform::audioOpen(kRate, 1024, &callback);
 }
 
 void ps2AudioPush(const int16_t *stereo, uint32_t frames)
@@ -194,8 +188,7 @@ void ps2AudioShutdown()
 {
     if (!g_started)
         return;
-    StopAudioStream(g_stream);
-    UnloadAudioStream(g_stream);
+    platform::audioClose();
     g_started = false;
 }
 

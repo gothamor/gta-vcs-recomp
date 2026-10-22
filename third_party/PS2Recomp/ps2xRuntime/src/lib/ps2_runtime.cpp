@@ -13,6 +13,7 @@
 #include "Kernel/Stubs/GS.h"
 #include "Kernel/Stubs/MPEG.h"
 #include "ps2_host_backend.h"
+#include "platform/gl_present.h"
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 #include "runtime/ps2_vu0_native.h"
@@ -432,25 +433,25 @@ void ps2ReportUnlistedResume(const R5900Context *ctx, uint32_t functionStart)
 }
 
 // [gta-recomp] Shows the GPU renderer's newest picture. False when there is no GPU renderer.
-static bool UploadGpuFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
+// `owned` is our texture for pictures made on the CPU; `shown` is what the window draws (owned, or the HW renderer's).
+static bool UploadGpuFrame(glpresent::Texture &owned, glpresent::Texture &shown, PS2Runtime *rt, uint32_t &outWidth,
+                           uint32_t &outHeight)
 {
     if (GSHwBackendHandle *hw = rt->hwRenderer())
     {
         uint32_t id = 0, w = 0, h = 0;
         if (hw->presenter().executeAndGetDisplay(id, w, h))
         {
-            tex.id = id;
-            tex.width = static_cast<int>(w);
-            tex.height = static_cast<int>(h);
-            tex.mipmaps = 1;
-            tex.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+            shown.id = id;
+            shown.width = static_cast<int>(w);
+            shown.height = static_cast<int>(h);
             outWidth = w;
             outHeight = h;
         }
         else
         {
-            outWidth = static_cast<uint32_t>(tex.width);
-            outHeight = static_cast<uint32_t>(tex.height);
+            outWidth = static_cast<uint32_t>(shown.width);
+            outHeight = static_cast<uint32_t>(shown.height);
         }
         return true;
     }
@@ -459,22 +460,22 @@ static bool UploadGpuFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, u
         return false;
     static uint64_t s_lastSeq = 0u;
     static uint32_t s_width = 640u, s_height = 448u;
-    gpu->setOutputSize(static_cast<uint32_t>(GetScreenWidth()), static_cast<uint32_t>(GetScreenHeight()));
+    int windowW = 0, windowH = 0;
+    platform::windowSize(windowW, windowH);
+    gpu->setOutputSize(static_cast<uint32_t>(windowW), static_cast<uint32_t>(windowH));
     static const bool s_noShow = std::getenv("PS2X_GPU_NOSHOW") != nullptr; // debugging
     if (const GSGpuFrame *frame = s_noShow ? nullptr : gpu->takeFrame(s_lastSeq))
     {
         if (frame->width && frame->height && frame->rgba.size() >= size_t(frame->width) * frame->height * 4u)
         {
-            if (tex.width != static_cast<int>(frame->width) || tex.height != static_cast<int>(frame->height))
+            if (owned.width != static_cast<int>(frame->width) || owned.height != static_cast<int>(frame->height))
             {
-                UnloadTexture(tex);
+                glpresent::destroyTexture(owned);
                 std::fprintf(stderr, "[gs] presenting %ux%u (internal %ux%u)\n", frame->width, frame->height, frame->internalWidth, frame->internalHeight);
-                Image img = GenImageColor(static_cast<int>(frame->width), static_cast<int>(frame->height), BLACK);
-                tex = LoadTextureFromImage(img);
-                UnloadImage(img);
-                SetTextureFilter(tex, TEXTURE_FILTER_BILINEAR);
+                owned = glpresent::createTexture(static_cast<int>(frame->width), static_cast<int>(frame->height), true);
             }
-            UpdateTexture(tex, frame->rgba.data());
+            glpresent::updateTexture(owned, frame->rgba.data());
+            shown = owned;
             s_width = frame->width;
             s_height = frame->height;
         }
@@ -527,10 +528,12 @@ void PS2Runtime::shutdownGpuRenderer()
         m_gpu->shutdown();
 }
 
-static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
+static void UploadFrame(glpresent::Texture &tex, glpresent::Texture &shown, PS2Runtime *rt, uint32_t &outWidth,
+                        uint32_t &outHeight)
 {
-    if (UploadGpuFrame(tex, rt, outWidth, outHeight))
+    if (UploadGpuFrame(tex, shown, rt, outWidth, outHeight))
         return;
+    shown = tex;
     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
     static bool s_hasLatchedInitialFrame = false;
     static uint32_t s_lastDisplayFbp = std::numeric_limits<uint32_t>::max();
@@ -570,9 +573,8 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
                                                    &sourceFbp,
                                                    &usedPreferredDisplaySource))
     {
-        Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, MAGENTA);
-        UpdateTexture(tex, blank.data);
-        UnloadImage(blank);
+        static const std::vector<uint32_t> s_magenta(static_cast<size_t>(FB_WIDTH) * FB_HEIGHT, 0xFFFF00FFu);
+        glpresent::updateTexture(tex, s_magenta.data());
         outWidth = FB_WIDTH;
         outHeight = DEFAULT_DISPLAY_HEIGHT;
         s_lastWidth = outWidth;
@@ -627,7 +629,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
         }
     }
 
-    UpdateTexture(tex, s_uploadBuffer.data());
+    glpresent::updateTexture(tex, s_uploadBuffer.data());
     outWidth = width;
     outHeight = height;
     s_hasUploadedFrame = true;
@@ -694,12 +696,8 @@ PS2Runtime::~PS2Runtime()
         m_audioBackend.stopAll();
         m_audioBackend.setAudioReady(false);
 #else
-        if (IsAudioDeviceReady())
-        {
-            ps2AudioShutdown(); // [gta-recomp]
-            CloseAudioDevice();
-            m_audioBackend.setAudioReady(false);
-        }
+        ps2AudioShutdown(); // [gta-recomp]
+        m_audioBackend.setAudioReady(false);
 #endif
         if (m_debugUiInitialized && m_debugUiShutdownCallback)
         {
@@ -707,9 +705,10 @@ PS2Runtime::~PS2Runtime()
             m_debugUiInitialized = false;
         }
 
-        if (IsWindowReady())
+        if (platform::ready())
         {
-            CloseWindow();
+            glpresent::shutdown();
+            platform::shutdown();
         }
 
         m_loadedModules.clear();
@@ -986,15 +985,22 @@ bool PS2Runtime::initialize(const char *title)
 #if defined(PLATFORM_VITA)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
-        // [gta-recomp] PS2X_HIDDEN=1: no window on the desktop (runtime/ps2_control.h)
-        SetConfigFlags(FLAG_WINDOW_RESIZABLE | (ps2control::hiddenMode() ? FLAG_WINDOW_HIDDEN : 0u));
-        InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
+        // [gta-recomp] Host window, input and audio through the platform layer (SDL3); PS2X_HIDDEN=1: no window on the
+        // desktop (runtime/ps2_control.h). Host frames are paced to 60/s by platform::present().
+        platform::WindowDesc window;
+        window.title = title;
+        window.width = HOST_WINDOW_WIDTH;
+        window.height = HOST_WINDOW_HEIGHT;
+        window.hidden = ps2control::hiddenMode();
+        if (!platform::init(window) || !glpresent::init())
+        {
+            std::cerr << "Failed to create the window" << std::endl;
+            return false;
+        }
         ps2control::start();
-        InitAudioDevice();
         ps2AudioInit(); // [gta-recomp] SPU2 output stream
-        m_audioBackend.setAudioReady(IsAudioDeviceReady());
+        m_audioBackend.setAudioReady(platform::audioAvailable());
 #endif
-        SetTargetFPS(60);
         if (m_debugUiInitCallback)
         {
             m_debugUiInitCallback(*this, m_debugUiUserData);
@@ -2786,9 +2792,12 @@ void PS2Runtime::run()
     RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
 
     // A blank image to use as a framebuffer
-    Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
-    Texture2D frameTex = LoadTextureFromImage(blank);
-    UnloadImage(blank);
+    glpresent::Texture frameTex = glpresent::createTexture(FB_WIDTH, FB_HEIGHT, false);
+    {
+        const std::vector<uint32_t> blank(static_cast<size_t>(FB_WIDTH) * FB_HEIGHT, 0u);
+        glpresent::updateTexture(frameTex, blank.data());
+    }
+    glpresent::Texture shownTex = frameTex; // [gta-recomp] what the window shows (frameTex or the HW renderer's)
 
     std::atomic<bool> gameThreadFinished{false};
 
@@ -2848,60 +2857,55 @@ void PS2Runtime::run()
 
             }
         });
+        platform::pumpEvents(); // [gta-recomp]
+        platform::beginFrame();
         uint32_t presentWidth = FB_WIDTH;
         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
         const auto uploadStart = std::chrono::steady_clock::now();
-        UploadFrame(frameTex, this, presentWidth, presentHeight);
+        UploadFrame(frameTex, shownTex, this, presentWidth, presentHeight);
         ps2perf::hostFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - uploadStart).count()); // [gta-recomp]
 
-        const float srcWidth = static_cast<float>(std::max<uint32_t>(1u, presentWidth));
-        const float srcHeight = static_cast<float>(std::max<uint32_t>(1u, presentHeight));
         // the game picture letterboxed into w x h
-        auto drawFrame = [&](float screenWidth, float screenHeight)
+        auto drawFrame = [&](int targetWidth, int targetHeight)
         {
-            const float scale = std::min(screenWidth / srcWidth, screenHeight / srcHeight);
-            const float dstWidth = srcWidth * scale;
-            const float dstHeight = srcHeight * scale;
-            const Rectangle srcRect{0.0f, 0.0f, srcWidth, srcHeight};
-            const Rectangle dstRect{(screenWidth - dstWidth) * 0.5f, (screenHeight - dstHeight) * 0.5f, dstWidth, dstHeight};
-            DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+            glpresent::drawFrame(shownTex.id, shownTex.width, shownTex.height, static_cast<int>(std::max<uint32_t>(1u, presentWidth)),
+                                 static_cast<int>(std::max<uint32_t>(1u, presentHeight)), targetWidth, targetHeight);
         };
 
-        BeginDrawing();
-        ClearBackground(BLACK);
-        drawFrame(static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight()));
+        int windowWidth = 0, windowHeight = 0;
+        platform::windowSize(windowWidth, windowHeight);
+        glpresent::bindWindow(windowWidth, windowHeight);
+        drawFrame(windowWidth, windowHeight);
         ps2perf::drawOverlay(); // [gta-recomp] F3 overlay, F4 CSV recording
         if (m_debugUiInitialized && m_debugUiDrawCallback)
         {
             m_debugUiDrawCallback(*this, m_debugUiUserData);
         }
-        EndDrawing();
+        platform::renderUi();
 
         // [gta-recomp] control channel (runtime/ps2_control.h): screenshots render the same picture off-screen, so
         // they work with the window hidden or covered
         ps2control::pump(
             [&](const std::string &path) -> std::string
             {
-                const int w = std::max(GetScreenWidth(), 960), h = std::max(GetScreenHeight(), 672); // readable when hidden
-                RenderTexture2D target = LoadRenderTexture(w, h);
-                if (target.id == 0)
+                const int w = std::max(windowWidth, 960), h = std::max(windowHeight, 672); // readable when hidden
+                std::vector<uint8_t> rgb;
+                const bool drawn = glpresent::capture(w, h,
+                                                      [&](int cw, int ch)
+                                                      {
+                                                          drawFrame(cw, ch);
+                                                          platform::renderUiScaled(cw, ch);
+                                                      },
+                                                      rgb);
+                glpresent::bindWindow(windowWidth, windowHeight);
+                if (!drawn || !platform::writePng(path.c_str(), rgb.data(), w, h))
                     return {};
-                BeginTextureMode(target);
-                ClearBackground(BLACK);
-                drawFrame(static_cast<float>(w), static_cast<float>(h));
-                ps2perf::drawOverlay(false);
-                EndTextureMode();
-                Image image = LoadImageFromTexture(target.texture);
-                ImageFlipVertical(&image);
-                ImageFormat(&image, PIXELFORMAT_UNCOMPRESSED_R8G8B8);
-                const bool ok = ExportImage(image, path.c_str());
-                UnloadImage(image);
-                UnloadRenderTexture(target);
-                return ok ? std::to_string(w) + "x" + std::to_string(h) : std::string();
+                return std::to_string(w) + "x" + std::to_string(h);
             },
             [this] { requestStop(); });
+        platform::present();
 
-        if (WindowShouldClose())
+        if (platform::quitRequested())
         {
             RUNTIME_LOG("[run] window close requested, breaking out of loop");
             requestStop();
@@ -2923,8 +2927,9 @@ void PS2Runtime::run()
     shutdownGpuRenderer(); // [gta-recomp]
     ps2perf::shutdown();   // [gta-recomp]
     ps2control::stop();    // [gta-recomp]
-    UnloadTexture(frameTex);
-    CloseWindow();
+    glpresent::destroyTexture(frameTex);
+    glpresent::shutdown();
+    platform::shutdown();
 
     RUNTIME_LOG("[run] exiting loop");
 }

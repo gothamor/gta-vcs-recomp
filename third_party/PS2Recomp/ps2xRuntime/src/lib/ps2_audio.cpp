@@ -1,67 +1,9 @@
 #include "runtime/ps2_audio.h"
 #include "runtime/ps2_memory.h"
 #include "ps2_host_backend.h"
+#include <cstdio>
 #include <cstring>
 #include <vector>
-
-namespace
-{
-    std::vector<uint8_t> buildWavFromPcm(const int16_t *pcm, size_t sampleCount, uint32_t sampleRate)
-    {
-        const uint32_t dataSize = static_cast<uint32_t>(sampleCount * 2);
-        const uint32_t fileSize = 36 + dataSize;
-        std::vector<uint8_t> wav(8 + fileSize);
-
-        uint8_t *p = wav.data();
-        p[0] = 'R';
-        p[1] = 'I';
-        p[2] = 'F';
-        p[3] = 'F';
-        p[4] = static_cast<uint8_t>(fileSize);
-        p[5] = static_cast<uint8_t>(fileSize >> 8);
-        p[6] = static_cast<uint8_t>(fileSize >> 16);
-        p[7] = static_cast<uint8_t>(fileSize >> 24);
-        p[8] = 'W';
-        p[9] = 'A';
-        p[10] = 'V';
-        p[11] = 'E';
-        p[12] = 'f';
-        p[13] = 'm';
-        p[14] = 't';
-        p[15] = ' ';
-        p[16] = 16;
-        p[17] = 0;
-        p[18] = 0;
-        p[19] = 0;
-        p[20] = 1;
-        p[21] = 0;
-        p[22] = 1;
-        p[23] = 0;
-        p[24] = static_cast<uint8_t>(sampleRate);
-        p[25] = static_cast<uint8_t>(sampleRate >> 8);
-        p[26] = static_cast<uint8_t>(sampleRate >> 16);
-        p[27] = static_cast<uint8_t>(sampleRate >> 24);
-        const uint32_t byteRate = sampleRate * 2;
-        p[28] = static_cast<uint8_t>(byteRate);
-        p[29] = static_cast<uint8_t>(byteRate >> 8);
-        p[30] = static_cast<uint8_t>(byteRate >> 16);
-        p[31] = static_cast<uint8_t>(byteRate >> 24);
-        p[32] = 2;
-        p[33] = 0;
-        p[34] = 16;
-        p[35] = 0;
-        p[36] = 'd';
-        p[37] = 'a';
-        p[38] = 't';
-        p[39] = 'a';
-        p[40] = static_cast<uint8_t>(dataSize);
-        p[41] = static_cast<uint8_t>(dataSize >> 8);
-        p[42] = static_cast<uint8_t>(dataSize >> 16);
-        p[43] = static_cast<uint8_t>(dataSize >> 24);
-        std::memcpy(p + 44, pcm, dataSize);
-        return wav;
-    }
-}
 
 namespace ps2_vag
 {
@@ -69,14 +11,9 @@ namespace ps2_vag
                 std::vector<int16_t> &outPcm, uint32_t &outSampleRate);
 }
 
+// [gta-recomp] Nothing to track: playback of these guessed libsd samples is off (see playDecodedSample).
 struct PS2AudioBackend::Impl
 {
-    struct TrackedSound
-    {
-        Sound snd;
-        uint32_t sampleKey;
-    };
-    std::vector<TrackedSound> activeSounds;
 };
 
 PS2AudioBackend::PS2AudioBackend() : m_impl(std::make_unique<Impl>())
@@ -228,83 +165,25 @@ void PS2AudioBackend::play(uint32_t sampleAddr, float pitch, float volume, uint3
 
 void PS2AudioBackend::pruneFinishedSounds()
 {
-#if defined(PLATFORM_VITA)
-    return;
-#else
-    auto &sounds = m_impl->activeSounds;
-    auto it = sounds.begin();
-    while (it != sounds.end())
-    {
-        if (!IsSoundPlaying(it->snd))
-        {
-            UnloadSound(it->snd);
-            it = sounds.erase(it);
-        }
-        else
-        {
-            ++it;
-        }
-    }
-#endif
 }
 
+// [gta-recomp] Upstream played these samples with raylib Sounds. raylib is gone, and VCS plays all of its audio
+// through the emulated SPU2 (ps2_audio_out.cpp), so a request here is only logged (once).
 void PS2AudioBackend::playDecodedSample(uint32_t sampleKey, DecodedSample &sample, float pitch, float volume,
                                         bool isBgm)
 {
-#if defined(PLATFORM_VITA)
-    (void)sampleKey;
-    (void)sample;
     (void)pitch;
     (void)volume;
     (void)isBgm;
-    return;
-#else
     if (!m_audioReady || sample.pcm.empty())
         return;
-
-    pruneFinishedSounds();
-
-    for (const auto &t : m_impl->activeSounds)
+    static bool s_logged = false;
+    if (!s_logged)
     {
-        if (t.sampleKey == sampleKey && IsSoundPlaying(t.snd))
-            return;
+        s_logged = true;
+        std::fprintf(stderr, "[audio] libsd sample playback requested (key 0x%x): not supported, SPU2 emulation only\n",
+                     sampleKey);
     }
-
-    auto &sounds = m_impl->activeSounds;
-    if (isBgm)
-    {
-        for (auto it = sounds.begin(); it != sounds.end();)
-        {
-            if (IsSoundPlaying(it->snd))
-            {
-                StopSound(it->snd);
-                UnloadSound(it->snd);
-                it = sounds.erase(it);
-            }
-            else
-                ++it;
-        }
-    }
-
-    constexpr int kMaxConcurrentSounds = 4;
-    while (static_cast<int>(sounds.size()) >= kMaxConcurrentSounds)
-    {
-        StopSound(sounds.front().snd);
-        UnloadSound(sounds.front().snd);
-        sounds.erase(sounds.begin());
-    }
-
-    std::vector<uint8_t> wav = buildWavFromPcm(sample.pcm.data(), sample.pcm.size(), sample.sampleRate);
-    Wave wave = LoadWaveFromMemory(".wav", wav.data(), static_cast<int>(wav.size()));
-    if (wave.frameCount <= 0)
-        return;
-    Sound snd = LoadSoundFromWave(wave);
-    UnloadWave(wave);
-    SetSoundPitch(snd, pitch);
-    SetSoundVolume(snd, volume);
-    m_impl->activeSounds.push_back({snd, sampleKey});
-    PlaySound(snd);
-#endif
 }
 
 void PS2AudioBackend::stop(uint32_t voiceId)
@@ -314,15 +193,4 @@ void PS2AudioBackend::stop(uint32_t voiceId)
 
 void PS2AudioBackend::stopAll()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-#if defined(PLATFORM_VITA)
-    return;
-#else
-    for (auto &t : m_impl->activeSounds)
-    {
-        StopSound(t.snd);
-        UnloadSound(t.snd);
-    }
-    m_impl->activeSounds.clear();
-#endif
 }

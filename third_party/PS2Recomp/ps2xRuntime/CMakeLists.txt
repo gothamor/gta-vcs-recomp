@@ -75,57 +75,10 @@ else()
         set(PLATFORM "Android" CACHE STRING "" FORCE)
     endif()
 
-    FetchContent_Declare(
-        raylib
-        GIT_REPOSITORY "https://github.com/raysan5/raylib.git"
-        GIT_TAG "5.5" # we will migrate to 4.2.0 later, trust me it will be better
-        GIT_PROGRESS TRUE
-    )
-    FetchContent_MakeAvailable(raylib)
-
-    if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_ANDROID)
-        FetchContent_Declare(
-            imgui
-            GIT_REPOSITORY https://github.com/ocornut/imgui.git
-            GIT_TAG "v1.92.7-docking"
-            GIT_SHALLOW TRUE
-        )
-        FetchContent_GetProperties(imgui)
-
-        if(NOT imgui_POPULATED)
-            FetchContent_Populate(imgui)
-        endif()
-
-        set(PS2X_IMGUI_SOURCE_DIR "${imgui_SOURCE_DIR}")
-
-        add_library(imgui STATIC
-            "${PS2X_IMGUI_SOURCE_DIR}/imgui.cpp"
-            "${PS2X_IMGUI_SOURCE_DIR}/imgui_draw.cpp"
-            "${PS2X_IMGUI_SOURCE_DIR}/imgui_tables.cpp"
-            "${PS2X_IMGUI_SOURCE_DIR}/imgui_widgets.cpp"
-            "${PS2X_IMGUI_SOURCE_DIR}/imgui_demo.cpp"
-        )
-        target_include_directories(imgui PUBLIC "${PS2X_IMGUI_SOURCE_DIR}")
-
-        FetchContent_Declare(
-            rlImGui
-            GIT_REPOSITORY https://github.com/raylib-extras/rlImGui.git
-            GIT_TAG "Raylib_5_5"
-            GIT_SHALLOW TRUE
-        )
-        FetchContent_GetProperties(rlImGui)
-
-        if(NOT rlimgui_POPULATED)
-            FetchContent_Populate(rlImGui)
-        endif()
-
-        set(PS2X_RLIMGUI_SOURCE_DIR "${rlimgui_SOURCE_DIR}")
-
-        add_library(rlImGui STATIC
-            "${PS2X_RLIMGUI_SOURCE_DIR}/rlImGui.cpp"
-        )
-        target_include_directories(rlImGui PUBLIC "${PS2X_RLIMGUI_SOURCE_DIR}")
-        target_link_libraries(rlImGui PUBLIC raylib imgui)
+    # [gta-recomp] No raylib: the host platform layer (window, input, audio, Dear ImGui) comes from the parent
+    # project as PS2X_HOST_PLATFORM_TARGET (gta-recomp: src/platform, SDL3). Dear ImGui is its `imgui` target.
+    if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_ANDROID AND NOT TARGET imgui)
+        message(FATAL_ERROR "PS2X_ENABLE_DEBUG_UI needs an `imgui` target from the host platform layer")
     endif()
 endif()
 
@@ -235,7 +188,10 @@ if(PS2X_IS_VITA)
         pthread
     )
 else()
-    target_link_libraries(ps2_host_backend INTERFACE raylib)
+    if(NOT PS2X_HOST_PLATFORM_TARGET)
+        message(FATAL_ERROR "Set PS2X_HOST_PLATFORM_TARGET to the host platform library (window, input, audio)")
+    endif()
+    target_link_libraries(ps2_host_backend INTERFACE ${PS2X_HOST_PLATFORM_TARGET})
 
     if(PS2X_IS_ANDROID)
         target_link_libraries(ps2_host_backend INTERFACE log android)
@@ -557,7 +513,7 @@ if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_VITA AND NOT PS2X_IS_ANDROID)
     target_sources(ps2EntryRunner PRIVATE
         src/lib/ps2_debug_panel.cpp
     )
-    target_link_libraries(ps2EntryRunner PRIVATE rlImGui imgui)
+    target_link_libraries(ps2EntryRunner PRIVATE imgui)
     target_compile_definitions(ps2EntryRunner PRIVATE PS2X_ENABLE_DEBUG_UI=1)
 endif()
 
@@ -611,11 +567,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebI
             )
         endif()
     endif()
-endif()
-
-# Work around WinAPI vs raylib symbol clash for CloseWindow on x64
-if(MSVC)
-    target_link_options(ps2EntryRunner PRIVATE "/FORCE:MULTIPLE")
 endif()
 
 # Vita: Work around for GCC 10's LTO plugin

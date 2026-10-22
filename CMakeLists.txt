@@ -25,6 +25,8 @@ file(GLOB_RECURSE VCS_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/*.cpp"
 )
 list(REMOVE_ITEM VCS_SOURCES "${CMAKE_SOURCE_DIR}/src/main.cpp")
+# The platform layer is its own library (src/platform/CMakeLists.txt), linked into the runtime.
+list(FILTER VCS_SOURCES EXCLUDE REGEX "/src/platform/")
 # VU1 microprograms compiled to C++ by tools/vu1_recomp.py (from the user's ELF; see game/vcs/vu1_uploads.txt)
 if(EXISTS "${CMAKE_SOURCE_DIR}/generated/vu1/vu1_compiled.cpp")
     list(APPEND VCS_SOURCES "${CMAKE_SOURCE_DIR}/generated/vu1/vu1_compiled.cpp")
@@ -35,13 +37,16 @@ set(PS2X_RUNNER_EXTRA_SOURCES "${VCS_SOURCES}" CACHE STRING "" FORCE)
 set(PS2X_RUNNER_MAIN "${CMAKE_SOURCE_DIR}/src/main.cpp" CACHE FILEPATH "" FORCE)
 
 set(PS2X_PARALLEL_GS_DIR "${CMAKE_SOURCE_DIR}/third_party/parallel-gs" CACHE PATH "" FORCE)
+if(VCS_HAVE_GENERATED)
+    add_subdirectory(src/platform)
+    set(PS2X_HOST_PLATFORM_TARGET vcs_platform CACHE STRING "" FORCE)
+endif()
 add_subdirectory(third_party/PS2Recomp)
 
 if(VCS_HAVE_GENERATED)
     set_target_properties(ps2EntryRunner PROPERTIES OUTPUT_NAME "vcs")
     target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_SOURCE_DIR}/src")
     # Our own sources aren't generated code; keep them out of the unity batches.
-    # (windows.h in them also clashes with raylib inside a unity TU.)
     set_source_files_properties(${VCS_SOURCES} "${CMAKE_SOURCE_DIR}/src/main.cpp"
         TARGET_DIRECTORY ps2EntryRunner
         PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE SKIP_PRECOMPILE_HEADERS TRUE)

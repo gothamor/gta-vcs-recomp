@@ -58,7 +58,7 @@ Newest at the bottom. Each entry: what, why, and what would change it.
    microcode + 4 small DVP overlays, so the set of programs is small).
 - 2026-10-22: step 3 is now planned in detail in NATIVE_RENDERER.md (SDL3 platform
   layer, own RHI with a D3D11 backend, GS HW backend port, then packet-level HLE).
-  Status: proposed, under review.
+  Its six decisions were approved by the user on 2026-10-22.
 
 ## 2026-10-22 - Movies skipped during bring-up
 - `FUN_0021CA70` (from `main`) plays `STINGS.PSS` then `INTRO.PSS` via the movie

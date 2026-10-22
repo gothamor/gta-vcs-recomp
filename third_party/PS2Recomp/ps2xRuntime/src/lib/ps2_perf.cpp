@@ -3,9 +3,12 @@
 #include "runtime/ps2_audio_out.h"
 #include "runtime/ps2_control.h"
 
-#include "raylib.h"
+#include "platform/platform.h"
+
+#include "imgui.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <array>
 #include <atomic>
 #include <cstdarg>
@@ -268,12 +271,30 @@ namespace ps2perf
             }
         }
 
-        // ---- overlay (main thread) ------------------------------------------------------------------------------
+        // ---- overlay (main thread): Dear ImGui foreground draw list ---------------------------------------------
+        using Color = ImU32;
+        constexpr Color rgba(int r, int g, int b, int a) { return IM_COL32(r, g, b, a); }
+        int screenWidth() { return static_cast<int>(ImGui::GetIO().DisplaySize.x); }
+        int screenHeight() { return static_cast<int>(ImGui::GetIO().DisplaySize.y); }
+        void rect(float x, float y, float w, float h, Color c)
+        {
+            ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), c);
+        }
+        void text(const char *t, float x, float y, float size, Color c)
+        {
+            ImGui::GetForegroundDrawList()->AddText(ImGui::GetFont(), size, ImVec2(x, y), c, t);
+        }
+        void line(float x0, float y0, float x1, float y1, Color c)
+        {
+            ImGui::GetForegroundDrawList()->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), c);
+        }
+        int textWidth(const char *t, float size) { return static_cast<int>(ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.0f, t).x); }
+
         constexpr Color kPhaseColors[kPhases] = {
-            {235, 150, 50, 235},  // game
-            {80, 160, 245, 235},  // render
-            {110, 210, 110, 235}, // iop
-            {120, 120, 130, 150}, // wait
+            rgba(235, 150, 50, 235),  // game
+            rgba(80, 160, 245, 235),  // render
+            rgba(110, 210, 110, 235), // iop
+            rgba(120, 120, 130, 150), // wait
         };
 
         std::string fmt(const char *f, ...)
@@ -288,16 +309,16 @@ namespace ps2perf
 
         void drawOverlayPanel(const std::vector<Sample> &samples, bool recording, const std::string &csvName)
         {
-            const int screenH = GetScreenHeight();
+            const int screenH = screenHeight();
             const int fs = std::max(10, screenH / 56);   // font size
             const int lh = fs + fs / 4;                  // line height
             const int pad = fs / 2;
-            const int w = std::min(GetScreenWidth() - 16, fs * 36);
+            const int w = std::min(screenWidth() - 16, fs * 36);
             const int graphH = fs * 7;
             const int lines = 7;
             const int h = pad * 3 + lines * lh + graphH + lh;
             const int x = 8, y = 8;
-            DrawRectangle(x, y, w, h, Color{0, 0, 0, 175});
+            rect(x, y, w, h, rgba(0, 0, 0, 175));
 
             // numbers: the last second, and the graph window for percentiles
             std::vector<Sample> lastSecond;
@@ -309,31 +330,31 @@ namespace ps2perf
             }
             const Summary now = summarize(lastSecond);
             const Summary win = summarize(samples);
-            const Color white{235, 235, 235, 255}, dim{170, 170, 175, 255};
+            const Color white = rgba(235, 235, 235, 255), dim = rgba(170, 170, 175, 255);
             int ty = y + pad;
-            auto line = [&](const std::string &text, Color c) {
-                DrawText(text.c_str(), x + pad, ty, fs, c);
+            auto addLine = [&](const std::string &t, Color c) {
+                text(t.c_str(), x + pad, ty, fs, c);
                 ty += lh;
             };
-            const Color fpsColor = now.fps >= 55.0 ? Color{120, 230, 120, 255} : now.fps >= 28.0 ? Color{240, 210, 90, 255} : Color{245, 100, 90, 255};
-            line(fmt("GAME  %5.1f fps  %5.1f ms   p95 %.1f  p99 %.1f  max %.1f", now.fps, now.avgMs, win.p95, win.p99, win.maxMs), fpsColor);
-            line(fmt("VBLANK %4.1f/s   HOST %4.0f fps %4.1f ms   GL %4.1f ms", now.vblanksPerS, now.hostFps, now.hostMs, now.glMs), white);
-            line(fmt("EE ms   game %4.1f  render %4.1f  iop %4.1f  wait %4.1f", now.phaseMs[0], now.phaseMs[1], now.phaseMs[2],
-                     now.phaseMs[3]),
-                 white);
-            line(fmt("GS  %5.0f draws  %5.1fk verts  %3.0f tex uploads", now.counters[0], now.counters[1] / 1000.0, now.counters[2]), white);
-            line(fmt("DMA %5.0f tags   VU1 %5.0f programs", now.counters[3], now.counters[4]), white);
-            line(fmt("AUDIO %3.0f ms queued   %llu underruns (last %zu frames)", now.audioMs, static_cast<unsigned long long>(win.underruns),
-                     samples.size()),
-                 now.audioMs < 20.0 ? Color{245, 100, 90, 255} : white);
-            line(recording ? fmt("REC %s   [F4] stop   [F3] hide", csvName.c_str()) : std::string("[F4] record CSV   [F3] hide"),
-                 recording ? Color{245, 90, 90, 255} : dim);
+            const Color fpsColor = now.fps >= 55.0 ? rgba(120, 230, 120, 255) : now.fps >= 28.0 ? rgba(240, 210, 90, 255) : rgba(245, 100, 90, 255);
+            addLine(fmt("GAME  %5.1f fps  %5.1f ms   p95 %.1f  p99 %.1f  max %.1f", now.fps, now.avgMs, win.p95, win.p99, win.maxMs), fpsColor);
+            addLine(fmt("VBLANK %4.1f/s   HOST %4.0f fps %4.1f ms   GL %4.1f ms", now.vblanksPerS, now.hostFps, now.hostMs, now.glMs), white);
+            addLine(fmt("EE ms   game %4.1f  render %4.1f  iop %4.1f  wait %4.1f", now.phaseMs[0], now.phaseMs[1], now.phaseMs[2],
+                        now.phaseMs[3]),
+                    white);
+            addLine(fmt("GS  %5.0f draws  %5.1fk verts  %3.0f tex uploads", now.counters[0], now.counters[1] / 1000.0, now.counters[2]), white);
+            addLine(fmt("DMA %5.0f tags   VU1 %5.0f programs", now.counters[3], now.counters[4]), white);
+            addLine(fmt("AUDIO %3.0f ms queued   %llu underruns (last %zu frames)", now.audioMs, static_cast<unsigned long long>(win.underruns),
+                        samples.size()),
+                    now.audioMs < 20.0 ? rgba(245, 100, 90, 255) : white);
+            addLine(recording ? fmt("REC %s   [F4] stop   [F3] hide", csvName.c_str()) : std::string("[F4] record CSV   [F3] hide"),
+                    recording ? rgba(245, 90, 90, 255) : dim);
 
             // graph: one stacked bar per game frame, EE thread phases; frame time beyond the phases shows as the outline
             const int gx = x + pad, gy = ty + pad / 2, gw = w - pad * 2;
             // scale: 0-67 ms, or 133 / 267 ms when the frames do not fit
             const float maxMs = win.p95 <= 60.0 ? 66.7f : win.p95 <= 125.0 ? 133.3f : 266.7f;
-            DrawRectangle(gx, gy, gw, graphH, Color{20, 20, 25, 200});
+            rect(gx, gy, gw, graphH, rgba(20, 20, 25, 200));
             const float barW = static_cast<float>(gw) / kGraphSamples;
             const size_t first = samples.size() > kGraphSamples ? samples.size() - kGraphSamples : 0;
             for (size_t i = first; i < samples.size(); ++i)
@@ -345,37 +366,37 @@ namespace ps2perf
                 {
                     const float ph = std::min(s.phaseMs[p], maxMs) / maxMs * graphH;
                     const float top = std::max(base - ph, static_cast<float>(gy));
-                    DrawRectangleRec(Rectangle{bx, top, std::max(barW - 0.5f, 1.0f), base - top}, kPhaseColors[p]);
+                    rect(bx, top, std::max(barW - 0.5f, 1.0f), base - top, kPhaseColors[p]);
                     base = top;
                 }
                 if (s.frameMs > maxMs)
-                    DrawRectangleRec(Rectangle{bx, static_cast<float>(gy), std::max(barW - 0.5f, 1.0f), 3.0f}, Color{255, 60, 60, 255});
+                    rect(bx, static_cast<float>(gy), std::max(barW - 0.5f, 1.0f), 3.0f, rgba(255, 60, 60, 255));
             }
             const struct { float ms; const char *label; Color c; } marks[] = {
-                {1000.0f / 60.0f, "60", Color{120, 230, 120, 200}},
-                {1000.0f / 30.0f, "30", Color{240, 210, 90, 200}},
-                {50.0f, "20", Color{245, 100, 90, 200}},
-                {100.0f, "10", Color{245, 100, 90, 200}},
-                {200.0f, "5", Color{245, 100, 90, 200}},
+                {1000.0f / 60.0f, "60", rgba(120, 230, 120, 200)},
+                {1000.0f / 30.0f, "30", rgba(240, 210, 90, 200)},
+                {50.0f, "20", rgba(245, 100, 90, 200)},
+                {100.0f, "10", rgba(245, 100, 90, 200)},
+                {200.0f, "5", rgba(245, 100, 90, 200)},
             };
             for (const auto &m : marks)
             {
                 if (m.ms >= maxMs)
                     continue;
                 const int my = gy + graphH - static_cast<int>(m.ms / maxMs * graphH);
-                DrawLine(gx, my, gx + gw, my, m.c);
-                DrawText(m.label, gx + gw - MeasureText(m.label, fs * 3 / 4) - 2, my - fs * 3 / 4, fs * 3 / 4, m.c);
+                line(gx, my, gx + gw, my, m.c);
+                text(m.label, gx + gw - textWidth(m.label, fs * 3 / 4) - 2, my - fs * 3 / 4, fs * 3 / 4, m.c);
             }
             // legend
             int lx = gx;
             const int ly = gy + graphH + pad / 2;
             for (size_t p = 0; p < kPhases; ++p)
             {
-                DrawRectangle(lx, ly + fs / 4, fs / 2, fs / 2, kPhaseColors[p]);
-                DrawText(kPhaseNames[p], lx + fs * 3 / 4, ly, fs * 3 / 4 + 1, dim);
-                lx += MeasureText(kPhaseNames[p], fs * 3 / 4 + 1) + fs * 3 / 2;
+                rect(lx, ly + fs / 4, fs / 2, fs / 2, kPhaseColors[p]);
+                text(kPhaseNames[p], lx + fs * 3 / 4, ly, fs * 3 / 4 + 1, dim);
+                lx += textWidth(kPhaseNames[p], fs * 3 / 4 + 1) + fs * 3 / 2;
             }
-            DrawText(fmt("last %zu frames, ms per frame (0-%.0f), lines = fps", std::min(samples.size(), kGraphSamples), maxMs).c_str(), lx, ly, fs * 3 / 4 + 1, dim);
+            text(fmt("last %zu frames, ms per frame (0-%.0f), lines = fps", std::min(samples.size(), kGraphSamples), maxMs).c_str(), lx, ly, fs * 3 / 4 + 1, dim);
         }
     }
 
@@ -427,14 +448,14 @@ namespace ps2perf
 
     void drawOverlay(bool handleKeys)
     {
-        if (handleKeys && ps2control::keyPressed(KEY_F3))
+        if (handleKeys && ps2control::keyPressed(platform::KEY_F3))
             g_overlay = !g_overlay;
         bool recording;
         std::string csvName;
         std::vector<Sample> samples;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
-            if (handleKeys && ps2control::keyPressed(KEY_F4))
+            if (handleKeys && ps2control::keyPressed(platform::KEY_F4))
             {
                 g_logFromEnv = true; // a manual toggle wins over PS2X_PERF_LOG
                 if (g_csv)
@@ -450,7 +471,7 @@ namespace ps2perf
         if (g_overlay)
             drawOverlayPanel(samples, recording, csvName);
         else if (recording)
-            DrawText("REC", 10, 10, std::max(10, GetScreenHeight() / 46), Color{245, 90, 90, 255});
+            text("REC", 10, 10, std::max(10, screenHeight() / 46), rgba(245, 90, 90, 255));
     }
 
     std::string summaryLine()

@@ -45,63 +45,58 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     };
     float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
 
-    constexpr int kGamepad = 0;
     const bool physical = ps2control::physicalInputOn(); // [gta-recomp] off in hidden test runs
-    if (physical && IsGamepadAvailable(kGamepad))
+    if (physical && platform::gamepadConnected())
     {
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_UP), PAD_UP);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN), PAD_DOWN);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT), PAD_LEFT);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT), PAD_RIGHT);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN), PAD_CROSS);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT), PAD_CIRCLE);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT), PAD_SQUARE);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_UP), PAD_TRIANGLE);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1), PAD_L1);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1), PAD_R1);
-        // Analog triggers report through the axes on most XInput pads
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_2) ||
-                  GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_TRIGGER) > 0.3f,
-              PAD_L2);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_2) ||
-                  GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.3f,
-              PAD_R2);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT), PAD_START);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_LEFT), PAD_SELECT);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_THUMB), PAD_L3);
-        press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_THUMB), PAD_R3);
+        press(platform::gamepadButton(platform::GAMEPAD_DPAD_UP), PAD_UP);
+        press(platform::gamepadButton(platform::GAMEPAD_DPAD_DOWN), PAD_DOWN);
+        press(platform::gamepadButton(platform::GAMEPAD_DPAD_LEFT), PAD_LEFT);
+        press(platform::gamepadButton(platform::GAMEPAD_DPAD_RIGHT), PAD_RIGHT);
+        press(platform::gamepadButton(platform::GAMEPAD_SOUTH), PAD_CROSS);
+        press(platform::gamepadButton(platform::GAMEPAD_EAST), PAD_CIRCLE);
+        press(platform::gamepadButton(platform::GAMEPAD_WEST), PAD_SQUARE);
+        press(platform::gamepadButton(platform::GAMEPAD_NORTH), PAD_TRIANGLE);
+        press(platform::gamepadButton(platform::GAMEPAD_LEFT_SHOULDER), PAD_L1);
+        press(platform::gamepadButton(platform::GAMEPAD_RIGHT_SHOULDER), PAD_R1);
+        // Triggers are analog axes (0..1)
+        press(platform::gamepadAxis(platform::AXIS_LEFT_TRIGGER) > 0.3f, PAD_L2);
+        press(platform::gamepadAxis(platform::AXIS_RIGHT_TRIGGER) > 0.3f, PAD_R2);
+        press(platform::gamepadButton(platform::GAMEPAD_START), PAD_START);
+        press(platform::gamepadButton(platform::GAMEPAD_BACK), PAD_SELECT);
+        press(platform::gamepadButton(platform::GAMEPAD_LEFT_STICK), PAD_L3);
+        press(platform::gamepadButton(platform::GAMEPAD_RIGHT_STICK), PAD_R3);
         // small radial deadzone: worn sticks rest a few percent off centre
         auto deadzone = [](float &x, float &y)
         {
             if (x * x + y * y < 0.12f * 0.12f)
                 x = y = 0.0f;
         };
-        lx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_X);
-        ly = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_Y);
-        rx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_X);
-        ry = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_Y);
+        lx = platform::gamepadAxis(platform::AXIS_LEFT_X);
+        ly = platform::gamepadAxis(platform::AXIS_LEFT_Y);
+        rx = platform::gamepadAxis(platform::AXIS_RIGHT_X);
+        ry = platform::gamepadAxis(platform::AXIS_RIGHT_Y);
         deadzone(lx, ly);
         deadzone(rx, ry);
     }
 
     auto key = [](int k)
     { return ps2control::keyDown(k); };
-    press(key(KEY_UP), PAD_UP);
-    press(key(KEY_DOWN), PAD_DOWN);
-    press(key(KEY_LEFT), PAD_LEFT);
-    press(key(KEY_RIGHT), PAD_RIGHT);
-    press(key(KEY_LEFT_SHIFT) || key(KEY_RIGHT_SHIFT), PAD_CROSS);
-    press(key(KEY_SPACE), PAD_SQUARE);
-    press(key(KEY_F), PAD_TRIANGLE);
-    press(key(KEY_LEFT_CONTROL) || key(KEY_RIGHT_CONTROL) || (physical && IsMouseButtonDown(MOUSE_BUTTON_LEFT)), PAD_CIRCLE);
-    press(key(KEY_Q), PAD_L1);
-    press(key(KEY_E) || (physical && IsMouseButtonDown(MOUSE_BUTTON_RIGHT)), PAD_R1);
-    press(key(KEY_ONE) || key(KEY_Z), PAD_L2);
-    press(key(KEY_THREE) || key(KEY_X), PAD_R2);
-    press(key(KEY_C), PAD_L3);
-    press(key(KEY_V), PAD_R3);
-    press(key(KEY_ENTER) || key(KEY_KP_ENTER), PAD_START);
-    press(key(KEY_BACKSPACE), PAD_SELECT);
+    press(key(platform::KEY_UP), PAD_UP);
+    press(key(platform::KEY_DOWN), PAD_DOWN);
+    press(key(platform::KEY_LEFT), PAD_LEFT);
+    press(key(platform::KEY_RIGHT), PAD_RIGHT);
+    press(key(platform::KEY_LEFT_SHIFT) || key(platform::KEY_RIGHT_SHIFT), PAD_CROSS);
+    press(key(platform::KEY_SPACE), PAD_SQUARE);
+    press(key(platform::KEY_F), PAD_TRIANGLE);
+    press(key(platform::KEY_LEFT_CONTROL) || key(platform::KEY_RIGHT_CONTROL) || (physical && platform::mouseDown(platform::MOUSE_LEFT)), PAD_CIRCLE);
+    press(key(platform::KEY_Q), PAD_L1);
+    press(key(platform::KEY_E) || (physical && platform::mouseDown(platform::MOUSE_RIGHT)), PAD_R1);
+    press(key(platform::KEY_ONE) || key(platform::KEY_Z), PAD_L2);
+    press(key(platform::KEY_THREE) || key(platform::KEY_X), PAD_R2);
+    press(key(platform::KEY_C), PAD_L3);
+    press(key(platform::KEY_V), PAD_R3);
+    press(key(platform::KEY_ENTER) || key(platform::KEY_KP_ENTER), PAD_START);
+    press(key(platform::KEY_BACKSPACE), PAD_SELECT);
 
     auto axis = [](float current, bool negative, bool positive)
     {
@@ -109,10 +104,10 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
             return negative ? -1.0f : 1.0f;
         return current;
     };
-    lx = axis(lx, key(KEY_A), key(KEY_D));
-    ly = axis(ly, key(KEY_W), key(KEY_S));
-    rx = axis(rx, key(KEY_J), key(KEY_L));
-    ry = axis(ry, key(KEY_I), key(KEY_K));
+    lx = axis(lx, key(platform::KEY_A), key(platform::KEY_D));
+    ly = axis(ly, key(platform::KEY_W), key(platform::KEY_S));
+    rx = axis(rx, key(platform::KEY_J), key(platform::KEY_L));
+    ry = axis(ry, key(platform::KEY_I), key(platform::KEY_K));
 
     auto toByte = [](float v)
     {
