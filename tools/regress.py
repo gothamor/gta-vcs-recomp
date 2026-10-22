@@ -9,6 +9,7 @@ Steps (each a tool of its own, run in turn; the game window shows):
   tour      tools/tour.py on a fixed subset of the map grid (classes per point)
   missions  tools/missions.py on a few story missions (crash / hang / dark / frame time)
   drive     tools/drive.py on two spots (frame time, black / dip frames)
+  evening   the hospital at 12:00 / 20:00 / 21:00 - no black pictures (the evening black frames)
 
 Writes OUT/report.md and OUT/metrics.json (default OUT: build/regress/<date-time>). --set-baseline stores this
 run as build/regress/baseline (metrics.json + the scenes capture); later runs report what changed against it:
@@ -84,6 +85,38 @@ def step_drive(out, quick):
             "events": events[-20:]}
 
 
+def step_evening(out, quick):
+    """The evening black frames (game-internals.md 6g): at the hospital, 20:00 and 21:00 must show a picture. Fixed
+    2026-10-23 (render targets tracked taller than the scissor were dropped by a texture upload into the Z area)."""
+    sys.path.insert(0, TOOLS)
+    import rig  # noqa: E402
+    import tour  # noqa: E402
+    d = os.path.join(out, "evening")
+    os.makedirs(d, exist_ok=True)
+    g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="regress_evening")
+    lumas = {}
+    try:
+        g.wait_ingame()
+        g.invincible(True)
+        g.prime()
+        g.teleport(-884.0, -470.0, -100.0)
+        time.sleep(3)
+        for h in (12, 20, 21):
+            g.set_time(h, 0)
+            time.sleep(2.5)  # the scene load's fade is over
+            vals = []
+            for k in range(3):
+                path = os.path.join(d, "t%02d_%d.png" % (h, k))
+                g.cmd("screenshot " + path)
+                vals.append(round(tour.picture_stats(path)[0], 1))
+                time.sleep(0.4)
+            lumas["%02d:00" % h] = vals
+    finally:
+        g.quit()
+    black = [t for t, v in lumas.items() if min(v) < 10]
+    return {"luma": lumas, "black_times": black}
+
+
 def compare(base, new):
     notes = []
     bt, nt = base.get("tour", {}), new.get("tour", {})
@@ -104,6 +137,8 @@ def compare(base, new):
     for k in ("black_frames", "dip_frames"):
         if nd.get(k, 0) > bd.get(k, 0):
             notes.append("drive %s %d -> %d" % (k, bd.get(k, 0), nd.get(k, 0)))
+    for t in new.get("evening", {}).get("black_times", []):
+        notes.append("evening: black picture at %s (the evening black frames are back?)" % t)
     for s in new.get("scenes", {}).get("compare_failed", []):
         notes.append("scene %s differs from the baseline (see scenes_compare.log, diff images)" % s)
     return notes
@@ -118,7 +153,8 @@ def main():
     out = os.path.abspath(a.out or os.path.join(ROOT, "build", "regress", time.strftime("%Y%m%d-%H%M%S")))
     os.makedirs(out, exist_ok=True)
     metrics = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "quick": a.quick}
-    for name, fn in (("scenes", step_scenes), ("tour", step_tour), ("missions", step_missions), ("drive", step_drive)):
+    for name, fn in (("scenes", step_scenes), ("tour", step_tour), ("missions", step_missions), ("drive", step_drive),
+                     ("evening", step_evening)):
         print("[regress] %s" % name)
         t0 = time.time()
         try:

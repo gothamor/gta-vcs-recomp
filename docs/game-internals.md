@@ -236,14 +236,25 @@ the next (30 fps). In order:
 8. Blend with the previous picture: FBP 0 -> 140 at FIX 16 (motion blur), alpha-only clear.
 9. HUD / text at the far plane; the cinematic bars (zero height when closed) and text boxes (alpha 0x40).
 
-**Evening black frames**: between about 20:00 and 22:15 (the window moves with the weather) most frames come out
-black - everything but the last text - with normal draw counts. Same with the VU1 path (`PS2X_HLE=0`), so not the
-native renderer. The passes, their order, sources and targets are identical at noon and 20:00 (above), so the
-difference is in the values. The copies' texture coordinates are identical too (the self-copy reads 140 at a
-+0.94 texel offset, the trails pass reads 384 at +0.5), so the copy chain is not it; next suspects are the
-time-of-day inputs (sky colours, the prelit tint VU data 0x9C-0x9E, lighting constants) around 20:00. Skipping all
-render-target reads (`PS2X_HW_SKIP=1`) blacks out noon as well, as expected: the picture reaches FBP 140 / 0 only
-through those copies.
+**Evening black frames (fixed 2026-10-23)**: between about 20:00 and 22:15 most frames came out black -
+everything but the last text - with normal draw counts, native and VU path alike. Found by dumping the render target
+after every full-screen draw (`PS2X_HW_DUMP_STEPS`): the scene in FBP 140 was fine until the bloom was added back
+(step 6) and then 0 - the GPU copy of FBP 140 had been thrown away mid-frame. Cause, in our HW renderer, not the
+game:
+- In the evening the game uploads a 512x512 8-bit texture to block 8960 (page 280 = the Z-buffer area; Z is no
+  longer needed by then). It also uploads a 16x16 CLUT at block 13588 (page 424, inside the bloom buffer FBP 420)
+  and streams textures into the VRAM around 420 all the time (~6000 small uploads a second). VCS reuses VRAM freely.
+- The renderer drops a render target (forgets its GPU copy) when an upload touches its pages. FBP 140 was tracked
+  24 page rows tall (pages 140-380) instead of 14 (140-280), because the sky gradient's vertices reach y 738 and
+  the height was taken from vertices, not from what the scissor (0..447) lets the GS write. So the Z-area texture
+  "hit" the picture and dropped it. FBP 0 likewise stayed 32 rows tall after the boot-time clear of all VRAM.
+- Fix (gs_hw.cpp `noteTarget`, `shrinkTargets`): a target's height is the last scissored line it can be drawn to;
+  heights shrink back to what was drawn in the last 300 frames. Now 19:30-22:45 show a picture with the night
+  bloom, and no target is dropped by the Z-area texture. A regression check (`tools/regress.py`, step "evening")
+  keeps it fixed.
+- Still dropped (as before): the bloom buffers FBP 420 / 384 when textures are uploaded around them, and the Z-clear
+  view FBP 280. Copying uploads into targets block by block (`PS2X_HW_PATCH_TARGETS=1`) is exact but costs ~200 ms
+  a frame with VCS's upload rate; it needs lazy patching (resolve only when the target is read) - milestone 3.
 
 ## 7. Textures: `.XTX`
 

@@ -446,6 +446,27 @@ namespace
                     if (skip && (((skip & 1u) && ds.texIsRt) || (skip & 4u)))
                         break;
                     draw(ds, f.draws[c.index].first, f.draws[c.index].count, nullptr);
+                    // [gta-recomp] PS2X_HW_DUMP_STEPS=1: while draws are logged, write the target after every draw that
+                    // covers the whole screen or reads a render target (where a frame goes black, step by step)
+                    static const bool steps = std::getenv("PS2X_HW_DUMP_STEPS") != nullptr;
+                    if (steps && logDraws)
+                    {
+                        const DrawCmd &dc = f.draws[c.index];
+                        float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+                        for (uint32_t i = 0; i < dc.count; ++i)
+                        {
+                            const HwVertex &v = f.vertices[dc.first + i];
+                            x0 = std::min(x0, v.x), x1 = std::max(x1, v.x), y0 = std::min(y0, v.y), y1 = std::max(y1, v.y);
+                        }
+                        const bool full = x0 <= 1.0f && x1 >= 639.0f && y0 <= 1.0f && y1 >= 447.0f;
+                        auto it = m_rts.find(ds.fbp);
+                        if ((full || ds.texIsRt) && it != m_rts.end())
+                        {
+                            endPass();
+                            static int step = 0;
+                            dumpTexture(*it->second.color, "step" + std::to_string(step++) + "_fbp" + std::to_string(ds.fbp));
+                        }
+                    }
                     break;
                 }
                 case CmdType::MeshCreate:
@@ -1086,7 +1107,7 @@ namespace
             }
             if (depthFill(batch, s, out, n))
                 return;
-            noteTarget(s.fbp, s.fbw, s.fpsm, out, n);
+            noteTarget(s.fbp, s.fbw, s.fpsm, out, n, s.scy1);
             Frame &f = *m_frame;
             if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != CmdType::Draw ||
                 std::memcmp(&f.draws.back().s, &s, sizeof(HwState)) != 0)
@@ -1757,6 +1778,7 @@ namespace
             ps2perf::add(ps2perf::Counter::Vertices, f.vertices.size() + f.nativeVertices);
             ps2perf::add(ps2perf::Counter::TexUploads, f.textures.size());
             ++m_frameIndex;
+            shrinkTargets(); // [gta-recomp]
             {
                 std::unique_lock<std::mutex> lock(m_queueMutex);
                 // Don't let the game run more than a few frames ahead of the main thread.
@@ -1826,7 +1848,7 @@ namespace
             }
             HwVertex extent{};
             extent.y = static_cast<float>(s.scy1); // the scissor bounds what the draw can touch
-            noteTarget(s.fbp, s.fbw, s.fpsm, &extent, 1);
+            noteTarget(s.fbp, s.fbw, s.fpsm, &extent, 1, s.scy1);
             Frame &f = *m_frame;
             uint32_t transientOffset = 0;
             if (draw.transient)
@@ -2234,7 +2256,11 @@ namespace
             }
         }
 
-        void noteTarget(uint32_t fbp, uint32_t fbw, uint32_t psm, const HwVertex *v, uint32_t n)
+        // [gta-recomp] scissorMaxY: the GS writes nothing below the scissor, so a draw whose vertices reach further
+        // (VCS's sky gradient goes to y 738 on a 448-line screen) must not grow the target past it. An oversized target
+        // claims VRAM pages it never uses, and an upload there (the game puts a texture into the Z-buffer area at
+        // night) dropped the whole picture: the evening black frames.
+        void noteTarget(uint32_t fbp, uint32_t fbw, uint32_t psm, const HwVertex *v, uint32_t n, uint32_t scissorMaxY)
         {
             auto found = m_rts.find(fbp);
             if (found == m_rts.end())
@@ -2245,11 +2271,23 @@ namespace
             float maxY = 0.0f;
             for (uint32_t i = 0; i < n; ++i)
                 maxY = std::max(maxY, v[i].y);
+            maxY = std::min(maxY, static_cast<float>(scissorMaxY) + 1.0f); // vertex y is an edge: pixels up to maxY - 1
             uint32_t pw, ph;
             pageSize(psm, pw, ph);
-            const uint32_t rows = std::min<uint32_t>(32u, (static_cast<uint32_t>(std::max(maxY, 0.0f)) + ph) / ph);
+            const uint32_t lastLine = static_cast<uint32_t>(std::max(maxY - 1.0f, 0.0f));
+            const uint32_t rows = std::min<uint32_t>(32u, lastLine / ph + 1u);
+            rt.recentRows = std::max(rt.recentRows, rows);
             if (rows > rt.pageRows)
+            {
                 ++m_texStateVersion;
+                static int logged = 0;
+                if (rows > 15u && logged < 40 && std::getenv("PS2X_HW_LOG_DROPS"))
+                {
+                    ++logged;
+                    std::fprintf(stderr, "[gs-hw] rt fbp=%u fbw=%u grows to %u page rows: draw of %u vertices, max y %.0f, scissor %u\n", fbp,
+                                 fbw, rows, n, maxY, scissorMaxY);
+                }
+            }
             rt.pageRows = std::max(rt.pageRows, std::max<uint32_t>(rows, 1u));
         }
 
@@ -2262,7 +2300,19 @@ namespace
                       t.trxreg.rrh, first, last);
             for (uint32_t p = first; p < last && p < kPages; ++p)
                 ++m_pageGen[p];
-            // An upload over a render target: copy the uploaded rect into it (same base), or drop the target.
+            std::vector<uint16_t> written; // [gta-recomp] blocks this upload wrote (for patchTarget), filled on demand
+            bool writtenKnown = false;
+            auto uploadBlocks = [&]() -> const std::vector<uint16_t> & {
+                if (!writtenKnown)
+                {
+                    rectBlocks(t.bitbltbuf.dpsm, t.bitbltbuf.dbp, t.bitbltbuf.dbw, t.trxpos.dsax, t.trxpos.dsay, t.trxreg.rrw,
+                               t.trxreg.rrh, written, nullptr);
+                    writtenKnown = true;
+                }
+                return written;
+            };
+            // An upload over a render target: copy the uploaded rect into it (same base), copy the blocks it wrote
+            // (other base), or drop the target (formats without a block layout).
             for (auto it = m_rts.begin(); it != m_rts.end();)
             {
                 const uint32_t rtFirst = it->first * 32u / 32u * 1u; // fbp is in 8 KiB pages already
@@ -2294,8 +2344,22 @@ namespace
                         f.rtUploads.push_back(std::move(up));
                         ++it;
                     }
+                    else if (patchTargets() && patchTarget(it->first, it->second, uploadBlocks()))
+                    {
+                        ++it; // [gta-recomp] the written blocks were copied into the target
+                    }
                     else
                     {
+                        static int logged = 0; // [gta-recomp] which uploads drop render targets (evening black frames)
+                        if (logged < 200 && std::getenv("PS2X_HW_LOG_DROPS"))
+                        {
+                            ++logged;
+                            std::fprintf(stderr,
+                                         "[gs-hw] upload dbp=%u dbw=%u psm=%u %ux%u at %u,%u (pages %u-%u) drops rt fbp=%u fbw=%u rows=%u "
+                                         "(pages %u-%u)\n",
+                                         t.bitbltbuf.dbp, t.bitbltbuf.dbw, t.bitbltbuf.dpsm, t.trxreg.rrw, t.trxreg.rrh, t.trxpos.dsax,
+                                         t.trxpos.dsay, first, last, it->first, it->second.fbw, it->second.pageRows, rtFirst, rtLast);
+                        }
                         f.cmds.push_back({CmdType::RtDrop, static_cast<uint32_t>(f.rtDrops.size())});
                         f.rtDrops.push_back(it->first);
                         it = m_rts.erase(it);
@@ -2312,7 +2376,142 @@ namespace
         struct RtInfo
         {
             uint32_t fbw = 1, psm = 0, pageRows = 1;
+            uint32_t recentRows = 0; // [gta-recomp] rows drawn since the last trim (shrinkTargets)
         };
+
+        // [gta-recomp] A target grows to the tallest draw ever made into it (VCS clears all of VRAM through FBP 0 at
+        // boot: 1472 lines); every 300 frames trim each target to what was drawn in that time, so it stops claiming
+        // pages other data lives in (an upload there would drop or rewrite it for nothing).
+        void shrinkTargets()
+        {
+            if (m_frameIndex % 300u != 0u)
+                return;
+            for (auto &[fbp, rt] : m_rts)
+            {
+                if (rt.recentRows && rt.recentRows < rt.pageRows)
+                {
+                    if (std::getenv("PS2X_HW_LOG_DROPS"))
+                        std::fprintf(stderr, "[gs-hw] rt fbp=%u trimmed %u -> %u page rows\n", fbp, rt.pageRows, rt.recentRows);
+                    rt.pageRows = rt.recentRows;
+                    ++m_texStateVersion;
+                }
+                rt.recentRows = 0;
+            }
+        }
+
+        // [gta-recomp] Block (8x8 / 16x8 pixels) position inside a page for each of its 32 blocks, per format; false for
+        // formats GSMem::RectBlocks does not know.
+        bool blockLayout(uint32_t psm, std::array<std::pair<uint8_t, uint8_t>, 32> &where, uint32_t &bw, uint32_t &bh)
+        {
+            uint32_t pw, ph;
+            pageSize(psm, pw, ph);
+            bw = pw / 8u;
+            bh = ph / 4u;
+            if (psm == GS_PSM_CT16 || psm == GS_PSM_CT16S)
+            {
+                bw = 16u;
+                bh = 8u;
+            }
+            if (pw / bw * (ph / bh) != 32u)
+                return false;
+            std::vector<uint16_t> touched;
+            for (uint32_t by = 0; by < ph / bh; ++by)
+                for (uint32_t bx = 0; bx < pw / bw; ++bx)
+                {
+                    touched.clear();
+                    if (!GSMem::RectBlocks(psm, 0u, pw / 64u, bx * bw, by * bh, bw, bh, touched, nullptr) || touched.size() != 1u ||
+                        touched[0] >= 32u)
+                        return false;
+                    where[touched[0]] = {static_cast<uint8_t>(bx), static_cast<uint8_t>(by)};
+                }
+            return true;
+        }
+
+        // [gta-recomp] PS2X_HW_PATCH_TARGETS=1 turns patchTarget on. Off by default: VCS streams textures into the VRAM
+        // around its bloom buffer (FBP 420) every frame - ~6000 small uploads a second - and patching each one costs
+        // more than the game frame (3 fps). Doing it right needs lazy patching (dirty blocks resolved only when the
+        // target is read); until then overlapped targets are dropped as before.
+        static bool patchTargets()
+        {
+            static const bool on = [] {
+                const char *e = std::getenv("PS2X_HW_PATCH_TARGETS");
+                return e && *e && *e != '0';
+            }();
+            return on;
+        }
+
+        // [gta-recomp] An upload that overlaps a render target at another base: copy just the blocks it wrote into the
+        // target (as the GS would - the rest of the target keeps what was drawn), read back from CPU VRAM in the
+        // target's own layout. VCS puts a CLUT inside its bloom buffer and a texture in the Z-buffer area each frame;
+        // dropping the whole target there lost the picture. False when the format is not supported (then drop).
+        bool patchTarget(uint32_t fbp, const RtInfo &rt, const std::vector<uint16_t> &written)
+        {
+            std::array<std::pair<uint8_t, uint8_t>, 32> where{};
+            uint32_t bw = 0, bh = 0, pw = 0, ph = 0;
+            if (!blockLayout(rt.psm, where, bw, bh))
+                return false;
+            pageSize(rt.psm, pw, ph);
+            const uint32_t firstBlock = fbp * 32u, lastBlock = (fbp + rt.pageRows * rt.fbw) * 32u;
+            std::vector<uint32_t> perPage(rt.pageRows * rt.fbw, 0u); // bitmask of written blocks per target page
+            uint32_t count = 0;
+            for (uint16_t b : written)
+                if (b >= firstBlock && b < lastBlock)
+                {
+                    perPage[(b - firstBlock) / 32u] |= 1u << ((b - firstBlock) % 32u);
+                    ++count;
+                }
+            if (!count)
+                return true;
+            // Large overwrites (VCS: a 512x512 texture into the Z-buffer area every frame, seen through the Z-clear view
+            // FBP 280) are dropped as before: reading them back per pixel cost ~200 ms a frame, and a target mostly
+            // overwritten has little worth keeping. Small ones (a CLUT inside the bloom buffer) are patched.
+            if (count > 256u)
+                return false;
+            static uint64_t patches = 0, blocks = 0;
+            ++patches;
+            blocks += count;
+            if (std::getenv("PS2X_HW_LOG_DROPS") && (patches & (patches - 1)) == 0) // powers of two
+                std::fprintf(stderr, "[gs-hw] patched %llu uploads into targets (%llu blocks; last: fbp %u, %u blocks)\n",
+                             static_cast<unsigned long long>(patches), static_cast<unsigned long long>(blocks), fbp, count);
+            Frame &f = *m_frame;
+            auto emit = [&](uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+                RtUpload up;
+                up.fbp = fbp;
+                up.fbw = rt.fbw;
+                up.x = x;
+                up.y = y;
+                up.w = w;
+                up.h = h;
+                up.pixels.resize(static_cast<size_t>(w) * h);
+                for (uint32_t yy = 0; yy < h; ++yy)
+                    for (uint32_t xx = 0; xx < w; ++xx)
+                    {
+                        uint32_t v = m_cpu.ReadVram(rt.psm, fbp * 32u, rt.fbw, x + xx, y + yy);
+                        if (rt.psm == GS_PSM_CT16 || rt.psm == GS_PSM_CT16S)
+                            v = ((v & 0x1Fu) << 3) | (((v >> 5) & 0x1Fu) << 11) | (((v >> 10) & 0x1Fu) << 19) |
+                                ((v & 0x8000u) ? 0x80000000u : 0u);
+                        up.pixels[static_cast<size_t>(yy) * w + xx] = v;
+                    }
+                f.cmds.push_back({CmdType::RtUpload, static_cast<uint32_t>(f.rtUploads.size())});
+                f.rtUploads.push_back(std::move(up));
+            };
+            for (uint32_t pg = 0; pg < perPage.size(); ++pg)
+            {
+                const uint32_t mask = perPage[pg];
+                if (!mask)
+                    continue;
+                const uint32_t px = (pg % rt.fbw) * pw, py = (pg / rt.fbw) * ph;
+                if (mask == 0xFFFFFFFFu)
+                {
+                    emit(px, py, pw, ph);
+                    continue;
+                }
+                for (uint32_t k = 0; k < 32u; ++k)
+                    if (mask & (1u << k))
+                        emit(px + where[k].first * bw, py + where[k].second * bh, bw, bh);
+            }
+            return true;
+        }
         static constexpr uint32_t kPages = 512u; // 4 MiB / 8 KiB
         static constexpr size_t kMaxTextures = 3000u;
         static constexpr size_t kMaxMeshes = 12000u; // [gta-recomp] native draws' vertex data (~3-10 KB each)

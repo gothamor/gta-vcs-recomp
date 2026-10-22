@@ -107,9 +107,9 @@
 
 ## Milestone 2 - correctness sweep (started 2026-10-23)
 Findings so far (rig runs; details in game-internals.md):
-- [ ] **Evening black frames** (the user's "world turns black"): 20:00-22:15 game time most frames black, draws
-      normal, native and VU path alike; frame structure identical to noon (game-internals.md 6g). Next: compare the
-      copies' texture coordinates / alpha between noon and 20:00, the self-copy 140 -> 140.
+- [x] **Evening black frames** (the user's "world turns black"): fixed 2026-10-23 - render targets were tracked
+      taller than the scissor, so the Z-area texture the game uploads at night dropped the picture
+      (game-internals.md 6g). Regression check: `tools/regress.py` step "evening".
 - [ ] After a death the world near the hospital drew only lights for ~40 s (01:25-01:57 game time) - check whether
       it is the same bug (night window) or streaming.
 - [ ] Driving: 36-54 ms per frame (game code ~20 ms, render submit ~15 ms) - below 30 fps in traffic.
