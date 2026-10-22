@@ -6,7 +6,11 @@
 
 #include "runtime/ps2_control.h" // [gta-recomp] keys: physical or injected
 
+#include "render/gs_shaders.h" // [gta-recomp] D3D11 (RHI) execution
+#include "rhi/rhi.h"
+
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -430,6 +434,646 @@ void main()
 )";
 
     // ------------------------------------------------------------------------------------------------------
+    // [gta-recomp] Execution on the renderer's RHI device (main thread). Render targets keep PS2 rows top-down
+    // (texture row = PS2 row); the vertex shader flips Y for D3D's NDC.
+    // ------------------------------------------------------------------------------------------------------
+    struct DrawConstants // render/shaders/gs_draw.hlsl, cbuffer Draw
+    {
+        float targetRtFix[4];
+        int32_t tmeTfxTccFst[4];
+        int32_t linearIipFgeAte[4];
+        int32_t atstArefAfailRt[4];
+        int32_t texSizeWrap[4];
+        int32_t region[4];
+        float rtOrigin[4];
+        int32_t blendCPremul[4];
+        float fogColor[4];
+    };
+
+    struct QuadConstants // render/shaders/gs_util.hlsl, cbuffer Quad
+    {
+        float rect[4];
+        float uvRect[4];
+        float color[4];
+        float params[4];
+    };
+
+    // GS blend (A - B) * C / 128 + D as a fixed-function blend (C from the shader's second output); false when not
+    // expressible (drawn unblended).
+    struct GsBlend
+    {
+        bool enable = false;
+        rhi::BlendFactor src = rhi::BlendFactor::One;
+        rhi::BlendFactor dst = rhi::BlendFactor::Zero;
+        rhi::BlendOp op = rhi::BlendOp::Add;
+        int premul = 0; // 0: none, 1: rgb *= C, 2: rgb *= 1 + C
+    };
+
+    bool gsBlend(const HwState &s, GsBlend &b)
+    {
+        using F = rhi::BlendFactor;
+        using O = rhi::BlendOp;
+        b = GsBlend{};
+        if (!s.abe)
+            return true;
+        const int A = s.ba, B = s.bb, D = s.bd;
+        O op = O::Add;
+        F src = F::One, dst = F::Zero;
+        if (A == B)
+        {
+            // (X - X) * C + D = D
+            if (D == 0) { src = F::One; dst = F::Zero; }
+            else if (D == 1) { src = F::Zero; dst = F::One; }
+            else { src = F::Zero; dst = F::Zero; }
+        }
+        else if (A == 0 && B == 1)
+        {
+            if (D == 1) { src = F::Src1Alpha; dst = F::InvSrc1Alpha; }                          // Cs*C + Cd*(1-C)
+            else if (D == 0) { b.premul = 2; op = O::Subtract; src = F::One; dst = F::Src1Alpha; } // Cs*(1+C) - Cd*C
+            else { src = F::Src1Alpha; dst = F::Src1Alpha; op = O::Subtract; }                 // (Cs - Cd)*C
+        }
+        else if (A == 0 && B == 2)
+        {
+            b.premul = 1; // Cs*C + D
+            src = F::One;
+            dst = (D == 1) ? F::One : F::Zero;
+            if (D == 0) { b.premul = 2; src = F::One; dst = F::Zero; }
+        }
+        else if (A == 1 && B == 0)
+        {
+            if (D == 0) { src = F::InvSrc1Alpha; dst = F::Src1Alpha; } // Cs*(1-C) + Cd*C
+            else return false;
+        }
+        else if (A == 2 && B == 0)
+        {
+            b.premul = 1; // D - Cs*C
+            if (D == 1) { op = O::ReverseSubtract; src = F::One; dst = F::One; }
+            else { src = F::Zero; dst = F::Zero; }
+        }
+        else if (A == 2 && B == 1)
+        {
+            if (D == 1) { src = F::Zero; dst = F::InvSrc1Alpha; }                               // Cd*(1-C)
+            else if (D == 0) { op = O::ReverseSubtract; src = F::One; dst = F::Src1Alpha; }       // Cs - Cd*C
+            else return false;
+        }
+        else if (A == 1 && B == 2)
+        {
+            if (D == 0) { src = F::One; dst = F::Src1Alpha; }  // Cs + Cd*C
+            else if (D == 2) { src = F::Zero; dst = F::Src1Alpha; } // Cd*C
+            else return false;
+        }
+        else
+        {
+            return false;
+        }
+        b.enable = true;
+        b.src = src;
+        b.dst = dst;
+        b.op = op;
+        return true;
+    }
+
+    // F12 / PS2X_HW_DUMP: one line per draw of the dumped frame (state + bounds).
+    void logDraw(const Frame &f, const DrawCmd &d)
+    {
+        const HwState &s = d.s;
+        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, z0 = 1e9f, z1 = -1e9f;
+        uint32_t rgbaOr = 0, fogMin = 255;
+        for (uint32_t i = 0; i < d.count; ++i)
+        {
+            const HwVertex &v = f.vertices[d.first + i];
+            x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
+            z0 = std::min(z0, v.z); z1 = std::max(z1, v.z);
+            rgbaOr |= v.r | (v.g << 8) | (v.b << 16) | (uint32_t(v.a) << 24);
+            fogMin = std::min<uint32_t>(fogMin, static_cast<uint32_t>(v.fog * 255.0f));
+        }
+        std::fprintf(stderr,
+                     "[draw] n=%u fbp=%u zbp=%u zte=%u ztst=%u zmsk=%u tme=%u tex(psm? key=%llx %ux%u rt=%u) tfx=%u tcc=%u abe=%u blend=%u%u%u%u fix=%u ate=%u atst=%u aref=%u afail=%u fge=%u fogMin=%u fogCol=%u,%u,%u fbmsk=%x prim=%u iip=%u fst=%u bounds=(%.0f,%.0f)-(%.0f,%.0f) z=%.5f..%.5f rgbaOr=%08x\n",
+                     d.count, s.fbp, s.zbp, s.zte, s.ztst, s.zmsk, s.tme, (unsigned long long)s.texKey, s.tw, s.th, s.texIsRt,
+                     s.tfx, s.tcc, s.abe, s.ba, s.bb, s.bc, s.bd, s.fix, s.ate, s.atst, s.aref, s.afail, s.fge, fogMin,
+                     s.fogR, s.fogG, s.fogB, s.fbmsk, s.mode, s.iip, s.fst, x0, y0, x1, y1, z0, z1, rgbaOr);
+    }
+
+    void writePpm(const std::string &path, const uint8_t *rgba, uint32_t w, uint32_t h)
+    {
+        if (FILE *f = std::fopen(path.c_str(), "wb"))
+        {
+            std::fprintf(f, "P6 %u %u 255 ", w, h);
+            for (size_t i = 0; i < size_t(w) * h; ++i)
+                std::fwrite(&rgba[i * 4u], 1, 3, f);
+            std::fclose(f);
+            std::fprintf(stderr, "[gs-hw] dumped %s (%ux%u)\n", path.c_str(), w, h);
+        }
+    }
+
+    class RhiExecutor
+    {
+    public:
+        RhiExecutor(rhi::Device &device, uint32_t scale) : m_dev(device), m_scale(scale)
+        {
+            const render::GsShaders &sh = render::gsShaders();
+            m_drawCb = m_dev.createBuffer({sizeof(DrawConstants), rhi::BufferUsage::Constant, true, "gs draw constants"});
+            m_quadCb = m_dev.createBuffer({sizeof(QuadConstants), rhi::BufferUsage::Constant, true, "gs quad constants"});
+            m_point = m_dev.createSampler({rhi::Filter::Nearest, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
+            m_linear = m_dev.createSampler({rhi::Filter::Linear, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
+            rhi::PipelineDesc q;
+            q.vertex = sh.quadVS;
+            q.topology = rhi::Topology::TriangleStrip;
+            q.pixel = sh.blitPS;
+            q.name = "gs blit";
+            m_blit = m_dev.createPipeline(q);
+            q.pixel = sh.fillColorPS;
+            q.name = "gs fill colour";
+            m_fillColor = m_dev.createPipeline(q);
+            q.pixel = sh.fillDepthPS;
+            q.blend.writeMask = 0;
+            q.depth = {true, true, rhi::Compare::Always};
+            q.name = "gs fill depth";
+            m_fillDepth = m_dev.createPipeline(q);
+            m_ready = m_drawCb && m_quadCb && m_point && m_linear && m_blit && m_fillColor && m_fillDepth;
+        }
+
+        bool ready() const { return m_ready; }
+        rhi::Device &device() { return m_dev; }
+        rhi::Texture *display() const { return m_display.get(); }
+        uint32_t displayWidth() const { return m_displayW * m_scale; }
+        uint32_t displayHeight() const { return m_displayH * m_scale; }
+
+        void execute(const Frame &f, bool logDraws)
+        {
+            m_dev.pushMarker("gs frame");
+            const size_t bytes = f.vertices.size() * sizeof(HwVertex);
+            if (bytes)
+            {
+                if (!m_vb || m_vbCapacity < bytes)
+                {
+                    m_vbCapacity = std::max<size_t>(bytes + bytes / 2, 1u << 20);
+                    m_vb = m_dev.createBuffer({m_vbCapacity, rhi::BufferUsage::Vertex, true, "gs vertices"});
+                }
+                m_dev.updateBuffer(*m_vb, f.vertices.data(), bytes);
+            }
+            for (const Cmd &c : f.cmds)
+            {
+                switch (c.type)
+                {
+                case CmdType::TexCreate:
+                {
+                    const TexCreate &t = f.textures[c.index];
+                    rhi::TextureDesc d;
+                    d.width = t.w;
+                    d.height = t.h;
+                    d.usage = rhi::UsageSampled;
+                    d.name = "gs texture";
+                    m_textures[t.key] = m_dev.createTexture(d, t.pixels.data(), t.w * 4u);
+                    break;
+                }
+                case CmdType::TexDelete:
+                    m_textures.erase(f.texDeletes[c.index]);
+                    break;
+                case CmdType::RtDrop:
+                    endPass();
+                    m_rts.erase(f.rtDrops[c.index]);
+                    break;
+                case CmdType::RtUpload:
+                    rtUpload(f.rtUploads[c.index]);
+                    break;
+                case CmdType::Clear:
+                    clear(f.clears[c.index]);
+                    break;
+                case CmdType::DepthFill:
+                    depthFill(f.depthFills[c.index], logDraws);
+                    break;
+                case CmdType::Draw:
+                    if (logDraws)
+                        logDraw(f, f.draws[c.index]);
+                    draw(f.draws[c.index]);
+                    break;
+                }
+            }
+            endPass();
+            m_dev.popMarker();
+        }
+
+        void composeDisplay(const Frame &f)
+        {
+            m_displayW = f.displayW;
+            m_displayH = f.displayH;
+            const uint32_t w = m_displayW * m_scale, h = m_displayH * m_scale;
+            if (!w || !h)
+                return;
+            if (!m_display || m_display->desc().width != w || m_display->desc().height != h)
+            {
+                endPass();
+                m_display = m_dev.createTexture({w, h, rhi::Format::RGBA8, rhi::UsageRenderTarget | rhi::UsageSampled, "gs display"});
+            }
+            auto it = m_rts.find(f.displayFbp);
+            if (f.displayFromRt && it != m_rts.end())
+            {
+                // the PS2 frame buffer's alpha is not shown: written as 1
+                const Rt &rt = it->second;
+                const float tw = static_cast<float>(rt.color->desc().width), th = static_cast<float>(rt.color->desc().height);
+                const float x0 = static_cast<float>(f.displayX * m_scale), y0 = static_cast<float>(f.displayY * m_scale);
+                blit(*rt.color, {x0 / tw, y0 / th, (x0 + w) / tw, (y0 + h) / th}, *m_display, 0, 0, w, h, false, true);
+            }
+            else if (!f.cpuDisplay.empty())
+            {
+                auto tmp = m_dev.createTexture({f.cpuDisplayW, f.cpuDisplayH, rhi::Format::RGBA8, rhi::UsageSampled, "gs cpu display"},
+                                               f.cpuDisplay.data(), f.cpuDisplayW * 4u);
+                if (tmp)
+                    blit(*tmp, {0.0f, 0.0f, 1.0f, 1.0f}, *m_display, 0, 0, w, h, true, true);
+            }
+            else
+            {
+                fill(m_display.get(), nullptr, 0, 0, w, h, {0.0f, 0.0f, 0.0f, 1.0f}, 0.0f);
+            }
+            endPass();
+        }
+
+        // F12 / PS2X_HW_DUMP: render targets and the display as PPM files.
+        void dump()
+        {
+            endPass();
+            std::vector<uint8_t> px;
+            for (const auto &[fbp, rt] : m_rts)
+                dumpTexture(*rt.color, "rt_" + std::to_string(fbp));
+            if (m_display)
+                dumpTexture(*m_display, "display");
+        }
+
+        std::string describeTargets() const
+        {
+            std::string s;
+            for (const auto &[fbp, rt] : m_rts)
+                s += " " + std::to_string(fbp) + "(" + std::to_string(rt.w) + "x" + std::to_string(rt.h) + ")";
+            return s;
+        }
+
+    private:
+        struct Rt
+        {
+            std::unique_ptr<rhi::Texture> color;
+            uint32_t w = 0, h = 0; // PS2 pixels
+        };
+        struct Depth
+        {
+            std::unique_ptr<rhi::Texture> tex;
+            uint32_t w = 0, h = 0; // PS2 pixels
+        };
+
+        void dumpTexture(rhi::Texture &t, const std::string &name)
+        {
+            const uint32_t w = t.desc().width, h = t.desc().height;
+            std::vector<uint8_t> px(size_t(w) * h * 4u);
+            if (m_dev.readTexture(t, 0, 0, w, h, px.data()))
+                writePpm("hw_" + name + ".ppm", px.data(), w, h);
+        }
+
+        void endPass()
+        {
+            if (m_inPass)
+                m_dev.endPass();
+            m_inPass = false;
+            m_passColor = m_passDepth = nullptr;
+        }
+
+        // color null + depth: depth only
+        void bindPass(rhi::Texture *color, rhi::Texture *depth)
+        {
+            if (m_inPass && color == m_passColor && depth == m_passDepth)
+                return;
+            endPass();
+            rhi::PassDesc p;
+            p.color = color;
+            p.depth = depth;
+            p.depthOnly = color == nullptr;
+            m_dev.beginPass(p);
+            m_inPass = true;
+            m_passColor = color;
+            m_passDepth = depth;
+        }
+
+        static void ndcRect(float x, float y, float w, float h, float targetW, float targetH, float out[4])
+        {
+            out[0] = x / targetW * 2.0f - 1.0f;
+            out[1] = 1.0f - y / targetH * 2.0f;
+            out[2] = (x + w) / targetW * 2.0f - 1.0f;
+            out[3] = 1.0f - (y + h) / targetH * 2.0f;
+        }
+
+        // src (uv rect, 0..1) -> dst pixel rect, point or bilinear; opaque: alpha written as 1
+        void blit(rhi::Texture &src, std::array<float, 4> uv, rhi::Texture &dst, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                  bool linear, bool opaque)
+        {
+            bindPass(&dst, nullptr);
+            QuadConstants q{};
+            ndcRect(static_cast<float>(x), static_cast<float>(y), static_cast<float>(w), static_cast<float>(h),
+                    static_cast<float>(dst.desc().width), static_cast<float>(dst.desc().height), q.rect);
+            std::memcpy(q.uvRect, uv.data(), sizeof(q.uvRect));
+            q.params[1] = opaque ? 1.0f : 0.0f;
+            m_dev.setScissor(0, 0, static_cast<int>(dst.desc().width), static_cast<int>(dst.desc().height));
+            m_dev.setPipeline(*m_blit);
+            m_dev.updateBuffer(*m_quadCb, &q, sizeof(q));
+            m_dev.setConstants(0, *m_quadCb);
+            m_dev.setTexture(0, &src, linear ? m_linear.get() : m_point.get());
+            m_dev.draw(4);
+            m_dev.setTexture(0, nullptr, nullptr);
+        }
+
+        // solid colour into `color`, or a depth value into `depth` (depth-only), inside a pixel rect
+        void fill(rhi::Texture *color, rhi::Texture *depth, uint32_t x, uint32_t y, uint32_t w, uint32_t h, std::array<float, 4> rgba,
+                  float depthValue)
+        {
+            rhi::Texture *target = color ? color : depth;
+            bindPass(color, color ? nullptr : depth);
+            const int tw = static_cast<int>(target->desc().width), th = static_cast<int>(target->desc().height);
+            const int x0 = std::min<int>(static_cast<int>(x), tw), y0 = std::min<int>(static_cast<int>(y), th);
+            m_dev.setScissor(x0, y0, std::min<int>(static_cast<int>(w), tw - x0), std::min<int>(static_cast<int>(h), th - y0));
+            QuadConstants q{};
+            q.rect[0] = -1.0f; q.rect[1] = 1.0f; q.rect[2] = 1.0f; q.rect[3] = -1.0f;
+            std::memcpy(q.color, rgba.data(), sizeof(q.color));
+            q.params[0] = depthValue;
+            m_dev.setPipeline(color ? *m_fillColor : *m_fillDepth);
+            m_dev.updateBuffer(*m_quadCb, &q, sizeof(q));
+            m_dev.setConstants(0, *m_quadCb);
+            m_dev.draw(4);
+        }
+
+        std::unique_ptr<rhi::Texture> makeTarget(uint32_t w, uint32_t h, bool depth)
+        {
+            rhi::TextureDesc d;
+            d.width = w * m_scale;
+            d.height = h * m_scale;
+            d.format = depth ? rhi::Format::D32F : rhi::Format::RGBA8;
+            d.usage = depth ? rhi::UsageDepth : (rhi::UsageRenderTarget | rhi::UsageSampled);
+            d.name = depth ? "gs depth" : "gs target";
+            auto t = m_dev.createTexture(d);
+            endPass();
+            rhi::PassDesc p;
+            p.name = "gs target clear";
+            if (depth)
+            {
+                p.depth = t.get();
+                p.depthOnly = true;
+                p.clearDepth = true;
+                p.clearDepthValue = 0.0f;
+            }
+            else
+            {
+                p.color = t.get();
+                p.clearColor = true;
+                p.clearRgba[3] = 0.0f;
+            }
+            m_dev.beginPass(p);
+            m_dev.endPass();
+            return t;
+        }
+
+        // grows the target to at least w x h (PS2 pixels), keeping its contents
+        void growRt(Rt &rt, uint32_t w, uint32_t h)
+        {
+            if (rt.color && rt.w >= w && rt.h >= h)
+                return;
+            Rt grown;
+            grown.w = std::max(rt.w, w);
+            grown.h = std::max(rt.h, h);
+            grown.color = makeTarget(grown.w, grown.h, false);
+            if (rt.color)
+                m_dev.copyTexture(*grown.color, 0, 0, *rt.color, 0, 0, rt.w * m_scale, rt.h * m_scale);
+            rt = std::move(grown);
+        }
+
+        Rt &rtFor(uint32_t fbp, uint32_t fbw, uint32_t minH)
+        {
+            Rt &rt = m_rts[fbp];
+            growRt(rt, std::max<uint32_t>(fbw, 1u) * 64u, std::max<uint32_t>(minH, 512u));
+            return rt;
+        }
+
+        // grows (recreated, cleared to 0) to at least w x h
+        Depth &depthFor(uint32_t zbp, uint32_t w, uint32_t h)
+        {
+            Depth &d = m_depth[zbp];
+            if (d.tex && d.w >= w && d.h >= h)
+                return d;
+            d.w = std::max(d.w, w);
+            d.h = std::max(d.h, h);
+            d.tex = makeTarget(d.w, d.h, true);
+            return d;
+        }
+
+        void rtUpload(const RtUpload &u)
+        {
+            Rt &rt = rtFor(u.fbp, u.fbw, u.y + u.h);
+            // uploaded at 1x, then drawn into the target at its scale
+            auto tmp = m_dev.createTexture({u.w, u.h, rhi::Format::RGBA8, rhi::UsageSampled, "gs rt upload"}, u.pixels.data(), u.w * 4u);
+            if (tmp)
+                blit(*tmp, {0.0f, 0.0f, 1.0f, 1.0f}, *rt.color, u.x * m_scale, u.y * m_scale, u.w * m_scale, u.h * m_scale, false, false);
+        }
+
+        void clear(const ClearCmd &cl)
+        {
+            Rt &rt = rtFor(cl.s.fbp, cl.s.fbw, cl.s.scy1 + 1u);
+            const std::array<float, 4> rgba = {(cl.rgba & 0xFF) / 255.0f, ((cl.rgba >> 8) & 0xFF) / 255.0f, ((cl.rgba >> 16) & 0xFF) / 255.0f,
+                                               ((cl.rgba >> 24) & 0xFF) / 255.0f};
+            fill(rt.color.get(), nullptr, cl.s.scx0 * m_scale, cl.s.scy0 * m_scale, (cl.s.scx1 - cl.s.scx0 + 1u) * m_scale,
+                 (cl.s.scy1 - cl.s.scy0 + 1u) * m_scale, rgba, 0.0f);
+        }
+
+        void depthFill(const DepthFillCmd &f, bool log)
+        {
+            const auto it = m_depth.find(f.zbp);
+            if (it == m_depth.end() || !it->second.tex)
+                return; // created (cleared) on first use
+            fill(nullptr, it->second.tex.get(), 0, f.y0 * m_scale, f.width * m_scale, (f.y1 - f.y0) * m_scale, {0, 0, 0, 0}, f.value);
+            if (log)
+                std::fprintf(stderr, "[draw] depth fill zbp=%u rows %u..%u width %u value %.6f\n", f.zbp, f.y0, f.y1, f.width, f.value);
+        }
+
+        rhi::Pipeline &drawPipeline(const GsBlend &b, uint8_t mask, bool depthTest, uint32_t ztst, bool zwrite, uint8_t mode)
+        {
+            const bool dual = b.enable && (b.src == rhi::BlendFactor::Src1Alpha || b.src == rhi::BlendFactor::InvSrc1Alpha ||
+                                           b.dst == rhi::BlendFactor::Src1Alpha || b.dst == rhi::BlendFactor::InvSrc1Alpha);
+            const uint32_t key = (b.enable ? 1u : 0u) | (static_cast<uint32_t>(b.src) << 1) | (static_cast<uint32_t>(b.dst) << 5) |
+                                 (static_cast<uint32_t>(b.op) << 9) | (uint32_t(mask & 0xF) << 12) | ((depthTest ? 1u : 0u) << 16) |
+                                 ((ztst & 3u) << 17) | ((zwrite ? 1u : 0u) << 19) | (uint32_t(mode & 3u) << 20) | ((dual ? 1u : 0u) << 22);
+            std::unique_ptr<rhi::Pipeline> &p = m_drawPipelines[key];
+            if (!p)
+            {
+                const render::GsShaders &sh = render::gsShaders();
+                rhi::PipelineDesc d;
+                d.vertex = sh.drawVS;
+                d.pixel = dual ? sh.drawPSDual : sh.drawPS;
+                d.attributes = {
+                    {"POSITION", 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(HwVertex, x))},
+                    {"TEXCOORD", 0, rhi::VertexFormat::Float3, static_cast<uint32_t>(offsetof(HwVertex, s))},
+                    {"COLOR", 0, rhi::VertexFormat::UByte4Norm, static_cast<uint32_t>(offsetof(HwVertex, r))},
+                    {"TEXCOORD", 1, rhi::VertexFormat::Float1, static_cast<uint32_t>(offsetof(HwVertex, fog))},
+                };
+                d.stride = sizeof(HwVertex);
+                d.topology = mode == 1 ? rhi::Topology::Lines : mode == 2 ? rhi::Topology::Points : rhi::Topology::Triangles;
+                d.blend.enable = b.enable;
+                d.blend.srcColor = b.src;
+                d.blend.dstColor = b.dst;
+                d.blend.colorOp = b.op;
+                d.blend.srcAlpha = rhi::BlendFactor::One;
+                d.blend.dstAlpha = rhi::BlendFactor::Zero;
+                d.blend.writeMask = mask;
+                d.depth.test = depthTest;
+                d.depth.write = depthTest && zwrite;
+                d.depth.func = ztst == 1 ? rhi::Compare::Always : ztst == 2 ? rhi::Compare::GreaterEqual : rhi::Compare::Greater;
+                d.name = "gs draw";
+                p = m_dev.createPipeline(d);
+            }
+            return *p;
+        }
+
+        void draw(const DrawCmd &dc)
+        {
+            const HwState &s = dc.s;
+            if (!dc.count || !m_vb)
+                return;
+            Rt &rt = rtFor(s.fbp, s.fbw, s.scy1 + 1u);
+            const bool depthOn = s.zte != 0u;
+            Depth *depth = nullptr;
+            if (depthOn)
+            {
+                // D3D binds a depth buffer only with a colour target of the same size: grow whichever is smaller
+                depth = &depthFor(s.zbp, rt.w, rt.h);
+                growRt(rt, depth->w, depth->h);
+            }
+
+            // texture: decoded VRAM, another render target, or this target itself (sampled from a copy)
+            rhi::Texture *tex = nullptr;
+            float rtScale = 1.0f;
+            if (s.tme)
+            {
+                if (s.texIsRt)
+                {
+                    auto it = m_rts.find(s.rtFbp);
+                    if (it != m_rts.end())
+                    {
+                        tex = it->second.color.get();
+                        if (s.rtFbp == s.fbp)
+                            tex = feedbackCopy(*tex);
+                    }
+                    rtScale = static_cast<float>(m_scale);
+                }
+                else
+                {
+                    auto it = m_textures.find(s.texKey);
+                    tex = it != m_textures.end() ? it->second.get() : nullptr;
+                }
+            }
+
+            bindPass(rt.color.get(), depth ? depth->tex.get() : nullptr);
+            m_dev.setScissor(s.scx0 * m_scale, s.scy0 * m_scale, (s.scx1 - s.scx0 + 1) * m_scale, (s.scy1 - s.scy0 + 1) * m_scale);
+
+            DrawConstants c{};
+            c.targetRtFix[0] = static_cast<float>(rt.w);
+            c.targetRtFix[1] = static_cast<float>(rt.h);
+            c.targetRtFix[2] = rtScale;
+            c.targetRtFix[3] = s.fix;
+            c.tmeTfxTccFst[0] = s.tme;
+            c.tmeTfxTccFst[1] = s.tfx;
+            c.tmeTfxTccFst[2] = s.tcc;
+            c.tmeTfxTccFst[3] = s.fst;
+            c.linearIipFgeAte[0] = s.linear;
+            c.linearIipFgeAte[1] = s.iip;
+            c.linearIipFgeAte[2] = s.fge;
+            c.linearIipFgeAte[3] = s.ate;
+            c.atstArefAfailRt[0] = s.atst;
+            c.atstArefAfailRt[1] = s.aref;
+            c.atstArefAfailRt[2] = 0;
+            c.atstArefAfailRt[3] = s.texIsRt;
+            c.texSizeWrap[0] = s.tw;
+            c.texSizeWrap[1] = s.th;
+            c.texSizeWrap[2] = s.wms;
+            c.texSizeWrap[3] = s.wmt;
+            c.region[0] = s.minu;
+            c.region[1] = s.maxu;
+            c.region[2] = s.minv;
+            c.region[3] = s.maxv;
+            c.rtOrigin[0] = s.rtOx;
+            c.rtOrigin[1] = s.rtOy;
+            c.fogColor[0] = s.fogR;
+            c.fogColor[1] = s.fogG;
+            c.fogColor[2] = s.fogB;
+
+            GsBlend b;
+            if (!gsBlend(s, b))
+            {
+                b.enable = false;
+                if (m_reportedBlend.insert(s.ba | (s.bb << 2) | (s.bd << 6)).second)
+                    std::fprintf(stderr, "[gs-hw] unsupported blend A=%u B=%u C=%u D=%u (drawn opaque)\n", s.ba, s.bb, s.bc, s.bd);
+            }
+            c.blendCPremul[0] = s.bc;
+            c.blendCPremul[1] = b.premul;
+
+            // frame write mask (whole channels only)
+            const uint8_t mr = (s.fbmsk & 0xFFu) != 0xFFu, mg = (s.fbmsk & 0xFF00u) != 0xFF00u, mb = (s.fbmsk & 0xFF0000u) != 0xFF0000u,
+                          ma = (s.fbmsk & 0xFF000000u) != 0xFF000000u;
+            uint8_t mask = static_cast<uint8_t>(mr | (mg << 1) | (mb << 2) | (ma << 3));
+            bool zwrite = depthOn && !s.zmsk;
+
+            // pass 1: pixels passing the alpha test (or all of them)
+            if (s.ate && s.atst != 1u && s.afail != 0u)
+            {
+                // AFAIL other than KEEP: draw the passing pixels normally, the failing ones with the AFAIL mask
+                submit(dc, c, tex, drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode));
+                c.atstArefAfailRt[2] = 1;
+                if (s.afail == 1u) zwrite = false;                      // FB_ONLY
+                else if (s.afail == 2u) mask = 0;                       // ZB_ONLY
+                else { mask = static_cast<uint8_t>(mask & 7u); zwrite = false; } // RGB_ONLY
+            }
+            else if (!(s.ate && s.atst != 1u))
+            {
+                c.linearIipFgeAte[3] = 0; // no alpha test (ATST ALWAYS)
+            }
+            submit(dc, c, tex, drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode));
+        }
+
+        void submit(const DrawCmd &dc, const DrawConstants &c, rhi::Texture *tex, rhi::Pipeline &pipeline)
+        {
+            m_dev.setPipeline(pipeline);
+            m_dev.setVertexBuffer(*m_vb);
+            m_dev.updateBuffer(*m_drawCb, &c, sizeof(c));
+            m_dev.setConstants(0, *m_drawCb);
+            m_dev.setTexture(0, tex, nullptr);
+            m_dev.draw(dc.count, dc.first);
+        }
+
+        // a draw that samples its own target reads a copy (D3D cannot sample a bound render target)
+        rhi::Texture *feedbackCopy(rhi::Texture &target)
+        {
+            const rhi::TextureDesc &td = target.desc();
+            if (!m_feedback || m_feedback->desc().width != td.width || m_feedback->desc().height != td.height)
+                m_feedback = m_dev.createTexture({td.width, td.height, rhi::Format::RGBA8, rhi::UsageSampled, "gs feedback copy"});
+            m_dev.copyTexture(*m_feedback, 0, 0, target, 0, 0, td.width, td.height);
+            if (m_feedbackReported++ == 0)
+                std::fprintf(stderr, "[gs-hw] a draw samples its own render target: reading a copy\n");
+            return m_feedback.get();
+        }
+
+        rhi::Device &m_dev;
+        uint32_t m_scale;
+        bool m_ready = false;
+        std::unique_ptr<rhi::Buffer> m_vb, m_drawCb, m_quadCb;
+        size_t m_vbCapacity = 0;
+        std::unique_ptr<rhi::Sampler> m_point, m_linear;
+        std::unique_ptr<rhi::Pipeline> m_blit, m_fillColor, m_fillDepth;
+        std::unordered_map<uint32_t, std::unique_ptr<rhi::Pipeline>> m_drawPipelines;
+        std::unordered_map<uint32_t, Rt> m_rts;
+        std::unordered_map<uint32_t, Depth> m_depth;
+        std::unordered_map<uint64_t, std::unique_ptr<rhi::Texture>> m_textures;
+        std::unique_ptr<rhi::Texture> m_display, m_feedback;
+        uint32_t m_displayW = 640, m_displayH = 448;
+        std::unordered_set<uint32_t> m_reportedBlend;
+        uint64_t m_feedbackReported = 0;
+        bool m_inPass = false;
+        rhi::Texture *m_passColor = nullptr, *m_passDepth = nullptr;
+    };
+
+    // ------------------------------------------------------------------------------------------------------
     class HwBackend final : public GSHwBackendHandle, public GSHwPresenter
     {
     public:
@@ -513,6 +1157,14 @@ void main()
             }
             if (!n)
                 return;
+            if (!s.iip) // [gta-recomp] flat: the GS colours with the last vertex; give every vertex that colour
+                for (uint32_t i = 0; i + 1 < n; ++i)
+                {
+                    out[i].r = out[n - 1].r;
+                    out[i].g = out[n - 1].g;
+                    out[i].b = out[n - 1].b;
+                    out[i].a = out[n - 1].a;
+                }
             if (s.zte && s.ztst != 1u && s.zbp != s.fbp) // a depth buffer in real use (tested against)
             {
                 DepthInfo &di = m_depthBufs[s.zbp];
@@ -1237,10 +1889,20 @@ void main()
         GSHwPresenter &presenter() override { return *this; }
 
         // ---- GSHwPresenter (main thread) ---------------------------------------------------------------------
-        bool executeAndGetDisplay(uint32_t &glTexture, uint32_t &width, uint32_t &height) override
+        bool executeAndGetDisplay(rhi::Device &device, rhi::Texture *&texture, uint32_t &width, uint32_t &height) override
         {
-            if (!m_glReady && !initGl())
+            if (!m_rhi)
+            {
+                m_rhi = std::make_unique<RhiExecutor>(device, m_scale);
+                std::fprintf(stderr, m_rhi->ready() ? "[gs-hw] renderer ready (%s), scale %ux\n" : "[gs-hw] renderer failed (%s)\n",
+                             device.adapterName().c_str(), m_scale);
+            }
+            if (!m_rhi->ready())
                 return false;
+            // [gta-recomp] PS2X_HW_PARITY=1: the former OpenGL executor runs the same frames in a hidden GL context and
+            // the two displayed pictures are compared (docs/NATIVE_RENDERER.md, stage 3)
+            static const bool parityWanted = std::getenv("PS2X_HW_PARITY") != nullptr;
+            const bool parity = parityWanted && (m_glReady || initGl());
             std::deque<std::unique_ptr<Frame>> frames;
             {
                 std::lock_guard<std::mutex> lock(m_queueMutex);
@@ -1249,27 +1911,31 @@ void main()
             m_queueCv.notify_all();
             if (!frames.empty())
             {
-                GLint prevFbo = 0, prevViewport[4] = {};
-                m_gl.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
-                m_gl.glGetIntegerv(GL_VIEWPORT, prevViewport);
                 // [gta-recomp] F12 (or PS2X_HW_DUMP=<frame>): list the next frame's draws and dump its targets
                 static const long dumpAt = std::getenv("PS2X_HW_DUMP") ? std::atol(std::getenv("PS2X_HW_DUMP")) : -1;
                 const bool f12 = ps2control::keyDown(301 /* KEY_F12 */);
                 const bool dumpNow = (f12 && !m_f12Down) ||
                                      (dumpAt >= 0 && !m_dumped && m_executedFrames + frames.size() >= static_cast<uint64_t>(dumpAt));
                 m_f12Down = f12;
-                m_logDraws = dumpNow;
                 for (auto &frame : frames)
-                    execute(*frame);
-                m_logDraws = false;
-                composeDisplay(*frames.back());
+                    m_rhi->execute(*frame, dumpNow);
+                m_rhi->composeDisplay(*frames.back());
+                if (parity)
+                {
+                    GLint prevFbo = 0, prevViewport[4] = {};
+                    m_gl.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+                    m_gl.glGetIntegerv(GL_VIEWPORT, prevViewport);
+                    for (auto &frame : frames)
+                        execute(*frame);
+                    composeDisplay(*frames.back());
+                    compareParity();
+                    restoreHostState(static_cast<GLuint>(prevFbo), prevViewport);
+                }
                 m_executedFrames += frames.size();
                 if (dumpNow)
                 {
                     m_dumped = true;
-                    for (const auto &[fbp, rt] : m_glRts)
-                        dumpTexture(rt.color, rt.w * m_scale, rt.h * m_scale, "rt_" + std::to_string(fbp));
-                    dumpTexture(m_displayTex, m_displayTexW, m_displayTexH, "display");
+                    m_rhi->dump();
                 }
                 static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
                 if (debug)
@@ -1287,12 +1953,10 @@ void main()
                     if (std::chrono::duration<double>(now - since).count() >= 1.0)
                     {
                         const Frame &l = *frames.back();
-                        std::fprintf(stderr, "[gs-hw] %llu frames, %llu draws, %llu verts, %llu tex | display fbp=%u %ux%u at %u,%u fromRt=%d cpu=%zu | rts:",
+                        std::fprintf(stderr, "[gs-hw] %llu frames, %llu draws, %llu verts, %llu tex | display fbp=%u %ux%u at %u,%u fromRt=%d cpu=%zu | rts:%s",
                                      (unsigned long long)nFrames, (unsigned long long)nDraws, (unsigned long long)nVerts,
                                      (unsigned long long)nTex, l.displayFbp, l.displayW, l.displayH, l.displayX, l.displayY,
-                                     l.displayFromRt ? 1 : 0, l.cpuDisplay.size());
-                        for (const auto &[fbp, rt] : m_glRts)
-                            std::fprintf(stderr, " %u(%ux%u)", fbp, rt.w, rt.h);
+                                     l.displayFromRt ? 1 : 0, l.cpuDisplay.size(), m_rhi->describeTargets().c_str());
                         std::fprintf(stderr, " pmode=%llx dispfb1=%llx display1=%llx dispfb2=%llx display2=%llx\n",
                                      (unsigned long long)l.privRegs[0], (unsigned long long)l.privRegs[7], (unsigned long long)l.privRegs[8],
                                      (unsigned long long)l.privRegs[9], (unsigned long long)l.privRegs[10]);
@@ -1300,21 +1964,66 @@ void main()
                         since = now;
                     }
                 }
-                restoreHostState(static_cast<GLuint>(prevFbo), prevViewport);
                 std::lock_guard<std::mutex> lock(m_queueMutex);
                 for (auto &frame : frames)
                     if (m_freeFrames.size() < 6u)
                         m_freeFrames.push_back(std::move(frame));
             }
-            if (!m_displayTex)
+            texture = m_rhi->display();
+            if (!texture)
                 return false;
-            glTexture = m_displayTex;
-            width = m_displayW * m_scale;
-            height = m_displayH * m_scale;
+            width = m_rhi->displayWidth();
+            height = m_rhi->displayHeight();
             return true;
         }
 
-        void releaseGl() override {}
+        // [gta-recomp] PS2X_HW_PARITY: every 30th call, the GL and RHI displays side by side (RGB difference); the first
+        // pictures that differ noticeably are written as parity_<n>_{gl,rhi}.ppm.
+        void compareParity()
+        {
+            if (m_parityCalls++ % 30u != 0u)
+                return;
+            rhi::Texture *d = m_rhi->display();
+            if (!d || !m_displayTex)
+                return;
+            const uint32_t w = d->desc().width, h = d->desc().height;
+            if (w != m_displayTexW || h != m_displayTexH)
+            {
+                std::fprintf(stderr, "[gs-parity] display sizes differ: gl %ux%u, rhi %ux%u\n", m_displayTexW, m_displayTexH, w, h);
+                return;
+            }
+            std::vector<uint8_t> gl(size_t(w) * h * 4u), rh(size_t(w) * h * 4u);
+            m_gl.glBindTexture(GL_TEXTURE_2D, m_displayTex);
+            m_gl.glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, gl.data());
+            m_gl.glBindTexture(GL_TEXTURE_2D, 0);
+            if (!m_rhi->device().readTexture(*d, 0, 0, w, h, rh.data()))
+                return;
+            uint64_t sum = 0, off = 0;
+            int maxDiff = 0;
+            for (size_t i = 0; i < size_t(w) * h; ++i)
+            {
+                int px = 0;
+                for (int c = 0; c < 3; ++c)
+                {
+                    const int diff = std::abs(int(gl[i * 4 + c]) - int(rh[i * 4 + c]));
+                    sum += diff;
+                    px = std::max(px, diff);
+                }
+                maxDiff = std::max(maxDiff, px);
+                off += px > 8;
+            }
+            const double mean = double(sum) / (double(w) * h * 3.0);
+            const double offPct = 100.0 * double(off) / (double(w) * h);
+            m_parityWorst = std::max(m_parityWorst, mean);
+            std::fprintf(stderr, "[gs-parity] frame %llu: mean %.3f, max %d, %.3f%% of pixels off by > 8 (worst mean so far %.3f)\n",
+                         (unsigned long long)m_executedFrames, mean, maxDiff, offPct, m_parityWorst);
+            if (mean > 0.25 && m_parityDumps < 6u)
+            {
+                const std::string base = "parity_" + std::to_string(m_parityDumps++) + "_";
+                writePpm(base + "gl.ppm", gl.data(), w, h);
+                writePpm(base + "rhi.ppm", rh.data(), w, h);
+            }
+        }
 
         void dumpTexture(GLuint tex, uint32_t w, uint32_t h, const std::string &name)
         {
@@ -2225,6 +2934,10 @@ void main()
         uint32_t m_displayTexW = 0, m_displayTexH = 0, m_displayW = 640, m_displayH = 448;
         uint64_t m_executedFrames = 0;
         uint32_t m_loggedTransfers = 0, m_loggedTextures = 0;
+        std::unique_ptr<RhiExecutor> m_rhi; // [gta-recomp] the renderer (D3D11)
+        uint64_t m_parityCalls = 0;         // [gta-recomp] PS2X_HW_PARITY
+        uint32_t m_parityDumps = 0;
+        double m_parityWorst = 0.0;
         bool m_dumped = false;
         bool m_f12Down = false;  // [gta-recomp]
         bool m_logDraws = false; // [gta-recomp]

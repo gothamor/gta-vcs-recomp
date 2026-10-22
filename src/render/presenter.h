@@ -14,7 +14,7 @@ namespace rhi
 
 namespace present
 {
-    // A picture to show: made on the CPU (software GS, paraLLEl-GS readback) or copied from the OpenGL HW renderer.
+    // A picture to show: made on the CPU (software GS, paraLLEl-GS readback) or a renderer's own texture.
     struct Picture
     {
         std::shared_ptr<rhi::Texture> texture;
@@ -29,10 +29,6 @@ namespace present
 
     Picture createPicture(int width, int height, bool linear);
     void updatePicture(const Picture &picture, const void *rgba); // whole picture, rows top-down, tightly packed
-
-    // Stage 2 stopgap, removed in stage 3: copies the OpenGL HW renderer's picture (a texture in the platform layer's
-    // hidden GL context) into `picture` (resized as needed).
-    bool pictureFromGl(Picture &picture, uint32_t glTexture, int width, int height);
 
     // Per host frame: beginFrame() before platform::beginFrame() (Dear ImGui renderer), drawWindow() after
     // platform::endUiFrame(), then optional captures, then present().

@@ -204,11 +204,13 @@ namespace rhi
         virtual ~Pipeline() = default;
     };
 
-    // A pass draws into one colour target (null = the swapchain's back buffer) and an optional depth target.
+    // A pass draws into one colour target (null = the swapchain's back buffer, unless depthOnly) and an optional
+    // depth target. Colour and depth targets bound together must be the same size.
     struct PassDesc
     {
         Texture *color = nullptr;
         Texture *depth = nullptr;
+        bool depthOnly = false; // no colour target: only `depth`
         bool clearColor = false;
         float clearRgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         bool clearDepth = false;

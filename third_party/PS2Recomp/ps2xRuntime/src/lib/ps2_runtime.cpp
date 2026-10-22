@@ -439,13 +439,15 @@ static bool UploadGpuFrame(present::Picture &owned, present::Picture &shown, PS2
 {
     if (GSHwBackendHandle *hw = rt->hwRenderer())
     {
-        // [gta-recomp] the HW renderer is OpenGL until stage 3 of docs/NATIVE_RENDERER.md: its picture is copied over
-        static present::Picture s_hwPicture;
-        uint32_t id = 0, w = 0, h = 0;
-        if (hw->presenter().executeAndGetDisplay(id, w, h) &&
-            present::pictureFromGl(s_hwPicture, id, static_cast<int>(w), static_cast<int>(h)))
+        // [gta-recomp] the HW renderer draws on the window's device: its display texture is shown directly
+        rhi::Texture *display = nullptr;
+        uint32_t w = 0, h = 0;
+        if (hw->presenter().executeAndGetDisplay(*present::device(), display, w, h))
         {
-            shown = s_hwPicture;
+            shown.texture = std::shared_ptr<rhi::Texture>(display, [](rhi::Texture *) {}); // owned by the HW renderer
+            shown.width = static_cast<int>(w);
+            shown.height = static_cast<int>(h);
+            shown.linear = true;
             outWidth = w;
             outHeight = h;
         }
@@ -998,11 +1000,8 @@ bool PS2Runtime::initialize(const char *title)
             std::cerr << "Failed to create the window" << std::endl;
             return false;
         }
-        if (m_hw && !platform::glInit()) // the OpenGL HW renderer's context (stage 2 stopgap)
-        {
-            std::cerr << "PS2X_GS=hw needs OpenGL 3.3" << std::endl;
-            return false;
-        }
+        if (m_hw && std::getenv("PS2X_HW_PARITY") && !platform::glInit()) // the former GL executor, as a checker
+            std::cerr << "PS2X_HW_PARITY needs OpenGL 3.3: no parity check" << std::endl;
         ps2control::start();
         ps2AudioInit(); // [gta-recomp] SPU2 output stream
         m_audioBackend.setAudioReady(platform::audioAvailable());

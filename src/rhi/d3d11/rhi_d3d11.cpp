@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 
 using Microsoft::WRL::ComPtr;
 
@@ -428,12 +429,17 @@ namespace rhi
             std::unique_ptr<Pipeline> createPipeline(const PipelineDesc &desc) override
             {
                 auto p = std::make_unique<D3DPipeline>();
-                if (FAILED(m_device->CreateVertexShader(desc.vertex.data, desc.vertex.size, nullptr, &p->vs)) ||
-                    FAILED(m_device->CreatePixelShader(desc.pixel.data, desc.pixel.size, nullptr, &p->ps)))
+                // shader objects are shared by every pipeline made from the same bytecode
+                ComPtr<ID3D11VertexShader> &vs = m_vertexShaders[desc.vertex.data];
+                ComPtr<ID3D11PixelShader> &ps = m_pixelShaders[desc.pixel.data];
+                if ((!vs && FAILED(m_device->CreateVertexShader(desc.vertex.data, desc.vertex.size, nullptr, &vs))) ||
+                    (!ps && FAILED(m_device->CreatePixelShader(desc.pixel.data, desc.pixel.size, nullptr, &ps))))
                 {
                     std::fprintf(stderr, "[rhi] shaders of pipeline '%s' rejected\n", desc.name ? desc.name : "?");
                     return nullptr;
                 }
+                p->vs = vs;
+                p->ps = ps;
                 if (!desc.attributes.empty())
                 {
                     std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
@@ -479,7 +485,16 @@ namespace rhi
             {
                 ID3D11RenderTargetView *rtv = m_backRtv.Get();
                 uint32_t w = m_width, h = m_height;
-                if (pass.color)
+                if (pass.depthOnly)
+                {
+                    rtv = nullptr;
+                    if (pass.depth)
+                    {
+                        w = pass.depth->desc().width;
+                        h = pass.depth->desc().height;
+                    }
+                }
+                else if (pass.color)
                 {
                     auto &t = static_cast<D3DTexture &>(*pass.color);
                     rtv = t.rtv.Get();
@@ -490,7 +505,7 @@ namespace rhi
                 // a target may still be bound as a shader input from an earlier pass
                 ID3D11ShaderResourceView *none[8] = {};
                 m_context->PSSetShaderResources(0, 8, none);
-                m_context->OMSetRenderTargets(1, &rtv, dsv);
+                m_context->OMSetRenderTargets(rtv ? 1u : 0u, rtv ? &rtv : nullptr, dsv);
                 if (pass.clearColor && rtv)
                     m_context->ClearRenderTargetView(rtv, pass.clearRgba);
                 if (pass.clearDepth && dsv)
@@ -678,6 +693,8 @@ namespace rhi
             std::string m_adapterName;
             D3DPipeline *m_pipeline = nullptr;
             float m_blendConstant[4] = {0, 0, 0, 0};
+            std::unordered_map<const void *, ComPtr<ID3D11VertexShader>> m_vertexShaders; // by bytecode
+            std::unordered_map<const void *, ComPtr<ID3D11PixelShader>> m_pixelShaders;
             bool m_passMarker = false;
             bool m_ui = false;
             bool m_lostReported = false;

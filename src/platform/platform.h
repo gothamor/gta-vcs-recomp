@@ -140,8 +140,8 @@ namespace platform
     bool audioOpen(uint32_t rate, uint32_t bufferFrames, AudioFill fill);
     void audioClose();
 
-    // Stage 2 stopgap (docs/NATIVE_RENDERER.md), removed in stage 3: an OpenGL 3.3 core context on a hidden window,
-    // current on the main thread, for the OpenGL HW GS renderer. glProc: its entry points (null when missing).
+    // Stage 3 transition (docs/NATIVE_RENDERER.md): an OpenGL 3.3 core context on a hidden window, current on the
+    // main thread, for the former OpenGL GS executor (PS2X_HW_PARITY). glProc: its entry points (null when missing).
     bool glInit();
     void *glProc(const char *name);
 
