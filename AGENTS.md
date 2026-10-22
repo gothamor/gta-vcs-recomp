@@ -58,6 +58,7 @@ python tools/gamectl.py press F2|screenshot f.png|perf|quit
 python tools/rig.py start --save build/rig/saves/fortbaxter   # straight into gameplay from a card copy
 python tools/rig.py player|scripts|peekf 0x4e4910 1|scm <hex>  # inspect / drive the running game
 python tools/tour.py OUT [--every 9 --limit 18]               # world tour (quick subset with --every/--limit)
+python tools/saves.py [OUT]                                   # save / Load Game / Delete Game through the menus
 ```
 
 The rig (`src/debug/rig.cpp`, `tools/rig.py`) drives the game through its own script VM: `Game.teleport`,

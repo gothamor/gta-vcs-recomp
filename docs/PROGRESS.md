@@ -61,7 +61,8 @@
 - [x] Memory card load (2026-10-22): the game finds its saves at start-up and loads the newest
       ("Load Successful", back at the save point) since `sceMcGetDir` lists folders in card order
       (PS2RECOMP_PATCHES.md); before, saves were written but never seen. Saving over a slot replaces its
-      file (2026-10-23); the Load Game menu itself not driven yet
+      file (2026-10-23). Save (slot 2), Load Game (slot 1) and Delete Game through the game's own menus all work
+      (2026-10-23, `tools/saves.py`, regress step "saves"; game-internals.md 10e)
 - [x] Frontend menus render (pause menu, LOAD/NEW/DELETE menu when a save exists)
 - [x] World vanishing when moving fast / driving: HW renderer never cleared the bottom half of
       the Z buffer (see PS2RECOMP_PATCHES.md, gs_hw.cpp depth fill)
@@ -152,7 +153,7 @@ Findings so far (rig runs; details in game-internals.md):
 | `PS2X_SPU2_REVERB=0` | mute the SPU2 reverb (A/B listening) |
 | `PS2X_AUDIO=0`, `PS2X_AUDIO_DUMP=f.wav`, `PS2X_AUDIO_STATS=1` | no audio output / record the SPU2 mix / underrun and fill stats |
 | `PS2X_IOP_REALTIME=0` | IOP time purely from EE cycles (audio slows with the game) |
-| `VCS_TEST_SAVE=s` | save to slot 1 through the game's code s seconds after boot |
+| `VCS_TEST_SAVE=s[:slot]` | save to slot 1 (or 1..8) through the game's code s seconds after boot (mid-script: prefer `tools/saves.py`) |
 | `VCS_TRACE_SECTORS=1`, `VCS_TRACE_CELL=1` | world sector draw / current hex cell vs camera |
 | `VCS_DUMP_RAM=s,s,...` | write EE RAM to ram_<s>.bin at those seconds |
 | `PS2X_DMA_HIST=1` | VIF1 payload per MB of RAM every 5 s |

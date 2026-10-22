@@ -396,7 +396,7 @@ namespace
                          static_cast<unsigned long long>(allIn));
     }
 
-    // VCS_TEST_SAVE=<s>: <s> seconds after boot, save to slot 1 through the game's own memory card code, in the
+    // VCS_TEST_SAVE=<s>[:<slot>]: <s> seconds after boot, save to slot 1 (or 1..8) through the game's own memory card code, in the
     // order FUN_00108128 (the safehouse save menu's action) uses: FUN_00276bf0(card manager 0x510480, 0) scans
     // the card, the "saving" flag at 0x48A664 goes up, FUN_002778a8(manager, slot) saves, the flag goes down.
     // Each call is made as a guest tail call from scePadRead (pc = function, ra = scePadRead's return address),
@@ -437,6 +437,11 @@ namespace
         static const auto start = std::chrono::steady_clock::now();
         static const char *saveEnv = std::getenv("VCS_TEST_SAVE");
         static const int delay = saveEnv ? std::atoi(saveEnv) : 0;
+        static const uint32_t slot = [] {
+            const char *colon = saveEnv ? std::strchr(saveEnv, ':') : nullptr;
+            const int s = colon ? std::atoi(colon + 1) : 1;
+            return static_cast<uint32_t>(std::clamp(s, 1, 8) - 1); // the game counts slots from 0
+        }();
         static int step = 0;
         constexpr uint32_t kCardManager = 0x00510480u, kSavingFlag = 0x0048A664u;
         g_origPadRead(rdram, ctx, runtime);
@@ -445,10 +450,10 @@ namespace
             return;
         uint32_t status = 0;
         std::memcpy(&status, rdram + kCardManager + 0x54u, 4);
-        const auto tailCall = [&](uint32_t function)
+        const auto tailCall = [&](uint32_t function, uint32_t a1 = 0u)
         {
             SET_GPR_U32(ctx, 4, kCardManager);
-            SET_GPR_U32(ctx, 5, 0u);
+            SET_GPR_U32(ctx, 5, a1);
             ctx->pc = function;
         };
         switch (step++)
@@ -459,10 +464,10 @@ namespace
             break;
         case 1:
         {
-            std::fprintf(stderr, "[mc-test] scan done (status %u); saving to slot 1\n", status);
+            std::fprintf(stderr, "[mc-test] scan done (status %u); saving to slot %u\n", status, slot + 1u);
             const uint32_t one = 1u;
             std::memcpy(rdram + kSavingFlag, &one, 4);
-            tailCall(0x002778A8u);
+            tailCall(0x002778A8u, slot);
             break;
         }
         case 2:

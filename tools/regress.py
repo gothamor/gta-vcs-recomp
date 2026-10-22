@@ -10,6 +10,7 @@ Steps (each a tool of its own, run in turn; the game window shows):
   missions  tools/missions.py on a few story missions (crash / hang / dark / frame time)
   drive     tools/drive.py on two spots (frame time, black / dip frames)
   evening   the hospital at 12:00 / 20:00 / 21:00 - no black pictures (the evening black frames)
+  saves     tools/saves.py: save to slot 2, Load Game slot 1, Delete Game slot 2 through the game's menus
 
 Writes OUT/report.md and OUT/metrics.json (default OUT: build/regress/<date-time>). --set-baseline stores this
 run as build/regress/baseline (metrics.json + the scenes capture); later runs report what changed against it:
@@ -117,6 +118,13 @@ def step_evening(out, quick):
     return {"luma": lumas, "black_times": black}
 
 
+def step_saves(out, quick):
+    d = os.path.join(out, "saves")
+    run([os.path.join(TOOLS, "saves.py"), d], os.path.join(out, "saves.log"))
+    path = os.path.join(d, "results.json")
+    return {k: v["ok"] for k, v in json.load(open(path)).items()} if os.path.isfile(path) else {"error": "no results"}
+
+
 def compare(base, new):
     notes = []
     bt, nt = base.get("tour", {}), new.get("tour", {})
@@ -139,6 +147,9 @@ def compare(base, new):
             notes.append("drive %s %d -> %d" % (k, bd.get(k, 0), nd.get(k, 0)))
     for t in new.get("evening", {}).get("black_times", []):
         notes.append("evening: black picture at %s (the evening black frames are back?)" % t)
+    for k, ok in new.get("saves", {}).items():
+        if ok is not True:
+            notes.append("saves: %s failed (see saves.log and the screenshots)" % k)
     for s in new.get("scenes", {}).get("compare_failed", []):
         notes.append("scene %s differs from the baseline (see scenes_compare.log, diff images)" % s)
     return notes
@@ -154,7 +165,7 @@ def main():
     os.makedirs(out, exist_ok=True)
     metrics = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "quick": a.quick}
     for name, fn in (("scenes", step_scenes), ("tour", step_tour), ("missions", step_missions), ("drive", step_drive),
-                     ("evening", step_evening)):
+                     ("evening", step_evening), ("saves", step_saves)):
         print("[regress] %s" % name)
         t0 = time.time()
         try:

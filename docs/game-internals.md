@@ -382,6 +382,24 @@ keeps its order in a hidden `.ps2x-order` file (PS2RECOMP_PATCHES.md).
   `scePadRead`. A direct host call of a guest function is not safe: a scheduler checkpoint inside it
   unwinds the call and the rest of the routine never runs.
 
+### 10e. The save / load / delete menus (driven 2026-10-23, `tools/saves.py`)
+
+- **Save Game** is opened by scripts with `ACTIVATE_SAVE_MENU` (opcode 0x0260, no arguments; handler entry at
+  `0x4BFDF0` in the opcode table) - the rig can open it anywhere. "Save the current game?" -> Save Game -> the
+  8-slot list ("1 Soldier  22 Oct 2026 23:31:27", "Save File 2 Not Present" ...) with the cursor on **Cancel**;
+  an empty slot asks "Are you sure you want to save this game?", an used one "Proceed with overwriting this saved
+  game?" (both default to **No**), then "Save Successful. Select OK to continue."
+- Saving advances the clock (12:02 -> 22:00 at Fort Baxter). Loading that save then starts the story's next
+  mission intro (script `ch_jerr`, "Take Sgt. Martinez's bike") - game flow, not a load problem; the original
+  Fort Baxter save loads straight into the barracks.
+- **Load Game / New Game / Delete Game** are on the pause menu's *Game* tab (Map, Brief, Game, Stats, Controls,
+  Audio, Display). Load lists the slots with their dates, asks "All unsaved progress in your current game will be
+  lost. Proceed with loading?", and reads the slot file in full (98,300 + 4 bytes). Delete asks "Proceed with
+  deleting this saved game?" and ends with "Delete Successful"; the file and its `.ps2x-order` entry go.
+- With two files for slot 1 on the card (the stray `1 In the beginning` from before the directory-order fix) the
+  menus show only the newer one.
+- At boot the newest slot (by the header date) is loaded automatically; with slots 1 and 2 present it took slot 2.
+
 ## 11. Scripts: MAIN.SCM and the script VM
 
 Found 2026-10-22 for the automation rig (`src/debug/rig.cpp`, `tools/rig.py`) from a RAM dump at the Fort Baxter
