@@ -480,12 +480,26 @@ namespace
     // loaded model; the culling result decides the rest.
     // VCS_TRACE_TELEPORT: FUN_0020b3d8(ped, CVector *pos) is the ped teleport (remove, set position, reset, add);
     // log who calls it (it is reached through a vtable) and where to.
+    uint32_t g_currentScript = 0; // CRunningScript being interpreted (FUN_002560d8 ProcessOneCommand), game thread
+    void traceScriptCommand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_currentScript = GPR_U32(ctx, 4);
+        FUN_002560d8_0x2560d8(rdram, ctx, runtime);
+    }
+
     void traceTeleport(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         float pos[3];
         std::memcpy(pos, rdram + (GPR_U32(ctx, 5) & 0x01FFFFFFu), sizeof(pos));
-        std::fprintf(stderr, "[teleport] ped %08x -> (%.2f, %.2f, %.2f) ra=%08x\n", GPR_U32(ctx, 4), pos[0], pos[1], pos[2],
-                     GPR_U32(ctx, 31));
+        char name[9] = {};
+        uint32_t ip = 0;
+        if (g_currentScript)
+        {
+            std::memcpy(name, rdram + ((g_currentScript + 0x20F) & 0x01FFFFFFu), 8);
+            std::memcpy(&ip, rdram + ((g_currentScript + 0x10) & 0x01FFFFFFu), 4);
+        }
+        std::fprintf(stderr, "[teleport] ped %08x -> (%.2f, %.2f, %.2f) ra=%08x last script %s ip %x\n", GPR_U32(ctx, 4), pos[0],
+                     pos[1], pos[2], GPR_U32(ctx, 31), name, ip);
         FUN_0020b3d8_0x20b3d8(rdram, ctx, runtime);
     }
 
@@ -622,7 +636,10 @@ namespace
         if (std::getenv("VCS_TRACE_PACKETS"))
             runtime.replaceFunction(0x00476770u, &tracePacketUse);
         if (std::getenv("VCS_TRACE_TELEPORT"))
+        {
             runtime.replaceFunction(0x0020B3D8u, &traceTeleport);
+            runtime.replaceFunction(0x002560D8u, &traceScriptCommand);
+        }
         if (std::getenv("VCS_TRACE_SECTORS"))
             runtime.replaceFunction(0x00240ED8u, &traceSector);
         if (std::getenv("VCS_TRACE_CELL"))

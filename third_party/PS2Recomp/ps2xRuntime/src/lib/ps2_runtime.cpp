@@ -2892,13 +2892,13 @@ void PS2Runtime::run()
             float luma = 0.0f;
             if (present::frameLuma(shownTex, srcWidth, srcHeight, luma))
             {
-                ps2perf::noteFrameLuma(luma, hostFrame);
-                // PS2X_FRAME_DUMP_DIR: a bright scene going black - save that frame and the next two, and say what the
-                // renderer drew (first 40 such events)
+                const bool started = ps2perf::noteFrameLuma(luma, hostFrame);
+                // PS2X_FRAME_DUMP_DIR: the picture going black or much darker than the scene (a dip) - save that
+                // frame and the next two, and say what the renderer drew (first 60 such events)
                 static const char *dumpDir = std::getenv("PS2X_FRAME_DUMP_DIR");
                 static float prevLuma = 0.0f;
                 static int dumpLeft = 0, events = 0;
-                if (dumpDir && *dumpDir && luma < 3.0f && prevLuma > 40.0f && events < 40)
+                if (dumpDir && *dumpDir && started && events < 60)
                 {
                     ++events;
                     dumpLeft = 3;

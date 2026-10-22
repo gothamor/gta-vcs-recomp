@@ -484,8 +484,9 @@ namespace ps2perf
         float g_dipReference = 0.0f, g_dipMin = 0.0f;
     }
 
-    void noteFrameLuma(float mean, uint64_t hostFrame)
+    bool noteFrameLuma(float mean, uint64_t hostFrame)
     {
+        bool started = false;
         constexpr float kBlack = 6.0f; // the middle of the picture all but black
         g_probedFrames.fetch_add(1, std::memory_order_relaxed);
         if (mean < kBlack)
@@ -493,6 +494,7 @@ namespace ps2perf
             g_blackFrames.fetch_add(1, std::memory_order_relaxed);
             if (g_blackRunLength++ == 0)
             {
+                started = true;
                 g_blackRunStart = hostFrame;
                 g_lumaBeforeRun = g_lastLuma;
             }
@@ -511,6 +513,7 @@ namespace ps2perf
         {
             if (g_dipLength++ == 0)
             {
+                started = true;
                 g_dipStart = hostFrame;
                 g_dipReference = g_lumaAverage;
                 g_dipMin = mean;
@@ -531,6 +534,7 @@ namespace ps2perf
         if (!g_dipLength || g_dipLength > 120)
             g_lumaAverage = g_lumaAverage <= 0.0f ? mean : g_lumaAverage * 0.95f + mean * 0.05f;
         g_lastLuma = mean;
+        return started;
     }
 
     void setOverlay(bool on) { g_overlay = on; }

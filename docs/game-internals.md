@@ -409,11 +409,14 @@ game's own `LOAD_AND_LAUNCH_MISSION_INTERNAL` (refuse while `0x4CD3E7` is set).
 - **Ped teleport**: `FUN_0020b3d8(ped, CVector *pos)` (remove from the world via `FUN_0018fa50(ped, 2)`, set the
   position `FUN_00472688`, clear movement state +0x1c8 / +0x814..+0x81c / +0x150, add back `FUN_0018f8f8`); reached
   through a vtable, every caller seen goes through `0x4127d0`. `VCS_TRACE_TELEPORT=1` logs each call.
-- **Entrance markers move the player**: teleporting onto (-1200, -300) is followed by two more teleports, to
-  (-1648.87, -262.50, 15.94) and (-1648.87, -261.00, 14.50) - the Fort Baxter barracks door - every time. So that
-  point sits on an entrance whose exit is the barracks (same pattern as GTA VC's enex markers). Found with a write
-  watch on the ped's x (`VCS_WATCH`, pc `0x47268c` inside the teleport) and then `VCS_TRACE_TELEPORT`. The world
-  tour's "relocated" points are mostly these and the map-edge clamp.
+- **The safehouse script moves the player back once**: after loading the Fort Baxter save (inside the barracks
+  safehouse, area 2) and teleporting away, the *next* teleport far from Fort Baxter is followed by two teleports
+  done by the script `safehou` (IP 0x20E86, then 0x20EA4): to (-1648.87, -262.50, 15.94) and (-1648.87, -261.00,
+  14.50) - the barracks door. Once, whatever the destination; later teleports land. Found with a write watch on the
+  ped's x (`VCS_WATCH`, pc `0x47268c` inside the teleport), then `VCS_TRACE_TELEPORT`, which hooks the interpreter's
+  ProcessOneCommand to name the script that was running. First mistaken for entrance markers. The rig's
+  `Game.prime()` triggers it on purpose before working. The world tour's other "relocated" points are the map-edge
+  clamp.
 - While the ped sits in a vehicle its own matrix is not its world position (it read (-0.4, 0.0, 21.6) in a car
   parked at (-596, 600)); use the vehicle's.
 - `CREATE_CAR` (0x0048, handler `0x3d03b0`): 4 parameters (model, x, y, z; z = -100 finds the ground) plus the
@@ -424,7 +427,8 @@ game's own `LOAD_AND_LAUNCH_MISSION_INTERNAL` (refuse while `0x4CD3E7` is set).
 
 - Main loop, frame limiter, CTimer (section 4) - milestone 4 (60 fps).
 - Vehicle structure, "in vehicle" / "in water" ped flags.
-- Where the entrance markers are (and their exits) - the rig should avoid landing on them.
+- After dying (hospital respawn, clock jumps to ~01:25) the world around the hospital was not drawn for ~40 s,
+  only lights (autodrive soak 2026-10-23) - streaming or rendering, to find out (milestone 2).
 - Mission-passed flags (storyline globals) - for reaching late-game states.
 - Cheat handlers (weapons, health, vehicles, weather) - the script commands cover these for now.
 - Collision: VU0 program 0 (section 6c), collision streaming - the fall-through bug.

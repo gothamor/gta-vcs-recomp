@@ -65,7 +65,8 @@ namespace ps2perf
     // [gta-recomp] Main thread, per host frame when the brightness probe runs (PS2X_FRAME_STATS / control channel):
     // the presented picture's mean luma (0..255). Counts black frames (summaryLine: black_frames / probed_frames) and
     // logs every run of black frames ("[frames] black run ...").
-    void noteFrameLuma(float mean, uint64_t hostFrame);
+    // Returns true on the first frame of a black run or a dip (the moment worth a screenshot).
+    bool noteFrameLuma(float mean, uint64_t hostFrame);
     // [gta-recomp] Main thread: the F3 overlay's state (settings menu).
     void setOverlay(bool on);
     bool overlayOn();

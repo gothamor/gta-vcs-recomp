@@ -111,6 +111,7 @@ def start_game(args, n):
     g = rig.Game.start(save=args.save, name="tour%d" % n, seconds=6 * 3600)
     g.wait_ingame()
     g.invincible(True)
+    g.prime()  # the safehouse script's one-time move back to the barracks door (rig.Game.prime)
     g.set_time(args.hour, 0)
     return g
 

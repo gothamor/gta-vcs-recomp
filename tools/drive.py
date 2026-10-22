@@ -36,6 +36,8 @@ def main():
     ap.add_argument("--model", type=int, default=211)
     ap.add_argument("--spots", default="all")
     ap.add_argument("--hour", type=int, default=12)
+    ap.add_argument("--auto", action="store_true", help="an AI driver drives, the player rides along (realistic)")
+    ap.add_argument("--speed", type=float, default=30.0, help="cruise speed with --auto")
     ap.add_argument("--save", default=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"))
     args = ap.parse_args()
     out = os.path.abspath(args.out or os.path.join(ROOT, "build", "drive", time.strftime("%Y%m%d-%H%M%S")))
@@ -46,20 +48,25 @@ def main():
     try:
         g.wait_ingame()
         g.invincible(True)
+        g.prime()
         for si, (x, y) in enumerate(spots):
             g.set_time(args.hour, 0)
             g.teleport(x, y, -100.0)
             time.sleep(1.0)
-            g.spawn_car(args.model)
+            if args.auto:
+                g.autodrive(args.model, args.speed)
+            else:
+                g.spawn_car(args.model)
             time.sleep(1.0)
             start = counters(g)
-            g.cmd("key Shift down")  # accelerate (Cross)
+            if not args.auto:
+                g.cmd("key Shift down")  # accelerate (Cross)
             t0 = time.time()
             last = g.player()[1]
             steer = None
             while time.time() - t0 < args.seconds:
                 t = time.time() - t0
-                want = "A" if int(t / 4) % 3 == 0 else ("D" if int(t / 4) % 3 == 1 else None)
+                want = None if args.auto else ("A" if int(t / 4) % 3 == 0 else ("D" if int(t / 4) % 3 == 1 else None))
                 if want != steer:
                     if steer:
                         g.cmd("key %s up" % steer)

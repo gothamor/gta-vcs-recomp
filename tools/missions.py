@@ -75,6 +75,10 @@ def main():
                 g = rig.Game.start(save=args.save, name="mission%d" % index, seconds=args.seconds + 180, port=args.port)
                 g.wait_ingame()
                 g.invincible(True)
+                # start outdoors: the save loads inside the barracks (interior area 2); a mission launched there
+                # draws the outdoor world around an interior (black) and fails as "left the area". prime() ends
+                # outside the barracks door.
+                g.prime()
                 g.mission(index)
                 t0 = time.time()
                 worst = 0.0

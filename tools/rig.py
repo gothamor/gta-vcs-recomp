@@ -50,6 +50,12 @@ class Scm:
     SET_CHAR_COORDINATES = 0x0044
     CREATE_CAR = 0x0048
     SET_CAR_COORDINATES = 0x004E
+    CAR_WANDER_RANDOMLY = 0x004B
+    SET_CAR_CRUISE_SPEED = 0x0050
+    SET_CAR_DRIVING_STYLE = 0x0051
+    CREATE_CHAR_INSIDE_CAR = 0x00A4
+    SET_CAR_PROOFS = 0x01B2
+    WARP_CHAR_INTO_CAR_AS_PASSENGER = 0x0298
     SET_TIME_OF_DAY = 0x005B
     CLEAR_WANTED_LEVEL = 0x009B
     DO_FADE = 0x00C9
@@ -143,6 +149,26 @@ class Game:
                 time.sleep(1.0)
         raise RuntimeError("not in game after %.0f s" % timeout)
 
+    # Outside the Fort Baxter barracks door (where the game itself puts the player when leaving that interior).
+    BARRACKS_DOOR = (-1648.87, -261.0)
+
+    def prime(self, timeout=10.0):
+        """Make later teleports land where asked. The Fort Baxter save loads in the barracks safehouse (interior area
+        2). After the player has been teleported out of it, the safehouse script (`safehou`, IP 0x20E86) moves him back
+        to the barracks door once, on the next teleport (game-internals.md 12). Trigger that here: two teleports away,
+        then wait until the script has put him at the door. Returns True when it happened."""
+        self.teleport(75.0, 175.0, -100.0)
+        time.sleep(3.0)
+        self.teleport(-600.0, 600.0, -100.0)
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            x, y, _ = self.player()[1]
+            if abs(x - self.BARRACKS_DOOR[0]) < 15 and abs(y - self.BARRACKS_DOOR[1]) < 15:
+                time.sleep(1.0)
+                return True
+            time.sleep(0.25)
+        return False
+
     def cmd(self, line, timeout=70.0):
         reply = gamectl.send(line, port=self.port, timeout=timeout)
         if not reply.startswith("ok"):
@@ -212,6 +238,21 @@ class Game:
                 S.op(S.CREATE_CAR, S.i(model), S.f(x + ahead), S.f(y), S.f(z + 1.0), S.LOCAL0) +
                 S.op(S.SET_CAR_COORDINATES, S.LOCAL0, S.f(x + ahead), S.f(y), S.f(-100.0)) +
                 S.op(S.WARP_CHAR_INTO_CAR, S.PLAYER, S.LOCAL0) + S.op(S.MARK_MODEL_AS_NO_LONGER_NEEDED, S.i(model)))
+        return self.scm(code)
+
+    def autodrive(self, model=211, speed=30.0, style=2, driver=(4, 55)):
+        """A car with an AI driver (ped type / model) wandering the streets, the player in the passenger seat:
+        realistic driving at speed without steering it ourselves."""
+        S = Scm
+        _, (x, y, z), _ = self.player()
+        car, drv = S.LOCAL0, b"\x0e"  # locals 0 and 1
+        code = (S.op(S.REQUEST_MODEL, S.i(model)) + S.op(S.REQUEST_MODEL, S.i(driver[1])) + S.op(S.LOAD_ALL_MODELS_NOW) +
+                S.op(S.CREATE_CAR, S.i(model), S.f(x + 4.0), S.f(y), S.f(-100.0), car) +
+                S.op(S.CREATE_CHAR_INSIDE_CAR, car, S.i(driver[0]), S.i(driver[1]), drv) +
+                S.op(S.WARP_CHAR_INTO_CAR_AS_PASSENGER, S.PLAYER, car, S.i(0)) +
+                S.op(S.SET_CAR_PROOFS, car, S.i(1), S.i(1), S.i(1), S.i(1), S.i(1)) +
+                S.op(S.CAR_WANDER_RANDOMLY, car) + S.op(S.SET_CAR_CRUISE_SPEED, car, S.f(speed)) +
+                S.op(S.SET_CAR_DRIVING_STYLE, car, S.i(style)))
         return self.scm(code)
 
     def mission(self, index):
