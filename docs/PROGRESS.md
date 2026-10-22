@@ -117,6 +117,8 @@
 | `VCS_RWATCH=lo,hi` | which code reads a guest range |
 | `PS2X_HW_DUMP=<frame>` | dump HW render targets + display as PPM |
 | `python tools/run.py N name --hidden` + `python tools/gamectl.py ...` | hidden test run driven over the control channel |
+| `python tools/scenes.py capture OUT` / `compare REF NEW` | reference scenes (screenshots + perf) from an empty card; diff two captures |
+| `VCS_DATA_DIR=dir` | save / cache folder instead of %LOCALAPPDATA%/VCSRecomp |
 | `python tools/sendkey.py Return`, `python tools/screenshot.py f.png` | key press / screenshot (control channel if open, else the window) |
 | `python tools/eedis.py <elf> <addr or name>` | EE disassembly with function names |
 | `python tools/minidbg.py <exe> <iso>` | catch fail-fast crashes with a stack |

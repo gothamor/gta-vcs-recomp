@@ -94,6 +94,9 @@ namespace
 
     fs::path dataDirectory()
     {
+        // VCS_DATA_DIR: another save / cache folder (scripted test runs start from an empty memory card)
+        if (const char *dir = std::getenv("VCS_DATA_DIR"); dir && *dir)
+            return fs::path(dir);
 #if defined(_WIN32)
         if (const char *local = std::getenv("LOCALAPPDATA"))
             return fs::path(local) / "VCSRecomp";

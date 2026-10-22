@@ -92,14 +92,26 @@ which those libraries handle poorly or not at all. The interface stays small
 Each stage ends with the game fully playable and a commit; nothing is a big-bang
 switch. Sizes are relative (S < M < L < XL).
 
-### Stage 0 - Baselines (S)
+### Stage 0 - Baselines (S) - done 2026-10-22
 
-- Reference captures on fixed scenes (boot/legal, loading screen, title flyover,
-  Fort Baxter first scene, pause menu, a driving scene): `PS2X_HW_DUMP` render
-  targets + display, plus control-channel screenshots.
-- Perf baseline: F4 CSV for the flyover and Fort Baxter.
-- A script (`tools/`, Python) that runs a scene and diffs captures against the
-  references with a tolerance and a diff image. Used by every later stage.
+- `python tools/scenes.py capture OUT` runs the game from an empty memory card
+  (`VCS_DATA_DIR`) along a fixed script driven over the control channel: loading
+  screen, three flyover shots, intro cutscene, gameplay with HUD after skipping the
+  cutscene (Cross), the pause map, gameplay again. It saves screenshots, the perf
+  overlay numbers per phase and a whole-run perf CSV (`PS2X_PERF_LOG`).
+- `python tools/scenes.py compare REF NEW` reports per-scene mean difference and
+  writes diff images. Static scenes (loading, pause map) must match (tolerance 2.0);
+  two runs of the same build match exactly (0.00). Moving scenes drift with timing
+  between runs (up to ~15 mean on the flyover road shot) and only fail when black
+  or missing.
+- `python tools/scenes.py explore OUT --every N --press T:KEY,...` was used to find
+  the timeline (screenshots every N s plus a contact sheet).
+- References live in `build/scenes/` (game imagery, never committed). Baseline
+  before stage 1: `build/scenes/base_raylib_a` (raylib + GL, `PS2X_GS=hw`).
+  Flyover 10-44 s: 17.9 game fps, render submit 37.5 ms, game 14.5 ms, GL execute
+  3.2 ms per frame, host 59.6 fps; gameplay: ~29-30 game fps, render ~16.5 ms.
+- `PS2X_HW_DUMP` render-target dumps were left out of the script: the frame number
+  they key on drifts between runs; use them by hand when a scene differs.
 
 ### Stage 1 - SDL3 platform layer, raylib removed, still OpenGL (M)
 
