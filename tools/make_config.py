@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build game/vcs/vcs.toml for ps2_recomp from the two analysis passes.
 
-- Ghidra (tools/ghidra_analyze.sh): function boundaries + code labels
+- Ghidra (tools/ghidra_analyze.py): function boundaries + code labels
   (game/vcs/functions.csv) and exact syscall-wrapper names.
 - ps2_analyzer: SCE SDK library identification (stubs, entry points),
   MMIO access sites and jump tables.

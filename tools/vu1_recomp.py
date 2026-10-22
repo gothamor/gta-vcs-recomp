@@ -16,7 +16,7 @@
 # The VU maths runs on all four lanes at once (vu1v:: in ps2_vu1_compiled.h: per lane the same operations as the
 # scalar vu1fast:: rules, in the same order) and every register is written whole.
 # The output is made from the game's code: it goes to generated\ (never committed).
-# Usage: python tools\vu1_recomp.py [elf] [out.cpp]   (recomp.bat runs it)
+# Usage: python tools/vu1_recomp.py [elf] [out.cpp] [uploads.txt]   (tools/recompile.py runs it)
 import os
 import struct
 import sys
@@ -925,7 +925,7 @@ def emit_chunk(prog, start, end, fn_name):
 
 def main():
     if not os.path.exists(ELF):
-        sys.exit(f'vu1_recomp: {ELF} not found (python tools\\prepare_disc.py "<your disc>" first)')
+        sys.exit(f'vu1_recomp: {ELF} not found (python tools/recompile.py extracts it from your disc)')
     ranges = None
     if UPLOADS:
         # [gta-recomp] uploads list: code bytes from the ELF; uploads continuing each other in both the ELF and VU

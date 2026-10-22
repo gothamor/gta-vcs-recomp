@@ -45,7 +45,7 @@ Newest at the bottom. Each entry: what, why, and what would change it.
 - The machine's VS 2022/2026 installs have no C++ toolset; VS 2019 Build Tools
   (MSVC 14.29) do. We build with LLVM clang-cl 23 against that STL and the
   10.0.19041 Windows SDK. clang-cl also handles the huge generated files better
-  than cl.exe. `tools/devenv.cmd` sets this up.
+  than cl.exe. `tools/toolchain.py` sets this up (vswhere + vcvars64).
 - Baseline CPU: AVX2 (upstream's `/arch:AVX2`). Revisit if we want pre-Haswell
   CPUs; the generated code mostly needs SSE4.1.
 

@@ -25,6 +25,24 @@ Status: early bring-up. See [docs/PROGRESS.md](docs/PROGRESS.md).
 python tools/vcs_disc.py info "path/to/your.iso"
 ```
 
+## Build
+All tools are Python 3 scripts (standard library only); the Visual Studio environment is found and set up
+automatically.
+```
+python tools/build.py --recompile "path/to/your.iso"
+```
+recompiles the game from your disc and builds it in one go; `python tools/build.py` rebuilds after code changes.
+The disc can also be given by `VCS_ISO`, `iso=...` in `vcs.ini`, or by putting the `.iso` in the repository root.
+
+| Script | What |
+|---|---|
+| `tools/build.py [--recompile [ISO]]` | configure + build (`build/release/.../ps2xRuntime/vcs.exe`), optionally recompiling first |
+| `tools/recompile.py [ISO]` | disc -> generated C++ only |
+| `tools/run.py [seconds] [logname]` | run the game for a while, log to `build/run/<logname>.log` |
+| `tools/perf_report.py file.csv` | summarise a perf recording (F4 in game) |
+| `tools/screenshot.py`, `tools/sendkey.py` | capture / press keys in the game window (Windows) |
+| `tools/ghidra_analyze.py` | redo the Ghidra analysis (Ghidra 12 + JDK 21) |
+
 ## Layout
 | Path | What |
 |---|---|
