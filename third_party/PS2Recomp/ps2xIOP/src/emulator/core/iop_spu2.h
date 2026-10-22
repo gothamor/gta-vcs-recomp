@@ -1,7 +1,7 @@
 // [gta-recomp] SPU2 (PS2 sound processor) as seen from the IOP: registers at 0x1F900000..0x1F9007FF, 2 MB of
 // sound RAM, transfers from IOP DMA channels 4 / 7 and the manual data port, 2 cores x 24 ADPCM voices with
-// pitch / ADSR / loops, AutoDMA PCM input, IRQ-address interrupts and a 48 kHz stereo mix handed to the host.
-// Not yet: reverb, noise, pitch modulation, Gaussian interpolation (linear here).
+// pitch / ADSR / loops, Gaussian interpolation, pitch modulation, noise, reverb, AutoDMA PCM input, IRQ-address
+// interrupts and a 48 kHz stereo mix handed to the host.
 #pragma once
 
 #include <array>
@@ -42,17 +42,23 @@ namespace ps2x::iop::detail
         void setSampleSink(SampleSink sink) { m_sink = std::move(sink); }
 
     private:
+        struct Sweep // a volume register's current level and its sweep envelope counter
+        {
+            int16_t level = 0;
+            uint32_t counter = 0;
+        };
+
         struct Voice
         {
             uint16_t volL = 0, volR = 0, pitch = 0, adsr1 = 0, adsr2 = 0;
-            int16_t curVolL = 0, curVolR = 0;
+            Sweep curVolL, curVolR;
             uint32_t ssa = 0, lsa = 0, nax = 0;
             bool lsaSetBySoftware = false;
-            // decoder
-            int16_t samples[28]{};
+            // decoder: samples[0..2] are the last three of the previous block (Gaussian interpolation reads 4)
+            int16_t samples[3 + 28]{};
             int32_t hist1 = 0, hist2 = 0;
             uint32_t counter = 0; // 4.12: position within the decoded block
-            int16_t prevSample = 0;
+            int16_t out = 0;      // VxOUTX: last output after the envelope (pitch modulation source for voice + 1)
             bool blockValid = false;
             uint8_t blockFlags = 0;
             uint32_t blockAddr = 0;
@@ -70,10 +76,20 @@ namespace ps2x::iop::detail
             uint32_t irqa = 0, tsa = 0;
             uint32_t konLatch = 0, kofLatch = 0;
             uint16_t mvolL = 0, mvolR = 0, evolL = 0, evolR = 0, avolL = 0, avolR = 0, bvolL = 0, bvolR = 0;
-            int16_t curMvolL = 0, curMvolR = 0;
+            Sweep curMvolL, curMvolR;
             std::array<uint16_t, 0x200> raw{}; // last written value of every core register (fallback reads)
             std::deque<std::pair<int16_t, int16_t>> adma; // AutoDMA input FIFO
             uint32_t admaReadPos = 0; // halfword offset in the input buffer, for IRQ checks
+            // noise generator (ATTR bits 8-13)
+            int32_t noiseTimer = 0;
+            uint16_t noiseLevel = 0;
+            // reverb: work area ESA..EEA (halfwords), the 22 address registers 0x2E4..0x338 (dAPF1, dAPF2, mLSAME ...
+            // mRAPF2 in psx-spx order) and the 10 volumes 0x774..0x786 (vIIR, vCOMB1-4, vWALL, vAPF1, vAPF2, vLIN, vRIN)
+            uint32_t esa = 0, eea = 0, revbPos = 0;
+            uint32_t revbAddr[22]{};
+            int16_t revbVol[10]{};
+            int16_t revbIn[2][128]{}, revbOut[2][128]{}; // 48 kHz rings for the 39-tap resampler (64 entries, mirrored)
+            uint32_t revbTick = 0;
         };
 
         void writeCore(uint32_t core, uint32_t reg, uint16_t value);
@@ -82,10 +98,12 @@ namespace ps2x::iop::detail
         void keyOff(Core &c, uint32_t mask);
         void decodeBlock(Core &c, uint32_t coreIndex, Voice &v);
         int32_t voiceSample(Core &c, uint32_t coreIndex, uint32_t voiceIndex);
+        static void stepNoise(Core &c);
+        void reverb(Core &c, int32_t inL, int32_t inR, int32_t &outL, int32_t &outR);
         void stepEnvelope(Voice &v);
         void mixOne(int16_t &outL, int16_t &outR);
         void checkIrq(uint32_t addressLo, uint32_t addressHi); // halfword range [lo, hi)
-        static int16_t fixedVolume(uint16_t reg, int16_t &current);
+        static int16_t fixedVolume(uint16_t reg, Sweep &current);
 
         std::vector<uint16_t> m_ram;
         std::array<Core, 2> m_cores{};
@@ -99,6 +117,8 @@ namespace ps2x::iop::detail
         struct Stats // PS2X_TRACE_SPU2=1
         {
             uint64_t keyOns = 0, dmaBytes = 0, admaSamples = 0, irqs = 0, frames = 0;
+            uint64_t wetSamples[2]{}, reverbSamples[2]{}, pmonSamples = 0, noiseSamples = 0;
+            int32_t reverbPeak = 0;
             int32_t peak = 0;
             uint32_t maxActive = 0;
         } m_stats;

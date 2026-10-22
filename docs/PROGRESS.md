@@ -53,7 +53,9 @@
       IRQ address, AutoDMA, IOP DMA 4/7) mixed to a 48 kHz host audio stream (SDL3 since stage 1 of NATIVE_RENDERER.md). Music, SFX and
       voices confirmed by ear. IOP time follows the wall clock, so audio no longer stutters
       when the game drops below 60 VBlanks/s (0 underruns at 20-60 VBlanks/s).
-- [ ] Audio: reverb, noise, pitch modulation, Gaussian interpolation, exact volume sweeps
+- [x] Audio: reverb, noise, pitch modulation, Gaussian interpolation, exact volume sweeps / ADSR timing
+      (2026-10-23, from psx-spx; PS2RECOMP_PATCHES.md). VCS keeps reverb off and uses no PMON / NON in gameplay
+      (game-internals.md 9), so what is audible is the interpolation and the envelopes
 - [x] Memory card save: the game's own save routine writes its folder, icons and slot file
       to `%LOCALAPPDATA%/VCSRecomp/mc0` (verified with `VCS_TEST_SAVE`); boot finds the save
 - [x] Memory card load (2026-10-22): the game finds its saves at start-up and loads the newest
@@ -146,7 +148,8 @@ Findings so far (rig runs; details in game-internals.md):
 | `VCS_SELFTEST=1` | recompiled libgcc helpers vs native |
 | `VCS_TRACE_DELAY=1`, `VCS_TRACE_SOUND=1` | DelayThread calls; EE sound driver commands |
 | `PS2X_TRACE_SPU=1`, `PS2X_TRACE_IOP_DMA=1` | IOP SPU2/DMA/interrupt tracing |
-| `PS2X_TRACE_SPU2=1` | SPU2 key-ons, DMA bytes, IRQs, peak level per 5 s |
+| `PS2X_TRACE_SPU2=1` | SPU2 key-ons, DMA bytes, IRQs, peak level per 5 s; per core: wet input, reverb output, ESA/EEA, EVOL, PMON / NON use |
+| `PS2X_SPU2_REVERB=0` | mute the SPU2 reverb (A/B listening) |
 | `PS2X_AUDIO=0`, `PS2X_AUDIO_DUMP=f.wav`, `PS2X_AUDIO_STATS=1` | no audio output / record the SPU2 mix / underrun and fill stats |
 | `PS2X_IOP_REALTIME=0` | IOP time purely from EE cycles (audio slows with the game) |
 | `VCS_TEST_SAVE=s` | save to slot 1 through the game's code s seconds after boot |

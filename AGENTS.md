@@ -49,6 +49,7 @@ choices).
 ```
 python tools/build.py                       # rebuild after code changes (--reconfigure after adding files)
 python tools/build.py --recompile [ISO]     # disc -> generated C++ -> build (slow)
+python tools/build.py --iop-tests           # SPU2 unit tests (reverb, interpolation, noise, PMON)
 python tools/run.py 60 name                 # run 60 s, log to build/run/name.log (visible window)
 python tools/run.py 60 name --control       # + control channel for tools/gamectl.py
 python tools/scenes.py capture OUT          # reference scenes from an empty card (screenshots + perf)

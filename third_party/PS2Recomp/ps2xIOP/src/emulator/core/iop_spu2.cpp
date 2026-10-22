@@ -22,6 +22,66 @@ namespace ps2x::iop::detail
 
         uint32_t setHigh(uint32_t addr, uint16_t value) { return ((static_cast<uint32_t>(value) & 0xFu) << 16) | (addr & 0xFFFFu); }
         uint32_t setLow(uint32_t addr, uint16_t value) { return (addr & 0xF0000u) | value; }
+
+        // 4-point Gaussian interpolation table (psx-spx "4-Point Gaussian Interpolation"; SPU2 uses the same one)
+        constexpr int16_t kGauss[512] = {
+#include "iop_spu2_gauss.inc"
+        };
+
+        // 39-tap half-band FIR the reverb unit resamples its input / output with (psx-spx "Reverb Buffer Resampling")
+        constexpr int32_t kReverbFir[39] = {
+            -0x0001, 0, 0x0002, 0, -0x000A, 0, 0x0023, 0, -0x0067, 0, 0x010A, 0, -0x0268, 0, 0x0534, 0, -0x0B90, 0, 0x2806, 0x4000,
+            0x2806, 0, -0x0B90, 0, 0x0534, 0, -0x0268, 0, 0x010A, 0, -0x0067, 0, 0x0023, 0, -0x000A, 0, 0x0002, 0, -0x0001,
+        };
+
+        int32_t fir39(const int16_t *window) // window[0..38], oldest first
+        {
+            int32_t sum = 0;
+            for (uint32_t i = 0; i < 39; ++i)
+                sum += kReverbFir[i] * window[i];
+            return sum;
+        }
+
+        int32_t mul15(int32_t a, int32_t b) { return (a * b) >> 15; }
+
+        // One output-rate tick of an envelope (ADSR phase or volume sweep), psx-spx "Envelope Operation depending on
+        // Shift/Step/Mode/Direction". stepValue 0..3 means +7..+4 (or -8..-5 when decreasing).
+        void envelopeTick(int32_t &level, uint32_t &counter, int32_t shift, int32_t stepValue, bool exponential, bool decrease,
+                          bool negative = false)
+        {
+            int32_t step = 7 - stepValue;
+            if (decrease != negative)
+                step = ~step;
+            step *= 1 << std::max(0, 11 - shift);
+            uint32_t increment = 0x8000u >> std::max(0, shift - 11);
+            if (exponential && !decrease && level > 0x6000)
+            {
+                if (shift < 10)
+                    step >>= 2;
+                else if (shift >= 11)
+                    increment >>= 2;
+                else
+                {
+                    step >>= 1;
+                    increment >>= 1;
+                }
+            }
+            else if (exponential && decrease)
+                step = (step * level) >> 15;
+            if ((stepValue | (shift << 2)) != 0x7F)
+                increment = std::max(increment, 1u);
+            counter += increment;
+            if ((counter & 0x8000u) == 0u)
+                return;
+            counter = 0;
+            level += step;
+            if (!decrease)
+                level = std::clamp(level, -0x8000, 0x7FFF);
+            else if (negative)
+                level = std::clamp(level, -0x8000, 0);
+            else
+                level = std::max(level, 0);
+        }
     }
 
     IopSpu2::IopSpu2()
@@ -43,18 +103,19 @@ namespace ps2x::iop::detail
         m_outBuffer.clear();
     }
 
-    int16_t IopSpu2::fixedVolume(uint16_t reg, int16_t &current)
+    int16_t IopSpu2::fixedVolume(uint16_t reg, Sweep &current)
     {
         if ((reg & 0x8000u) == 0u)
         {
-            current = static_cast<int16_t>(reg << 1);
-            return current;
+            current.level = static_cast<int16_t>(reg << 1);
+            return current.level;
         }
-        // Sweep mode (approximation): ramp toward full scale or zero.
-        const bool decrease = (reg & 0x2000u) != 0u;
-        const int32_t next = decrease ? current - 128 : current + 128;
-        current = static_cast<int16_t>(std::clamp(next, 0, 0x7FFF));
-        return current;
+        // sweep mode: bit 14 exponential, 13 decrease, 12 negative phase, 2-6 shift, 0-1 step
+        int32_t level = current.level;
+        envelopeTick(level, current.counter, (reg >> 2) & 0x1F, reg & 3, (reg & 0x4000u) != 0u, (reg & 0x2000u) != 0u,
+                     (reg & 0x1000u) != 0u);
+        current.level = static_cast<int16_t>(level);
+        return current.level;
     }
 
     void IopSpu2::checkIrq(uint32_t lo, uint32_t hi)
@@ -94,8 +155,8 @@ namespace ps2x::iop::detail
             case 0x0A: return c.avolR;
             case 0x0C: return c.bvolL;
             case 0x0E: return c.bvolR;
-            case 0x10: return static_cast<uint16_t>(c.curMvolL);
-            case 0x12: return static_cast<uint16_t>(c.curMvolR);
+            case 0x10: return static_cast<uint16_t>(c.curMvolL.level);
+            case 0x12: return static_cast<uint16_t>(c.curMvolR.level);
             default: return c.raw[(0x160u + reg) / 2u];
             }
         }
@@ -130,7 +191,11 @@ namespace ps2x::iop::detail
             case 0x0A: c.avolR = value; break;
             case 0x0C: c.bvolL = value; break;
             case 0x0E: c.bvolR = value; break;
-            default: c.raw[(0x160u + reg) / 2u] = value; break;
+            default:
+                c.raw[(0x160u + reg) / 2u] = value;
+                if (reg >= 0x14u && reg <= 0x26u) // 0x774..0x786: reverb volumes
+                    c.revbVol[(reg - 0x14u) / 2u] = static_cast<int16_t>(value);
+                break;
             }
             return;
         }
@@ -159,8 +224,8 @@ namespace ps2x::iop::detail
             case 3: return v.adsr1;
             case 4: return v.adsr2;
             case 5: return static_cast<uint16_t>(v.level);
-            case 6: return static_cast<uint16_t>(v.curVolL);
-            default: return static_cast<uint16_t>(v.curVolR);
+            case 6: return static_cast<uint16_t>(v.curVolL.level);
+            default: return static_cast<uint16_t>(v.curVolR.level);
             }
         }
         if (reg >= 0x1C0u && reg < 0x1C0u + 24u * 0xCu)
@@ -250,8 +315,18 @@ namespace ps2x::iop::detail
             }
             return;
         }
+        if (reg >= 0x2E0u && reg < 0x33Cu) // ESA, then the reverb address registers: hi / lo pairs
+        {
+            const uint32_t index = (reg - 0x2E0u) / 4u;
+            uint32_t &addr = index == 0u ? c.esa : c.revbAddr[index - 1u];
+            addr = (reg & 2u) != 0u ? setLow(addr, value) : setHigh(addr, value);
+            if (index == 0u)
+                c.revbPos = 0; // writing ESA restarts the buffer
+            return;
+        }
         switch (reg)
         {
+        case 0x33C: c.eea = ((static_cast<uint32_t>(value) & 0xFu) << 16) | 0xFFFFu; break; // EEA: upper bits only
         case 0x180: c.pmon = (c.pmon & 0xFF0000u) | value; break;
         case 0x182: c.pmon = (c.pmon & 0xFFFFu) | ((value & 0xFFu) << 16); break;
         case 0x184: c.non = (c.non & 0xFF0000u) | value; break;
@@ -306,7 +381,8 @@ namespace ps2x::iop::detail
             v.nax = v.ssa & kAddrMask;
             v.counter = 0;
             v.hist1 = v.hist2 = 0;
-            v.prevSample = 0;
+            std::memset(v.samples, 0, sizeof(v.samples));
+            v.out = 0;
             v.blockValid = false;
             v.lsaSetBySoftware = false;
             v.phase = Voice::Phase::Attack;
@@ -342,6 +418,7 @@ namespace ps2x::iop::detail
         v.blockAddr = addr;
         if ((v.blockFlags & 0x4u) != 0u && !v.lsaSetBySoftware)
             v.lsa = addr;
+        std::memcpy(v.samples, v.samples + 28, 3 * sizeof(int16_t)); // keep the previous block's last three
         for (uint32_t i = 0; i < 28; ++i)
         {
             const uint16_t word = m_ram[(addr + 1u + i / 4u) & kAddrMask];
@@ -350,7 +427,7 @@ namespace ps2x::iop::detail
             s = clamp16(s);
             v.hist2 = v.hist1;
             v.hist1 = s;
-            v.samples[i] = static_cast<int16_t>(s);
+            v.samples[3u + i] = static_cast<int16_t>(s);
         }
         v.blockValid = true;
         (void)c;
@@ -358,7 +435,7 @@ namespace ps2x::iop::detail
 
     void IopSpu2::stepEnvelope(Voice &v)
     {
-        int32_t rate = 0;
+        int32_t rate = 0; // shift << 2 | step
         bool exponential = false, decrease = false;
         switch (v.phase)
         {
@@ -385,21 +462,8 @@ namespace ps2x::iop::detail
             decrease = true;
             break;
         }
-        const int32_t shift = rate >> 2;
-        int32_t step = decrease ? (-8 + (rate & 3)) : (7 - (rate & 3));
-        uint32_t cycles = 1u << std::max(0, shift - 11);
-        step <<= std::max(0, 11 - shift);
-        if (exponential && !decrease && v.level > 0x6000)
-            cycles *= 4u;
-        if (exponential && decrease)
-            step = (step * v.level) >> 15;
-        if (v.envCounter > 0u)
-            --v.envCounter;
-        if (v.envCounter == 0u)
-        {
-            v.envCounter = cycles;
-            v.level = std::clamp(v.level + step, 0, 0x7FFF);
-        }
+        envelopeTick(v.level, v.envCounter, rate >> 2, rate & 3, exponential, decrease);
+        v.level = std::clamp(v.level, 0, 0x7FFF); // the ADSR level is never negative
         switch (v.phase)
         {
         case Voice::Phase::Attack:
@@ -435,15 +499,34 @@ namespace ps2x::iop::detail
             return 0;
         if (!v.blockValid)
             decodeBlock(c, coreIndex, v);
-        const uint32_t index = v.counter >> 12;
-        const int32_t frac = static_cast<int32_t>(v.counter & 0xFFFu);
-        const int32_t s0 = v.samples[std::min<uint32_t>(index, 27u)];
-        const int32_t s1 = index + 1u < 28u ? v.samples[index + 1u] : s0;
-        const int32_t sample = s0 + (((s1 - s0) * frac) >> 12);
+        int32_t sample;
+        if ((c.non & (1u << voiceIndex)) != 0u)
+        {
+            sample = static_cast<int16_t>(c.noiseLevel);
+            ++m_stats.noiseSamples;
+        }
+        else
+        {
+            // 4-point Gaussian over the current sample and the three before it (psx-spx)
+            const uint32_t index = std::min<uint32_t>(v.counter >> 12, 27u);
+            const uint32_t g = (v.counter >> 4) & 0xFFu;
+            const int16_t *s = v.samples + index; // s[3] = current ("new"), s[0] = oldest
+            sample = ((kGauss[0x0FFu - g] * s[0]) >> 15) + ((kGauss[0x1FFu - g] * s[1]) >> 15) +
+                     ((kGauss[0x100u + g] * s[2]) >> 15) + ((kGauss[g] * s[3]) >> 15);
+        }
         stepEnvelope(v);
         const int32_t out = (sample * v.level) >> 15;
+        v.out = static_cast<int16_t>(out);
 
-        v.counter += std::min<uint32_t>(v.pitch, 0x3FFFu);
+        uint32_t step = v.pitch;
+        if (voiceIndex > 0u && (c.pmon & (1u << voiceIndex)) != 0u)
+        {
+            // pitch modulation by the previous voice's output: step * (1 + out / 0x8000), with the hardware's sign glitch
+            const int32_t factor = c.voices[voiceIndex - 1u].out + 0x8000;
+            step = static_cast<uint32_t>((static_cast<int32_t>(static_cast<int16_t>(v.pitch)) * factor) >> 15) & 0xFFFFu;
+            ++m_stats.pmonSamples;
+        }
+        v.counter += std::min<uint32_t>(step, 0x4000u);
         while (v.counter >= (28u << 12))
         {
             v.counter -= 28u << 12;
@@ -469,28 +552,118 @@ namespace ps2x::iop::detail
         return out;
     }
 
+    void IopSpu2::stepNoise(Core &c)
+    {
+        // psx-spx "SPU Noise Generator": ATTR bits 10-13 shift, bits 8-9 step (4..7), clocked at the output rate
+        const int32_t shift = (c.attr >> 10) & 0xF;
+        c.noiseTimer -= 4 + ((c.attr >> 8) & 3);
+        if (c.noiseTimer < 0)
+        {
+            const uint32_t n = c.noiseLevel;
+            const uint32_t parity = ((n >> 15) ^ (n >> 12) ^ (n >> 11) ^ (n >> 10) ^ 1u) & 1u;
+            c.noiseLevel = static_cast<uint16_t>((n << 1) | parity);
+            c.noiseTimer += 0x20000 >> shift;
+            if (c.noiseTimer < 0)
+                c.noiseTimer += 0x20000 >> shift;
+        }
+    }
+
+    // Reverb, psx-spx "SPU Reverb Formula" with SPU2 registers: one 48 kHz tick computes the left side, the next the
+    // right side (each channel at 24 kHz), the input downsampled and the output upsampled with the 39-tap FIR. The
+    // buffer address advances after the right side and wraps within ESA..EEA. ATTR bit 7 gates the buffer writes only.
+    void IopSpu2::reverb(Core &c, int32_t inL, int32_t inR, int32_t &outL, int32_t &outR)
+    {
+        const uint32_t pos = c.revbTick & 63u;
+        c.revbIn[0][pos] = c.revbIn[0][pos | 64u] = clamp16(inL);
+        c.revbIn[1][pos] = c.revbIn[1][pos | 64u] = clamp16(inR);
+        const uint32_t side = c.revbTick & 1u; // 0 = left, 1 = right
+        int32_t wet = 0;
+        if (c.esa < c.eea)
+        {
+            const uint32_t size = c.eea - c.esa + 1u;
+            auto at = [&](uint32_t reg, uint32_t back = 0u) {
+                const uint32_t rel = (c.revbPos + c.revbAddr[reg]) % size;
+                return (c.esa + (rel + size - back % size) % size) & kAddrMask;
+            };
+            auto rd = [&](uint32_t a) { return static_cast<int32_t>(static_cast<int16_t>(m_ram[a])); };
+            const bool write = (c.attr & 0x80u) != 0u;
+            auto wr = [&](uint32_t a, int32_t value) {
+                if (write)
+                    m_ram[a] = static_cast<uint16_t>(clamp16(value));
+            };
+            const int16_t *vol = c.revbVol;
+            const int32_t vIIR = vol[0], vWALL = vol[5], vAPF1 = vol[6], vAPF2 = vol[7];
+            const int32_t in = mul15(vol[8 + side], clamp16(fir39(&c.revbIn[side][(pos - 38u) & 63u]) >> 15));
+            // register indices (revbAddr): 0 dAPF1, 1 dAPF2, 2/3 mSAME, 4/5 mCOMB1, 6/7 mCOMB2, 8/9 dSAME, 10/11 mDIFF,
+            // 12/13 mCOMB3, 14/15 mCOMB4, 16/17 dDIFF, 18/19 mAPF1, 20/21 mAPF2 (left / right)
+            const uint32_t mSame = at(2 + side), mSamePrev = at(2 + side, 1u), dSame = at(8 + side);
+            const uint32_t mDiff = at(10 + side), mDiffPrev = at(10 + side, 1u), dDiff = at(17 - side); // other side
+            const int32_t same = mul15(in + mul15(rd(dSame), vWALL) - rd(mSamePrev), vIIR) + rd(mSamePrev);
+            const int32_t diff = mul15(in + mul15(rd(dDiff), vWALL) - rd(mDiffPrev), vIIR) + rd(mDiffPrev);
+            wr(mSame, same);
+            wr(mDiff, diff);
+            int32_t out = mul15(vol[1], rd(at(4 + side))) + mul15(vol[2], rd(at(6 + side))) + mul15(vol[3], rd(at(12 + side))) +
+                          mul15(vol[4], rd(at(14 + side)));
+            const uint32_t apf1 = at(18 + side), apf1Src = at(18 + side, c.revbAddr[0]);
+            const int32_t a1 = out - mul15(vAPF1, rd(apf1Src));
+            wr(apf1, a1);
+            out = mul15(clamp16(a1), vAPF1) + rd(apf1Src);
+            const uint32_t apf2 = at(20 + side), apf2Src = at(20 + side, c.revbAddr[1]);
+            const int32_t a2 = out - mul15(vAPF2, rd(apf2Src));
+            wr(apf2, a2);
+            out = mul15(clamp16(a2), vAPF2) + rd(apf2Src);
+            wet = clamp16(out);
+            if (side == 1u)
+                c.revbPos = (c.revbPos + 1u) % size;
+        }
+        c.revbOut[side][pos] = c.revbOut[side][pos | 64u] = static_cast<int16_t>(wet);
+        c.revbOut[side ^ 1u][pos] = c.revbOut[side ^ 1u][pos | 64u] = 0;
+        // zero-stuffed 24 kHz -> 48 kHz: gain 2 (>> 14)
+        outL = clamp16(fir39(&c.revbOut[0][(pos - 38u) & 63u]) >> 14);
+        outR = clamp16(fir39(&c.revbOut[1][(pos - 38u) & 63u]) >> 14);
+        ++c.revbTick;
+    }
+
     void IopSpu2::mixOne(int16_t &outL, int16_t &outR)
     {
+        static const bool reverbOn = [] {
+            const char *e = std::getenv("PS2X_SPU2_REVERB");
+            return !(e && e[0] == '0');
+        }();
         int32_t core0L = 0, core0R = 0;
         for (uint32_t ci = 0; ci < 2; ++ci)
         {
             Core &c = m_cores[ci];
-            int32_t dryL = 0, dryR = 0;
+            if (c.non != 0u)
+                stepNoise(c);
+            int32_t dryL = 0, dryR = 0, wetL = 0, wetR = 0;
             for (uint32_t vi = 0; vi < 24; ++vi)
             {
                 Voice &v = c.voices[vi];
                 if (v.phase == Voice::Phase::Off)
+                {
+                    v.out = 0;
                     continue;
+                }
                 const int32_t s = voiceSample(c, ci, vi);
                 const int32_t l = (s * fixedVolume(v.volL, v.curVolL)) >> 15;
                 const int32_t r = (s * fixedVolume(v.volR, v.curVolR)) >> 15;
-                if (c.vmixL & (1u << vi))
+                const uint32_t bit = 1u << vi;
+                if (c.vmixL & bit)
                     dryL += l;
-                if (c.vmixR & (1u << vi))
+                if (c.vmixR & bit)
                     dryR += r;
+                if (c.vmixEL & bit)
+                    wetL += l;
+                if (c.vmixER & bit)
+                    wetR += r;
             }
+            // MMIX gates (PCSX2's naming): 0x800/0x400 voices dry L/R, 0x200/0x100 voices wet, 0x80/0x40 input dry,
+            // 0x20/0x10 input wet, 0x08/0x04 external (core 0 into core 1) dry, 0x02/0x01 external wet
             int32_t mixL = (c.mmix & 0x800u) ? dryL : 0;
             int32_t mixR = (c.mmix & 0x400u) ? dryR : 0;
+            int32_t fxL = (c.mmix & 0x200u) ? wetL : 0;
+            int32_t fxR = (c.mmix & 0x100u) ? wetR : 0;
             // AutoDMA input
             if (!c.adma.empty())
             {
@@ -500,20 +673,49 @@ namespace ps2x::iop::detail
                 checkIrq(base + c.admaReadPos, base + c.admaReadPos + 1u);
                 checkIrq(base + 0x200u + c.admaReadPos, base + 0x200u + c.admaReadPos + 1u);
                 c.admaReadPos = (c.admaReadPos + 1u) & 0x1FFu;
-                int16_t dummy = 0;
+                Sweep dummy;
+                const int32_t l = (inL * fixedVolume(c.avolL, dummy)) >> 15;
+                const int32_t r = (inR * fixedVolume(c.avolR, dummy)) >> 15;
                 if (c.mmix & 0x80u)
-                    mixL += (inL * fixedVolume(c.avolL, dummy)) >> 15;
+                    mixL += l;
                 if (c.mmix & 0x40u)
-                    mixR += (inR * fixedVolume(c.avolR, dummy)) >> 15;
+                    mixR += r;
+                if (c.mmix & 0x20u)
+                    fxL += l;
+                if (c.mmix & 0x10u)
+                    fxR += r;
             }
             // core 0 output into core 1
             if (ci == 1u)
             {
-                int16_t dummy = 0;
+                Sweep dummy;
+                const int32_t l = (core0L * fixedVolume(c.bvolL, dummy)) >> 15;
+                const int32_t r = (core0R * fixedVolume(c.bvolR, dummy)) >> 15;
                 if (c.mmix & 0x08u)
-                    mixL += (core0L * fixedVolume(c.bvolL, dummy)) >> 15;
+                    mixL += l;
                 if (c.mmix & 0x04u)
-                    mixR += (core0R * fixedVolume(c.bvolR, dummy)) >> 15;
+                    mixR += r;
+                if (c.mmix & 0x02u)
+                    fxL += l;
+                if (c.mmix & 0x01u)
+                    fxR += r;
+            }
+            if (fxL != 0 || fxR != 0)
+                ++m_stats.wetSamples[ci];
+            // reverb: skipped while it can neither write its buffer nor be heard
+            if (reverbOn && ((c.attr & 0x80u) != 0u || c.evolL != 0u || c.evolR != 0u))
+            {
+                int32_t revL = 0, revR = 0;
+                reverb(c, fxL, fxR, revL, revR);
+                revL = mul15(revL, static_cast<int16_t>(c.evolL));
+                revR = mul15(revR, static_cast<int16_t>(c.evolR));
+                if (revL != 0 || revR != 0)
+                {
+                    ++m_stats.reverbSamples[ci];
+                    m_stats.reverbPeak = std::max(m_stats.reverbPeak, std::max(std::abs(revL), std::abs(revR)));
+                }
+                mixL += revL;
+                mixR += revR;
             }
             const int32_t l = clamp16((mixL * fixedVolume(c.mvolL, c.curMvolL)) >> 15);
             const int32_t r = clamp16((mixR * fixedVolume(c.mvolR, c.curMvolR)) >> 15);
@@ -545,6 +747,18 @@ namespace ps2x::iop::detail
                          (unsigned long long)m_stats.admaSamples, (unsigned long long)m_stats.irqs, m_stats.peak, m_cores[0].attr,
                          m_cores[0].mmix, m_cores[0].mvolL, m_cores[0].mvolR, m_cores[0].admas, m_cores[1].attr, m_cores[1].mmix,
                          m_cores[1].mvolL, m_cores[1].mvolR, m_cores[1].admas);
+        if (trace)
+            for (uint32_t ci = 0; ci < 2; ++ci)
+            {
+                const Core &c = m_cores[ci];
+                std::fprintf(stderr,
+                             "[spu2]   core%u fx: wet %llu, reverb out %llu (peak %d), esa %05x eea %05x evol %04x/%04x vmixE %06x/%06x "
+                             "vIIR %04x vLIN %04x | pmon %06x non %06x (pmon samples %llu, noise %llu)\n",
+                             ci, (unsigned long long)m_stats.wetSamples[ci], (unsigned long long)m_stats.reverbSamples[ci],
+                             m_stats.reverbPeak, c.esa, c.eea, c.evolL, c.evolR, c.vmixEL, c.vmixER, (uint16_t)c.revbVol[0],
+                             (uint16_t)c.revbVol[8], c.pmon, c.non, (unsigned long long)m_stats.pmonSamples,
+                             (unsigned long long)m_stats.noiseSamples);
+            }
         m_stats = {};
     }
 

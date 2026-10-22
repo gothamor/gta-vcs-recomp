@@ -63,6 +63,12 @@ if(PS2X_IOP_BUILD_TESTS)
     target_include_directories(ps2_iop_import_version_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME ps2_iop_import_version_tests COMMAND ps2_iop_import_version_tests)
 
+    # [gta-recomp] SPU2 voice / reverb / interpolation checks
+    add_executable(ps2_iop_spu2_tests tests/iop_spu2_tests.cpp)
+    target_link_libraries(ps2_iop_spu2_tests PRIVATE ps2_iop)
+    target_include_directories(ps2_iop_spu2_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME ps2_iop_spu2_tests COMMAND ps2_iop_spu2_tests)
+
 endif()
 
 install(TARGETS ps2_iop
