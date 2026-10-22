@@ -50,6 +50,7 @@ add_subdirectory(third_party/PS2Recomp)
 if(VCS_HAVE_GENERATED)
     set_target_properties(ps2EntryRunner PROPERTIES OUTPUT_NAME "vcs")
     target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_link_libraries(ps2EntryRunner PRIVATE vcs_host) # main.cpp: settings menu (Dear ImGui), presenter aspect
     # Our own sources aren't generated code; keep them out of the unity batches.
     set_source_files_properties(${VCS_SOURCES} "${CMAKE_SOURCE_DIR}/src/main.cpp"
         TARGET_DIRECTORY ps2EntryRunner

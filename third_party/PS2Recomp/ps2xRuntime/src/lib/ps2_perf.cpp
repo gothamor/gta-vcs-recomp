@@ -474,6 +474,10 @@ namespace ps2perf
             text("REC", 10, 10, std::max(10, screenHeight() / 46), rgba(245, 90, 90, 255));
     }
 
+    void setOverlay(bool on) { g_overlay = on; }
+
+    bool overlayOn() { return g_overlay; }
+
     std::string summaryLine()
     {
         std::vector<Sample> lastSecond;

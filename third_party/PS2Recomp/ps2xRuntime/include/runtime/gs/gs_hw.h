@@ -34,6 +34,9 @@ public:
     // holding the newest displayed picture (alpha = 1, row 0 at the top; owned by the renderer, valid until the next
     // call) and its size; false until a first frame has been displayed.
     virtual bool executeAndGetDisplay(rhi::Device &device, rhi::Texture *&texture, uint32_t &width, uint32_t &height) = 0;
+    // [gta-recomp] Whether the displayed frames draw 3D (depth-tested or native draws), with some hysteresis: frames that
+    // are only 2D (loading screens, menus) are presented at 4:3 in widescreen.
+    virtual bool showing3d() const = 0;
 };
 
 class GSHwBackendHandle : public GSRasterBackend
@@ -45,3 +48,8 @@ public:
 };
 
 std::unique_ptr<GSHwBackendHandle> makeHwRasterBackend(const GSHwOptions &options);
+
+// [gta-recomp] Widescreen (docs/SETTINGS_MENU_WIDESCREEN.md): 2D draws (no depth test, into a 640-wide target, not
+// covering the whole width) are squeezed horizontally by `factor` around the middle, so the HUD keeps its 4:3 shape in a
+// wider picture. 1 = off. Any thread.
+void gsHwSetHudSqueeze(float factor);

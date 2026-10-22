@@ -22,7 +22,9 @@
 namespace ps2control
 {
     bool hiddenMode();        // PS2X_HIDDEN
-    bool physicalInputOn();   // false when hidden or PS2X_INPUT=injected
+    bool physicalInputOn();   // false when hidden, PS2X_INPUT=injected or the game's input is blocked
+    // Main thread: an in-game UI (the settings menu) has the keyboard / mouse / gamepad; the game sees none of it.
+    void setGameInputBlocked(bool blocked);
 
     // Keyboard state for the game and the debug keys: physical (when allowed) or injected through the control channel.
     // `key` is a platform::Key (platform/platform.h).

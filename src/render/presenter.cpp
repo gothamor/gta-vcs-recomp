@@ -6,6 +6,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -33,13 +34,19 @@ namespace present
         std::unique_ptr<rhi::Texture> g_captureTarget;
         std::vector<uint8_t> g_captureRgba;
 
-        // The bound pass's target is targetWidth x targetHeight.
-        void drawPicture(const Picture &picture, int srcWidth, int srcHeight, int targetWidth, int targetHeight)
+        std::atomic<float> g_displayAspect{4.0f / 3.0f};
+
+        // The bound pass's target is targetWidth x targetHeight; the src region is shown at display aspect `aspect`.
+        void drawPicture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int targetWidth, int targetHeight)
         {
-            if (!picture.texture || srcWidth <= 0 || srcHeight <= 0 || targetWidth <= 0 || targetHeight <= 0)
+            if (!picture.texture || srcWidth <= 0 || srcHeight <= 0 || targetWidth <= 0 || targetHeight <= 0 || aspect <= 0.0f)
                 return;
-            const float scale = std::min(static_cast<float>(targetWidth) / srcWidth, static_cast<float>(targetHeight) / srcHeight);
-            const float w = srcWidth * scale, h = srcHeight * scale;
+            float w = static_cast<float>(targetWidth), h = w / aspect;
+            if (h > targetHeight)
+            {
+                h = static_cast<float>(targetHeight);
+                w = h * aspect;
+            }
             const float x0 = (targetWidth - w) * 0.5f, y0 = (targetHeight - h) * 0.5f;
             auto ndcX = [&](float px) { return px / targetWidth * 2.0f - 1.0f; };
             auto ndcY = [&](float py) { return 1.0f - py / targetHeight * 2.0f; };
@@ -132,7 +139,11 @@ namespace present
 
     void beginFrame() { g_device->uiNewFrame(); }
 
-    void drawWindow(const Picture &picture, int srcWidth, int srcHeight, int windowWidth, int windowHeight)
+    void setDisplayAspect(float aspect) { g_displayAspect.store(aspect, std::memory_order_relaxed); }
+
+    float displayAspect(bool showing3d) { return showing3d ? g_displayAspect.load(std::memory_order_relaxed) : 4.0f / 3.0f; }
+
+    void drawWindow(const Picture &picture, int srcWidth, int srcHeight, float aspect, int windowWidth, int windowHeight)
     {
         if (windowWidth > 0 && windowHeight > 0)
             g_device->resize(static_cast<uint32_t>(windowWidth), static_cast<uint32_t>(windowHeight));
@@ -142,14 +153,14 @@ namespace present
         pass.clearColor = true;
         pass.name = "window";
         g_device->beginPass(pass);
-        drawPicture(picture, srcWidth, srcHeight, static_cast<int>(w), static_cast<int>(h));
+        drawPicture(picture, srcWidth, srcHeight, aspect, static_cast<int>(w), static_cast<int>(h));
         g_device->uiRender(ImGui::GetDrawData());
         g_device->endPass();
     }
 
     void present() { g_device->present(false); }
 
-    bool capture(const Picture &picture, int srcWidth, int srcHeight, int width, int height, std::vector<uint8_t> &rgb)
+    bool capture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int width, int height, std::vector<uint8_t> &rgb)
     {
         if (width <= 0 || height <= 0)
             return false;
@@ -170,7 +181,7 @@ namespace present
         pass.clearColor = true;
         pass.name = "capture";
         g_device->beginPass(pass);
-        drawPicture(picture, srcWidth, srcHeight, width, height);
+        drawPicture(picture, srcWidth, srcHeight, aspect, width, height);
         if (ImDrawData *data = ImGui::GetDrawData(); data && data->Valid && data->DisplaySize.x > 0.0f && data->DisplaySize.y > 0.0f)
         {
             ImDrawData scaled = *data; // the window's UI, stretched to the capture size

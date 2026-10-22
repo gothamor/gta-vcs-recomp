@@ -2871,6 +2871,14 @@ void PS2Runtime::run()
         UploadFrame(frameTex, shownTex, this, presentWidth, presentHeight);
         ps2perf::hostFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - uploadStart).count()); // [gta-recomp]
 
+        // [gta-recomp] display aspect: 4:3 (the PS2's TV), the widescreen ratio for 3D frames (render/presenter.h)
+        const float aspect = present::displayAspect(!hwRenderer() || hwRenderer()->presenter().showing3d());
+        static float lastAspect = 0.0f; // [gta-recomp] log the presentation shape when it changes
+        if (aspect != lastAspect)
+        {
+            std::fprintf(stderr, "[present] display aspect %.3f\n", aspect);
+            lastAspect = aspect;
+        }
         const int srcWidth = static_cast<int>(std::max<uint32_t>(1u, presentWidth));
         const int srcHeight = static_cast<int>(std::max<uint32_t>(1u, presentHeight));
         ps2perf::drawOverlay(); // [gta-recomp] F3 overlay, F4 CSV recording
@@ -2881,7 +2889,7 @@ void PS2Runtime::run()
         platform::endUiFrame();
         int windowWidth = 0, windowHeight = 0;
         platform::windowSize(windowWidth, windowHeight);
-        present::drawWindow(shownTex, srcWidth, srcHeight, windowWidth, windowHeight);
+        present::drawWindow(shownTex, srcWidth, srcHeight, aspect, windowWidth, windowHeight);
 
         // [gta-recomp] control channel (runtime/ps2_control.h): screenshots render the same picture off-screen, so
         // they work with the window hidden or covered
@@ -2890,7 +2898,7 @@ void PS2Runtime::run()
             {
                 const int w = std::max(windowWidth, 960), h = std::max(windowHeight, 672); // readable when hidden
                 std::vector<uint8_t> rgb;
-                if (!present::capture(shownTex, srcWidth, srcHeight, w, h, rgb) || !platform::writePng(path.c_str(), rgb.data(), w, h))
+                if (!present::capture(shownTex, srcWidth, srcHeight, aspect, w, h, rgb) || !platform::writePng(path.c_str(), rgb.data(), w, h))
                     return {};
                 return std::to_string(w) + "x" + std::to_string(h);
             },

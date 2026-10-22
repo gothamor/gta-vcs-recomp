@@ -8,15 +8,23 @@
 // Without an argument it uses "iso=" from vcs.ini next to the exe, then the
 // first *.iso in the exe's folder or the current folder.
 #include "ps2_runtime.h"
+#include "runtime/gs/gs_hw.h"
 #include "runtime/ps2_disc_image.h"
+#include "runtime/ps2_perf.h"
 
 #include "debug/crash.h"
 #include "debug/profiler.h"
 #include "debug/selftest.h"
 #include "debug/watchdog.h"
 #include "disc/iso_image.h"
+#include "game/vcs_display.h"
+#include "platform/platform.h"
+#include "render/presenter.h"
+#include "settings/settings.h"
+#include "ui/settings_menu.h"
 #include "util/sha1.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -125,24 +133,91 @@ namespace
         return {};
     }
 
-    // vcs.ini settings besides iso=: scale=<1..8> (internal render resolution, as PS2X_HW_SCALE; the environment wins)
-    void applyIniSettings(const fs::path &ini)
+    void setEnv(const char *name, const std::string &value)
     {
-        std::ifstream in(ini);
-        std::string line;
-        while (std::getline(in, line))
-        {
-            while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
-                line.pop_back();
-            if (line.rfind("scale=", 0) == 0 && !std::getenv("PS2X_HW_SCALE"))
-            {
 #if defined(_WIN32)
-                _putenv_s("PS2X_HW_SCALE", line.substr(6).c_str());
+        _putenv_s(name, value.c_str());
 #else
-                setenv("PS2X_HW_SCALE", line.substr(6).c_str(), 0);
+        setenv(name, value.c_str(), 1);
 #endif
-            }
-        }
+    }
+
+    // Display aspect: the presenter's ratio, the game camera's Hor+ widening and the HUD squeeze (game/vcs_display.h).
+    void applyAspect()
+    {
+        const int code = settings::value("display.aspect");
+        const float aspect = code == 169 ? 16.0f / 9.0f : code == 1610 ? 16.0f / 10.0f : 4.0f / 3.0f;
+        present::setDisplayAspect(aspect);
+        vcs::setAspectWidening(aspect / (4.0f / 3.0f));
+        gsHwSetHudSqueeze(settings::value("display.hud") == 0 ? (4.0f / 3.0f) / aspect : 1.0f);
+        std::fprintf(stderr, "[settings] display aspect %.3f, HUD %s\n", aspect, settings::value("display.hud") == 0 ? "4:3" : "stretched");
+    }
+
+    // The player settings (settings/settings.h; the menu shows them in this order). vcs.ini next to vcs.exe holds
+    // them along with iso=.
+    void registerSettings()
+    {
+        using settings::Apply;
+        using settings::Type;
+        settings::Spec s;
+
+        s = {};
+        s.key = "display.aspect";
+        s.page = "Display";
+        s.label = "Aspect ratio";
+        s.help = "Widescreen shows more to the sides (Hor+); 4:3 is the original picture.";
+        s.type = Type::Choice;
+        s.choices = {{"4:3 (original)", 43}, {"16:10", 1610}, {"16:9", 169}};
+        s.defaultValue = 43;
+        s.env = "VCS_ASPECT";
+        s.onChange = [](int) { applyAspect(); };
+        settings::add(s);
+
+        s = {};
+        s.key = "display.hud";
+        s.page = "Display";
+        s.label = "HUD";
+        s.help = "In widescreen: keep the HUD, text and menus at 4:3 in the middle, or stretch them to the screen.";
+        s.type = Type::Choice;
+        s.choices = {{"Keep 4:3", 0}, {"Stretch", 1}};
+        s.defaultValue = 0;
+        s.onChange = [](int) { applyAspect(); };
+        settings::add(s);
+
+        s = {};
+        s.key = "display.scale";
+        s.alias = "scale";
+        s.page = "Display";
+        s.label = "Internal resolution";
+        s.help = "Renders the game at this multiple of 640x448. Costs GPU time.";
+        s.type = Type::Integer;
+        s.min = 1;
+        s.max = 8;
+        s.format = "%dx";
+        s.defaultValue = 1;
+        s.apply = Apply::Restart;
+        s.env = "PS2X_HW_SCALE";
+        s.onChange = [](int v) { setEnv("PS2X_HW_SCALE", std::to_string(v)); }; // read when the renderer starts
+        settings::add(s);
+
+        s = {};
+        s.key = "graphics.perf_overlay";
+        s.page = "Graphics";
+        s.label = "Performance overlay";
+        s.help = "Frame times and counters in the corner (F3 toggles it too; F4 records a CSV).";
+        s.type = Type::Toggle;
+        s.onChange = [](int v) { ps2perf::setOverlay(v != 0); };
+        s.read = [] { return ps2perf::overlayOn() ? 1 : 0; };
+        settings::add(s);
+
+        s = {};
+        s.key = "controls.menu_key";
+        s.page = "Controls";
+        s.label = "Settings menu key";
+        s.help = "Opens and closes this menu. On a gamepad: hold Back + Start.";
+        s.type = Type::Key;
+        s.defaultValue = platform::KEY_F2;
+        settings::add(s);
     }
 
     fs::path firstIsoIn(const fs::path &dir)
@@ -202,7 +277,9 @@ int main(int argc, char *argv[])
     vcs::installCrashHandlers();
     try
     {
-        applyIniSettings(exeDirectory() / "vcs.ini");
+        registerSettings();
+        settings::load(exeDirectory() / "vcs.ini");
+        settings::applyAll();
         const fs::path isoPath = locateIso(argc, argv);
         if (isoPath.empty())
         {
@@ -232,6 +309,9 @@ int main(int argc, char *argv[])
         ps2_disc::setImage(&disc);
 
         PS2Runtime runtime;
+        // the settings menu draws in the runtime's UI hook (registered before initialize(), which runs the init hook)
+        runtime.setDebugUiCallbacks([](PS2Runtime &, void *) {}, [](PS2Runtime &, void *) { ui::drawSettingsMenu(); }, nullptr,
+                                    nullptr);
         if (!runtime.initialize("GTA: Vice City Stories"))
         {
             std::cerr << "Failed to initialize runtime" << std::endl;

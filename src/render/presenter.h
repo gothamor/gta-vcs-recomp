@@ -34,10 +34,15 @@ namespace present
     // platform::endUiFrame(), then optional captures, then present().
     void beginFrame();
     // The window's back buffer (resized to windowWidth x windowHeight): black, the top-left src part of the picture
-    // letterboxed, the Dear ImGui output on top.
-    void drawWindow(const Picture &picture, int srcWidth, int srcHeight, int windowWidth, int windowHeight);
+    // letterboxed at display aspect `aspect` (width / height), the Dear ImGui output on top.
+    void drawWindow(const Picture &picture, int srcWidth, int srcHeight, float aspect, int windowWidth, int windowHeight);
     void present();
 
     // The same picture and Dear ImGui output (scaled) rendered off-screen at width x height; RGB rows top-down.
-    bool capture(const Picture &picture, int srcWidth, int srcHeight, int width, int height, std::vector<uint8_t> &rgb);
+    bool capture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int width, int height, std::vector<uint8_t> &rgb);
+
+    // Display aspect of the game picture (docs/SETTINGS_MENU_WIDESCREEN.md): 4:3 as on a PS2's TV, or the widescreen
+    // ratio. displayAspect(false) is for frames without 3D (loading screens, menus): always 4:3. Any thread.
+    void setDisplayAspect(float aspect);
+    float displayAspect(bool showing3d);
 }

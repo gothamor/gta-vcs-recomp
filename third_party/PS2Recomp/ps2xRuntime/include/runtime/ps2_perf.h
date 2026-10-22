@@ -62,6 +62,9 @@ namespace ps2perf
     void hostFrame(double glMs);
     // Main thread, between BeginDrawing and EndDrawing: handles F3/F4 and draws the overlay when on.
     void drawOverlay(bool handleKeys = true);
+    // [gta-recomp] Main thread: the F3 overlay's state (settings menu).
+    void setOverlay(bool on);
+    bool overlayOn();
     // The overlay's numbers for the last second as one line (control channel "perf").
     std::string summaryLine();
     // Closes a running recording (end of run).

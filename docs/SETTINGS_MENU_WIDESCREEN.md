@@ -1,6 +1,7 @@
 # Settings menu and widescreen - plan
 
-Status: **plan, for review** (2026-10-22). Nothing here is implemented yet.
+Status: **v1 built** (2026-10-22): spike done, settings menu and Hor+ widescreen (4:3, 16:10,
+16:9) in; see "What v1 built" below for what differs from the plan.
 
 Two pieces, built in that order:
 1. An in-game **settings menu** of our own (not the PS2 game's menus), opened with a key binding,
@@ -29,6 +30,78 @@ projection matrices, and treats other aspect ratios as an extension of it.
 Also found: **our presentation shows the 640x448 frame at 1.43:1** (square pixels). A PS2 frame is
 meant to be shown at 4:3 (non-square pixels), so today's picture is ~7% too wide. The widescreen
 work fixes that too ("Display aspect" below).
+
+## Spike result (2026-10-22) - the plan's widescreen route changes
+
+Forcing the game's preference (`VCS_WIDESCREEN=1`, src/game/vcs_display.cpp) and logging the
+globals showed:
+- The writes stick (preference 1; aspect 16/9 in the frontend, 5/3 in game - `[0x6f4d14]` is 1 in
+  game and 0 in the frontend, so it is not a PAL flag but a frontend / in-game switch; in 4:3 the
+  aspect is 4/3 / 1.25).
+- The FOV global is the same in both modes (45 frontend, 120 flyover, 70 in game).
+- `FUN_001ab9e0` = set the camera's view window: x = tan(FOV / 2), y = x / aspect, raster
+  640x448, through `FUN_0018f2d8` (RwCameraSetViewWindow). So the game's widescreen is **Vert-**:
+  same horizontal view, vertical view cut by 25%, for a TV that stretches the picture.
+- The HUD does not change with the preference (the radar keeps its 4:3 shape); the preference's
+  readers are 3D-projected sprites (e.g. `0x1147e0`: size without the 4/3 factor).
+- The camera at `0x21f9c8` (same camera object `[0x51E490]`) gets a fixed 16/9: probably the
+  letterboxed cutscene view.
+
+New route for 16:9 (and other ratios): **Hor+ through the view-window setter**. Replace
+`FUN_001ab9e0` with a wrapper that widens the horizontal extent by r = display aspect / (4:3) and
+keeps the vertical one (tan * r, aspect * r); RenderWare derives the frustum (EE culling) and the
+VU matrices from the view window, so 3D, culling and both renderers follow. The game's own
+preference stays off. The renderer squeezes 2D draws (no depth test, not full width) by 1/r so the
+HUD keeps its shape (in the middle 4:3 of the screen), and frames without 3D (loading screens, the
+pause map) are shown at 4:3, pillarboxed.
+
+## What v1 built (2026-10-22)
+
+- `src/settings/settings.{h,cpp}`: the registry (Toggle / Choice / Integer / Key; Live / Restart),
+  values as ints, vcs.ini read / write (unknown lines and comments kept, temp file + rename, only
+  non-default values appended), environment overrides per setting (read at load, shown greyed out,
+  never written back), an `alias` for older keys (`scale=` -> `display.scale`) and a `read` hook
+  for settings a hotkey also changes (F3 overlay). No separate ini module: it is ~60 lines.
+- `src/ui/settings_menu.{h,cpp}`: the menu, drawn in the runtime's debug-UI callback. Tabs per
+  page (LB / RB or Q / E switch), a two-column table per page, the selected row's help line,
+  "applies after a restart" under changed Restart settings. F2 (`controls.menu_key`) or pressing
+  Back + Start together toggles it (no half-second hold: the press is enough, see below); Escape /
+  B closes it (not while a combo list is open). Dear ImGui keyboard / gamepad nav is switched on
+  only while the menu is open.
+- Input: `ps2control::setGameInputBlocked` - `physicalInputOn()` is false while the menu is open
+  and after it closes until every key / button is released (so the B or Escape that closed it
+  never reaches the game).
+- Settings (main.cpp `registerSettings`): Display > Aspect ratio (`display.aspect` = 43 / 1610 /
+  169, env `VCS_ASPECT`), HUD (`display.hud`: keep 4:3 / stretch), Internal resolution
+  (`display.scale`, restart, env `PS2X_HW_SCALE`); Graphics > Performance overlay; Controls >
+  Settings menu key.
+- Widescreen: the Hor+ route from the spike - `vcs_display.cpp` wraps `FUN_001ab9e0`, the presenter
+  shows 3D frames at the display aspect (2D-only frames - loading screens, the pause menu - at
+  4:3), the HW renderer squeezes the HUD by (4:3) / aspect. What tells them apart (found with frame
+  dumps, `PS2X_HW_DUMP`):
+  - RenderWare keeps ZTE on for 2D (ZTE=0 is prohibited on the GS) and uses ALWAYS or GEQUAL, so
+    "no depth test" finds nothing. VCS draws its whole HUD, text, radar and menus at the **largest
+    Z** (0xFFFFFF; 0.99999994 after scaling, not 1.0), while projected sprites (clouds, coronas,
+    the mission arrow's glow) take the same RwIm2D path at their real depth. HUD = at the far
+    plane, not full width (sky, horizon band, fades), not sampling a render target (the colour
+    filter is drawn in strips from the frame itself).
+  - The radar map and menu labels are clipped by the scissor: squeezed draws get a squeezed
+    scissor.
+  - 3D = a depth-tested draw (GEQUAL / GREATER) not at the far plane, or a native draw. The game
+    draws 3D in every other VBlank (30 fps), so "3D" is judged over the last 32 frames: 4 or more
+    3D -> wide, none -> 4:3, otherwise unchanged. The game thread reads the same flag to decide
+    whether to squeeze (a frame or two late at a switch).
+  - Checked with `tools/scenes.py capture` at 16:9 and 4:3: gameplay HUD in the middle 4:3 with
+    a round, clipped radar; flyovers and the intro cutscene wide (the cutscene keeps its own
+    letterbox bars inside the 16:9 picture); loading screen and pause map at 4:3. Not yet looked
+    at: vehicles' HUD, the phone / mission text boxes, the frontend menus over a 3D background.
+- Not done from the plan: 21:9 and "match window" (the same mechanism; streaming at the edges
+  needs a look first), separate horizontal / vertical internal scale, window mode, pausing,
+  control-channel `menu` / `set` commands (environment overrides cover scripted captures:
+  `VCS_ASPECT=169 python tools/scenes.py capture ...`).
+- Gamepad chord: opening on the Back + Start press means the game may see Start for one frame
+  (and open its pause menu) before the block applies. A hold time would not avoid that either; a
+  later fix is to delay Start to the game by a frame while Back is held.
 
 ## Part 1 - the settings menu
 

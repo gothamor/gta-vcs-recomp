@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <bit>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -23,6 +25,13 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+namespace
+{
+    std::atomic<float> g_hudSqueeze{1.0f}; // [gta-recomp] gsHwSetHudSqueeze
+}
+
+void gsHwSetHudSqueeze(float factor) { g_hudSqueeze.store(factor, std::memory_order_relaxed); }
 
 GSHwOptions GSHwOptions::fromEnvironment()
 {
@@ -148,6 +157,7 @@ namespace
         std::vector<NativeDrawCmd> nativeDraws;
         std::vector<uint8_t> nativeBytes; // transient native vertices
         uint64_t nativeVertices = 0;
+        bool had3d = false; // [gta-recomp] any depth-tested or native draw (widescreen presentation)
         uint64_t privRegs[15]{};
         // Display from CPU VRAM when no render target holds the displayed buffer.
         std::vector<uint32_t> cpuDisplay;
@@ -1003,6 +1013,37 @@ namespace
                     out[i].b = out[n - 1].b;
                     out[i].a = out[n - 1].a;
                 }
+            // [gta-recomp] VCS draws its HUD, text, radar and menus (RwIm2D) at the largest Z, whatever the depth test
+            // (RenderWare keeps ZTE on: ZTE=0 is prohibited on the GS); projected sprites (clouds, coronas) take the
+            // same path at their real depth.
+            bool far = true;
+            float x0 = out[0].x, x1 = out[0].x;
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                x0 = std::min(x0, out[i].x);
+                x1 = std::max(x1, out[i].x);
+                far = far && out[i].z >= 0.99999f; // the largest Z24 / Z32 value
+            }
+            // 3D (widescreen presentation): depth-tested, not at the far plane
+            if (s.zte && s.ztst >= 2u && !far)
+                m_frame->had3d = true;
+            // widescreen: the HUD keeps its 4:3 shape in the middle (gsHwSetHudSqueeze) while the picture is shown
+            // wide - draws at the far plane, except full-width ones (sky, fades) and the screen effects that sample the
+            // frame (drawn in strips). The scissor goes with them (the radar and menu labels are clipped by it).
+            if (far && s.fbw == 10u && !s.texIsRt && !(x0 <= 1.0f && x1 >= 639.0f) && m_showing3d.load(std::memory_order_relaxed))
+            {
+                const float squeeze = g_hudSqueeze.load(std::memory_order_relaxed);
+                if (squeeze < 0.9999f)
+                {
+                    for (uint32_t i = 0; i < n; ++i)
+                        out[i].x = 320.0f + (out[i].x - 320.0f) * squeeze;
+                    if (s.scx0 > 0u || s.scx1 < 639u)
+                    {
+                        s.scx0 = static_cast<uint16_t>(std::max(0.0f, std::floor(320.0f + (s.scx0 - 320.0f) * squeeze)));
+                        s.scx1 = static_cast<uint16_t>(std::min(639.0f, std::ceil(320.0f + (s.scx1 + 1.0f - 320.0f) * squeeze) - 1.0f));
+                    }
+                }
+            }
             if (s.zte && s.ztst != 1u && s.zbp != s.fbp) // a depth buffer in real use (tested against)
             {
                 DepthInfo &di = m_depthBufs[s.zbp];
@@ -1722,6 +1763,7 @@ namespace
             f.nativeDraws.clear();
             f.nativeBytes.clear();
             f.nativeVertices = 0;
+            f.had3d = false;
             std::memset(f.privRegs, 0, sizeof(f.privRegs));
             f.cpuDisplay.clear();
             f.cpuDisplayW = f.cpuDisplayH = 0;
@@ -1799,6 +1841,7 @@ namespace
             f.cmds.push_back({CmdType::NativeDraw, static_cast<uint32_t>(f.nativeDraws.size())});
             f.nativeDraws.push_back(nd);
             f.nativeVertices += draw.drawCount;
+            f.had3d = true;
             ps2hle::g_gsVerticesRecorded += draw.drawCount;
             return true;
         }
@@ -1842,12 +1885,30 @@ namespace
                 // [gta-recomp] F12 (or PS2X_HW_DUMP=<frame>): list the next frame's draws and dump its targets
                 static const long dumpAt = std::getenv("PS2X_HW_DUMP") ? std::atol(std::getenv("PS2X_HW_DUMP")) : -1;
                 const bool f12 = ps2control::keyDown(301 /* KEY_F12 */);
-                const bool dumpNow = (f12 && !m_f12Down) ||
-                                     (dumpAt >= 0 && !m_dumped && m_executedFrames + frames.size() >= static_cast<uint64_t>(dumpAt));
+                if (f12 && !m_f12Down)
+                    m_dumpPending = true;
                 m_f12Down = f12;
+                if (dumpAt >= 0 && !m_dumped && m_executedFrames + frames.size() >= static_cast<uint64_t>(dumpAt))
+                    m_dumpPending = true;
+                // the next batch that draws anything (the game draws in every other VBlank at 30 fps)
+                const bool dumpNow = m_dumpPending &&
+                                     std::any_of(frames.begin(), frames.end(), [](const auto &fr) { return !fr->cmds.empty(); });
+                if (dumpNow)
+                    m_dumpPending = false;
                 for (auto &frame : frames)
                     m_rhi->execute(*frame, dumpNow);
                 m_rhi->composeDisplay(*frames.back());
+                // 3D or not over the last 32 frames (the game draws 3D in every other VBlank at 30 fps): 3D in 4 or
+                // more of them shows 3D, none shows 2D, in between keeps the current shape (fades, loading flashes)
+                for (auto &frame : frames)
+                {
+                    m_3dHistory = (m_3dHistory << 1) | (frame->had3d ? 1u : 0u);
+                    const int n = std::popcount(m_3dHistory);
+                    if (n >= 4)
+                        m_showing3d = true;
+                    else if (n == 0)
+                        m_showing3d = false;
+                }
                 m_executedFrames += frames.size();
                 if (dumpNow)
                 {
@@ -2253,6 +2314,12 @@ namespace
         uint32_t m_loggedTransfers = 0, m_loggedTextures = 0;
         bool m_dumped = false;
         bool m_f12Down = false; // [gta-recomp]
+        bool m_dumpPending = false; // [gta-recomp] F12 / PS2X_HW_DUMP waiting for a frame with draws
+        uint32_t m_3dHistory = ~0u; // [gta-recomp] showing3d: had3d of the last 32 frames, newest in bit 0
+        std::atomic<bool> m_showing3d{true}; // main thread writes, the game thread's Submit reads
+
+    public:
+        bool showing3d() const override { return m_showing3d.load(std::memory_order_relaxed); }
     };
 }
 

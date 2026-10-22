@@ -218,13 +218,20 @@ namespace ps2control
         return hidden;
     }
 
+    namespace
+    {
+        std::atomic<bool> g_gameInputBlocked{false};
+    }
+
+    void setGameInputBlocked(bool blocked) { g_gameInputBlocked.store(blocked, std::memory_order_relaxed); }
+
     bool physicalInputOn()
     {
         static const bool on = [] {
             const char *v = std::getenv("PS2X_INPUT");
             return !hiddenMode() && !(v && std::string(v) == "injected");
         }();
-        return on;
+        return on && !g_gameInputBlocked.load(std::memory_order_relaxed);
     }
 
     bool keyDown(int key)

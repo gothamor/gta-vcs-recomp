@@ -5,6 +5,7 @@
 // unity batch (~9 min), while this file only needs a relink.
 // Once a binding is settled it can move to overrides.toml.
 #include "game_overrides.h"
+#include "game/vcs_display.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/ps2_perf.h"
@@ -597,12 +598,14 @@ namespace
     void markFrameKick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         ps2perf::markGameFrame();
+        vcs::applyDisplay(rdram); // widescreen preference / aspect (settings menu)
         FUN_002723e8_0x2723e8(rdram, ctx, runtime);
     }
 
     void applyVcs(PS2Runtime &runtime)
     {
         runtime.replaceFunction(0x002723E8u, &markFrameKick);
+        vcs::installDisplayHooks(runtime); // widescreen (settings menu)
         if (std::getenv("VCS_TRACE_PACKETS"))
             runtime.replaceFunction(0x00476770u, &tracePacketUse);
         if (std::getenv("VCS_TRACE_SECTORS"))
