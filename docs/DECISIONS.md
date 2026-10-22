@@ -56,6 +56,9 @@ Newest at the bottom. Each entry: what, why, and what would change it.
 3. End state for performance and real hi-res/widescreen: native renderer fed by
    high-level hooks on the game's VU1 render paths (VCS has only ~4.8 KB of VU
    microcode + 4 small DVP overlays, so the set of programs is small).
+- 2026-10-22: step 3 is now planned in detail in NATIVE_RENDERER.md (SDL3 platform
+  layer, own RHI with a D3D11 backend, GS HW backend port, then packet-level HLE).
+  Status: proposed, under review.
 
 ## 2026-10-22 - Movies skipped during bring-up
 - `FUN_0021CA70` (from `main`) plays `STINGS.PSS` then `INTRO.PSS` via the movie
