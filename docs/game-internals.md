@@ -217,6 +217,31 @@ Found from frame dumps (`PS2X_HW_DUMP`, draw lists with depth) during the widesc
 - Pause menus have no depth-tested geometry below the far plane (that is how "3D frame" vs "2D
   frame" is told apart for the widescreen presentation).
 
+### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
+
+From `PS2X_HW_DUMP` / F12 with `PS2X_HW_DUMP_BATCHES=4` at the hospital (-884, -470), noon and 20:00; the draw
+log names the render target each copy reads (`src rt fbp=...`). The game draws a frame in one VBlank and nothing in
+the next (30 fps). In order:
+
+1. Opaque full-screen copy of buffer **140 -> 0** (240 vertices: strips) - the previous picture kept in FBP 0.
+2. Sky gradient (24 vertices, `Cs*FIX`, z = far), cloud sprites (64x64, additive), horizon band (full width).
+3. Alpha-only full-screen quad into 140 (FBMSK 0xFFFFFF), then the **native 3D** (~900-1300 world / lit draws,
+   all into FBP 140).
+4. Opaque full-screen **self-copy 140 -> 140** (120 vertices) - a shifted / filtered copy of the scene onto itself.
+5. Radar: 128x128 into FBP 420 from 140, radar tiles into 420; more 3D (particles, peds' second pass) into 140.
+6. Bloom: 256x256 ping-pong between FBP 420 and 452 (4 passes: clear `Cs*FIX` black, add the other at FIX 128 with
+   tint 0x13), then added into 140 (`Cs*FIX + Cd`, FIX ~100).
+7. Trails / colour: 512x512 downsample 140 -> FBP 384 (opaque), blended back into 140 at FIX 8 (`(Cs-Cd)*FIX+Cd`,
+   624 vertices of strips) and added with a tint (0x10, 0x03, 0x09 at noon; 0x10, 0x01, 0x04 at 20:00).
+8. Blend with the previous picture: FBP 0 -> 140 at FIX 16 (motion blur), alpha-only clear.
+9. HUD / text at the far plane; the cinematic bars (zero height when closed) and text boxes (alpha 0x40).
+
+**Evening black frames**: between about 20:00 and 22:15 (the window moves with the weather) most frames come out
+black - everything but the last text - with normal draw counts. Same with the VU1 path (`PS2X_HLE=0`), so not the
+native renderer. The passes, their order, sources and targets are identical at noon and 20:00 (above), so the
+difference is in the values (texture coordinates of a copy, alpha, a self-copy reading what it writes). Under
+investigation; `PS2X_HW_SKIP` (1: skip render-target reads, 4: native only) exists for bisecting it.
+
 ## 7. Textures: `.XTX`
 
 Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):

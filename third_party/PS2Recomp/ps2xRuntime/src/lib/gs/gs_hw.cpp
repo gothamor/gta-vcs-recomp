@@ -324,6 +324,16 @@ namespace
                      d.count, s.fbp, s.zbp, s.zte, s.ztst, s.zmsk, s.tme, (unsigned long long)s.texKey, s.tw, s.th, s.texIsRt,
                      s.tfx, s.tcc, s.abe, s.ba, s.bb, s.bc, s.bd, s.fix, s.ate, s.atst, s.aref, s.afail, s.fge, fogMin,
                      s.fogR, s.fogG, s.fogB, s.fbmsk, s.mode, s.iip, s.fst, x0, y0, x1, y1, z0, z1, rgbaOr);
+        if (s.texIsRt) // [gta-recomp] which render target a frame copy / screen effect reads, and where in it
+            std::fprintf(stderr, "[draw]   src rt fbp=%u at %u,%u tex %ux%u tbw? st=(%.1f,%.1f)\n", s.rtFbp, s.rtOx, s.rtOy, s.tw, s.th,
+                         d.count ? f.vertices[d.first].s : 0.0f, d.count ? f.vertices[d.first].t : 0.0f);
+        if (d.count <= 24) // [gta-recomp] small draws (overlays, fades): every vertex
+            for (uint32_t i = 0; i < d.count; ++i)
+            {
+                const HwVertex &v = f.vertices[d.first + i];
+                std::fprintf(stderr, "[draw]   v%u (%.1f, %.1f, %.6f) rgba %02x %02x %02x %02x\n", i, v.x, v.y, v.z, v.r, v.g, v.b,
+                             v.a);
+            }
     }
 
     void writePpm(const std::string &path, const uint8_t *rgba, uint32_t w, uint32_t h)
@@ -426,10 +436,18 @@ namespace
                     depthFill(f.depthFills[c.index], logDraws);
                     break;
                 case CmdType::Draw:
+                {
                     if (logDraws)
                         logDraw(f, f.draws[c.index]);
-                    draw(f.draws[c.index].s, f.draws[c.index].first, f.draws[c.index].count, nullptr);
+                    // [gta-recomp] PS2X_HW_SKIP=<mask> (diagnostics): 1 skips draws that sample a render target (frame
+                    // copies, screen effects), 2 skips untextured full-screen draws, 4 skips everything but native draws
+                    static const unsigned skip = std::getenv("PS2X_HW_SKIP") ? std::strtoul(std::getenv("PS2X_HW_SKIP"), nullptr, 0) : 0u;
+                    const HwState &ds = f.draws[c.index].s;
+                    if (skip && (((skip & 1u) && ds.texIsRt) || (skip & 4u)))
+                        break;
+                    draw(ds, f.draws[c.index].first, f.draws[c.index].count, nullptr);
                     break;
+                }
                 case CmdType::MeshCreate:
                 {
                     const MeshCreate &m = f.meshes[c.index];
@@ -1908,10 +1926,25 @@ namespace
                 // the next batch that draws anything (the game draws in every other VBlank at 30 fps)
                 const bool dumpNow = m_dumpPending &&
                                      std::any_of(frames.begin(), frames.end(), [](const auto &fr) { return !fr->cmds.empty(); });
+                // PS2X_HW_DUMP_BATCHES=<n>: list the draws of n consecutive batches (a game frame's 3D and its
+                // post-effect / HUD frame can arrive in different batches); the targets are written after the last
+                static const int dumpBatches = std::max(1, std::getenv("PS2X_HW_DUMP_BATCHES") ? std::atoi(std::getenv("PS2X_HW_DUMP_BATCHES")) : 1);
                 if (dumpNow)
+                {
                     m_dumpPending = false;
+                    m_dumpBatchesLeft = dumpBatches;
+                }
+                const bool logThis = m_dumpBatchesLeft > 0;
+                const bool dumpTargets = logThis && m_dumpBatchesLeft == 1;
                 for (auto &frame : frames)
-                    m_rhi->execute(*frame, dumpNow);
+                {
+                    if (logThis)
+                        std::fprintf(stderr, "[draw] --- frame (%zu draws, %zu native, 3d %d) ---\n", frame->draws.size(),
+                                     frame->nativeDraws.size(), frame->had3d ? 1 : 0);
+                    m_rhi->execute(*frame, logThis);
+                }
+                if (m_dumpBatchesLeft > 0)
+                    --m_dumpBatchesLeft;
                 m_rhi->composeDisplay(*frames.back());
                 {
                     // [gta-recomp] lastFrameInfo: per frame of the batch: draws / native draws / clears / rt drops,
@@ -1940,7 +1973,7 @@ namespace
                         m_showing3d = false;
                 }
                 m_executedFrames += frames.size();
-                if (dumpNow)
+                if (dumpTargets)
                 {
                     m_dumped = true;
                     m_rhi->dump();
@@ -2345,6 +2378,7 @@ namespace
         bool m_dumped = false;
         bool m_f12Down = false; // [gta-recomp]
         bool m_dumpPending = false; // [gta-recomp] F12 / PS2X_HW_DUMP waiting for a frame with draws
+        int m_dumpBatchesLeft = 0;  // [gta-recomp] PS2X_HW_DUMP_BATCHES
         uint32_t m_3dHistory = ~0u; // [gta-recomp] showing3d: had3d of the last 32 frames, newest in bit 0
         std::atomic<bool> m_showing3d{true}; // main thread writes, the game thread's Submit reads
 

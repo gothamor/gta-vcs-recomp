@@ -105,6 +105,20 @@
       baseline, report.md
 - [ ] Soak runs; in-process falling detector; unconverted-draw counter; map image with the land outline
 
+## Milestone 2 - correctness sweep (started 2026-10-23)
+Findings so far (rig runs; details in game-internals.md):
+- [ ] **Evening black frames** (the user's "world turns black"): 20:00-22:15 game time most frames black, draws
+      normal, native and VU path alike; frame structure identical to noon (game-internals.md 6g). Next: compare the
+      copies' texture coordinates / alpha between noon and 20:00, the self-copy 140 -> 140.
+- [ ] After a death the world near the hospital drew only lights for ~40 s (01:25-01:57 game time) - check whether
+      it is the same bug (night window) or streaming.
+- [ ] Driving: 36-54 ms per frame (game code ~20 ms, render submit ~15 ms) - below 30 fps in traffic.
+- [ ] Sea points where the player sinks to -40..-100 (no water there?) - world tour "falling".
+- [ ] With `PS2X_HLE=0` the noon picture is much darker (luma 18 vs 92 native) - the VU path regressed or the
+      native path is too bright; compare against the scenes baseline.
+- [x] Black flashes at teleports / car warps are the game's own load transitions (not bugs).
+- [x] "Relocations" after loading: the safehouse script (rig.Game.prime).
+
 ## Phase 5 - stability
 - [ ] Vic falls through the world in some places (reported by the user 2026-10-22, after the
       native renderer; not yet known whether it is new). Collision needs a look: whether the
