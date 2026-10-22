@@ -391,6 +391,7 @@ add_library(ps2_runtime STATIC
     src/lib/ps2_disc_image.cpp
     src/lib/ps2_audio_out.cpp
     src/lib/ps2_perf.cpp
+    src/lib/ps2_control.cpp
     src/lib/ps2_runtime.cpp
     src/lib/ps2_vif1_interpreter.cpp
     src/lib/vu/ps2_vu1_core.cpp
@@ -451,6 +452,11 @@ endif()
 target_compile_definitions(ps2_runtime PRIVATE
     PS2X_HAS_FFMPEG=$<BOOL:${PS2X_ENABLE_FFMPEG}>
 )
+
+# [gta-recomp] control channel sockets (src/lib/ps2_control.cpp)
+if(WIN32)
+    target_link_libraries(ps2_runtime PRIVATE ws2_32)
+endif()
 
 file(GLOB_RECURSE KERNEL_SRC_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel/*.cpp"

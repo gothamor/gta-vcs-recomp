@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace ps2perf
 {
@@ -60,7 +61,9 @@ namespace ps2perf
     // Main thread, once per host frame: how long the GPU renderer's command execution took.
     void hostFrame(double glMs);
     // Main thread, between BeginDrawing and EndDrawing: handles F3/F4 and draws the overlay when on.
-    void drawOverlay();
+    void drawOverlay(bool handleKeys = true);
+    // The overlay's numbers for the last second as one line (control channel "perf").
+    std::string summaryLine();
     // Closes a running recording (end of run).
     void shutdown();
 }

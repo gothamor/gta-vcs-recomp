@@ -30,3 +30,10 @@ a remappable `vcs.ini` section is planned.
 | F3 | performance overlay: game fps and frame-time percentiles, EE thread time per phase (game / render / IOP / wait), GS and DMA counters, host and GL times, audio buffer, and a frame-time graph |
 | F4 | start / stop recording one CSV row per game frame to `perf_<date>_<time>.csv` (working directory); summarise with `python tools/perf_report.py <file>` |
 | F12 | (hardware renderer) list the next frame's draws on stderr and dump its render targets |
+
+## Test runs without a window
+`python tools/run.py 600 test --hidden` starts the game with no window on the desktop, no sound, and the physical
+keyboard / mouse / gamepad ignored (`PS2X_HIDDEN=1`). It listens on 127.0.0.1:47615 (`PS2X_CONTROL_PORT`) for
+`tools/gamectl.py`: `screenshot out.png` (the picture plus the perf overlay, rendered off-screen), `press Return 150`,
+`key W down` / `up`, `perf`, `quit`. `--control` (`PS2X_CONTROL=1`) opens the same channel with the window shown;
+`PS2X_INPUT=injected` ignores physical input with the window shown.

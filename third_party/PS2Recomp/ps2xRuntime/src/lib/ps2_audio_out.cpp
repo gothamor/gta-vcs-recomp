@@ -6,6 +6,7 @@
 // large pitch swings an earlier version used. After an underrun playback waits for the target fill before
 // resuming (one short gap instead of a crackle). PS2X_AUDIO_STATS=1 prints underruns / fill every 5 s.
 #include "runtime/ps2_audio_out.h"
+#include "runtime/ps2_control.h"
 
 #include "raylib.h"
 
@@ -142,8 +143,9 @@ namespace
 
 void ps2AudioInit()
 {
-    const char *off = std::getenv("PS2X_AUDIO");
-    if (g_started || (off && off[0] == '0') || !IsAudioDeviceReady())
+    const char *setting = std::getenv("PS2X_AUDIO");
+    const bool muted = setting ? setting[0] == '0' : ps2control::hiddenMode(); // hidden test runs are silent by default
+    if (g_started || muted || !IsAudioDeviceReady())
         return;
     SetAudioStreamBufferSizeDefault(1024);
     g_stream = LoadAudioStream(kRate, 16, 2);

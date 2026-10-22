@@ -1,6 +1,7 @@
 // [gta-recomp] Performance instrumentation: see runtime/ps2_perf.h.
 #include "runtime/ps2_perf.h"
 #include "runtime/ps2_audio_out.h"
+#include "runtime/ps2_control.h"
 
 #include "raylib.h"
 
@@ -424,16 +425,16 @@ namespace ps2perf
         g_lastHostNs = now;
     }
 
-    void drawOverlay()
+    void drawOverlay(bool handleKeys)
     {
-        if (IsKeyPressed(KEY_F3))
+        if (handleKeys && ps2control::keyPressed(KEY_F3))
             g_overlay = !g_overlay;
         bool recording;
         std::string csvName;
         std::vector<Sample> samples;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
-            if (IsKeyPressed(KEY_F4))
+            if (handleKeys && ps2control::keyPressed(KEY_F4))
             {
                 g_logFromEnv = true; // a manual toggle wins over PS2X_PERF_LOG
                 if (g_csv)
@@ -450,6 +451,23 @@ namespace ps2perf
             drawOverlayPanel(samples, recording, csvName);
         else if (recording)
             DrawText("REC", 10, 10, std::max(10, GetScreenHeight() / 46), Color{245, 90, 90, 255});
+    }
+
+    std::string summaryLine()
+    {
+        std::vector<Sample> lastSecond;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            for (const Sample &x : recent(kHistory))
+                lastSecond.push_back(x);
+        }
+        while (lastSecond.size() > 1 && lastSecond.back().t - lastSecond.front().t > 1.0)
+            lastSecond.erase(lastSecond.begin());
+        const Summary r = summarize(lastSecond);
+        return fmt("game_fps=%.1f frame_ms=%.1f vblank_per_s=%.1f game_ms=%.1f render_ms=%.1f iop_ms=%.1f wait_ms=%.1f draws=%.0f "
+                   "verts=%.0f tex_uploads=%.0f dma_tags=%.0f vu1_programs=%.0f host_fps=%.0f gl_ms=%.1f audio_ms=%.0f",
+                   r.fps, r.avgMs, r.vblanksPerS, r.phaseMs[0], r.phaseMs[1], r.phaseMs[2], r.phaseMs[3], r.counters[0], r.counters[1],
+                   r.counters[2], r.counters[3], r.counters[4], r.hostFps, r.glMs, r.audioMs);
     }
 
     void shutdown()

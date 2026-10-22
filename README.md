@@ -40,7 +40,9 @@ The disc can also be given by `VCS_ISO`, `iso=...` in `vcs.ini`, or by putting t
 | `tools/recompile.py [ISO]` | disc -> generated C++ only |
 | `tools/run.py [seconds] [logname]` | run the game for a while, log to `build/run/<logname>.log` |
 | `tools/perf_report.py file.csv` | summarise a perf recording (F4 in game) |
-| `tools/screenshot.py`, `tools/sendkey.py` | capture / press keys in the game window (Windows) |
+| `tools/run.py ... --hidden` | test run with no window, no sound, no physical input (driven by `tools/gamectl.py`) |
+| `tools/gamectl.py` | control a running game: screenshots, key presses, perf numbers, quit (works hidden) |
+| `tools/screenshot.py`, `tools/sendkey.py` | screenshot / key press: via the control channel when open, else the window (Windows) |
 | `tools/ghidra_analyze.py` | redo the Ghidra analysis (Ghidra 12 + JDK 21) |
 
 ## Layout

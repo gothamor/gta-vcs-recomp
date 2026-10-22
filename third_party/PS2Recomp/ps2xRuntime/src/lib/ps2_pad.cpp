@@ -1,5 +1,6 @@
 #include "runtime/ps2_pad.h"
 #include "ps2_host_backend.h"
+#include "runtime/ps2_control.h"
 #include <cstring>
 
 namespace
@@ -45,7 +46,8 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
 
     constexpr int kGamepad = 0;
-    if (IsGamepadAvailable(kGamepad))
+    const bool physical = ps2control::physicalInputOn(); // [gta-recomp] off in hidden test runs
+    if (physical && IsGamepadAvailable(kGamepad))
     {
         press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_UP), PAD_UP);
         press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN), PAD_DOWN);
@@ -83,7 +85,7 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     }
 
     auto key = [](int k)
-    { return IsKeyDown(k); };
+    { return ps2control::keyDown(k); };
     press(key(KEY_UP), PAD_UP);
     press(key(KEY_DOWN), PAD_DOWN);
     press(key(KEY_LEFT), PAD_LEFT);
@@ -91,9 +93,9 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     press(key(KEY_LEFT_SHIFT) || key(KEY_RIGHT_SHIFT), PAD_CROSS);
     press(key(KEY_SPACE), PAD_SQUARE);
     press(key(KEY_F), PAD_TRIANGLE);
-    press(key(KEY_LEFT_CONTROL) || key(KEY_RIGHT_CONTROL) || IsMouseButtonDown(MOUSE_BUTTON_LEFT), PAD_CIRCLE);
+    press(key(KEY_LEFT_CONTROL) || key(KEY_RIGHT_CONTROL) || (physical && IsMouseButtonDown(MOUSE_BUTTON_LEFT)), PAD_CIRCLE);
     press(key(KEY_Q), PAD_L1);
-    press(key(KEY_E) || IsMouseButtonDown(MOUSE_BUTTON_RIGHT), PAD_R1);
+    press(key(KEY_E) || (physical && IsMouseButtonDown(MOUSE_BUTTON_RIGHT)), PAD_R1);
     press(key(KEY_ONE) || key(KEY_Z), PAD_L2);
     press(key(KEY_THREE) || key(KEY_X), PAD_R2);
     press(key(KEY_C), PAD_L3);

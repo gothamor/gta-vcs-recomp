@@ -4,7 +4,7 @@
 #include "runtime/gs/ps2_gs_memory.h" // [gta-recomp] RectBlocks (lazy uploads)
 #include "runtime/gs/gs_cpu_backend.h"
 
-extern "C" bool IsKeyDown(int key); // raylib (window owner)
+#include "runtime/ps2_control.h" // [gta-recomp] keys: physical or injected
 
 #include <algorithm>
 #include <chrono>
@@ -1254,7 +1254,7 @@ void main()
                 m_gl.glGetIntegerv(GL_VIEWPORT, prevViewport);
                 // [gta-recomp] F12 (or PS2X_HW_DUMP=<frame>): list the next frame's draws and dump its targets
                 static const long dumpAt = std::getenv("PS2X_HW_DUMP") ? std::atol(std::getenv("PS2X_HW_DUMP")) : -1;
-                const bool f12 = IsKeyDown(301 /* KEY_F12 */);
+                const bool f12 = ps2control::keyDown(301 /* KEY_F12 */);
                 const bool dumpNow = (f12 && !m_f12Down) ||
                                      (dumpAt >= 0 && !m_dumped && m_executedFrames + frames.size() >= static_cast<uint64_t>(dumpAt));
                 m_f12Down = f12;

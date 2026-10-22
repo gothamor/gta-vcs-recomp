@@ -116,6 +116,7 @@
 | `VCS_COUNT_CALLS=addr,...` | calls per 5 s of guest functions |
 | `VCS_RWATCH=lo,hi` | which code reads a guest range |
 | `PS2X_HW_DUMP=<frame>` | dump HW render targets + display as PPM |
-| `python tools/sendkey.py Return`, `python tools/screenshot.py f.png` | press a key in / capture the game window (Windows) |
+| `python tools/run.py N name --hidden` + `python tools/gamectl.py ...` | hidden test run driven over the control channel |
+| `python tools/sendkey.py Return`, `python tools/screenshot.py f.png` | key press / screenshot (control channel if open, else the window) |
 | `python tools/eedis.py <elf> <addr or name>` | EE disassembly with function names |
 | `python tools/minidbg.py <exe> <iso>` | catch fail-fast crashes with a stack |

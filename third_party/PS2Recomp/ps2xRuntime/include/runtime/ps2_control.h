@@ -1,0 +1,37 @@
+// [gta-recomp] Hidden test runs and remote control.
+//
+// PS2X_HIDDEN=1 runs the game with its window hidden (not on the desktop or taskbar, never focused), ignores the
+// physical keyboard / mouse / gamepad and mutes the sound output unless PS2X_AUDIO=1 - so automated tests neither
+// disturb the person at the machine nor pick up their input. PS2X_INPUT=injected ignores physical input with the
+// window shown.
+//
+// PS2X_CONTROL=1 (implied by PS2X_HIDDEN) listens on 127.0.0.1:PS2X_CONTROL_PORT (default 47615) for one-line text
+// commands, answered with one line ("ok ..." / "error ..."):
+//   ping                      -> ok
+//   screenshot <path.png>     -> ok <w>x<h>     the presented picture incl. the perf overlay, rendered off-screen
+//   key <name> down|up        -> ok             hold / release a key (names: tools/gamectl.py --help)
+//   press <name> [ms=150]     -> ok             press and release; answers after the release
+//   perf                      -> ok <summary>   the perf overlay's numbers for the last second
+//   quit                      -> ok             stop the game
+// tools/gamectl.py is the client.
+#pragma once
+
+#include <functional>
+#include <string>
+
+namespace ps2control
+{
+    bool hiddenMode();        // PS2X_HIDDEN
+    bool physicalInputOn();   // false when hidden or PS2X_INPUT=injected
+
+    // Keyboard state for the game and the debug keys: physical (when allowed) or injected through the control channel.
+    // `key` is a raylib KeyboardKey.
+    bool keyDown(int key);
+    bool keyPressed(int key); // main thread, once per frame (edges of physical or injected presses)
+
+    // Main thread. start() after the window exists; pump() once per frame after EndDrawing - it runs the queued
+    // commands; `capture` renders the current picture into a PNG and returns "<w>x<h>" or "" on failure.
+    void start();
+    void pump(const std::function<std::string(const std::string &path)> &capture, const std::function<void()> &quit);
+    void stop();
+}

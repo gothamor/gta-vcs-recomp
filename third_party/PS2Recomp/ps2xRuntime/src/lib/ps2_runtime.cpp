@@ -18,6 +18,7 @@
 #include "runtime/ps2_vu0_native.h"
 #include "runtime/ps2_audio_out.h"
 #include "runtime/ps2_perf.h"
+#include "runtime/ps2_control.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -985,8 +986,10 @@ bool PS2Runtime::initialize(const char *title)
 #if defined(PLATFORM_VITA)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
-        SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+        // [gta-recomp] PS2X_HIDDEN=1: no window on the desktop (runtime/ps2_control.h)
+        SetConfigFlags(FLAG_WINDOW_RESIZABLE | (ps2control::hiddenMode() ? FLAG_WINDOW_HIDDEN : 0u));
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
+        ps2control::start();
         InitAudioDevice();
         ps2AudioInit(); // [gta-recomp] SPU2 output stream
         m_audioBackend.setAudioReady(IsAudioDeviceReady());
@@ -2851,28 +2854,52 @@ void PS2Runtime::run()
         UploadFrame(frameTex, this, presentWidth, presentHeight);
         ps2perf::hostFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - uploadStart).count()); // [gta-recomp]
 
-        BeginDrawing();
-        ClearBackground(BLACK);
         const float srcWidth = static_cast<float>(std::max<uint32_t>(1u, presentWidth));
         const float srcHeight = static_cast<float>(std::max<uint32_t>(1u, presentHeight));
-        const float screenWidth = static_cast<float>(GetScreenWidth());
-        const float screenHeight = static_cast<float>(GetScreenHeight());
-        const float scale = std::min(screenWidth / srcWidth, screenHeight / srcHeight);
-        const float dstWidth = srcWidth * scale;
-        const float dstHeight = srcHeight * scale;
-        const Rectangle srcRect{0.0f, 0.0f, srcWidth, srcHeight};
-        const Rectangle dstRect{
-            (screenWidth - dstWidth) * 0.5f,
-            (screenHeight - dstHeight) * 0.5f,
-            dstWidth,
-            dstHeight};
-        DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+        // the game picture letterboxed into w x h
+        auto drawFrame = [&](float screenWidth, float screenHeight)
+        {
+            const float scale = std::min(screenWidth / srcWidth, screenHeight / srcHeight);
+            const float dstWidth = srcWidth * scale;
+            const float dstHeight = srcHeight * scale;
+            const Rectangle srcRect{0.0f, 0.0f, srcWidth, srcHeight};
+            const Rectangle dstRect{(screenWidth - dstWidth) * 0.5f, (screenHeight - dstHeight) * 0.5f, dstWidth, dstHeight};
+            DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+        };
+
+        BeginDrawing();
+        ClearBackground(BLACK);
+        drawFrame(static_cast<float>(GetScreenWidth()), static_cast<float>(GetScreenHeight()));
         ps2perf::drawOverlay(); // [gta-recomp] F3 overlay, F4 CSV recording
         if (m_debugUiInitialized && m_debugUiDrawCallback)
         {
             m_debugUiDrawCallback(*this, m_debugUiUserData);
         }
         EndDrawing();
+
+        // [gta-recomp] control channel (runtime/ps2_control.h): screenshots render the same picture off-screen, so
+        // they work with the window hidden or covered
+        ps2control::pump(
+            [&](const std::string &path) -> std::string
+            {
+                const int w = std::max(GetScreenWidth(), 960), h = std::max(GetScreenHeight(), 672); // readable when hidden
+                RenderTexture2D target = LoadRenderTexture(w, h);
+                if (target.id == 0)
+                    return {};
+                BeginTextureMode(target);
+                ClearBackground(BLACK);
+                drawFrame(static_cast<float>(w), static_cast<float>(h));
+                ps2perf::drawOverlay(false);
+                EndTextureMode();
+                Image image = LoadImageFromTexture(target.texture);
+                ImageFlipVertical(&image);
+                ImageFormat(&image, PIXELFORMAT_UNCOMPRESSED_R8G8B8);
+                const bool ok = ExportImage(image, path.c_str());
+                UnloadImage(image);
+                UnloadRenderTexture(target);
+                return ok ? std::to_string(w) + "x" + std::to_string(h) : std::string();
+            },
+            [this] { requestStop(); });
 
         if (WindowShouldClose())
         {
@@ -2895,6 +2922,7 @@ void PS2Runtime::run()
     }
     shutdownGpuRenderer(); // [gta-recomp]
     ps2perf::shutdown();   // [gta-recomp]
+    ps2control::stop();    // [gta-recomp]
     UnloadTexture(frameTex);
     CloseWindow();
 
