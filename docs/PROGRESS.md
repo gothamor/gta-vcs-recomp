@@ -40,14 +40,15 @@
 - [x] Static world (terrain, buildings) not drawn: VCALLMSR used vi[27] instead of
       CMSAR0, so the VU0 sector frustum test culled everything. Fixed; ground,
       buildings and the skyline render.
-- [~] In-game speed: 11 -> ~46-67 VBlanks/s (compiled VU1, native VU0 box clip /
+- [~] In-game speed: 11 -> ~55-60 VBlanks/s in gameplay (paced: never above 60) (compiled VU1, native VU0 box clip /
       matrix programs, texture/CLUT/upload/timer fixes, no FP contraction).
       Remaining: guest code ~31%, T4 swizzle ~9%, DMA chain copies ~7.5%
 - [ ] Performance: per-instruction `ctx->pc` stores (emitter now skips them for
       pure ALU ops - needs a regenerate + test), `__restrict` for generated code
 
 ## Phase 4 - audio, input, memory card, movies
-- [~] Input: keyboard + mouse + gamepad (docs/CONTROLS.md); not yet verified in game
+- [x] Input: keyboard + mouse + gamepad (docs/CONTROLS.md), verified in game: after the
+      intro cutscene the player controls Vic at Fort Baxter (HUD, radar, mission marker)
 - [ ] Audio: needs SPU2 emulation (voices, ADPCM, IRQ, AutoDMA) - see ENGINE.md "Sound system"
 ## Phase 5 - stability
 ## Phase 6 - enhancements

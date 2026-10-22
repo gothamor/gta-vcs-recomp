@@ -316,6 +316,19 @@ namespace ps2_stubs
             }
 
             fillPadStatus(outData, state, portState);
+            { // [gta-recomp] PS2X_TRACE_PAD=1: log every change of what the game reads
+                static const bool trace = std::getenv("PS2X_TRACE_PAD") != nullptr;
+                static uint8_t last[8] = {};
+                static uint64_t reads = 0;
+                ++reads;
+                if (trace && std::memcmp(last, outData, 8) != 0)
+                {
+                    std::memcpy(last, outData, 8);
+                    std::fprintf(stderr, "[pad] port %d read #%llu mode=%02x buttons=%02x%02x rx=%u ry=%u lx=%u ly=%u (addr 0x%08x)\n", port,
+                                 static_cast<unsigned long long>(reads), outData[1], outData[3], outData[2], outData[4], outData[5], outData[6],
+                                 outData[7], dataAddr);
+                }
+            }
 
             {
                 std::lock_guard<std::mutex> lock(g_padStateMutex);

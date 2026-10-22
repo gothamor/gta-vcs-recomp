@@ -68,10 +68,18 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
         press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_LEFT), PAD_SELECT);
         press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_THUMB), PAD_L3);
         press(IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_THUMB), PAD_R3);
+        // small radial deadzone: worn sticks rest a few percent off centre
+        auto deadzone = [](float &x, float &y)
+        {
+            if (x * x + y * y < 0.12f * 0.12f)
+                x = y = 0.0f;
+        };
         lx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_X);
         ly = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_Y);
         rx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_X);
         ry = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_Y);
+        deadzone(lx, ly);
+        deadzone(rx, ry);
     }
 
     auto key = [](int k)

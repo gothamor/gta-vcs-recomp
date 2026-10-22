@@ -1868,8 +1868,14 @@ void EeScheduler::processDueDeadlines()
                 scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
                               scheduled.hostDeadline + kVBlankDuration,
                               EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});
+                // [gta-recomp] Never fall more than one period behind the host clock: after a slow stretch
+                // (loading, a heavy scene) the old chained deadline let VBlanks race at ~80/s to catch up.
+                auto nextHostDeadline = scheduled.hostDeadline + kVBlankPeriod;
+                const auto hostNow = std::chrono::steady_clock::now();
+                if (nextHostDeadline + kVBlankPeriod < hostNow)
+                    nextHostDeadline = hostNow;
                 scheduleEvent(scheduled.deadlineCycle + kVBlankPeriodCycles,
-                              scheduled.hostDeadline + kVBlankPeriod,
+                              nextHostDeadline,
                               EeEvent{EeEventType::VBlankStart, 0, 0});
             }
             processEvent(scheduled.event);
