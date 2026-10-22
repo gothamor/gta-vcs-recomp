@@ -153,6 +153,188 @@ namespace
         return worldCodeResident(code, generation);
     }
 
+    // ---- lit / skinned models: stage table 0x16 (0x5a5 skin, 0x0da, 0x4ff light, 0x2b6 kick), lit-pass code --------
+    bool litCodeResident(const uint8_t *code, uint64_t generation)
+    {
+        static uint64_t checkedGeneration = ~0ull;
+        static bool resident = false;
+        if (generation == checkedGeneration)
+            return resident;
+        static const uint32_t ranges[][2] = {{0x30, 0x118}, {0x6D0, 0x748}, {0x748, 0x7E0}, {0x7F0, 0xC20}, {0xC38, 0x1030},
+                                             {0x1048, 0x11F8}, {0x1360, 0x13D8}, {0x15B0, 0x1638}, {0x2700, 0x3400}};
+        uint64_t h = 0xCBF29CE484222325ull;
+        for (const auto &r : ranges)
+            h = fnv(code, r[0], r[1], h);
+        checkedGeneration = generation;
+        resident = h == 0x1B498A6A0D9BD196ull;
+        return resident;
+    }
+
+    bool isLitPipeline(const uint8_t *code, const uint8_t *vu, uint64_t generation)
+    {
+        const IVec4 t38 = loadI(vu, 38), t40 = loadI(vu, 40), t41 = loadI(vu, 41), t52 = loadI(vu, 52);
+        if ((t38.v[0] & 0xFFFF) != 0x16 || (t40.v[0] & 0xFFFF) != 0x5A5 || (t40.v[1] & 0xFFFF) != 0xA8 || (t40.v[2] & 0xFFFF) != 0xDA ||
+            (t41.v[0] & 0xFFFF) != 0x4FF || (t41.v[1] & 0xFFFF) != 0x9C || (t41.v[2] & 0xFFFF) != 0x2B6)
+            return false;
+        const uint32_t entry = t52.v[0] & 0xFFFF;
+        if (entry != 0xE9 && entry != 0xDE)
+            return false;
+        return litCodeResident(code, generation);
+    }
+
+    float bitsToFloat(uint32_t b)
+    {
+        float f;
+        std::memcpy(&f, &b, 4);
+        return f;
+    }
+
+    struct LitPacket
+    {
+        uint32_t posBase = 0, nrmBase = 0, uvBase = 0, wBase = 0, outBase = 0, count = 0, nloop = 0;
+        float pos[256][3];
+        float nrm[256][3];
+    };
+
+    bool litPacket(const ps2hle::MscalContext &c, LitPacket &lp)
+    {
+        const uint8_t *vu = c.vuData;
+        const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48);
+        const uint32_t top = c.top & 0x3FFu, base = top & static_cast<uint32_t>(i48.v[2]);
+        lp.posBase = static_cast<uint32_t>(i47.v[0]) + base;
+        lp.nrmBase = static_cast<uint32_t>(i47.v[1]) + base;
+        lp.uvBase = static_cast<uint32_t>(i47.v[2]) + base;
+        lp.wBase = static_cast<uint32_t>(i48.v[0]) + base;
+        lp.outBase = static_cast<uint32_t>(i48.v[3]) + top;
+        const IVec4 header = loadI(vu, lp.posBase - 1u);
+        lp.count = static_cast<uint32_t>(header.v[2]);
+        lp.nloop = std::min(static_cast<uint32_t>(header.v[3]), lp.count);
+        return lp.count != 0u && lp.count <= 256u;
+    }
+
+    // stage 0x5a5 (0x2d28): 4-bone skinning, in the VU's operation order
+    void skin(const uint8_t *vu, LitPacket &lp)
+    {
+        const uint32_t mask = static_cast<uint32_t>(loadI(vu, 0xA8).v[1]);
+        const Vec4 scale = loadF(vu, 42), offset = loadF(vu, 43);
+        const float inv128 = bitsToFloat(0x3C000000u);
+        for (uint32_t i = 0; i < lp.count; ++i)
+        {
+            const Vec4 pi = itof(loadI(vu, lp.posBase + i)), ni = itof(loadI(vu, lp.nrmBase + i));
+            const IVec4 wi = loadI(vu, lp.wBase + i);
+            const Vec4 w = loadF(vu, lp.wBase + i);
+            float p[3], n[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                const float acc = pi.v[k] * scale.v[k];
+                p[k] = acc + offset.v[k] * 1.0f;
+                n[k] = ni.v[k] * inv128;
+            }
+            float t[4][3];
+            Vec4 b0[4];
+            for (int bone = 0; bone < 4; ++bone)
+            {
+                const uint32_t at = 0xA9u + (static_cast<uint32_t>(wi.v[bone]) & mask);
+                Vec4 r[4] = {loadF(vu, at), loadF(vu, at + 1), loadF(vu, at + 2), loadF(vu, at + 3)};
+                if (bone == 0)
+                    for (int k = 0; k < 4; ++k)
+                        b0[k] = r[k];
+                for (int k = 0; k < 3; ++k)
+                {
+                    float acc = r[0].v[k] * p[0];
+                    acc = acc + r[1].v[k] * p[1];
+                    acc = acc + r[2].v[k] * p[2];
+                    t[bone][k] = acc + r[3].v[k] * 1.0f;
+                }
+            }
+            for (int k = 0; k < 3; ++k)
+            {
+                float acc = b0[0].v[k] * n[0];
+                acc = acc + b0[1].v[k] * n[1];
+                lp.nrm[i][k] = acc + b0[2].v[k] * n[2];
+                acc = t[0][k] * w.v[0];
+                acc = acc + t[1][k] * w.v[1];
+                acc = acc + t[2][k] * w.v[2];
+                lp.pos[i][k] = acc + t[3][k] * w.v[3];
+            }
+        }
+    }
+
+    // clip test on the skinned positions (lit pass 0x0c38: clip matrix 24-27 as is); returns (any, all) flags
+    void litClip(const uint8_t *vu, const LitPacket &lp, uint32_t &any, uint32_t &all)
+    {
+        Vec4 cm[4] = {loadF(vu, 24), loadF(vu, 25), loadF(vu, 26), loadF(vu, 27)};
+        const Vec4 guard = loadF(vu, 65);
+        any = 0;
+        all = 0xFFFu;
+        for (uint32_t i = 0; i < std::max(lp.count, 6u); ++i)
+        {
+            Vec4 pos;
+            if (i < lp.count)
+                pos = {{lp.pos[i][0], lp.pos[i][1], lp.pos[i][2], 1.0f}};
+            else
+                pos = loadF(vu, lp.posBase + i); // padding vertices: whatever the buffer holds
+            const Vec4 pc = transform(cm, pos);
+            Vec4 g;
+            for (int k = 0; k < 4; ++k)
+                g.v[k] = pc.v[k] * guard.v[k];
+            const uint32_t f = (clipFlags(g, pc.v[3]) << 6) | clipFlags(pc, pc.v[3]);
+            any |= f;
+            all &= f;
+        }
+    }
+
+    // stage 0x4ff (0x27f8, vi01 = 0x9c): lighting constants as the VU prepares them
+    struct LitLights
+    {
+        Vec4 dir[3], col[4], ambient, clamp;
+        int32_t alpha = 0;
+    };
+
+    LitLights litLights(const uint8_t *vu)
+    {
+        LitLights L;
+        const float inv510 = bitsToFloat(0x3B008081u);
+        const IVec4 mi = loadI(vu, 51);
+        Vec4 mat = itof(mi);
+        for (int k = 0; k < 4; ++k)
+            mat.v[k] *= inv510;
+        for (int r = 0; r < 3; ++r)
+            L.dir[r] = loadF(vu, 0x9Cu + 9u + r);
+        for (int r = 0; r < 4; ++r)
+        {
+            L.col[r] = loadF(vu, 0x9Cu + 3u + r);
+            for (int k = 0; k < 4; ++k)
+                L.col[r].v[k] *= mat.v[k];
+        }
+        L.ambient = loadF(vu, 0x9Cu + 7u);
+        for (int k = 0; k < 4; ++k)
+            L.ambient.v[k] *= mat.v[k];
+        L.clamp = loadF(vu, 0x9Cu + 8u);
+        L.alpha = mi.v[3];
+        return L;
+    }
+
+    void litColour(const LitLights &L, const float n[3], int32_t out[3])
+    {
+        float d[4];
+        for (int k = 0; k < 4; ++k)
+        {
+            float acc = L.dir[0].v[k] * n[0];
+            acc = acc + L.dir[1].v[k] * n[1];
+            d[k] = std::max(0.0f, acc + L.dir[2].v[k] * n[2]);
+        }
+        for (int k = 0; k < 3; ++k)
+        {
+            float acc = L.col[0].v[k] * d[0];
+            acc = acc + L.col[1].v[k] * d[1];
+            acc = acc + L.col[2].v[k] * d[2];
+            acc = acc + L.col[3].v[k] * d[3];
+            const float c = acc + L.ambient.v[k] * 1.0f;
+            out[k] = ftoi(std::min(L.clamp.v[k], c), 1.0f);
+        }
+    }
+
     enum class Decision
     {
         None,
@@ -166,6 +348,7 @@ namespace
         Decision decision = Decision::None;
         uint32_t outBase = 0, count = 0, nloop = 0;
         uint32_t expected[256][12]; // per vertex: STQ (float bits), RGBA, XYZF
+        bool litLanes = false;      // lit packets: STQ.w and fog not compared
         uint64_t vertsBefore = 0;
     } g_pred;
 
@@ -204,9 +387,14 @@ namespace
         return handled;
     }
 
+    bool predictLit(const ps2hle::MscalContext &c);
+
     bool predict(const ps2hle::MscalContext &c)
     {
         g_pred.decision = Decision::None;
+        g_pred.litLanes = false;
+        if (c.startPc == 0x30u && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
+            return predictLit(c);
         if (c.startPc != 0x30u || !isWorldPipeline(c.vuCode, c.vuData, c.codeGeneration))
             return false;
         const uint8_t *vu = c.vuData;
@@ -301,6 +489,81 @@ namespace
         return false;
     }
 
+    bool predictLit(const ps2hle::MscalContext &c)
+    {
+        static LitPacket lp;
+        const uint8_t *vu = c.vuData;
+        if (!litPacket(c, lp))
+            return false;
+        ++g_stats.packets;
+        skin(vu, lp);
+        uint32_t any = 0, all = 0;
+        if ((loadI(vu, 52).v[0] & 0xFFFF) == 0xE9)
+            litClip(vu, lp, any, all);
+        g_pred.vertsBefore = ps2hle::g_gsVerticesRecorded;
+        if (all != 0u)
+        {
+            g_pred.decision = Decision::Culled;
+            ++g_stats.culled;
+            return false;
+        }
+        if (any & 0xFC0u)
+        {
+            g_pred.decision = Decision::Clipper;
+            ++g_stats.clipper;
+            return false;
+        }
+        // lit-pass transform (0x07f0: matrix 28-31 as is), fog (0x1048), lighting (0x27f8)
+        Vec4 m[4] = {loadF(vu, 28), loadF(vu, 29), loadF(vu, 30), loadF(vu, 31)};
+        const float inv255 = bitsToFloat(0x3B808081u);
+        Vec4 uvm[3] = {loadF(vu, 44), loadF(vu, 45), loadF(vu, 46)};
+        for (auto &r : uvm)
+            for (int k = 0; k < 3; ++k)
+                r.v[k] *= inv255;
+        const bool fog = (loadI(vu, 52).v[1] & 2) != 0;
+        const Vec4 fogp = loadF(vu, 53);
+        const LitLights L = litLights(vu);
+        // The STQ qword's w lane (ignored by the GS, read by the fog stage) does not follow one vertex in the lit
+        // transform's software pipeline as the runtime's VU1 runs it (it repeats / lags); that lane and the fog are
+        // not compared for lit packets (g_pred.litLanes)
+        for (uint32_t i = 0; i < lp.count; ++i)
+        {
+            const Vec4 p = transform(m, {{lp.pos[i][0], lp.pos[i][1], lp.pos[i][2], 1.0f}});
+            const float wNext = p.v[3];
+            const Vec4 uv = itof(loadI(vu, lp.uvBase + i));
+            float st[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                float acc = uvm[0].v[k] * uv.v[0];
+                acc = acc + uvm[1].v[k] * uv.v[1];
+                st[k] = acc + uvm[2].v[k] * uv.v[2];
+            }
+            const float q = 1.0f / p.v[3];
+            uint32_t *e = g_pred.expected[i];
+            float stq[4] = {st[0] * q, st[1] * q, st[2] * q, wNext};
+            std::memcpy(e, stq, 16);
+            int32_t rgb[3];
+            litColour(L, lp.nrm[i], rgb);
+            e[4] = static_cast<uint32_t>(rgb[0]);
+            e[5] = static_cast<uint32_t>(rgb[1]);
+            e[6] = static_cast<uint32_t>(rgb[2]);
+            e[7] = static_cast<uint32_t>(L.alpha);
+            for (int k = 0; k < 3; ++k)
+                e[8 + k] = static_cast<uint32_t>(ftoi(p.v[k] * q, 16.0f));
+            float f = 0.0f;
+            if (fog)
+                f = std::max(std::min(fogp.v[3] * wNext + 1.0f * fogp.v[2], 255.0f), 0.0f);
+            e[11] = static_cast<uint32_t>(ftoi(f, 16.0f));
+        }
+        g_pred.decision = Decision::Fast;
+        g_pred.litLanes = true;
+        g_pred.outBase = lp.outBase;
+        g_pred.count = lp.count;
+        g_pred.nloop = lp.nloop;
+        ++g_stats.fast;
+        return false;
+    }
+
     void after(const ps2hle::MscalContext &c)
     {
         if (g_pred.decision == Decision::None)
@@ -326,6 +589,8 @@ namespace
                     bool fieldExact = true, fieldClose = true;
                     for (int l = 0; l < 4; ++l)
                     {
+                        if (g_pred.litLanes && l == 3 && k != 1)
+                            continue;
                         const uint32_t a = got[k * 4 + l], b = e[k * 4 + l];
                         if (a == b)
                             continue;
@@ -550,11 +815,99 @@ namespace
         return true;
     }
 
+    NativeStats g_nativeLit;
+
+    bool drawNativeLit(const ps2hle::MscalContext &c)
+    {
+        static LitPacket lp;
+        uint8_t *vu = c.vuData;
+        if (!litPacket(c, lp))
+            return false;
+        ++g_nativeLit.packets;
+        skin(vu, lp);
+        // the skinning stage writes the skinned position (xyz) and normal (xyz) back over its inputs; a later pass
+        // over the same buffer (stage table 0x13) reads them
+        for (uint32_t i = 0; i < lp.count; ++i)
+        {
+            std::memcpy(vu + ((lp.posBase + i) & (kQwords - 1u)) * 16u, lp.pos[i], 12);
+            std::memcpy(vu + ((lp.nrmBase + i) & (kQwords - 1u)) * 16u, lp.nrm[i], 12);
+        }
+        uint32_t any = 0, all = 0;
+        if ((loadI(vu, 52).v[0] & 0xFFFF) == 0xE9)
+            litClip(vu, lp, any, all);
+        if (all != 0u)
+        {
+            ++g_nativeLit.culled;
+            return true;
+        }
+        const bool clipped = (any & 0xFC0u) != 0u;
+
+        GSNativeDraw d;
+        d.kind = GSNativeDraw::VcsLit;
+        d.transient = true;
+        d.vertexStride = 48;
+        d.vertexCount = lp.count;
+        d.drawCount = lp.nloop;
+        static thread_local std::vector<uint8_t> verts;
+        verts.assign(size_t(lp.count) * 48u, 0);
+        for (uint32_t i = 0; i < lp.count; ++i)
+        {
+            uint8_t *v = verts.data() + size_t(i) * 48u;
+            const Vec4 uv = itof(loadI(vu, lp.uvBase + i));
+            std::memcpy(v, lp.pos[i], 12);
+            std::memcpy(v + 12, uv.v, 12);
+            std::memcpy(v + 24, lp.nrm[i], 12);
+        }
+        d.vertices = verts.data();
+        float *k = d.constants;
+        for (int r = 0; r < 4; ++r)
+            putRow(k + r * 4, loadF(vu, 28 + r));
+        const float inv255 = bitsToFloat(0x3B808081u);
+        for (int r = 0; r < 3; ++r)
+        {
+            Vec4 row = loadF(vu, 44 + r);
+            for (int l = 0; l < 3; ++l)
+                row.v[l] *= inv255;
+            row.v[3] = 0.0f;
+            putRow(k + 16 + r * 4, row);
+        }
+        const Vec4 fog = loadF(vu, 53);
+        k[28] = (loadI(vu, 52).v[1] & 2) ? 1.0f : 0.0f;
+        k[29] = fog.v[2];
+        k[30] = fog.v[3];
+        for (int r = 0; r < 4; ++r)
+            putRow(k + 32 + r * 4, loadF(vu, 24 + r));
+        const LitLights L = litLights(vu);
+        for (int r = 0; r < 3; ++r)
+            putRow(k + 48 + r * 4, L.dir[r]);
+        for (int r = 0; r < 4; ++r)
+            putRow(k + 60 + r * 4, L.col[r]);
+        putRow(k + 76, L.ambient);
+        putRow(k + 80, L.clamp);
+        k[84] = static_cast<float>(L.alpha);
+        d.constantCount = 88;
+        const IVec4 tag = loadI(vu, 49);
+        const uint64_t tagLo = uint64_t(uint32_t(tag.v[0])) | (uint64_t(uint32_t(tag.v[1])) << 32);
+        if (!ps2hle::gs()->submitNative((tagLo >> 47) & 0x7FFu, d))
+        {
+            ++g_nativeLit.fallback;
+            return false; // (the skinned write-back above is what the VU's own run does first anyway)
+        }
+        const int32_t variant = clipped ? 711 : 698;
+        std::memcpy(vu + 52u * 16u + 8u, &variant, 4);
+        (clipped ? g_nativeLit.clipped : g_nativeLit.drawn) += 1;
+        g_nativeLit.vertices += lp.nloop;
+        return true;
+    }
+
     bool beforeNative(const ps2hle::MscalContext &c)
     {
         const int rounding = std::fegetround();
         std::fesetround(FE_TOWARDZERO);
-        const bool handled = drawNative(c);
+        static const bool lit = !(std::getenv("PS2X_HLE_LIT") && *std::getenv("PS2X_HLE_LIT") == '0');
+        const bool handled = (lit && c.startPc == 0x30u && ps2hle::gs() && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
+                                 ? drawNativeLit(c)
+                                 : drawNative(c);
         std::fesetround(rounding);
         return handled;
     }

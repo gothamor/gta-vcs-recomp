@@ -124,6 +124,7 @@
 | `PS2X_HLE_VERIFY=1` | compare the C++ world pipeline with the VU1's output (bit-exact expected) |
 | `PS2X_HLE_SURVEY=1`, `PS2X_HLE_SURVEY_DUMP=n`, `PS2X_HLE_SURVEY_DUMP_EVERY=n` | VU1 program / layout survey, sample dumps |
 | `PS2X_HLE_STATS=1` | stage tables the native handler passes over |
+| `PS2X_HLE_LIT=0` | draw skinned / lit models through the VU1 program (world stays native) |
 | `python tools/vudis.py code.bin --start 0x30 --to-ebit` | VU microcode disassembler |
 | `python tools/sendkey.py Return`, `python tools/screenshot.py f.png` | key press / screenshot (control channel if open, else the window) |
 | `python tools/eedis.py <elf> <addr or name>` | EE disassembly with function names |

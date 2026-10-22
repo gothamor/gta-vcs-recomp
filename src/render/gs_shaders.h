@@ -9,6 +9,7 @@ namespace render
     {
         rhi::ShaderCode drawVS;
         rhi::ShaderCode worldVS;      // native VCS world draws
+        rhi::ShaderCode litVS;        // native VCS lit / skinned models
         rhi::ShaderCode drawPS;       // one colour output
         rhi::ShaderCode drawPSDual;   // + blend factor as the second output (Src1Alpha blending)
         rhi::ShaderCode quadVS;

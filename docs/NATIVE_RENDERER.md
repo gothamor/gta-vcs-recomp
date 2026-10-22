@@ -1,7 +1,7 @@
 # Native renderer plan (D3D11)
 
-Status: **approved** (2026-10-22). Stages 0-4 done; stage 5 (world) done for the prelit world pipeline, which is
-most of the frame. Next: the lit-model pipelines (stage 6).
+Status: **approved** (2026-10-22). Stages 0-4 done; stage 5 (prelit world) and stage 6 (skinned / lit models,
+stage table 0x16) done. Next: the remaining VU1 pipelines (second lit pass 0x13, the lit world variant, sprites).
 
 Goal: get from today's emulated GS (raylib + OpenGL 3.3) to a native renderer that
 draws the game's models directly, on D3D11, as fast as possible. Windows only for
@@ -305,7 +305,19 @@ packets, and the VU memory at MSCAL holds everything a draw needs):
 - Done when: captures match, render submit time on the flyover drops measurably
   (target: most of the world's share of the 34 ms).
 
-### Stage 6 - Peds and vehicles (L)
+### Stage 6 - Peds and vehicles (L) - skinned / lit models (table 0x16) done 2026-10-22
+
+Result: the lit pass (docs/ENGINE.md "Lit models") is reproduced in C++ (`vcs_hle_world.cpp`:
+4-bone skinning, clip test on skinned positions, transform, fog, 4 directional lights + ambient)
+and checked bit-exact against the VU1 (`PS2X_HLE_VERIFY=1`, together with the world: 1,448,812
+packets / 65.3M vertices) except two lanes the lit transform's software pipeline leaves
+inconsistent in the runtime's VU1 core (STQ.w, ignored by the GS, and the fog value that is
+computed from it); they are not compared. Native drawing: skinning stays on the CPU (its result is
+written back to VU memory, as a later pass over the same buffer reads it), the skinned vertices go
+to the GPU per draw (transient, not cached) and `vs_lit` does transform, fog and lighting.
+Cutscene 55-86 s: 28.1 -> 29.9 game fps (the cap), render submit 17.3 -> 11.8 ms, VU1 programs
+565 -> 238 per frame. `PS2X_HLE_LIT=0` keeps lit models on the VU1.
+
 
 - Skinning, the lighting dispatch program (0x0418, JALR table), vehicle env maps /
   specular, damage states, shadows if they go through the same programs.

@@ -48,18 +48,42 @@ VSOut vs_main(VSIn i)
     return o;
 }
 
-// Native draws (packet-level HLE, docs/NATIVE_RENDERER.md stage 4+): the VU1 work on the GPU.
-cbuffer World : register(b1)
+// Native draws (packet-level HLE, docs/NATIVE_RENDERER.md stage 4+): the VU1 work on the GPU. One constant block
+// for every kind; nat[31] = GS XYOFFSET in pixels (xy), Z format scale (z), filled by the renderer.
+cbuffer Native : register(b1)
 {
-    float4 worldM[4];      // GS window matrix rows, scale / offset folded in (VU data 28-31, 42, 43)
-    float4 worldUv[3];     // texture-coordinate matrix rows, times 1/255 (44-46)
-    float4 worldColScale;  // prelit colour scale / offset / clamp (0x9c-0x9e)
-    float4 worldColOffset;
-    float4 worldColMax;
-    float4 worldFog;       // x: on, y: bias, z: scale per unit of w (53)
-    float4 worldClip[4];   // clip-test matrix rows, folded (24-27)
-    float4 worldTarget;    // GS XYOFFSET in pixels (xy), Z format scale (z) - from the renderer
+    float4 nat[32];
 };
+// VcsWorld: 0-3 GS window matrix rows (scale / offset folded in, VU data 28-31, 42, 43), 4-6 texture matrix rows * 1/255
+//   (44-46), 7-9 prelit colour scale / offset / clamp (0x9c-0x9e), 10 fog (x on, y bias, z scale per w; 53),
+//   11-14 clip-test matrix rows, folded (24-27)
+// VcsLit: 0-3 GS window matrix (28-31), 4-6 texture matrix * 1/255, 7 fog, 8-11 clip-test matrix (24-27),
+//   12-14 light direction rows (lanes = lights), 15-18 light colours * material, 19 ambient * material, 20 clamp,
+//   21.x material alpha
+
+// XYZF2 / STQ / clip planes from the GS window position S and the clip-test position C (shared by the native kinds)
+void nativePosition(float4 S, float4 C, float3 st, inout VSOut o)
+{
+    const float q = 1.0 / S.w;
+    const float3 s = S.xyz * q;
+    // XYZF2 from FTOI4: X / Y in 12.4 fixed point, Z the integer part
+    const float2 xy = trunc(s.xy * 16.0) / 16.0 - nat[31].xy;
+    const float z = floor(trunc(s.z * 16.0) / 16.0);
+    const float depth = min(z * nat[31].z, 1.0);
+    const float2 p = xy / targetRtFix.xy;
+    o.pos = float4((p.x * 2.0 - 1.0) * S.w, (1.0 - p.y * 2.0) * S.w, depth * S.w, S.w);
+    o.depth = depth;
+    o.clip = float2(C.z + C.w, C.w - C.z); // the PS2 clip test's near / far planes
+    o.stq = st * q;
+}
+
+float nativeFog(float4 fog, float w)
+{
+    float f = 0.0;
+    if (fog.x > 0.5)
+        f = clamp(fog.z * w + fog.y, 0.0, 255.0);
+    return floor(trunc(f * 16.0) / 16.0) / 255.0;
+}
 
 struct WorldIn
 {
@@ -71,28 +95,36 @@ struct WorldIn
 // VCS prelit world (VU1 0x0030 with stages 0x0da / 0x4e0 / 0x2b6): see docs/ENGINE.md
 VSOut vs_world(WorldIn i)
 {
-    VSOut o;
-    const float4 S = worldM[0] * i.pos.x + worldM[1] * i.pos.y + worldM[2] * i.pos.z + worldM[3];
-    const float4 C = worldClip[0] * i.pos.x + worldClip[1] * i.pos.y + worldClip[2] * i.pos.z + worldClip[3];
-    const float q = 1.0 / S.w;
-    const float3 s = S.xyz * q;
-    // XYZF2 from FTOI4: X / Y in 12.4 fixed point, Z the integer part
-    const float2 xy = trunc(s.xy * 16.0) / 16.0 - worldTarget.xy;
-    const float z = floor(trunc(s.z * 16.0) / 16.0);
-    const float depth = min(z * worldTarget.z, 1.0);
-    const float2 p = xy / targetRtFix.xy;
-    o.pos = float4((p.x * 2.0 - 1.0) * S.w, (1.0 - p.y * 2.0) * S.w, depth * S.w, S.w);
-    o.depth = depth;
-    o.clip = float2(C.z + C.w, C.w - C.z);
-    const float3 st = worldUv[0].xyz * i.uv.x + worldUv[1].xyz * i.uv.y + worldUv[2].xyz * i.uv.z;
-    o.stq = st * q;
+    VSOut o = (VSOut)0;
+    const float4 S = nat[0] * i.pos.x + nat[1] * i.pos.y + nat[2] * i.pos.z + nat[3];
+    const float4 C = nat[11] * i.pos.x + nat[12] * i.pos.y + nat[13] * i.pos.z + nat[14];
+    nativePosition(S, C, nat[4].xyz * i.uv.x + nat[5].xyz * i.uv.y + nat[6].xyz * i.uv.z, o);
     const float4 c = float4(i.col & 0xFF, (i.col >> 8) & 0xFF, (i.col >> 16) & 0xFF, i.col >> 24);
-    o.col = trunc(min(worldColOffset + worldColScale * c, worldColMax)) / 255.0;
+    o.col = trunc(min(nat[8] + nat[7] * c, nat[9])) / 255.0;
     o.colFlat = o.col;
-    float f = 0.0;
-    if (worldFog.x > 0.5)
-        f = clamp(worldFog.z * S.w + worldFog.y, 0.0, 255.0);
-    o.fog = floor(trunc(f * 16.0) / 16.0) / 255.0;
+    o.fog = nativeFog(nat[10], S.w);
+    return o;
+}
+
+struct LitIn
+{
+    float3 pos : POSITION;   // skinned position (the VU's stage 0x5a5 output)
+    float3 uv : TEXCOORD0;   // ITOF0 of the V2-8 texture coordinate qword
+    float3 nrm : NORMAL;     // skinned normal
+};
+
+// VCS lit / skinned models (VU1 0x0030 with stages 0x5a5 / 0x0da / 0x4ff / 0x2b6): see docs/ENGINE.md
+VSOut vs_lit(LitIn i)
+{
+    VSOut o = (VSOut)0;
+    const float4 S = nat[0] * i.pos.x + nat[1] * i.pos.y + nat[2] * i.pos.z + nat[3];
+    const float4 C = nat[8] * i.pos.x + nat[9] * i.pos.y + nat[10] * i.pos.z + nat[11];
+    nativePosition(S, C, nat[4].xyz * i.uv.x + nat[5].xyz * i.uv.y + nat[6].xyz * i.uv.z, o);
+    const float4 d = max(nat[12] * i.nrm.x + nat[13] * i.nrm.y + nat[14] * i.nrm.z, 0.0);
+    const float4 c = trunc(min(nat[20], nat[15] * d.x + nat[16] * d.y + nat[17] * d.z + nat[18] * d.w + nat[19]));
+    o.col = float4(c.rgb, nat[21].x) / 255.0;
+    o.colFlat = o.col;
+    o.fog = nativeFog(nat[7], S.w);
     return o;
 }
 

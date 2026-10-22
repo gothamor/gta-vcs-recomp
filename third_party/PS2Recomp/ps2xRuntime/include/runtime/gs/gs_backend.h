@@ -13,14 +13,16 @@ struct GSNativeDraw
     enum Kind : uint32_t
     {
         VcsWorld = 1, // render/shaders/gs_draw.hlsl vs_world: prelit world (float3 pos, float3 uv, uint rgba; 32 bytes)
+        VcsLit = 2,   // vs_lit: skinned + lit models (float3 skinned pos, float3 uv, float3 normal, pad; 48 bytes)
     };
     uint32_t kind = 0;
+    bool transient = false;         // vertices change from draw to draw: sent with the frame, not cached
     uint64_t meshKey = 0;           // content hash of the vertex data
     const void *vertices = nullptr; // vertexCount * vertexStride bytes (read only when the mesh is not cached)
     uint32_t vertexStride = 0;
     uint32_t vertexCount = 0;
     uint32_t drawCount = 0;         // vertices drawn (a strip)
-    float constants[60] = {};       // the vertex program's parameters (layout per kind)
+    float constants[124] = {};      // the vertex program's parameters (layout per kind, gs_draw.hlsl cbuffer Native)
     uint32_t constantCount = 0;
 };
 

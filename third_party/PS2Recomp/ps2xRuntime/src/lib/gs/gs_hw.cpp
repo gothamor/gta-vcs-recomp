@@ -127,7 +127,9 @@ namespace
         HwState s;
         uint64_t meshKey = 0;
         uint32_t kind = 0, drawCount = 0;
-        float constants[64] = {}; // the kind's 60 + (XYOFFSET x, y in pixels, Z scale, 0)
+        bool transient = false;
+        uint32_t transientOffset = 0; // bytes into the frame's nativeBytes
+        float constants[128] = {};    // the kind's 124 + (XYOFFSET x, y in pixels, Z scale, 0)
     };
 
     struct Frame
@@ -144,6 +146,7 @@ namespace
         std::vector<MeshCreate> meshes;
         std::vector<uint64_t> meshDeletes;
         std::vector<NativeDrawCmd> nativeDraws;
+        std::vector<uint8_t> nativeBytes; // transient native vertices
         uint64_t nativeVertices = 0;
         uint64_t privRegs[15]{};
         // Display from CPU VRAM when no render target holds the displayed buffer.
@@ -333,7 +336,7 @@ namespace
             const render::GsShaders &sh = render::gsShaders();
             m_drawCb = m_dev.createBuffer({sizeof(DrawConstants), rhi::BufferUsage::Constant, true, "gs draw constants"});
             m_quadCb = m_dev.createBuffer({sizeof(QuadConstants), rhi::BufferUsage::Constant, true, "gs quad constants"});
-            m_worldCb = m_dev.createBuffer({64u * sizeof(float), rhi::BufferUsage::Constant, true, "gs native draw constants"});
+            m_worldCb = m_dev.createBuffer({128u * sizeof(float), rhi::BufferUsage::Constant, true, "gs native draw constants"});
             m_point = m_dev.createSampler({rhi::Filter::Nearest, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
             m_linear = m_dev.createSampler({rhi::Filter::Linear, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
             rhi::PipelineDesc q;
@@ -371,6 +374,15 @@ namespace
                     m_vb = m_dev.createBuffer({m_vbCapacity, rhi::BufferUsage::Vertex, true, "gs vertices"});
                 }
                 m_dev.updateBuffer(*m_vb, f.vertices.data(), bytes);
+            }
+            if (!f.nativeBytes.empty())
+            {
+                if (!m_nativeVb || m_nativeVbCapacity < f.nativeBytes.size())
+                {
+                    m_nativeVbCapacity = std::max<size_t>(f.nativeBytes.size() + f.nativeBytes.size() / 2, 1u << 20);
+                    m_nativeVb = m_dev.createBuffer({m_nativeVbCapacity, rhi::BufferUsage::Vertex, true, "gs native transient vertices"});
+                }
+                m_dev.updateBuffer(*m_nativeVb, f.nativeBytes.data(), f.nativeBytes.size());
             }
             for (const Cmd &c : f.cmds)
             {
@@ -673,14 +685,27 @@ namespace
                                            b.dst == rhi::BlendFactor::Src1Alpha || b.dst == rhi::BlendFactor::InvSrc1Alpha);
             const uint32_t key = (b.enable ? 1u : 0u) | (static_cast<uint32_t>(b.src) << 1) | (static_cast<uint32_t>(b.dst) << 5) |
                                  (static_cast<uint32_t>(b.op) << 9) | (uint32_t(mask & 0xF) << 12) | ((depthTest ? 1u : 0u) << 16) |
-                                 ((ztst & 3u) << 17) | ((zwrite ? 1u : 0u) << 19) | (uint32_t(mode & 3u) << 20) | ((dual ? 1u : 0u) << 22);
+                                 ((ztst & 3u) << 17) | ((zwrite ? 1u : 0u) << 19) | (uint32_t(mode & 7u) << 20) | ((dual ? 1u : 0u) << 23);
             std::unique_ptr<rhi::Pipeline> &p = m_drawPipelines[key];
             if (!p)
             {
                 const render::GsShaders &sh = render::gsShaders();
                 rhi::PipelineDesc d;
                 d.pixel = dual ? sh.drawPSDual : sh.drawPS;
-                if (mode == 3)
+                if (mode == 4)
+                {
+                    // [gta-recomp] native VCS lit model (GSNativeDraw::VcsLit): skinned on the CPU, lit / transformed here
+                    d.vertex = sh.litVS;
+                    d.attributes = {
+                        {"POSITION", 0, rhi::VertexFormat::Float3, 0},
+                        {"TEXCOORD", 0, rhi::VertexFormat::Float3, 12},
+                        {"NORMAL", 0, rhi::VertexFormat::Float3, 24},
+                    };
+                    d.stride = 48;
+                    d.topology = rhi::Topology::TriangleStrip;
+                    d.depthClip = false;
+                }
+                else if (mode == 3)
                 {
                     // [gta-recomp] native VCS world draw (GSNativeDraw::VcsWorld): 32-byte vertices, transformed on the GPU
                     d.vertex = sh.worldVS;
@@ -724,7 +749,15 @@ namespace
         void draw(const HwState &s, uint32_t first, uint32_t count, const NativeDrawCmd *native)
         {
             rhi::Buffer *vertices = m_vb.get();
-            if (native)
+            uint32_t vertexOffset = 0;
+            if (native && native->transient)
+            {
+                vertices = m_nativeVb.get();
+                vertexOffset = native->transientOffset;
+                if (vertices)
+                    m_dev.updateBuffer(*m_worldCb, native->constants, sizeof(native->constants));
+            }
+            else if (native)
             {
                 auto mesh = m_meshes.find(native->meshKey);
                 vertices = mesh != m_meshes.end() ? mesh->second.get() : nullptr;
@@ -820,7 +853,7 @@ namespace
             auto submit = [&](rhi::Pipeline &pipeline)
             {
                 m_dev.setPipeline(pipeline);
-                m_dev.setVertexBuffer(*vertices);
+                m_dev.setVertexBuffer(*vertices, vertexOffset);
                 m_dev.updateBuffer(*m_drawCb, &c, sizeof(c));
                 m_dev.setConstants(0, *m_drawCb);
                 if (native)
@@ -861,6 +894,8 @@ namespace
         bool m_ready = false;
         std::unique_ptr<rhi::Buffer> m_vb, m_drawCb, m_quadCb, m_worldCb;
         std::unordered_map<uint64_t, std::unique_ptr<rhi::Buffer>> m_meshes; // native draws' vertex data
+        std::unique_ptr<rhi::Buffer> m_nativeVb; // transient native vertices of the frame
+        size_t m_nativeVbCapacity = 0;
         size_t m_vbCapacity = 0;
         std::unique_ptr<rhi::Sampler> m_point, m_linear;
         std::unique_ptr<rhi::Pipeline> m_blit, m_fillColor, m_fillDepth;
@@ -1685,6 +1720,7 @@ namespace
             f.meshes.clear();
             f.meshDeletes.clear();
             f.nativeDraws.clear();
+            f.nativeBytes.clear();
             f.nativeVertices = 0;
             std::memset(f.privRegs, 0, sizeof(f.privRegs));
             f.cpuDisplay.clear();
@@ -1697,14 +1733,15 @@ namespace
         // [gta-recomp] packet-level HLE: a draw the GPU transforms (see GSNativeDraw)
         bool SubmitNative(const GSDrawState &state, const GSNativeDraw &draw) override
         {
-            if (draw.kind != GSNativeDraw::VcsWorld || !draw.drawCount || !draw.vertexCount || draw.constantCount > 60u)
+            if ((draw.kind != GSNativeDraw::VcsWorld && draw.kind != GSNativeDraw::VcsLit) || !draw.drawCount || !draw.vertexCount ||
+                draw.constantCount > 124u)
                 return false;
             GSPrimitiveBatch batch{};
             batch.state = state;
             HwState s{};
             if (!buildState(batch, s))
                 return true; // ZTST NEVER: nothing drawn
-            s.mode = 3;      // native strip (pipeline / merge key only)
+            s.mode = draw.kind == GSNativeDraw::VcsLit ? 4 : 3; // native strip kinds (pipeline / merge key only)
             if (s.zte && s.ztst != 1u && s.zbp != s.fbp)
             {
                 DepthInfo &di = m_depthBufs[s.zbp];
@@ -1716,8 +1753,18 @@ namespace
             extent.y = static_cast<float>(s.scy1); // the scissor bounds what the draw can touch
             noteTarget(s.fbp, s.fbw, s.fpsm, &extent, 1);
             Frame &f = *m_frame;
-            auto lru = m_meshLru.find(draw.meshKey);
-            if (lru == m_meshLru.end())
+            uint32_t transientOffset = 0;
+            if (draw.transient)
+            {
+                transientOffset = static_cast<uint32_t>(f.nativeBytes.size());
+                const auto *bytes = static_cast<const uint8_t *>(draw.vertices);
+                f.nativeBytes.insert(f.nativeBytes.end(), bytes, bytes + size_t(draw.vertexStride) * draw.vertexCount);
+            }
+            auto lru = draw.transient ? m_meshLru.end() : m_meshLru.find(draw.meshKey);
+            if (draw.transient)
+            {
+            }
+            else if (lru == m_meshLru.end())
             {
                 MeshCreate mc;
                 mc.key = draw.meshKey;
@@ -1740,13 +1787,15 @@ namespace
             nd.meshKey = draw.meshKey;
             nd.kind = draw.kind;
             nd.drawCount = draw.drawCount;
+            nd.transient = draw.transient;
+            nd.transientOffset = transientOffset;
             std::memcpy(nd.constants, draw.constants, sizeof(float) * draw.constantCount);
             const float zs = (s.zpsm == GS_PSM_Z32) ? (1.0f / 4294967296.0f)
                            : (s.zpsm == GS_PSM_Z16 || s.zpsm == GS_PSM_Z16S) ? (1.0f / 65536.0f)
                                                                              : (1.0f / 16777216.0f);
-            nd.constants[60] = state.context.xyoffset.ofx / 16.0f;
-            nd.constants[61] = state.context.xyoffset.ofy / 16.0f;
-            nd.constants[62] = zs;
+            nd.constants[124] = state.context.xyoffset.ofx / 16.0f;
+            nd.constants[125] = state.context.xyoffset.ofy / 16.0f;
+            nd.constants[126] = zs;
             f.cmds.push_back({CmdType::NativeDraw, static_cast<uint32_t>(f.nativeDraws.size())});
             f.nativeDraws.push_back(nd);
             f.nativeVertices += draw.drawCount;

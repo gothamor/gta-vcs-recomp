@@ -256,7 +256,7 @@ address), the matrix 28-31 (+42/43), uv matrix 44-46, colour scale/offset/clamp 
 53 and the GIF tag 49 (prim) - all in VU data at MSCAL time. Packets that cross the clip volume
 go through the VU clipper (0x11f8/0x13d8); a GPU version would clip in hardware instead.
 
-### Lit models (stage table 0x16; peds and other skinned models) - partly mapped
+### Lit models (stage table 0x16; peds and other skinned models)
 
 With native world drawing on, the largest remaining VU1 user is code variant e40090d9 (table 0x16:
 stages 0x5a5 (vi01 0xa8), 0x0da, 0x4ff (vi01 0x9c), 0x2b6), ~65 ms of VU1 per second of gameplay.
@@ -269,7 +269,13 @@ Layout: V4-32 header @0, V3-16 position @1, V3-8 normal @0x2b, V2-8 uv @0x55, V4
   as float; the normal * 1/128 rotated by bone 0 is written back over the normal slot.
 - 0x27f8 (stage 0x4ff, vi01 = 0x9c) = lighting: N.L for up to 4 directional lights (rows at
   vi01+9..11, lanes = lights), clamped >= 0; colour = ambient (vi01+7) + sum light colour
-  (vi01+3..6) * N.L, both scaled by the material colour `[51]` * 1/510; clamped to vi01+8; FTOI0.
+  (vi01+3..6) * N.L, both scaled by the material colour `[51]` * 1/510; clamped to vi01+8; FTOI0;
+  writes RGB only (alpha = `[51].w` from the transform's placeholder).
+- Lit-pass transform (0x07f0) / clip test (0x0c38): as the world's but on the skinned float positions
+  with matrices 28-31 / 24-27 as they are (no scale / offset fold). Code signature (ranges as the
+  world's, 0x2700-0x3400 for the variant region): 0x1b498a6a0d9bd196. The STQ qword's w lane and
+  the fog derived from it do not follow one vertex in the runtime's VU1 core (software-pipeline
+  effect); everything else reproduces bit-exact.
 
 ## Memory card (found while testing saves)
 - libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`), files live in

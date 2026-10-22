@@ -6,6 +6,7 @@ using BYTE = unsigned char; // fxc's /Fh headers declare `const BYTE name[]`
 #include "gs_draw_ps_dual.h"
 #include "gs_draw_vs.h"
 #include "gs_world_vs.h"
+#include "gs_lit_vs.h"
 #include "gs_quad_vs.h"
 #include "gs_blit_ps.h"
 #include "gs_fill_color_ps.h"
@@ -18,6 +19,7 @@ namespace render
         static const GsShaders shaders{
             {kGsDrawVS, sizeof(kGsDrawVS)},
             {kGsWorldVS, sizeof(kGsWorldVS)},
+            {kGsLitVS, sizeof(kGsLitVS)},
             {kGsDrawPS, sizeof(kGsDrawPS)},
             {kGsDrawPSDual, sizeof(kGsDrawPSDual)},
             {kGsQuadVS, sizeof(kGsQuadVS)},
