@@ -876,7 +876,7 @@ bool PS2Runtime::syncCoreSubsystems()
             auto hw = makeHwRasterBackend(GSHwOptions::fromEnvironment());
             m_hw = hw.get();
             m_gs.setRasterBackend(std::move(hw));
-            std::cerr << "[gs] hardware (OpenGL) GS renderer" << std::endl;
+            std::cerr << "[gs] hardware GS renderer (D3D11)" << std::endl;
         }
         const GSRendererMode mode = (gsEnv && std::strcmp(gsEnv, "hw") == 0) ? GSRendererMode::Cpu : gsRendererModeFromEnvironment();
         if (mode != GSRendererMode::Cpu)
@@ -1000,8 +1000,6 @@ bool PS2Runtime::initialize(const char *title)
             std::cerr << "Failed to create the window" << std::endl;
             return false;
         }
-        if (m_hw && std::getenv("PS2X_HW_PARITY") && !platform::glInit()) // the former GL executor, as a checker
-            std::cerr << "PS2X_HW_PARITY needs OpenGL 3.3: no parity check" << std::endl;
         ps2control::start();
         ps2AudioInit(); // [gta-recomp] SPU2 output stream
         m_audioBackend.setAudioReady(platform::audioAvailable());

@@ -338,7 +338,7 @@ namespace ps2perf
             };
             const Color fpsColor = now.fps >= 55.0 ? rgba(120, 230, 120, 255) : now.fps >= 28.0 ? rgba(240, 210, 90, 255) : rgba(245, 100, 90, 255);
             addLine(fmt("GAME  %5.1f fps  %5.1f ms   p95 %.1f  p99 %.1f  max %.1f", now.fps, now.avgMs, win.p95, win.p99, win.maxMs), fpsColor);
-            addLine(fmt("VBLANK %4.1f/s   HOST %4.0f fps %4.1f ms   GL %4.1f ms", now.vblanksPerS, now.hostFps, now.hostMs, now.glMs), white);
+            addLine(fmt("VBLANK %4.1f/s   HOST %4.0f fps %4.1f ms   GPU %4.1f ms", now.vblanksPerS, now.hostFps, now.hostMs, now.glMs), white);
             addLine(fmt("EE ms   game %4.1f  render %4.1f  iop %4.1f  wait %4.1f", now.phaseMs[0], now.phaseMs[1], now.phaseMs[2],
                         now.phaseMs[3]),
                     white);

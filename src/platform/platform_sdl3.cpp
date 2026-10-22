@@ -18,8 +18,6 @@ namespace platform
     namespace
     {
         SDL_Window *g_window = nullptr;
-        SDL_Window *g_glWindow = nullptr; // stage 2 stopgap: hidden, holds the OpenGL context
-        SDL_GLContext g_gl = nullptr;
         bool g_quit = false;
         bool g_imgui = false;
         uint64_t g_nextFrameNs = 0;
@@ -200,12 +198,6 @@ namespace platform
         if (g_gamepad)
             SDL_CloseGamepad(g_gamepad);
         g_gamepad = nullptr;
-        if (g_gl)
-            SDL_GL_DestroyContext(g_gl);
-        g_gl = nullptr;
-        if (g_glWindow)
-            SDL_DestroyWindow(g_glWindow);
-        g_glWindow = nullptr;
         if (g_window)
             SDL_DestroyWindow(g_window);
         g_window = nullptr;
@@ -348,26 +340,6 @@ namespace platform
             SDL_DestroyAudioStream(g_audio);
         g_audio = nullptr;
     }
-
-    bool glInit()
-    {
-        if (g_gl)
-            return true;
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-        g_glWindow = SDL_CreateWindow("gl", 16, 16, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
-        g_gl = g_glWindow ? SDL_GL_CreateContext(g_glWindow) : nullptr;
-        if (!g_gl)
-        {
-            std::fprintf(stderr, "[platform] OpenGL 3.3 context: %s\n", SDL_GetError());
-            return false;
-        }
-        SDL_GL_MakeCurrent(g_glWindow, g_gl);
-        return true;
-    }
-
-    void *glProc(const char *name) { return reinterpret_cast<void *>(SDL_GL_GetProcAddress(name)); }
 
     bool writePng(const char *path, const uint8_t *rgb, int width, int height)
     {

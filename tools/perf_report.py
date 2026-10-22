@@ -75,7 +75,7 @@ def main():
     host = [r for r in rows if r["host_fps"] > 0]
     if host:
         print(f"host     {mean(host, 'host_fps'):6.1f} fps  {mean(host, 'host_ms'):.1f} ms/frame  "
-              f"GL execute {mean(host, 'gl_ms'):.2f} ms (p95 {pct(sorted(r['gl_ms'] for r in host), .95):.2f})")
+              f"GPU submit {mean(host, 'gl_ms'):.2f} ms (p95 {pct(sorted(r['gl_ms'] for r in host), .95):.2f})")
     print(f"audio    {mean(rows, 'audio_ms'):.0f} ms queued on average, min {min(r['audio_ms'] for r in rows):.0f}, "
           f"{int(sum(r['underruns'] for r in rows))} underruns")
 

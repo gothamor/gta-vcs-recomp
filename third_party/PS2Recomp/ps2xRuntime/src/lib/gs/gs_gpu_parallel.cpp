@@ -53,7 +53,7 @@ bool vulkanPresentWanted()
         const std::string mode = renderer ? renderer : "";
         if (mode == "cpu")
             return false;
-        // [gta-recomp] Our window is OpenGL (platform layer): read pictures back unless PS2X_PRESENT=vulkan.
+        // [gta-recomp] Our window is D3D11 (src/rhi): read pictures back unless PS2X_PRESENT=vulkan.
         (void)mode;
         return present && std::string(present) == "vulkan";
     }();
@@ -1035,7 +1035,7 @@ namespace
             m_lastFrameWidth = width;
             m_lastFrameHeight = height;
             if (m_sharedPresent && g_sharedStopped.load(std::memory_order_acquire))
-                m_sharedPresent = false; // the window fell back to OpenGL: read back as before
+                m_sharedPresent = false; // the window is the D3D11 one: read back as before
             if (m_sharedPresent && shareFrame(frame, cmd, *source, width, height))
             {
                 frame.internalWidth = scanout.internal_width;

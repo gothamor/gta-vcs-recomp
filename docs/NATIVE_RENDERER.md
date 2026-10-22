@@ -1,6 +1,6 @@
 # Native renderer plan (D3D11)
 
-Status: **approved** (2026-10-22). Stages 0-2 done; next is stage 3.
+Status: **approved** (2026-10-22). Stages 0-3 done: D3D11 only, no OpenGL or raylib. Next is stage 4.
 
 Goal: get from today's emulated GS (raylib + OpenGL 3.3) to a native renderer that
 draws the game's models directly, on D3D11, as fast as possible. Windows only for
@@ -175,7 +175,7 @@ Result:
   and `PS2X_GS=cpu` checked. `PS2X_GS=gpu` not run (TDR on the dev GPU).
 - Display latency with `PS2X_GS=hw` is one host frame (16.7 ms) higher until stage 3.
 
-### Stage 3 - GS HW backend executor on the RHI (M)
+### Stage 3 - GS HW backend executor on the RHI (M) - done 2026-10-22
 
 The backend is already split: the game thread records API-neutral frame command
 lists (`Frame` in `gs_hw.cpp`: draws with `HwState`, texture creates/deletes, RT
@@ -196,8 +196,40 @@ uploads/drops, clears, depth fills), and only the main-thread executor touches G
   scenes, then the GL executor and the stage 1 GL blit are deleted and `hw`
   (D3D11) becomes the runtime default.
 
+Result:
+- `RhiExecutor` in `gs_hw.cpp` runs the recorded command lists on the window's
+  device; shaders `src/render/shaders/gs_draw.hlsl` (draw, with a dual-source
+  variant) and `gs_util.hlsl` (blits, fills), exposed by `render/gs_shaders.h`.
+  The recorder is unchanged except one line of behaviour (flat colours, below).
+- D3D11 differences handled:
+  - Y: render targets keep PS2 rows top-down; the vertex shader flips into NDC;
+    scissor and copy coordinates stay as they were.
+  - Flat shading: GL used the last vertex, D3D's `nointerpolation` the first; the
+    recorder now writes the last vertex's colour to every vertex of a flat
+    primitive (the GS rule), so the shader doesn't care.
+  - D3D binds a depth buffer only with an equally sized colour target: when they
+    differ, the smaller one grows (colour keeps its contents; depth is recreated
+    cleared, as the GL version did when it grew).
+  - Partial colour clears and the depth fills (VCS's Z clear through a colour
+    draw) are scissored fill draws; depth fills use a depth-only pass.
+  - A draw that samples its own render target reads a copy (D3D unbinds a bound
+    target from the shader instead of reading it). VCS does this.
+  - The displayed picture is drawn with alpha 1 by the blit shader (GL masked a
+    clear).
+- Parity (`PS2X_HW_PARITY=1`, kept for one commit, 2e85a69): the old GL executor ran
+  the same frames in a hidden GL context and the displays were compared every 30
+  host frames over the reference script: 80 of 116 identical, worst mean difference
+  0.43/255, differences only on triangle edges (top-left fill rule now in PS2
+  orientation, GL's was mirrored) and one horizon row.
+- Reference scenes: static 0.02 / 0.17 vs the raylib baseline. Flyover 10-44 s:
+  17.7-18.6 game fps over four runs (baseline 17.9-18.2); main-thread GPU submit
+  0.4 ms (GL execution was 3.2 ms; 3.7-3.9 with the stage 2 readback). The extra
+  frame of display latency from stage 2 is gone.
+- Checked: `PS2X_HW_SCALE=2`, `PS2X_HW_DUMP` / F12 (render targets and display as
+  PPM), hidden runs, resize. vcs.exe no longer imports opengl32.dll.
+
 At this point the game runs on D3D11 with no OpenGL or raylib left. Frame rate is
-about the same as today.
+about the same as before (the game thread's render submit is still the cost).
 
 ### Stage 4 - Packet-level HLE groundwork (L)
 

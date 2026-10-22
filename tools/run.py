@@ -5,7 +5,7 @@
 
 Runs in build/run/ (so files the game or the debug switches write land there), logs stdout+stderr to
 build/run/<logname>.log and stops the game after <seconds> (0 = until it exits). Environment variables
-(PS2X_*, VCS_*) pass through; PS2X_GS defaults to hw (OpenGL). Exit code 124 means the time ran out, as with `timeout`.
+(PS2X_*, VCS_*) pass through; PS2X_GS defaults to hw (the D3D11 hardware renderer). Exit code 124 means the time ran out, as with `timeout`.
 
 --hidden runs without a window on the desktop, without sound and ignoring the physical keyboard / mouse / gamepad;
 drive it with tools/gamectl.py (screenshots, key presses, perf numbers). --control keeps the window but also opens
@@ -37,7 +37,7 @@ def main():
     log = os.path.join(rundir, a.logname + ".log")
     with open(log, "w", encoding="utf-8") as f:
         env = dict(os.environ)
-        env.setdefault("PS2X_GS", "hw")  # the OpenGL renderer; the runtime's own default is the slow software one
+        env.setdefault("PS2X_GS", "hw")  # the hardware (D3D11) renderer; the runtime's own default is the slow software one
         if a.hidden:
             env["PS2X_HIDDEN"] = "1"
         if a.control:

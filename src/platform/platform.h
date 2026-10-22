@@ -140,11 +140,6 @@ namespace platform
     bool audioOpen(uint32_t rate, uint32_t bufferFrames, AudioFill fill);
     void audioClose();
 
-    // Stage 3 transition (docs/NATIVE_RENDERER.md): an OpenGL 3.3 core context on a hidden window, current on the
-    // main thread, for the former OpenGL GS executor (PS2X_HW_PARITY). glProc: its entry points (null when missing).
-    bool glInit();
-    void *glProc(const char *name);
-
     // PNG (8-bit RGB, rows top-down) - screenshots.
     bool writePng(const char *path, const uint8_t *rgb, int width, int height);
 }

@@ -21,7 +21,7 @@
 - [x] IOP time batching (23 -> 60 VBlanks/s, GS discarded) = full speed without GS
 - [x] paraLLEl-GS integrated but opt-in: hangs Pascal GPUs into TDR resets
 - [x] GS usage survey (`VCS_GS_STATS`): see docs/ENGINE.md
-- [~] Hardware OpenGL GS backend (`PS2X_GS=hw`, `src/lib/gs/gs_hw.cpp`): runs at
+- [~] Hardware GS backend (`PS2X_GS=hw`, `src/lib/gs/gs_hw.cpp`; D3D11 since stage 3 of NATIVE_RENDERER.md, was OpenGL): runs at
       full speed and shows the loading screen. Fixed: overlapping render targets
       (back buffer FBP 140 = FBP 0 + 448 lines), stale page cache for CLUT loads.
 - [x] Loading screens had wrong colours: VIF1 fed the next DMAtag's VIFcodes to
