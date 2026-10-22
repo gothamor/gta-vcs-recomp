@@ -58,8 +58,8 @@
       to `%LOCALAPPDATA%/VCSRecomp/mc0` (verified with `VCS_TEST_SAVE`); boot finds the save
 - [x] Memory card load (2026-10-22): the game finds its saves at start-up and loads the newest
       ("Load Successful", back at the save point) since `sceMcGetDir` lists folders in card order
-      (PS2RECOMP_PATCHES.md); before, saves were written but never seen. Load Game menu and saving
-      over an existing slot not checked by hand yet
+      (PS2RECOMP_PATCHES.md); before, saves were written but never seen. Saving over a slot replaces its
+      file (2026-10-23); the Load Game menu itself not driven yet
 - [x] Frontend menus render (pause menu, LOAD/NEW/DELETE menu when a save exists)
 - [x] World vanishing when moving fast / driving: HW renderer never cleared the bottom half of
       the Z buffer (see PS2RECOMP_PATCHES.md, gs_hw.cpp depth fill)
