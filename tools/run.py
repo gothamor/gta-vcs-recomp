@@ -38,6 +38,7 @@ def main():
     with open(log, "w", encoding="utf-8") as f:
         env = dict(os.environ)
         env.setdefault("PS2X_GS", "hw")  # the hardware (D3D11) renderer; the runtime's own default is the slow software one
+        env.setdefault("PS2X_CAPTURE_SIZE", "960x672")  # control-channel screenshots independent of the window size
         if a.hidden:
             env["PS2X_HIDDEN"] = "1"
         if a.control:

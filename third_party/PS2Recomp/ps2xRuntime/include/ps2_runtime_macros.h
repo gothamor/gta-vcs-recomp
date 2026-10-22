@@ -853,7 +853,20 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
 #define FPU_FLOOR_W_S(a) ((int32_t)floorf((float)(a)))
 #define FPU_CVT_S_W(a) ((float)(int32_t)(a))
 #define FPU_CVT_S_L(a) ((float)(int64_t)(a))
-#define FPU_CVT_W_S(a) ((int32_t)nearbyintf((float)(a)))
+// [gta-recomp] The EE FPU's CVT.W.S always truncates (rounds toward zero) and saturates: it has no rounding-mode
+// control and no NaN / infinity (exponent 255 is just a large number). nearbyintf rounded to nearest, so every
+// float -> int conversion in the game could come out one higher - VCS picked the wrong world-streaming cell
+// (hex grid) at places, loading another cell's geometry and collision: the player fell through the world there.
+static inline int32_t ps2FpuCvtWS(float f)
+{
+    uint32_t bits;
+    std::memcpy(&bits, &f, sizeof(bits));
+    const uint32_t exponent = (bits >> 23) & 0xFFu;
+    if (exponent >= 158u) // |f| >= 2^31 (and exponent 255): saturate by sign
+        return (bits & 0x80000000u) ? INT32_MIN : INT32_MAX;
+    return static_cast<int32_t>(f); // C++ float -> int truncates toward zero
+}
+#define FPU_CVT_W_S(a) (ps2FpuCvtWS((float)(a)))
 #define FPU_CVT_L_S(a) ((int64_t)(float)(a))
 #define FPU_C_F_S(a, b) (0)
 #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))

@@ -2933,7 +2933,16 @@ void PS2Runtime::run()
         ps2control::pump(
             [&](const std::string &path) -> std::string
             {
-                const int w = std::max(windowWidth, 960), h = std::max(windowHeight, 672); // readable when hidden
+                int w = std::max(windowWidth, 960), h = std::max(windowHeight, 672); // readable when hidden
+                // PS2X_CAPTURE_SIZE=WxH: a fixed size whatever the window (comparable test screenshots)
+                static const std::pair<int, int> fixedSize = [] {
+                    int fw = 0, fh = 0;
+                    if (const char *e = std::getenv("PS2X_CAPTURE_SIZE"))
+                        std::sscanf(e, "%dx%d", &fw, &fh);
+                    return std::make_pair(fw, fh);
+                }();
+                if (fixedSize.first > 0 && fixedSize.second > 0)
+                    w = fixedSize.first, h = fixedSize.second;
                 std::vector<uint8_t> rgb;
                 if (!present::capture(shownTex, srcWidth, srcHeight, aspect, w, h, rgb) || !platform::writePng(path.c_str(), rgb.data(), w, h))
                     return {};

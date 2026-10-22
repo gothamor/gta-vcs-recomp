@@ -61,6 +61,7 @@ def launch(out, hidden, extra_env=None):
     os.makedirs(data)
     env = dict(os.environ)
     env.setdefault("PS2X_GS", "hw")
+    env.setdefault("PS2X_CAPTURE_SIZE", "960x672")  # screenshots independent of the window size
     env["PS2X_CONTROL"] = "1"
     env["VCS_DATA_DIR"] = data
     if hidden:

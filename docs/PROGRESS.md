@@ -110,10 +110,13 @@ Findings so far (rig runs; details in game-internals.md):
 - [x] **Evening black frames** (the user's "world turns black"): fixed 2026-10-23 - render targets were tracked
       taller than the scissor, so the Z-area texture the game uploads at night dropped the picture
       (game-internals.md 6g). Regression check: `tools/regress.py` step "evening".
-- [ ] After a death the world near the hospital drew only lights for ~40 s (01:25-01:57 game time) - check whether
-      it is the same bug (night window) or streaming.
+- [x] After a death the world near the hospital drew only lights for ~40 s - it was the evening black frames
+      (fixed with them; checked 2026-10-23: drawn from the first frame after the respawn fade).
 - [ ] Driving: 36-54 ms per frame (game code ~20 ms, render submit ~15 ms) - below 30 fps in traffic.
-- [ ] Sea points where the player sinks to -40..-100 (no water there?) - world tour "falling".
+- [x] **Falling through the world** (the user's report; the tour's "falling" points in Downtown): fixed
+      2026-10-23. The runtime's CVT.W.S rounded to nearest; the EE truncates. The world streaming's hex-cell
+      choice came out one cell off at places, so the wrong cell's geometry and collision were loaded under the
+      player (game-internals.md 6b). Every float -> int conversion in the game was affected.
 - [ ] With `PS2X_HLE=0` the noon picture is much darker (luma 18 vs 92 native) - the VU path regressed or the
       native path is too bright; compare against the scenes baseline.
 - [x] Black flashes at teleports / car warps are the game's own load transitions (not bugs).

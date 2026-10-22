@@ -131,6 +131,19 @@ the globals each frame:
   Fort Baxter is around cells (5..7, 16..18).
 - In-world draws are mostly MODULATE + alpha test GREATER 8, fogged, vertex colours from V4-5
   unpacks.
+- **Levels**: the world is three levels, each a `WRLD` image (`.LVZ`) plus an archive (`.IMG`): 1 = BEACH (east
+  island), 2 = MAINLA (mainland: Little Havana, Little Haiti, Downtown, the airport, Fort Baxter), 3 = MALL. The
+  executable names them with the developers' paths (`cdrom0:/RUNDATA/BEACH.LVZ`... table at `0x4ADAE0`, resolved
+  through the disc index). Only one level's WRLD is in memory. `FUN_0023baf0(level, newLevel, ...)` switches;
+  `FUN_0023c188(level, camera position)` (per frame) calls it when the wanted level - global `0x4CD118`, set from
+  the player's zone - differs from the loaded one (`level + 0x18`). Teleporting across islands switches levels by
+  itself within half a second (rig `level_test`, 2026-10-23).
+- The cell the streaming focuses on is computed from the camera position in `FUN_0023c188` with float maths and
+  `cvt.w.s` (float -> int). The EE FPU's `cvt.w.s` truncates; the runtime rounded to nearest, so at places the
+  game picked a neighbouring hex cell 100+ units away (camera (-675, 1172) -> cell (14, 30), centre
+  (-587.5, 1301.6), instead of (13/14, 29)) and streamed that cell's geometry and collision: nothing drawn or solid
+  under the player, who fell through the world (the user's falling-through report; `VCS_TRACE_CELL=1` shows the
+  focus).
 
 ### 6c. VU microcode
 
