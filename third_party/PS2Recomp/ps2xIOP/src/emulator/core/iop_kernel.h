@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "iop_cpu.h"
 
 #include <cstddef>
@@ -58,6 +60,8 @@ namespace ps2x::iop::detail
         [[nodiscard]] bool setInternalEventFlag(int id, uint32_t bits);
 
         void sleepCurrent(IopCpuState &cpu);
+        [[nodiscard]] bool isThreadCpu(const IopCpuState &cpu) const noexcept { return m_currentThread && &m_currentThread->cpu == &cpu; } // [gta-recomp]
+        void setCallContextWait(std::function<void(uint64_t)> wait) { m_callContextWait = std::move(wait); } // [gta-recomp]
         void delayCurrentUntil(uint64_t wakeCycle, IopCpuState &cpu);
 
         [[nodiscard]] IopThread *beginNextReady(uint64_t currentCycle);
@@ -100,5 +104,6 @@ namespace ps2x::iop::detail
         uint32_t m_nextSemaphoreId = 1;
         uint32_t m_nextEventFlagId = 1;
         IopThread *m_currentThread = nullptr;
+        std::function<void(uint64_t)> m_callContextWait; // [gta-recomp]
     };
 }

@@ -1,4 +1,6 @@
 #include "iop_kernel.h"
+#include <cstdio>
+#include <cstdlib>
 
 #include "iop_memory.h"
 #include "../iop_emulator_const.h"
@@ -254,12 +256,11 @@ namespace ps2x::iop::detail
             setV0(0);
             return true;
         }
-        case 33: // DelayThread
-            if (m_currentThread != nullptr)
-            {
-                const uint64_t delayCycles = (static_cast<uint64_t>(cpu.gpr[4]) * kIopClockHz + 999'999ull) / 1'000'000ull;
-                delayCurrentUntil(currentCycle + std::max<uint64_t>(delayCycles, 1u), cpu);
-            }
+        case 33: // DelayThread ([gta-recomp] also in call context: see delayCurrentUntil)
+        {
+            const uint64_t delayCycles = (static_cast<uint64_t>(cpu.gpr[4]) * kIopClockHz + 999'999ull) / 1'000'000ull;
+            delayCurrentUntil(currentCycle + std::max<uint64_t>(delayCycles, 1u), cpu);
+        }
             setV0(0);
             return true;
         case 34: // GetSystemTime
@@ -662,8 +663,26 @@ namespace ps2x::iop::detail
 
     void IopKernel::delayCurrentUntil(uint64_t wakeCycle, IopCpuState &cpu)
     {
-        if (m_currentThread == nullptr)
+        {
+            static int traced = 0;
+            if (std::getenv("PS2X_TRACE_SPU") && (m_currentThread == nullptr || &m_currentThread->cpu != &cpu) && traced++ < 10)
+                std::fprintf(stderr, "[iop] delay in %s (current thread %d)\n", m_currentThread ? "foreign cpu" : "no thread",
+                             m_currentThread ? static_cast<int>(m_currentThread->id) : -1);
+        }
+        if (m_currentThread != nullptr && &m_currentThread->cpu != &cpu)
+        {
+            // [gta-recomp] a nested call (RPC handler / callback) running while a thread is current: delaying that
+            // thread would abort the call; run the rest of the IOP until the wake cycle instead
+            if (m_callContextWait)
+                m_callContextWait(wakeCycle);
             return;
+        }
+        if (m_currentThread == nullptr)
+        {
+            if (m_callContextWait) // [gta-recomp] nested call: run the rest of the IOP until then
+                m_callContextWait(wakeCycle);
+            return;
+        }
         m_currentThread->wakeCycle = wakeCycle;
         m_currentThread->state = IopThreadState::Delay;
         cpu.yielded = true;

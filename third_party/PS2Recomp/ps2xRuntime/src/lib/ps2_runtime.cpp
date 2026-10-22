@@ -16,6 +16,7 @@
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 #include "runtime/ps2_vu0_native.h"
+#include "runtime/ps2_audio_out.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -692,6 +693,7 @@ PS2Runtime::~PS2Runtime()
 #else
         if (IsAudioDeviceReady())
         {
+            ps2AudioShutdown(); // [gta-recomp]
             CloseAudioDevice();
             m_audioBackend.setAudioReady(false);
         }
@@ -769,8 +771,39 @@ void PS2Runtime::advanceIopEeCycles(uint64_t eeCycles) noexcept
     m_iopPendingEeCycles += eeCycles;
     if (m_iopPendingEeCycles < kIopBatchEeCycles)
         return;
-    const uint64_t cycles = m_iopPendingEeCycles;
+    uint64_t cycles = m_iopPendingEeCycles;
     m_iopPendingEeCycles = 0u;
+
+    // [gta-recomp] Keep IOP time (and so the SPU2 sample clock) up with the wall clock. On hardware the IOP and SPU2
+    // run in real time however slowly the EE game loop goes; here IOP time is derived from accounted EE cycles, so
+    // whenever the EE fell below full speed the SPU2 produced too few samples and the audio stuttered. Each batch
+    // may add up to 2 ms of extra IOP time while IOP time trails the host clock; a lag over 250 ms (a stall, a
+    // debugger) is forgiven rather than replayed. PS2X_IOP_REALTIME=0 restores pure EE-derived time.
+    static const bool realtime = []
+    {
+        const char *v = std::getenv("PS2X_IOP_REALTIME");
+        return !(v && v[0] == '0');
+    }();
+    if (realtime)
+    {
+        using Clock = std::chrono::steady_clock;
+        static constexpr uint64_t kEeHz = 294912000u;
+        static constexpr uint64_t kMaxExtra = kEeHz / 500u;  // 2 ms per batch
+        static constexpr uint64_t kMaxLag = kEeHz / 4u;      // 250 ms
+        static Clock::time_point origin = Clock::now();
+        static uint64_t given = 0u; // EE-cycle equivalents handed to the IOP since `origin`
+        const auto hostNs = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - origin).count();
+        const uint64_t hostCycles = static_cast<uint64_t>(static_cast<double>(hostNs) * (kEeHz / 1e9));
+        given += cycles;
+        if (hostCycles > given + kMaxLag)
+            given = hostCycles - kMaxLag;
+        if (hostCycles > given)
+        {
+            const uint64_t extra = std::min<uint64_t>(hostCycles - given, kMaxExtra);
+            cycles += extra;
+            given += extra;
+        }
+    }
     m_iopSubsystem->runEeCycles(cycles);
 }
 
@@ -951,6 +984,7 @@ bool PS2Runtime::initialize(const char *title)
         SetConfigFlags(FLAG_WINDOW_RESIZABLE);
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
         InitAudioDevice();
+        ps2AudioInit(); // [gta-recomp] SPU2 output stream
         m_audioBackend.setAudioReady(IsAudioDeviceReady());
 #endif
         SetTargetFPS(60);

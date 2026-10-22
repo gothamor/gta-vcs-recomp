@@ -10,6 +10,7 @@
 #include "core/iop_kernel.h"
 #include "imports/iop_loadcore.h"
 #include "core/iop_memory.h"
+#include "core/iop_spu2.h"
 #include "services/iop_module_loader.h"
 #include "services/iop_rpc.h"
 #include "imports/iop_stdio.h"
@@ -113,12 +114,16 @@ namespace ps2x::iop::detail
               imports(memory),
               loadcore(memory, imports)
         {
+            memory.setSpu2(&spu2); // [gta-recomp]
+            kernel.setCallContextWait([this](uint64_t wakeCycle) { waitInCallContext(wakeCycle); });
+            spu2.setSampleSink([this](const int16_t *stereo, uint32_t frames) { host.audioSamples(stereo, frames); });
             reset();
         }
 
         void reset()
         {
             memory.reset();
+            spu2.reset();
             kernel.reset();
             modules.clear();
             imports.reset();
@@ -271,21 +276,24 @@ namespace ps2x::iop::detail
 
             if (iequals(call.library, "thbase") || iequals(call.library, "threadman"))
             {
-                return kernel.dispatchThreadImport(call.ordinal, cpu, totalCycles)
-                           ? ImportDisposition::Handled
-                           : ImportDisposition::Missing;
+                const bool handled = kernel.dispatchThreadImport(call.ordinal, cpu, totalCycles);
+                if (handled)
+                    yieldFromCall(cpu);
+                return handled ? ImportDisposition::Handled : ImportDisposition::Missing;
             }
             if (iequals(call.library, "thsemap"))
             {
-                return kernel.dispatchSemaphoreImport(call.ordinal, cpu)
-                           ? ImportDisposition::Handled
-                           : ImportDisposition::Missing;
+                const bool handled = kernel.dispatchSemaphoreImport(call.ordinal, cpu);
+                if (handled)
+                    yieldFromCall(cpu);
+                return handled ? ImportDisposition::Handled : ImportDisposition::Missing;
             }
             if (iequals(call.library, "thevent"))
             {
-                return kernel.dispatchEventImport(call.ordinal, cpu)
-                           ? ImportDisposition::Handled
-                           : ImportDisposition::Missing;
+                const bool handled = kernel.dispatchEventImport(call.ordinal, cpu);
+                if (handled)
+                    yieldFromCall(cpu);
+                return handled ? ImportDisposition::Handled : ImportDisposition::Missing;
             }
             if (iequals(call.library, "sifcmd"))
             {
@@ -472,7 +480,48 @@ namespace ps2x::iop::detail
                                       uint32_t a3,
                                       uint32_t gp) override
         {
+            ++rpcCallDepth; // [gta-recomp] RPC handlers / module entry points: see yieldFromCall
+            struct Guard
+            {
+                uint32_t &depth;
+                ~Guard() { --depth; }
+            } guard{rpcCallDepth};
             return callFunction(address, a0, a1, a2, a3, gp);
+        }
+
+        // [gta-recomp] An RPC handler (run as a nested call, not on its server thread) just woke a thread or
+        // signalled a semaphore / event flag: on the IOP the woken thread would now get CPU time while the server
+        // thread waits, so run the ready threads until they block before the handler continues. (CDSTREAM posts a
+        // read to its worker and then polls the channel; without this the worker never runs and the handler spins.)
+        void yieldFromCall(IopCpuState &cpu)
+        {
+            if (rpcCallDepth == 0u || callYieldDepth >= 2u || kernel.isThreadCpu(cpu))
+                return;
+            ++callYieldDepth;
+            try
+            {
+                const uint64_t limit = totalCycles + 2'000'000u;
+                while (totalCycles < limit)
+                {
+                    servicePendingDmaInterrupts();
+                    servicePendingGuestCallbacks();
+                    timrman.serviceDue(totalCycles, *this);
+                    IopThread *next = kernel.beginNextReady(totalCycles);
+                    if (!next)
+                        break;
+                    const uint64_t before = totalCycles;
+                    runCpu(next->cpu, kDefaultSlice);
+                    kernel.endTimeslice(*next, kThreadReturnSentinel);
+                    if (totalCycles == before)
+                        ++totalCycles;
+                }
+            }
+            catch (...)
+            {
+                --callYieldDepth;
+                throw;
+            }
+            --callYieldDepth;
         }
 
         uint32_t executeGuestFunctionWithBudget(uint32_t address,
@@ -566,39 +615,71 @@ namespace ps2x::iop::detail
             servicingGuestCallbacks = false;
         }
 
+        // One scheduling loop: other threads, DMA completions, guest callbacks, timers and the SPU2 up to `target`.
+        void scheduleUntil(uint64_t target)
+        {
+            while (totalCycles < target)
+            {
+                servicePendingDmaInterrupts();
+                servicePendingGuestCallbacks();
+                timrman.serviceDue(totalCycles, *this);
+                spu2.advanceTo(totalCycles); // [gta-recomp] SPU2 mixing + IRQ-address interrupts
+                if (spu2.takeIrq())
+                    (void)intrman.dispatchInterrupt(9, *this);
+                IopThread *next = kernel.beginNextReady(totalCycles);
+                if (!next)
+                {
+                    uint64_t nextWake = kernel.nextWakeCycle(target);
+                    for (const auto &[irq, completionCycle] : pendingDmaInterrupts)
+                        nextWake = std::min(nextWake, completionCycle);
+                    if (!pendingGuestCallbacks.empty())
+                        nextWake = std::min(nextWake, pendingGuestCallbacks.begin()->first);
+                    nextWake = timrman.nextEventCycle(nextWake);
+                    totalCycles = std::max(totalCycles + 1u, std::min(target, nextWake));
+                    continue;
+                }
+                const uint64_t before = totalCycles;
+                runCpu(next->cpu, static_cast<uint32_t>(std::min<uint64_t>(kDefaultSlice, target - totalCycles)));
+                kernel.endTimeslice(*next, kThreadReturnSentinel);
+                if (totalCycles == before)
+                    ++totalCycles;
+            }
+        }
+
         void runCycles(uint64_t cycles) noexcept
         {
             try
             {
-                const uint64_t target = totalCycles + cycles;
-                while (totalCycles < target)
-                {
-                    servicePendingDmaInterrupts();
-                    servicePendingGuestCallbacks();
-                    timrman.serviceDue(totalCycles, *this);
-                    IopThread *next = kernel.beginNextReady(totalCycles);
-                    if (!next)
-                    {
-                        uint64_t nextWake = kernel.nextWakeCycle(target);
-                        for (const auto &[irq, completionCycle] : pendingDmaInterrupts)
-                            nextWake = std::min(nextWake, completionCycle);
-                        if (!pendingGuestCallbacks.empty())
-                            nextWake = std::min(nextWake, pendingGuestCallbacks.begin()->first);
-                        nextWake = timrman.nextEventCycle(nextWake);
-                        totalCycles = std::max(totalCycles + 1u, std::min(target, nextWake));
-                        continue;
-                    }
-                    const uint64_t before = totalCycles;
-                    runCpu(next->cpu, static_cast<uint32_t>(std::min<uint64_t>(kDefaultSlice, target - totalCycles)));
-                    kernel.endTimeslice(*next, kThreadReturnSentinel);
-                    if (totalCycles == before)
-                        ++totalCycles;
-                }
+                scheduleUntil(totalCycles + cycles);
             }
             catch (...)
             {
                 // Runtime scheduling must never throw through EeScheduler::accountCycles().
             }
+        }
+
+        // [gta-recomp] A delay (DelayThread / WaitVblank*) inside a nested call (an RPC handler or callback run
+        // outside any thread, e.g. CDSTREAM's sound-bank load waiting for its stream thread): let the rest of the
+        // IOP run until the wake cycle instead of returning at once - the waiting code then sees real progress.
+        void waitInCallContext(uint64_t wakeCycle)
+        {
+            if (callContextWaitDepth >= 4u)
+                return;
+            static int traced = 0;
+            if (std::getenv("PS2X_TRACE_SPU") && traced++ < 12)
+                std::fprintf(stderr, "[iop] call-context wait from cycle %llu to %llu (depth %u)\n", (unsigned long long)totalCycles,
+                             (unsigned long long)wakeCycle, callContextWaitDepth);
+            ++callContextWaitDepth;
+            try
+            {
+                scheduleUntil(wakeCycle);
+            }
+            catch (...)
+            {
+                --callContextWaitDepth;
+                throw;
+            }
+            --callContextWaitDepth;
         }
 
         ModuleLoadResult loadImage(std::string path, std::span<const uint8_t> image, const void *arguments, uint32_t argumentSize)
@@ -693,6 +774,10 @@ namespace ps2x::iop::detail
 
         IopHost &host;
         IopMemory memory;
+        IopSpu2 spu2; // [gta-recomp]
+        uint32_t callContextWaitDepth = 0; // [gta-recomp]
+        uint32_t rpcCallDepth = 0;         // [gta-recomp]
+        uint32_t callYieldDepth = 0;       // [gta-recomp]
         IopSysmem sysmem;
         IopKernel kernel;
         IopCdvd cdvd;

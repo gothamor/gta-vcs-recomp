@@ -49,7 +49,12 @@
 ## Phase 4 - audio, input, memory card, movies
 - [x] Input: keyboard + mouse + gamepad (docs/CONTROLS.md), verified in game: after the
       intro cutscene the player controls Vic at Fort Baxter (HUD, radar, mission marker)
-- [ ] Audio: needs SPU2 emulation (voices, ADPCM, IRQ, AutoDMA) - see ENGINE.md "Sound system"
+- [x] Audio: SPU2 emulation (`ps2xIOP/.../iop_spu2.cpp`: 2x24 ADPCM voices, ADSR, loops,
+      IRQ address, AutoDMA, IOP DMA 4/7) mixed to a 48 kHz raylib stream. Music, SFX and
+      voices confirmed by ear. IOP time follows the wall clock, so audio no longer stutters
+      when the game drops below 60 VBlanks/s (0 underruns at 35-55 VBlanks/s).
+- [ ] Audio: reverb, noise, pitch modulation, Gaussian interpolation, exact volume sweeps
+- [ ] Memory card, movies
 ## Phase 5 - stability
 ## Phase 6 - enhancements
 
@@ -69,6 +74,9 @@
 | `VCS_SELFTEST=1` | recompiled libgcc helpers vs native |
 | `VCS_TRACE_DELAY=1`, `VCS_TRACE_SOUND=1` | DelayThread calls; EE sound driver commands |
 | `PS2X_TRACE_SPU=1`, `PS2X_TRACE_IOP_DMA=1` | IOP SPU2/DMA/interrupt tracing |
+| `PS2X_TRACE_SPU2=1` | SPU2 key-ons, DMA bytes, IRQs, peak level per 5 s |
+| `PS2X_AUDIO=0`, `PS2X_AUDIO_DUMP=f.wav`, `PS2X_AUDIO_STATS=1` | no audio output / record the SPU2 mix / underrun and fill stats |
+| `PS2X_IOP_REALTIME=0` | IOP time purely from EE cycles (audio slows with the game) |
 | `PS2X_VU0_VERIFY=1`, `PS2X_VU0_NATIVE=0` | check / disable native VU0 programs |
 | `PS2X_VU1_VERIFY=1`, `PS2X_VU1_COMPILED=0` | check / disable compiled VU1 code |
 | `PS2X_TRACE_VU0=1`, `PS2X_TRACE_VU1=1`, `PS2X_VU1_STAT=1` | VU program statistics |

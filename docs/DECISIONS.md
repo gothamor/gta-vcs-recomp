@@ -132,3 +132,18 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   the performance work). Remaining top costs: generated game code ~31%, T4
   texture swizzle (WriteP4) ~9%, DMA chain copy (memmove) ~7.5%, HW backend
   recording ~7%, scheduler checkpoints ~4%.
+
+## 2026-10-22 - SPU2 emulated in the IOP; IOP time follows the wall clock
+- The SPU2 lives in ps2xIOP (`core/iop_spu2.cpp`), behind the IOP's memory map
+  and DMA channels 4/7, rather than as a high-level libsd replacement: VCS's
+  CDSTREAM.IRX drives libsd directly, and its streaming depends on SPU2 IRQ
+  addresses and DMA-complete callbacks, which an HLE layer would have to fake.
+- The mix (48 kHz stereo, one frame per 768 IOP cycles) goes to a raylib audio
+  stream through a ring buffer. The callback resamples by +-8% steered to an
+  ~80 ms fill, so small production jitter is absorbed without gaps or drops.
+- IOP time was derived only from accounted EE cycles, so when the EE ran below
+  full speed the SPU2 produced 70-90% of real-time audio and playback stuttered
+  in step with the frame rate. On hardware the IOP/SPU2 keep real time whatever
+  the EE does, so each IOP batch may now add up to 2 ms of IOP time while it
+  trails the host clock (lag > 250 ms is forgiven). Measured: 100% production
+  and 0 underruns at 35-55 VBlanks/s. `PS2X_IOP_REALTIME=0` turns it off.

@@ -1,4 +1,5 @@
 #include "ps2_iop_host.h"
+#include "runtime/ps2_audio_out.h"
 #include "runtime/ps2_disc_image.h"
 
 #include "ps2_runtime.h"
@@ -594,4 +595,10 @@ bool PS2IopHostAdapter::readDiscSectors(uint32_t lsn, uint32_t sectors, void *de
     if (!disc || static_cast<uint64_t>(lsn) + sectors > disc->totalSectors())
         return false;
     return disc->readBytes(static_cast<uint64_t>(lsn) * 2048u, static_cast<size_t>(sectors) * 2048u, destination);
+}
+
+// [gta-recomp] SPU2 output (runtime/ps2_audio_out.h)
+void PS2IopHostAdapter::audioSamples(const int16_t *stereo, uint32_t frames)
+{
+    ps2AudioPush(stereo, frames);
 }

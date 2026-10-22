@@ -145,6 +145,16 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   `sceSdSetIRQCallback`) - real SPU2 emulation is needed for audio.
 - `DelayThread` (`0x468318`) = `SetTimerAlarm` (SDK timer lib on EE T0,
   handler `0x451038`) + `WaitSema`; a fresh semaphore per call.
+- libsd `sceSdInit` waits for `STATX & 0x7FF == 0` after reset; STATX bit 7
+  (DMA busy) must only be set while `ATTR & 0x30` (DMA mode) is set.
+- The sound-bank RPC handler (fn `0xA0D00`) signals CDSTREAM's reader thread
+  with a semaphore and then polls for completion *inside the RPC call*. The
+  runtime runs RPC handlers as nested calls, not on the server thread, so the
+  reader never ran: the IOP emulator now yields to ready IOP threads after
+  thread/semaphore/event imports made from a nested RPC call (`yieldFromCall`),
+  and a `DelayThread` there waits by running the IOP scheduler.
+- Bank load: ~1.7 MB of ADPCM by IOP DMA channel 4/7 into SPU2 RAM; music and
+  dialogue stream through voice loops refilled on SPU2 IRQ-address interrupts.
 
 ## Level data (WRLD)
 - `MAINLA.LVZ` / `BEACH.LVZ` / `MALL.LVZ` are zlib streams of a `WRLD` image

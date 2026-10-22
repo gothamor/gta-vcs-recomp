@@ -73,6 +73,7 @@ namespace ps2x::iop::detail
         [[nodiscard]] std::span<const uint8_t> ram() const noexcept { return m_ram; }
 
         [[nodiscard]] static uint32_t physicalAddress(uint32_t address) noexcept;
+        void setSpu2(class IopSpu2 *spu2) noexcept { m_spu2 = spu2; } // [gta-recomp]
 
     private:
         [[nodiscard]] uint32_t readHardware32(uint32_t address) const;
@@ -89,5 +90,6 @@ namespace ps2x::iop::detail
         uint32_t m_interruptMask = 0;
         uint32_t m_interruptControl = 1;
         std::optional<DmaStart> m_dmaStart;
+        class IopSpu2 *m_spu2 = nullptr; // [gta-recomp] SPU2 register window + DMA data
     };
 }
