@@ -317,6 +317,9 @@ written back to VU memory, as a later pass over the same buffer reads it), the s
 to the GPU per draw (transient, not cached) and `vs_lit` does transform, fog and lighting.
 Cutscene 55-86 s: 28.1 -> 29.9 game fps (the cap), render submit 17.3 -> 11.8 ms, VU1 programs
 565 -> 238 per frame. `PS2X_HLE_LIT=0` keeps lit models on the VU1.
+Rigid lit models (vehicles, props: the world pipeline with lighting stage 0x4ff) followed the same
+way: bit-exact reference, native through `vs_lit` with the world's folded matrices and a cached
+mesh (also covered by `PS2X_HLE_LIT=0`).
 
 
 - Skinning, the lighting dispatch program (0x0418, JALR table), vehicle env maps /

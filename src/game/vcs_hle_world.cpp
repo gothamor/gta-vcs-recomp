@@ -315,6 +315,16 @@ namespace
         return L;
     }
 
+    LitLights rigidLights(const uint8_t *vu)
+    {
+        LitLights L = litLights(vu);
+        const float inv128 = bitsToFloat(0x3C000000u);
+        for (auto &row : L.dir)
+            for (int k = 0; k < 4; ++k)
+                row.v[k] *= inv128;
+        return L;
+    }
+
     void litColour(const LitLights &L, const float n[3], int32_t out[3])
     {
         float d[4];
@@ -333,6 +343,35 @@ namespace
             const float c = acc + L.ambient.v[k] * 1.0f;
             out[k] = ftoi(std::min(L.clamp.v[k], c), 1.0f);
         }
+    }
+
+    // ---- rigid lit models (vehicles, props): the world pipeline with lighting stage 0x4ff (rigid-lit upload) --------
+    bool rigidCodeResident(const uint8_t *code, uint64_t generation)
+    {
+        static uint64_t checkedGeneration = ~0ull;
+        static bool resident = false;
+        if (generation == checkedGeneration)
+            return resident;
+        static const uint32_t ranges[][2] = {{0x30, 0x118}, {0x6D0, 0x748}, {0x748, 0x7E0}, {0x7F0, 0xC20}, {0xC38, 0x1030},
+                                             {0x1048, 0x11F8}, {0x1360, 0x13D8}, {0x15B0, 0x1638}, {0x2700, 0x3400}};
+        uint64_t h = 0xCBF29CE484222325ull;
+        for (const auto &r : ranges)
+            h = fnv(code, r[0], r[1], h);
+        checkedGeneration = generation;
+        resident = h == 0x0061E55208AD3296ull;
+        return resident;
+    }
+
+    bool isRigidPipeline(const uint8_t *code, const uint8_t *vu, uint64_t generation)
+    {
+        const IVec4 t38 = loadI(vu, 38), t40 = loadI(vu, 40), t41 = loadI(vu, 41), t52 = loadI(vu, 52);
+        if ((t38.v[0] & 0xFFFF) != 0x19 || (t40.v[2] & 0xFFFF) != 0xDA || (t41.v[0] & 0xFFFF) != 0x4FF ||
+            (t41.v[1] & 0xFFFF) != 0x9C || (t41.v[2] & 0xFFFF) != 0x2B6)
+            return false;
+        const uint32_t entry = t52.v[0] & 0xFFFF;
+        if (entry != 0xE9 && entry != 0xDE)
+            return false;
+        return rigidCodeResident(code, generation);
     }
 
     enum class Decision
@@ -395,7 +434,8 @@ namespace
         g_pred.litLanes = false;
         if (c.startPc == 0x30u && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
             return predictLit(c);
-        if (c.startPc != 0x30u || !isWorldPipeline(c.vuCode, c.vuData, c.codeGeneration))
+        const bool rigid = c.startPc == 0x30u && isRigidPipeline(c.vuCode, c.vuData, c.codeGeneration);
+        if (!rigid && (c.startPc != 0x30u || !isWorldPipeline(c.vuCode, c.vuData, c.codeGeneration)))
             return false;
         const uint8_t *vu = c.vuData;
         const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48);
@@ -468,11 +508,31 @@ namespace
             uint32_t *e = g_pred.expected[i];
             float stq[4] = {st[0] * q, st[1] * q, st[2] * q, p.v[3]};
             std::memcpy(e, stq, 16);
-            const Vec4 col = itof(loadI(vu, colBase + i));
-            for (int k = 0; k < 4; ++k)
+            if (rigid)
             {
-                const float r = co.v[k] + cs.v[k] * col.v[k];
-                e[4 + k] = static_cast<uint32_t>(ftoi(std::min(r, cmax.v[k]), 1.0f));
+                static const LitLights *L = nullptr;
+                static LitLights lights;
+                if (i == 0)
+                {
+                    lights = rigidLights(vu);
+                    L = &lights;
+                }
+                const Vec4 n = itof(loadI(vu, static_cast<uint32_t>(i47.v[1]) + (top & mask) + i));
+                int32_t rgb[3];
+                litColour(*L, n.v, rgb);
+                e[4] = static_cast<uint32_t>(rgb[0]);
+                e[5] = static_cast<uint32_t>(rgb[1]);
+                e[6] = static_cast<uint32_t>(rgb[2]);
+                e[7] = static_cast<uint32_t>(L->alpha);
+            }
+            else
+            {
+                const Vec4 col = itof(loadI(vu, colBase + i));
+                for (int k = 0; k < 4; ++k)
+                {
+                    const float r = co.v[k] + cs.v[k] * col.v[k];
+                    e[4 + k] = static_cast<uint32_t>(ftoi(std::min(r, cmax.v[k]), 1.0f));
+                }
             }
             for (int k = 0; k < 3; ++k)
                 e[8 + k] = static_cast<uint32_t>(ftoi(p.v[k] * q, 16.0f));
@@ -815,7 +875,105 @@ namespace
         return true;
     }
 
-    NativeStats g_nativeLit;
+    NativeStats g_nativeLit, g_nativeRigid;
+
+    bool drawNativeRigid(const ps2hle::MscalContext &c)
+    {
+        uint8_t *vu = c.vuData;
+        const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48);
+        const uint32_t top = c.top & 0x3FFu, base = top & static_cast<uint32_t>(i48.v[2]);
+        const uint32_t posBase = static_cast<uint32_t>(i47.v[0]) + base, nrmBase = static_cast<uint32_t>(i47.v[1]) + base,
+                       uvBase = static_cast<uint32_t>(i47.v[2]) + base;
+        const IVec4 header = loadI(vu, posBase - 1u);
+        const uint32_t count = static_cast<uint32_t>(header.v[2]);
+        if (count == 0u || count > 256u)
+            return false;
+        ++g_nativeRigid.packets;
+        Vec4 cm[4];
+        foldMatrix(vu, 24, cm);
+        uint32_t any = 0, all = 0;
+        if ((loadI(vu, 52).v[0] & 0xFFFF) == 0xE9)
+        {
+            const Vec4 guard = loadF(vu, 65);
+            all = 0xFFFu;
+            for (uint32_t i = 0; i < std::max(count, 6u); ++i)
+            {
+                const Vec4 p = transform(cm, itof(loadI(vu, posBase + i)));
+                Vec4 g;
+                for (int k = 0; k < 4; ++k)
+                    g.v[k] = p.v[k] * guard.v[k];
+                const uint32_t f = (clipFlags(g, p.v[3]) << 6) | clipFlags(p, p.v[3]);
+                any |= f;
+                all &= f;
+            }
+        }
+        if (all != 0u)
+        {
+            ++g_nativeRigid.culled;
+            return true;
+        }
+        const bool clipped = (any & 0xFC0u) != 0u;
+        GSNativeDraw d;
+        d.kind = GSNativeDraw::VcsLit;
+        d.vertexStride = 48;
+        d.vertexCount = count;
+        d.drawCount = std::min(static_cast<uint32_t>(header.v[3]), count);
+        uint64_t key = 0x52494749ull ^ count;
+        key = hashQwords(vu, posBase, count, key);
+        key = hashQwords(vu, uvBase, count, key);
+        key = hashQwords(vu, nrmBase, count, key);
+        d.meshKey = key;
+        static thread_local std::vector<uint8_t> verts;
+        verts.assign(size_t(count) * 48u, 0);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            uint8_t *v = verts.data() + size_t(i) * 48u;
+            std::memcpy(v, itof(loadI(vu, posBase + i)).v, 12);
+            std::memcpy(v + 12, itof(loadI(vu, uvBase + i)).v, 12);
+            std::memcpy(v + 24, itof(loadI(vu, nrmBase + i)).v, 12);
+        }
+        d.vertices = verts.data();
+        float *k = d.constants;
+        Vec4 m[4];
+        foldMatrix(vu, 28, m);
+        for (int r = 0; r < 4; ++r)
+            putRow(k + r * 4, m[r]);
+        const float inv255 = bitsToFloat(0x3B808081u);
+        for (int r = 0; r < 3; ++r)
+        {
+            Vec4 row = loadF(vu, 44 + r);
+            for (int l = 0; l < 3; ++l)
+                row.v[l] *= inv255;
+            row.v[3] = 0.0f;
+            putRow(k + 16 + r * 4, row);
+        }
+        const Vec4 fog = loadF(vu, 53);
+        k[28] = (loadI(vu, 52).v[1] & 2) ? 1.0f : 0.0f;
+        k[29] = fog.v[2];
+        k[30] = fog.v[3];
+        for (int r = 0; r < 4; ++r)
+            putRow(k + 32 + r * 4, cm[r]);
+        const LitLights L = rigidLights(vu);
+        for (int r = 0; r < 3; ++r)
+            putRow(k + 48 + r * 4, L.dir[r]);
+        for (int r = 0; r < 4; ++r)
+            putRow(k + 60 + r * 4, L.col[r]);
+        putRow(k + 76, L.ambient);
+        putRow(k + 80, L.clamp);
+        k[84] = static_cast<float>(L.alpha);
+        d.constantCount = 88;
+        const IVec4 tag = loadI(vu, 49);
+        const uint64_t tagLo = uint64_t(uint32_t(tag.v[0])) | (uint64_t(uint32_t(tag.v[1])) << 32);
+        if (!ps2hle::gs()->submitNative((tagLo >> 47) & 0x7FFu, d))
+        {
+            ++g_nativeRigid.fallback;
+            return false;
+        }
+        const int32_t variant = clipped ? 711 : 698;
+        std::memcpy(vu + 52u * 16u + 8u, &variant, 4);
+        (clipped ? g_nativeRigid.clipped : g_nativeRigid.drawn) += 1;
+        return true;
+    }
 
     bool drawNativeLit(const ps2hle::MscalContext &c)
     {
@@ -905,9 +1063,13 @@ namespace
         const int rounding = std::fegetround();
         std::fesetround(FE_TOWARDZERO);
         static const bool lit = !(std::getenv("PS2X_HLE_LIT") && *std::getenv("PS2X_HLE_LIT") == '0');
-        const bool handled = (lit && c.startPc == 0x30u && ps2hle::gs() && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
-                                 ? drawNativeLit(c)
-                                 : drawNative(c);
+        bool handled = false;
+        if (lit && c.startPc == 0x30u && ps2hle::gs() && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
+            handled = drawNativeLit(c);
+        else if (lit && c.startPc == 0x30u && ps2hle::gs() && isRigidPipeline(c.vuCode, c.vuData, c.codeGeneration))
+            handled = drawNativeRigid(c);
+        else
+            handled = drawNative(c);
         std::fesetround(rounding);
         return handled;
     }

@@ -256,6 +256,14 @@ address), the matrix 28-31 (+42/43), uv matrix 44-46, colour scale/offset/clamp 
 53 and the GIF tag 49 (prim) - all in VU data at MSCAL time. Packets that cross the clip volume
 go through the VU clipper (0x11f8/0x13d8); a GPU version would clip in hardware instead.
 
+### Rigid lit models (stage table 0x19 with stage 0x4ff; vehicles, props)
+
+The world pipeline (same code everywhere except 0x2700-0x3400, signature 0x0061e55208ad3296) with
+a lighting stage instead of the prelit colour stage: int8 normals (V3-8 at `[47].y`) through ITOF0,
+light-direction rows pre-multiplied by 1/128, then the same 4-light + ambient formula as the lit
+pass (`build/analysis/vu1_rigid_4ff.txt`); RGB into the RGBA slot, alpha `[51].w`. Reproduced
+bit-exact; drawn natively through `vs_lit` with the world's folded matrices and a cached mesh.
+
 ### Lit models (stage table 0x16; peds and other skinned models)
 
 With native world drawing on, the largest remaining VU1 user is code variant e40090d9 (table 0x16:
