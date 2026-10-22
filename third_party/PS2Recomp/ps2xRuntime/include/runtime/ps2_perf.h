@@ -62,6 +62,10 @@ namespace ps2perf
     void hostFrame(double glMs);
     // Main thread, between BeginDrawing and EndDrawing: handles F3/F4 and draws the overlay when on.
     void drawOverlay(bool handleKeys = true);
+    // [gta-recomp] Main thread, per host frame when the brightness probe runs (PS2X_FRAME_STATS / control channel):
+    // the presented picture's mean luma (0..255). Counts black frames (summaryLine: black_frames / probed_frames) and
+    // logs every run of black frames ("[frames] black run ...").
+    void noteFrameLuma(float mean, uint64_t hostFrame);
     // [gta-recomp] Main thread: the F3 overlay's state (settings menu).
     void setOverlay(bool on);
     bool overlayOn();

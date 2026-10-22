@@ -49,6 +49,7 @@ class Scm:
     TERMINATE = 0x0023
     SET_CHAR_COORDINATES = 0x0044
     CREATE_CAR = 0x0048
+    SET_CAR_COORDINATES = 0x004E
     SET_TIME_OF_DAY = 0x005B
     CLEAR_WANTED_LEVEL = 0x009B
     DO_FADE = 0x00C9
@@ -94,13 +95,16 @@ class Scm:
 
 
 class Game:
-    def __init__(self, proc, log_path):
+    def __init__(self, proc, log_path, port=gamectl.DEFAULT_PORT):
         self.proc = proc
         self.log_path = log_path
+        self.port = port
 
     @classmethod
-    def start(cls, save=None, name="rig", seconds=3600, env=None, data_dir=None):
-        data = data_dir or os.path.join(ROOT, "build", "rig", "data")
+    def start(cls, save=None, name="rig", seconds=3600, env=None, data_dir=None, port=None):
+        """port: a control port of its own, so several games can run side by side (each with its own card)."""
+        port = port or gamectl.DEFAULT_PORT
+        data = data_dir or os.path.join(ROOT, "build", "rig", "data" if port == gamectl.DEFAULT_PORT else "data%d" % port)
         if save:
             os.makedirs(data, exist_ok=True)
             copy_card(os.path.join(save, "mc0"), os.path.join(data, "mc0"))
@@ -110,13 +114,14 @@ class Game:
             os.makedirs(data)
         e = dict(os.environ)
         e["VCS_DATA_DIR"] = os.path.abspath(data)
+        e["PS2X_CONTROL_PORT"] = str(port)
         e.update(env or {})
         # run.py logs to build/run/<name>.log; no inherited pipes, so a caller's shell does not wait for the game
         proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "run.py"), str(int(seconds)), name, "--control"],
                                 cwd=ROOT, env=e, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)
-        gamectl.wait(timeout=90)
-        return cls(proc, os.path.join(ROOT, "build", "run", name + ".log"))
+        gamectl.wait(port=port, timeout=90)
+        return cls(proc, os.path.join(ROOT, "build", "run", name + ".log"), port)
 
     def alive(self):
         return self.proc is None or self.proc.poll() is None
@@ -139,7 +144,7 @@ class Game:
         raise RuntimeError("not in game after %.0f s" % timeout)
 
     def cmd(self, line, timeout=70.0):
-        reply = gamectl.send(line, timeout=timeout)
+        reply = gamectl.send(line, port=self.port, timeout=timeout)
         if not reply.startswith("ok"):
             raise RuntimeError("%s -> %s" % (line, reply))
         return reply[3:] if len(reply) > 3 else ""
@@ -199,6 +204,16 @@ class Game:
     def health(self, value=100):
         return self.scm(Scm.op(Scm.SET_CHAR_HEALTH, Scm.PLAYER, Scm.i(value)))
 
+    def spawn_car(self, model=211, ahead=4.0):
+        """Create a car (vehicle model id, e.g. 211; MAIN.SCM uses 171..276) next to the player and put him in it."""
+        S = Scm
+        _, (x, y, z), _ = self.player()
+        code = (S.op(S.REQUEST_MODEL, S.i(model)) + S.op(S.LOAD_ALL_MODELS_NOW) +
+                S.op(S.CREATE_CAR, S.i(model), S.f(x + ahead), S.f(y), S.f(z + 1.0), S.LOCAL0) +
+                S.op(S.SET_CAR_COORDINATES, S.LOCAL0, S.f(x + ahead), S.f(y), S.f(-100.0)) +
+                S.op(S.WARP_CHAR_INTO_CAR, S.PLAYER, S.LOCAL0) + S.op(S.MARK_MODEL_AS_NO_LONGER_NEEDED, S.i(model)))
+        return self.scm(code)
+
     def mission(self, index):
         """LOAD_AND_LAUNCH_MISSION_INTERNAL: the game's own mission start (only when no mission is running)."""
         if self.player()[2]:
@@ -215,7 +230,7 @@ class Game:
 
     def quit(self):
         try:
-            gamectl.send("quit", timeout=10)
+            gamectl.send("quit", port=self.port, timeout=10)
         except Exception:
             pass
         try:

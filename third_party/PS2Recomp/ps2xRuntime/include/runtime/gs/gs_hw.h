@@ -8,6 +8,8 @@
 // PS2X_GS=hw selects it. PS2X_HW_SCALE=<1..8> renders at that multiple of the PS2 resolution.
 #pragma once
 
+#include <string>
+
 #include "runtime/gs/gs_backend.h"
 
 #include <cstdint>
@@ -37,6 +39,8 @@ public:
     // [gta-recomp] Whether the displayed frames draw 3D (depth-tested or native draws), with some hysteresis: frames that
     // are only 2D (loading screens, menus) are presented at 4:3 in widescreen.
     virtual bool showing3d() const = 0;
+    // [gta-recomp] One line about the frames composed last (draws, native draws, 3D, displayed buffer): diagnostics.
+    virtual std::string lastFrameInfo() const = 0;
 };
 
 class GSHwBackendHandle : public GSRasterBackend

@@ -2881,6 +2881,43 @@ void PS2Runtime::run()
         }
         const int srcWidth = static_cast<int>(std::max<uint32_t>(1u, presentWidth));
         const int srcHeight = static_cast<int>(std::max<uint32_t>(1u, presentHeight));
+        // [gta-recomp] brightness probe (black-frame detector for the automation rig)
+        static const bool frameStats = [] {
+            const char *a = std::getenv("PS2X_FRAME_STATS"), *b = std::getenv("PS2X_CONTROL");
+            return (a && *a && *a != '0') || (b && *b && *b != '0');
+        }();
+        if (frameStats)
+        {
+            static uint64_t hostFrame = 0;
+            float luma = 0.0f;
+            if (present::frameLuma(shownTex, srcWidth, srcHeight, luma))
+            {
+                ps2perf::noteFrameLuma(luma, hostFrame);
+                // PS2X_FRAME_DUMP_DIR: a bright scene going black - save that frame and the next two, and say what the
+                // renderer drew (first 40 such events)
+                static const char *dumpDir = std::getenv("PS2X_FRAME_DUMP_DIR");
+                static float prevLuma = 0.0f;
+                static int dumpLeft = 0, events = 0;
+                if (dumpDir && *dumpDir && luma < 3.0f && prevLuma > 40.0f && events < 40)
+                {
+                    ++events;
+                    dumpLeft = 3;
+                }
+                if (dumpLeft > 0)
+                {
+                    --dumpLeft;
+                    const std::string path = std::string(dumpDir) + "/black_" + std::to_string(hostFrame) + ".png";
+                    std::vector<uint8_t> rgb;
+                    if (present::capture(shownTex, srcWidth, srcHeight, aspect, 640, 448, rgb))
+                        platform::writePng(path.c_str(), rgb.data(), 640, 448);
+                    std::fprintf(stderr, "[frames] dump host frame %llu luma %.1f (before %.1f): %s\n",
+                                 static_cast<unsigned long long>(hostFrame), luma, prevLuma,
+                                 hwRenderer() ? hwRenderer()->presenter().lastFrameInfo().c_str() : "(no hw renderer)");
+                }
+                prevLuma = luma;
+            }
+            ++hostFrame;
+        }
         ps2perf::drawOverlay(); // [gta-recomp] F3 overlay, F4 CSV recording
         if (m_debugUiInitialized && m_debugUiDrawCallback)
         {

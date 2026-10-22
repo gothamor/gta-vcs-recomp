@@ -478,6 +478,17 @@ namespace
     // VCS_TRACE_SECTORS=1: why FUN_00240ED8(level, sector) skips sectors, every 5 s. It draws a sector only when
     // the sector has a model index (+2) whose slot in the level's model table (*(level+0x1C))[idx*12] holds a
     // loaded model; the culling result decides the rest.
+    // VCS_TRACE_TELEPORT: FUN_0020b3d8(ped, CVector *pos) is the ped teleport (remove, set position, reset, add);
+    // log who calls it (it is reached through a vtable) and where to.
+    void traceTeleport(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        float pos[3];
+        std::memcpy(pos, rdram + (GPR_U32(ctx, 5) & 0x01FFFFFFu), sizeof(pos));
+        std::fprintf(stderr, "[teleport] ped %08x -> (%.2f, %.2f, %.2f) ra=%08x\n", GPR_U32(ctx, 4), pos[0], pos[1], pos[2],
+                     GPR_U32(ctx, 31));
+        FUN_0020b3d8_0x20b3d8(rdram, ctx, runtime);
+    }
+
     uint64_t g_sectorCalls = 0; // FUN_00240ED8 calls, for VCS_TRACE_CELL
     void traceSector(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -610,6 +621,8 @@ namespace
         vcs::installDisplayHooks(runtime); // widescreen (settings menu)
         if (std::getenv("VCS_TRACE_PACKETS"))
             runtime.replaceFunction(0x00476770u, &tracePacketUse);
+        if (std::getenv("VCS_TRACE_TELEPORT"))
+            runtime.replaceFunction(0x0020B3D8u, &traceTeleport);
         if (std::getenv("VCS_TRACE_SECTORS"))
             runtime.replaceFunction(0x00240ED8u, &traceSector);
         if (std::getenv("VCS_TRACE_CELL"))

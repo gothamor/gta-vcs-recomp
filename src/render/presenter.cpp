@@ -32,6 +32,7 @@ namespace present
         std::unique_ptr<rhi::Buffer> g_params;
         std::unique_ptr<rhi::Sampler> g_nearest, g_linear;
         std::unique_ptr<rhi::Texture> g_captureTarget;
+        std::unique_ptr<rhi::Texture> g_lumaTarget; // frameLuma
         std::vector<uint8_t> g_captureRgba;
 
         std::atomic<float> g_displayAspect{4.0f / 3.0f};
@@ -159,6 +160,45 @@ namespace present
     }
 
     void present() { g_device->present(false); }
+
+    bool frameLuma(const Picture &picture, int srcWidth, int srcHeight, float &mean)
+    {
+        constexpr int kW = 32, kH = 24;
+        if (!picture.texture || srcWidth <= 0 || srcHeight <= 0)
+            return false;
+        if (!g_lumaTarget)
+        {
+            rhi::TextureDesc desc;
+            desc.width = kW;
+            desc.height = kH;
+            desc.usage = rhi::UsageRenderTarget | rhi::UsageSampled;
+            desc.name = "luma probe";
+            g_lumaTarget = g_device->createTexture(desc);
+            if (!g_lumaTarget)
+                return false;
+        }
+        rhi::PassDesc pass;
+        pass.color = g_lumaTarget.get();
+        pass.clearColor = true;
+        pass.name = "luma probe";
+        g_device->beginPass(pass);
+        drawPicture(picture, srcWidth, srcHeight, static_cast<float>(kW) / kH, kW, kH);
+        g_device->endPass();
+        uint8_t rgba[kW * kH * 4];
+        if (!g_device->readTexture(*g_lumaTarget, 0, 0, kW, kH, rgba))
+            return false;
+        // the middle cells only (20%..80% across, 25%..80% down): the HUD stays out
+        double sum = 0.0;
+        int n = 0;
+        for (int y = kH / 4; y < kH * 4 / 5; ++y)
+            for (int x = kW / 5; x < kW * 4 / 5; ++x, ++n)
+            {
+                const uint8_t *px = rgba + (y * kW + x) * 4;
+                sum += 0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2];
+            }
+        mean = static_cast<float>(sum / n);
+        return true;
+    }
 
     bool capture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int width, int height, std::vector<uint8_t> &rgb)
     {

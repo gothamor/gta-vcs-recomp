@@ -477,6 +477,13 @@ namespace
             }
             else if (!f.cpuDisplay.empty())
             {
+                static int logged = 0; // [gta-recomp] normal for uploaded images (loading screens), suspicious in play
+                if (logged < 50 && f.had3d)
+                {
+                    ++logged;
+                    std::fprintf(stderr, "[gs-hw] 3D frame displayed from CPU VRAM: fbp=%u fromRt=%d; targets:%s\n", f.displayFbp,
+                                 f.displayFromRt ? 1 : 0, describeTargets().c_str());
+                }
                 auto tmp = m_dev.createTexture({f.cpuDisplayW, f.cpuDisplayH, rhi::Format::RGBA8, rhi::UsageSampled, "gs cpu display"},
                                                f.cpuDisplay.data(), f.cpuDisplayW * 4u);
                 if (tmp)
@@ -484,6 +491,14 @@ namespace
             }
             else
             {
+                // [gta-recomp] nothing to show: a black frame. Logged - a candidate for the black-flash bug
+                static int logged = 0;
+                if (logged < 50)
+                {
+                    ++logged;
+                    std::fprintf(stderr, "[gs-hw] display filled black: fbp=%u fromRt=%d %ux%u at %u,%u; targets:%s\n", f.displayFbp,
+                                 f.displayFromRt ? 1 : 0, f.displayW, f.displayH, f.displayX, f.displayY, describeTargets().c_str());
+                }
                 fill(m_display.get(), nullptr, 0, 0, w, h, {0.0f, 0.0f, 0.0f, 1.0f}, 0.0f);
             }
             endPass();
@@ -1898,6 +1913,21 @@ namespace
                 for (auto &frame : frames)
                     m_rhi->execute(*frame, dumpNow);
                 m_rhi->composeDisplay(*frames.back());
+                {
+                    // [gta-recomp] lastFrameInfo: per frame of the batch: draws / native draws / clears / rt drops,
+                    // 3D, displayed buffer
+                    std::string info = "batch " + std::to_string(frames.size()) + ":";
+                    for (auto &fr : frames)
+                    {
+                        char b[160];
+                        std::snprintf(b, sizeof(b), " [draws %zu native %zu clears %zu drops %zu 3d %d disp fbp %u rt %d]",
+                                      fr->draws.size(), fr->nativeDraws.size(), fr->clears.size(), fr->rtDrops.size(),
+                                      fr->had3d ? 1 : 0, fr->displayFbp, fr->displayFromRt ? 1 : 0);
+                        info += b;
+                    }
+                    std::lock_guard<std::mutex> lock(m_infoMutex);
+                    m_lastInfo = std::move(info);
+                }
                 // 3D or not over the last 32 frames (the game draws 3D in every other VBlank at 30 fps): 3D in 4 or
                 // more of them shows 3D, none shows 2D, in between keeps the current shape (fades, loading flashes)
                 for (auto &frame : frames)
@@ -2320,6 +2350,13 @@ namespace
 
     public:
         bool showing3d() const override { return m_showing3d.load(std::memory_order_relaxed); }
+        std::string lastFrameInfo() const override
+        {
+            std::lock_guard<std::mutex> lock(m_infoMutex);
+            return m_lastInfo;
+        }
+        mutable std::mutex m_infoMutex; // [gta-recomp] lastFrameInfo
+        std::string m_lastInfo;
     };
 }
 

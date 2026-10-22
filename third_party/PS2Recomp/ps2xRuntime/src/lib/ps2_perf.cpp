@@ -474,6 +474,65 @@ namespace ps2perf
             text("REC", 10, 10, std::max(10, screenHeight() / 46), rgba(245, 90, 90, 255));
     }
 
+    namespace
+    {
+        std::atomic<uint64_t> g_probedFrames{0}, g_blackFrames{0}, g_dipFrames{0};
+        uint64_t g_blackRunStart = 0, g_blackRunLength = 0; // main thread
+        float g_lumaBeforeRun = 0.0f, g_lastLuma = 0.0f;
+        float g_lumaAverage = 0.0f;                           // slow average: the scene's normal brightness
+        uint64_t g_dipStart = 0, g_dipLength = 0;
+        float g_dipReference = 0.0f, g_dipMin = 0.0f;
+    }
+
+    void noteFrameLuma(float mean, uint64_t hostFrame)
+    {
+        constexpr float kBlack = 6.0f; // the middle of the picture all but black
+        g_probedFrames.fetch_add(1, std::memory_order_relaxed);
+        if (mean < kBlack)
+        {
+            g_blackFrames.fetch_add(1, std::memory_order_relaxed);
+            if (g_blackRunLength++ == 0)
+            {
+                g_blackRunStart = hostFrame;
+                g_lumaBeforeRun = g_lastLuma;
+            }
+        }
+        else if (g_blackRunLength)
+        {
+            std::fprintf(stderr, "[frames] black run of %llu host frames from %llu (luma before %.1f, after %.1f)\n",
+                         static_cast<unsigned long long>(g_blackRunLength), static_cast<unsigned long long>(g_blackRunStart),
+                         g_lumaBeforeRun, mean);
+            g_blackRunLength = 0;
+        }
+        // Dips: a short run of frames much darker than the scene was (objects / parts of the world drawn black for
+        // a few frames, which a whole-screen black test misses). Runs longer than 2 s are scene changes, not dips.
+        const bool dark = g_lumaAverage > 25.0f && mean < g_lumaAverage * 0.55f;
+        if (dark)
+        {
+            if (g_dipLength++ == 0)
+            {
+                g_dipStart = hostFrame;
+                g_dipReference = g_lumaAverage;
+                g_dipMin = mean;
+            }
+            g_dipMin = std::min(g_dipMin, mean);
+        }
+        else if (g_dipLength)
+        {
+            if (g_dipLength <= 120)
+            {
+                g_dipFrames.fetch_add(g_dipLength, std::memory_order_relaxed);
+                std::fprintf(stderr, "[frames] dip of %llu host frames from %llu (scene luma %.1f, lowest %.1f, after %.1f)\n",
+                             static_cast<unsigned long long>(g_dipLength), static_cast<unsigned long long>(g_dipStart),
+                             g_dipReference, g_dipMin, mean);
+            }
+            g_dipLength = 0;
+        }
+        if (!g_dipLength || g_dipLength > 120)
+            g_lumaAverage = g_lumaAverage <= 0.0f ? mean : g_lumaAverage * 0.95f + mean * 0.05f;
+        g_lastLuma = mean;
+    }
+
     void setOverlay(bool on) { g_overlay = on; }
 
     bool overlayOn() { return g_overlay; }
@@ -492,7 +551,10 @@ namespace ps2perf
         return fmt("game_fps=%.1f frame_ms=%.1f vblank_per_s=%.1f game_ms=%.1f render_ms=%.1f iop_ms=%.1f wait_ms=%.1f draws=%.0f "
                    "verts=%.0f tex_uploads=%.0f dma_tags=%.0f vu1_programs=%.0f host_fps=%.0f gl_ms=%.1f audio_ms=%.0f",
                    r.fps, r.avgMs, r.vblanksPerS, r.phaseMs[0], r.phaseMs[1], r.phaseMs[2], r.phaseMs[3], r.counters[0], r.counters[1],
-                   r.counters[2], r.counters[3], r.counters[4], r.hostFps, r.glMs, r.audioMs);
+                   r.counters[2], r.counters[3], r.counters[4], r.hostFps, r.glMs, r.audioMs) +
+               fmt(" black_frames=%llu dip_frames=%llu probed_frames=%llu", static_cast<unsigned long long>(g_blackFrames.load()),
+                   static_cast<unsigned long long>(g_dipFrames.load()),
+                   static_cast<unsigned long long>(g_probedFrames.load())); // [gta-recomp] brightness probe
     }
 
     void shutdown()

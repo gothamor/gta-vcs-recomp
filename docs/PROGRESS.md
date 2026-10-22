@@ -94,8 +94,16 @@
 - [x] Player ped, current area (interior) found (game-internals.md 12)
 - [x] World tour (`tools/tour.py`): grid over the map, classes ok / water / relocated / falling / dark / slow /
       error, map image, screenshots, perf; restarts the game on a crash
-- [ ] Detectors in-process (black frames per frame, falling, unconverted draws), drive loops, mission smoke
-      tests, soak, one-command regression suite with baselines
+- [x] Brightness probe (`PS2X_FRAME_STATS=1`, on with the control channel): every presented frame's middle
+      region shrunk to 32x24 and read back; perf line `black_frames` / `dip_frames`; log lines
+      `[frames] black run ...` (whole picture black) and `[frames] dip ...` (much darker than the scene for up to
+      2 s). Normal walking / running: 0 of ~3000 frames; driving: one-game-frame full-black flashes seen
+      ("dip of 2 host frames ... scene luma 113, lowest 0.9") - the user's black-flash bug, now measurable
+- [x] Mission smoke test (`tools/missions.py`): each mission launched from a fresh load, screenshots, perf
+- [x] Drive loop (`tools/drive.py`): car spawned by script, driven with the steering alternating
+- [x] Regression suite (`tools/regress.py [--set-baseline]`): scenes + tour subset + missions + drive against a
+      baseline, report.md
+- [ ] Soak runs; in-process falling detector; unconverted-draw counter; map image with the land outline
 
 ## Phase 5 - stability
 - [ ] Vic falls through the world in some places (reported by the user 2026-10-22, after the
@@ -153,6 +161,10 @@
 | `display.hud=0\|1` | widescreen HUD: keep 4:3 in the middle / stretch |
 | `python tools/rig.py start --save DIR`, `python tools/rig.py <command>` | automation rig: start from a card copy; peek / poke / findvec / dump / scm / scripts / player / pause |
 | `python tools/tour.py [OUT] [--step 250] [--every K]` | world tour over the map (classes, map.png, screenshots, perf) |
+| `python tools/missions.py [OUT] [--only 45,46]`, `python tools/drive.py [OUT]` | mission smoke test; drive loop |
+| `python tools/regress.py [OUT] [--quick] [--set-baseline]` | regression suite against build/regress/baseline |
+| `PS2X_FRAME_STATS=1` | brightness probe without the control channel (black / dip frames in the perf line and log) |
+| `VCS_TRACE_TELEPORT=1` | log every ped teleport (FUN_0020b3d8) with its caller |
 | `display.scale=<1..8>` (old `scale=` still read) | internal render resolution, as `PS2X_HW_SCALE` (the environment wins) |
 | `python tools/vudis.py code.bin --start 0x30 --to-ebit` | VU microcode disassembler |
 | `python tools/sendkey.py Return`, `python tools/screenshot.py f.png` | key press / screenshot (control channel if open, else the window) |

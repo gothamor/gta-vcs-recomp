@@ -41,6 +41,10 @@ namespace present
     // The same picture and Dear ImGui output (scaled) rendered off-screen at width x height; RGB rows top-down.
     bool capture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int width, int height, std::vector<uint8_t> &rgb);
 
+    // Brightness probe (automation rig, docs/NATIVE_PORT_ROADMAP.md milestone 1): the picture's middle region
+    // (HUD margins left out) shrunk to 32x24 and read back; mean luma 0..255. Stalls the GPU briefly: opt-in.
+    bool frameLuma(const Picture &picture, int srcWidth, int srcHeight, float &mean);
+
     // Display aspect of the game picture (docs/SETTINGS_MENU_WIDESCREEN.md): 4:3 as on a PS2's TV, or the widescreen
     // ratio. displayAspect(false) is for frames without 3D (loading screens, menus): always 4:3. Any thread.
     void setDisplayAspect(float aspect);

@@ -8,9 +8,11 @@ sampling the player's height, take a screenshot and the perf line. Each point is
 
     ok          on the ground, picture looks normal
     water       in the sea (nothing under the ped: swimming)
-    relocated   the game moved the player elsewhere (story limits, out-of-map rescue)
+    relocated   the game moved the player: map-edge clamp, or the point is on an entrance marker (doors warp
+                the player, e.g. (-1200, -300) leads to the Fort Baxter barracks)
     falling     nothing under the ped and it sank far below sea level (no water / collision there)
-    dark        the picture is mostly black (black-world bug, missing world)
+    dark        all three pictures mostly black (black world, missing world, deep water)
+    flicker     some of the three pictures black (the picture went black for a moment)
     slow        game frame time over budget (default 40 ms)
     error       the game stopped answering / crashed (it is restarted and the tour goes on)
 
@@ -31,7 +33,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # World extent: the game clamps teleports to about x -2178..1564, y ..1926 (first tour, 2026-10-22); the south edge
 # is assumed symmetric. Inside that: all three islands and the sea around them.
 BOUNDS = (-2175.0, -1925.0, 1560.0, 1925.0)
-COLOURS = {"ok": (60, 180, 75), "water": (70, 130, 220), "relocated": (160, 160, 160), "falling": (230, 25, 75),
+COLOURS = {"ok": (60, 180, 75), "flicker": (145, 30, 180), "water": (70, 130, 220), "relocated": (160, 160, 160), "falling": (230, 25, 75),
            "dark": (20, 20, 20), "slow": (245, 130, 48), "error": (255, 0, 255)}
 
 
@@ -69,17 +71,15 @@ def classify(rec, args):
     if abs(x - tx) > 30 or abs(y - ty) > 30:
         return "relocated"
     zs = rec["z_samples"]
-    if not rec.get("ground", True):
-        # no ground under the ped: sinking far below the surface = the sea there has no water (or the world
-        # has no collision); otherwise swimming
-        if zs and zs[-1] < -20 and zs[-1] < zs[0] - 8:
-            return "falling"
-        return "water"
+    if zs and zs[-1] < -20 and zs[-1] < zs[0] - 8:
+        return "falling"  # sank far below sea level (no water / collision there)
     if z < 1.5:
         return "water"
-    st = rec.get("picture")
-    if st and (st[0] < 18 or st[1] > 0.7):
+    dark = [bool(st) and (st[0] < 18 or st[1] > 0.7) for st in rec.get("pictures") or [rec.get("picture")]]
+    if dark and all(dark):
         return "dark"
+    if any(dark):
+        return "flicker"
     if rec.get("perf", {}).get("frame_ms", 0) > args.slow_ms:
         return "slow"
     return "ok"
@@ -168,10 +168,15 @@ def main():
                 rec["z_samples"] = zs
                 ped, pos, _ = g.player()
                 rec["pos"] = [round(v, 2) for v in pos]
-                rec["ground"] = g.u32(ped + 0x7CC) != 0  # the ped stands on something (0: swimming / falling)
-                shot = os.path.join(out, "shots", "%d_%d.png" % (tx, ty))
-                g.cmd("screenshot " + shot)
-                rec["picture"] = picture_stats(shot)
+                # three pictures 0.7 s apart: one dark picture is a flicker, three are a dark place
+                pics = []
+                for k in range(3):
+                    shot = os.path.join(out, "shots", "%d_%d%s.png" % (tx, ty, "" if k == 0 else "_%d" % k))
+                    g.cmd("screenshot " + shot)
+                    pics.append(picture_stats(shot))
+                    time.sleep(0.7)
+                rec["picture"] = pics[0]
+                rec["pictures"] = pics
                 rec["perf"] = perf_fields(g.cmd("perf"))
             except Exception as e:  # crash / hang: record, restart, go on
                 rec["error"] = str(e)[:200]
