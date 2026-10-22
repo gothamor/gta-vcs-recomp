@@ -71,8 +71,8 @@ def classify(rec, args):
     if abs(x - tx) > 30 or abs(y - ty) > 30:
         return "relocated"
     zs = rec["z_samples"]
-    if zs and zs[-1] < -20 and zs[-1] < zs[0] - 8:
-        return "falling"  # sank far below sea level (no water / collision there)
+    if zs and zs[-1] < -30 and len(zs) >= 3 and zs[-1] < zs[-2] < zs[-3]:
+        return "falling"  # still dropping far below sea level (no water / collision there)
     if z < 1.5:
         return "water"
     dark = [bool(st) and (st[0] < 18 or st[1] > 0.7) for st in rec.get("pictures") or [rec.get("picture")]]
@@ -166,6 +166,11 @@ def main():
                 for _ in range(n):
                     time.sleep(args.settle / n)
                     zs.append(round(g.player()[1][2], 2))
+                if zs and zs[-1] < -5:
+                    # below sea level: a long drop into deep water plunges before it surfaces - watch a bit longer
+                    for _ in range(6):
+                        time.sleep(0.5)
+                        zs.append(round(g.player()[1][2], 2))
                 rec["z_samples"] = zs
                 ped, pos, _ = g.player()
                 rec["pos"] = [round(v, 2) for v in pos]
