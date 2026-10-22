@@ -17,6 +17,7 @@
 #include "ps2x/iop/iop_subsystem.h"
 #include "runtime/ps2_vu0_native.h"
 #include "runtime/ps2_audio_out.h"
+#include "runtime/ps2_perf.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -484,6 +485,7 @@ static bool UploadGpuFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, u
 
 void PS2Runtime::presentGpuVBlank(uint64_t vsyncTick)
 {
+    ps2perf::markVBlank(); // [gta-recomp]
     // [gta-recomp] VCS_FPS=1: count game frames (display buffer flips) per second of host time.
     static const bool s_fps = std::getenv("VCS_FPS") != nullptr;
     if (s_fps)
@@ -804,6 +806,7 @@ void PS2Runtime::advanceIopEeCycles(uint64_t eeCycles) noexcept
             given += extra;
         }
     }
+    ps2perf::PhaseScope iopTime(ps2perf::Phase::Iop); // [gta-recomp]
     m_iopSubsystem->runEeCycles(cycles);
 }
 
@@ -932,6 +935,7 @@ bool PS2Runtime::syncCoreSubsystems()
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                    m_gs, &m_memory, startPC, top, itop, 65536);
                                      traceVu1Program(startPC, g_vu1XgkickCount - kicksBefore, m_vu1.state().pc);
+                                     ps2perf::add(ps2perf::Counter::Vu1Programs); // [gta-recomp]
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
@@ -2843,7 +2847,9 @@ void PS2Runtime::run()
         });
         uint32_t presentWidth = FB_WIDTH;
         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
+        const auto uploadStart = std::chrono::steady_clock::now();
         UploadFrame(frameTex, this, presentWidth, presentHeight);
+        ps2perf::hostFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - uploadStart).count()); // [gta-recomp]
 
         BeginDrawing();
         ClearBackground(BLACK);
@@ -2861,6 +2867,7 @@ void PS2Runtime::run()
             dstWidth,
             dstHeight};
         DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+        ps2perf::drawOverlay(); // [gta-recomp] F3 overlay, F4 CSV recording
         if (m_debugUiInitialized && m_debugUiDrawCallback)
         {
             m_debugUiDrawCallback(*this, m_debugUiUserData);
@@ -2887,6 +2894,7 @@ void PS2Runtime::run()
         m_debugUiInitialized = false;
     }
     shutdownGpuRenderer(); // [gta-recomp]
+    ps2perf::shutdown();   // [gta-recomp]
     UnloadTexture(frameTex);
     CloseWindow();
 

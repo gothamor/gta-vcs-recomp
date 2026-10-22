@@ -10,6 +10,7 @@
 #include "raylib.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -40,6 +41,8 @@ namespace
     uint32_t g_dumpFrames = 0;
     uint64_t g_underrunFrames = 0, g_underruns = 0, g_droppedFrames = 0, g_playedFrames = 0, g_pushedFrames = 0;
     double g_minRate = 2.0, g_maxRate = 0.0;
+    std::atomic<uint64_t> g_underrunsTotal{0};
+    std::atomic<float> g_queuedMs{0.0f};
 
     void writeWavHeader(FILE *f, uint32_t frames)
     {
@@ -76,6 +79,7 @@ namespace
         // steer the rate toward the target fill, smoothed so the pitch never jumps
         const double wanted = 1.0 + std::clamp((static_cast<double>(g_queued) - g_target) / (kRate * 4.0), -kMaxRateOffset, kMaxRateOffset);
         g_rate += (wanted - g_rate) * 0.1;
+        g_queuedMs.store(g_queued * 1000.0f / kRate, std::memory_order_relaxed);
         g_minRate = std::min(g_minRate, g_rate);
         g_maxRate = std::max(g_maxRate, g_rate);
         for (unsigned int i = 0; i < frames; ++i)
@@ -86,6 +90,7 @@ namespace
                 {
                     g_primed = false;
                     ++g_underruns;
+                    g_underrunsTotal.fetch_add(1, std::memory_order_relaxed);
                     g_target = std::min(kMaxTargetFrames, g_target + kRate * 0.03);
                 }
                 // hold the last sample and fade it out instead of clicking to zero
@@ -191,3 +196,6 @@ void ps2AudioShutdown()
     UnloadAudioStream(g_stream);
     g_started = false;
 }
+
+float ps2AudioQueuedMs() { return g_queuedMs.load(std::memory_order_relaxed); }
+uint64_t ps2AudioUnderrunCount() { return g_underrunsTotal.load(std::memory_order_relaxed); }

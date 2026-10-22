@@ -1,4 +1,5 @@
 // [gta-recomp] Hardware (OpenGL 3.3) GS renderer. See runtime/gs/gs_hw.h.
+#include "runtime/ps2_perf.h" // [gta-recomp]
 #include "runtime/gs/gs_hw.h"
 #include "runtime/gs/gs_cpu_backend.h"
 
@@ -527,7 +528,9 @@ void main()
             {
                 f.cmds.push_back({CmdType::Draw, static_cast<uint32_t>(f.draws.size())});
                 f.draws.push_back({s, static_cast<uint32_t>(f.vertices.size()), 0u});
+                ps2perf::add(ps2perf::Counter::Draws); // [gta-recomp]
             }
+            ps2perf::add(ps2perf::Counter::Vertices, n);
             f.vertices.insert(f.vertices.end(), out, out + n);
             f.draws.back().count += n;
         }
@@ -1145,6 +1148,7 @@ void main()
             tc.h = d.textureHeight;
             m_cpu.DecodeTexture(d, tc.pixels);
             f.cmds.push_back({CmdType::TexCreate, static_cast<uint32_t>(f.textures.size())});
+            ps2perf::add(ps2perf::Counter::TexUploads); // [gta-recomp]
             f.textures.push_back(std::move(tc));
             m_texLru[key] = m_frameIndex;
             if (m_texLru.size() > kMaxTextures)

@@ -1,3 +1,4 @@
+#include "runtime/ps2_perf.h" // [gta-recomp]
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_address.h"
 #include "runtime/gs/gs_frontend.h"
@@ -1298,6 +1299,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
     {
         if ((address & 0xFF) == 0x00 && (value & 0x100))
         {
+            ps2perf::PhaseScope renderTime(ps2perf::Phase::Render); // [gta-recomp]
             const auto dctrlIt = m_ioRegisters.find(0x1000E000u);
             const bool dmacEnabled = (dctrlIt == m_ioRegisters.end()) || ((dctrlIt->second & 0x1u) != 0u);
             if (!dmacEnabled)
@@ -1367,7 +1369,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     // [gta-recomp] Was 4096: VCS kicks one VIF1 chain per frame with a CALL/RET pair per model, and
                     // views over the city exceed that - the tail of the chain (peds, vehicles, the HUD) was dropped, so
                     // they flickered out in busy views. Hardware has no limit; this only stops a corrupt looping chain.
-                    const int kMaxChainTags = 1 << 20;
+                    static const int kMaxChainTags = std::getenv("PS2X_DMA_MAX_TAGS") ? std::atoi(std::getenv("PS2X_DMA_MAX_TAGS")) : (1 << 20);
                     std::vector<uint8_t> chainBuf;
 
                     auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
@@ -1616,6 +1618,25 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         if (endChain)
                             break;
                     }
+                    if (channelBase == 0x10009000u)
+                        ps2perf::add(ps2perf::Counter::DmaTags, static_cast<uint64_t>(tagsProcessed)); // [gta-recomp]
+                    if (std::getenv("PS2X_DMA_HIST") && channelBase == 0x10009000u)
+                    {
+                        static int maxTags = 0, chains = 0;
+                        static uint64_t sumTags = 0;
+                        static auto lastTags = std::chrono::steady_clock::now();
+                        maxTags = std::max(maxTags, tagsProcessed);
+                        sumTags += static_cast<uint64_t>(tagsProcessed);
+                        ++chains;
+                        if (std::chrono::steady_clock::now() - lastTags > std::chrono::seconds(5))
+                        {
+                            lastTags = std::chrono::steady_clock::now();
+                            std::fprintf(stderr, "[dma-tags] %d VIF1 chains, avg %llu tags, max %d\n", chains,
+                                         static_cast<unsigned long long>(sumTags / std::max(chains, 1)), maxTags);
+                            maxTags = chains = 0;
+                            sumTags = 0;
+                        }
+                    }
                     if (tagsProcessed >= kMaxChainTags)
                     {
                         static int reported = 0;
@@ -1765,6 +1786,7 @@ void PS2Memory::completeDmacChannel(uint32_t channelBase, uint32_t cause)
 
 void PS2Memory::processPendingTransfers()
 {
+    ps2perf::PhaseScope renderTime(ps2perf::Phase::Render); // [gta-recomp]
     const bool hadGif = !m_pendingGifTransfers.empty();
     uint32_t observedGifQwc = 0u;
     for (const auto &transfer : m_pendingGifTransfers)

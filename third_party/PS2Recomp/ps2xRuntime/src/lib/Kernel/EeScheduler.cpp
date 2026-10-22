@@ -1,3 +1,4 @@
+#include "runtime/ps2_perf.h" // [gta-recomp]
 #include <cstdio>
 #include "runtime/ee_scheduler.h"
 
@@ -1818,6 +1819,7 @@ void EeScheduler::processDueDeadlines()
 
             if (now < pacingDeadline)
             {
+                ps2perf::PhaseScope waitTime(ps2perf::Phase::Wait); // [gta-recomp]
                 m_eventCv.wait_until(lock, pacingDeadline, [this]()
                                      { return !m_events.empty() ||
                                               m_stopRequested.load(std::memory_order_acquire); });
@@ -2038,6 +2040,7 @@ void EeScheduler::waitForEvent()
     }
     const uint64_t timerCycles = m_runtime.memory().cyclesUntilNextEeTimerInterrupt();
     const bool hasTimerDeadline = timerCycles != std::numeric_limits<uint64_t>::max();
+    ps2perf::PhaseScope waitTime(ps2perf::Phase::Wait); // [gta-recomp] (accountCycles below is cheap)
     if (m_deadlines.empty() && !hasTimerDeadline)
     {
         m_eventCv.wait(lock, [this]()

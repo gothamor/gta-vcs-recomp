@@ -7,6 +7,7 @@
 #include "game_overrides.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
+#include "runtime/ps2_perf.h"
 #include <ps2_recompiled_functions.h>
 
 #include <chrono>
@@ -591,8 +592,17 @@ namespace
         calls = nearFull = 0;
     }
 
+    // Game frame boundary for the perf overlay (runtime/ps2_perf.h): FUN_002723E8 kicks the frame's VIF1 display
+    // list (D1_CHCR = 0x145 at 0x27245C), once per rendered frame.
+    void markFrameKick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        ps2perf::markGameFrame();
+        FUN_002723e8_0x2723e8(rdram, ctx, runtime);
+    }
+
     void applyVcs(PS2Runtime &runtime)
     {
+        runtime.replaceFunction(0x002723E8u, &markFrameKick);
         if (std::getenv("VCS_TRACE_PACKETS"))
             runtime.replaceFunction(0x00476770u, &tracePacketUse);
         if (std::getenv("VCS_TRACE_SECTORS"))

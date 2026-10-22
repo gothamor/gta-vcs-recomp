@@ -23,3 +23,10 @@ same PS2 controller (DualShock 2, analog mode), so they can be mixed.
 The game's own PS2 controls apply on top (e.g. driving: Cross accelerates,
 Square brakes). Mapping lives in `third_party/PS2Recomp/ps2xRuntime/src/lib/ps2_pad.cpp`;
 a remappable `vcs.ini` section is planned.
+
+## Debug keys
+| Key | Effect |
+|---|---|
+| F3 | performance overlay: game fps and frame-time percentiles, EE thread time per phase (game / render / IOP / wait), GS and DMA counters, host and GL times, audio buffer, and a frame-time graph |
+| F4 | start / stop recording one CSV row per game frame to `perf_<date>_<time>.csv` (working directory); summarise with `python tools/perf_report.py <file>` |
+| F12 | (hardware renderer) list the next frame's draws on stderr and dump its render targets |

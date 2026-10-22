@@ -6,3 +6,5 @@
 void ps2AudioInit();     // after InitAudioDevice (main thread)
 void ps2AudioPush(const int16_t *stereo, uint32_t frames); // any thread
 void ps2AudioShutdown(); // before CloseAudioDevice
+float ps2AudioQueuedMs();          // audio waiting to be played (perf overlay)
+uint64_t ps2AudioUnderrunCount();  // underruns since start

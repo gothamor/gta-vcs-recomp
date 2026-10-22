@@ -61,7 +61,13 @@
 - [x] Frontend menus render (pause menu, LOAD/NEW/DELETE menu when a save exists)
 - [x] World vanishing when moving fast / driving: HW renderer never cleared the bottom half of
       the Z buffer (see PS2RECOMP_PATCHES.md, gs_hw.cpp depth fill)
-- [x] Vic / vehicles / HUD flickering out in busy views: DMA chains were cut at 4096 tags
+- [x] Vic / vehicles / HUD flickering out in busy views: DMA chains were cut at 4096 tags.
+      Cost: full frames are 7-14k tags; the title flyover dropped from ~45 to ~16 game fps.
+      First perf recording: render submit (VIF/VU1/GS recording) 41 ms of a 61 ms frame,
+      game code 15 ms, IOP 0.7 ms, GL execution 2.5 ms on the main thread.
+- [ ] Performance: render submit is the bottleneck now (see above)
+- [ ] Whole screen goes black for a few frames now and then (reported 2026-10-22 after the
+      DMA chain fix; not investigated yet)
 - [ ] Water surface looks missing (dark grey where sea should be) - to check
 - [ ] Movies
 ## Phase 5 - stability
@@ -91,6 +97,7 @@
 | `VCS_DUMP_RAM=s,s,...` | write EE RAM to ram_<s>.bin at those seconds |
 | `PS2X_DMA_HIST=1` | VIF1 payload per MB of RAM every 5 s |
 | `VCS_TRACE_PACKETS=1` | peak use of the game's DMA packet buffer |
+| F3 / F4, `PS2X_PERF_LOG=f.csv` | perf overlay / CSV recording (see CONTROLS.md); `python tools/perf_report.py f.csv` |
 | `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate a slow PC) |
 | `PS2X_VU0_VERIFY=1`, `PS2X_VU0_NATIVE=0` | check / disable native VU0 programs |
 | `PS2X_VU1_VERIFY=1`, `PS2X_VU1_COMPILED=0` | check / disable compiled VU1 code |
