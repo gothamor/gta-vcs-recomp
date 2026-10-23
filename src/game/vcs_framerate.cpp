@@ -42,6 +42,10 @@ namespace vcs
         constexpr uint32_t kWaitVBlank = 0x003703B8u;
         constexpr uint32_t kAfterMinClamp = 0x002F4C04u; // return address of Update's 2nd kTimerEnsure call
         constexpr uint32_t kLimiterWait = 0x00317A50u;   // return address of the limiter's VBlank wait
+        constexpr uint32_t kTimerUpdate = 0x002F4960u;   // CTimer::Update
+        constexpr uint32_t kTwoDPass = 0x0021F348u;      // the frame's 2D pass: radar, HUD, text (game-internals.md 6f)
+        constexpr uint32_t kFrameCounter = 0x004CD124u;  // CTimer::m_FrameCounter
+        constexpr uint32_t kTimeMs = 0x004CD104u;        // CTimer::m_snTimeInMilliseconds
 
         constexpr uint32_t kPrevTicks = 0x00488298u;  // CTimer: tick count of the last Update (64-bit)
         constexpr uint32_t kFrameTicks = 0x004CD564u; // CTimer: this frame's ticks
@@ -65,7 +69,10 @@ namespace vcs
 
         std::atomic<int> g_timing{static_cast<int>(Timing::Original)};
         std::atomic<int> g_cap{30};
-        PS2Runtime::RecompiledFunction g_origTicks = nullptr, g_origEnsure = nullptr, g_origWait = nullptr;
+        PS2Runtime::RecompiledFunction g_origTicks = nullptr, g_origEnsure = nullptr, g_origWait = nullptr, g_origTwoD = nullptr,
+                                           g_origUpdate = nullptr;
+        bool g_counterSwapped = false; // the 2D pass runs on the 30 Hz counter (game thread)
+        uint32_t g_realCounter = 0;
         uint64_t g_lastSleepNs = 0; // the limiter's last host wait (VCS_TIMING_LOG)
 
         bool independent() { return g_timing.load(std::memory_order_relaxed) == static_cast<int>(Timing::Independent); }
@@ -235,6 +242,36 @@ namespace vcs
             ctx->pc = GPR_U32(ctx, 31);
         }
 
+        // FUN_0021f348, the 2D pass: the HUD's flashing (CHud: `m_FrameCounter & 8` for a flashing item, `& 4` for
+        // health under 10, more `& 2 / 4 / 8` toggles - game-internals.md 4) counts frames, so it flashed twice as fast
+        // at 60 fps. Above 30 fps the pass sees a counter whose low bits advance 30 times a game second (game clock);
+        // the real one is put back as CTimer::Update starts (timerUpdate), which counts the next frame on it.
+        void twoDPass(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const bool fast = independent() ? effectiveFps() != 30.0 : g_cap.load(std::memory_order_relaxed) != 30;
+            if (fast && !g_counterSwapped)
+            {
+                g_realCounter = read32(rdram, kFrameCounter);
+                // only the low bits the flashing tests (& 2 / 4 / 8 ..) look at: the value stays within 63 of the real
+                // one for any other reader before the next Update (frame stamps compared with `counter - 1`)
+                const uint32_t at30 = static_cast<uint32_t>(static_cast<uint64_t>(read32(rdram, kTimeMs)) * 3u / 100u);
+                write32(rdram, kFrameCounter, (g_realCounter & ~0x3Fu) | (at30 & 0x3Fu));
+                g_counterSwapped = true;
+            }
+            g_origTwoD(rdram, ctx, runtime);
+        }
+
+        // FUN_002f4960 = CTimer::Update: the real frame counter back first (twoDPass), then the original
+        void timerUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_counterSwapped)
+            {
+                write32(rdram, kFrameCounter, g_realCounter);
+                g_counterSwapped = false;
+            }
+            g_origUpdate(rdram, ctx, runtime);
+        }
+
         // FUN_003703b8 = WaitVBlank
         void waitVBlank(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
@@ -298,7 +335,14 @@ namespace vcs
         g_origTicks = runtime.lookupFunction(kTimerTicks);
         g_origEnsure = runtime.lookupFunction(kTimerEnsure);
         g_origWait = runtime.lookupFunction(kWaitVBlank);
+        g_origTwoD = runtime.lookupFunction(kTwoDPass);
+        g_origUpdate = runtime.lookupFunction(kTimerUpdate);
         runtime.replaceFunction(kCountVBlank, &countVBlank);
+        if (g_origTwoD && g_origUpdate)
+        {
+            runtime.replaceFunction(kTwoDPass, &twoDPass);
+            runtime.replaceFunction(kTimerUpdate, &timerUpdate);
+        }
         if (!g_origTicks || !g_origEnsure || !g_origWait)
         {
             std::fprintf(stderr, "[framerate] CTimer / WaitVBlank not found: independent timing unavailable\n");

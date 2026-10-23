@@ -148,9 +148,13 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
     FUN_0011c958, 00138b68, 00140b28, 00186aa8, 001effb0, 0020db30, 00203240, 00238bb0, 00243730, 0025bba8,
     00267928, 00268048, 002c3e48, 0033d5a0, 00378dd8, 00421320 ... - run more often per second at higher rates;
     harmless where the work itself scales by the step;
-  - blinking, `frame & 8 / 4 / 2` toggles: FUN_0031e3f8, 0031fce8, 00321500 (& 8), 003209d0, 00320f28 (& 4),
-    001419d0, 0033dca0, 003f29d8 (& 2), 002af6e0 (& 8) - flash twice as fast at 60 fps (HUD / radar / blips, to
-    confirm);
+  - blinking, `frame & 8 / 4 / 2` toggles: FUN_0031e3f8, 0031fce8, 00321500 (& 8), 003209d0, 00320f28 (& 4) -
+    right after CHud::Draw (0x31c628), reVC's CHud flashing (a flashed item on `& 8`, health under 10 on `& 4`);
+    001419d0, 0033dca0, 003f29d8 (& 2), 002af6e0 (& 8) elsewhere. They flashed twice as fast at 60 fps. **Fixed**
+    for the 2D pass (radar, HUD, text: FUN_0021f348): above 30 fps it runs on a counter whose low 6 bits advance
+    30 times a game second (from the game clock), put back as CTimer::Update starts (`vcs_framerate.cpp`
+    twoDPass / timerUpdate) - the value stays within 63 of the real counter for anything else reading it then.
+    The four outside the 2D pass are not covered yet;
   - timestamps (stored, compared with frame - 1: "seen last frame"): FUN_00383028 .. 003868c0, 003ac9c8 - harmless.
 - **Emulated time and the VBlank chain** (found when independent timing first ran at 5 fps): VBlank events are chained
   in EE cycles (+1/60 s each) and each is also held to its host-clock moment. An EE clock moved past the chain makes
