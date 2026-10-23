@@ -261,6 +261,7 @@ dropped on uploads (lazy render-target patching).
       caps 60 and 100; cap 100 runs 91 fps outside the barracks, `tools/bench.py --fps 100 VCS_TIMING=1`: city
       spots 80-100 fps, AI drive 68 fps (game 13.7 ms, worker 14.0 ms). Original timing unchanged (static
       reference scenes 0.00).
+- [x] User playtest (2026-10-24): missions play well in frame-rate independent timing at 60 and 100 fps.
 - [ ] Frame-rate independence, phases 3-4. Done: falling / jumping explained (Euler integration error, <= 6%, not a
       bug - game-internals.md 4); real-time pacing checked (game clock = wall clock at caps 60 / 100 / refresh,
       presents at the cap). HUD / radar flashing at the original rate above 30 fps (2D pass on a 30 Hz frame counter). Left: the four
@@ -272,7 +273,10 @@ dropped on uploads (lazy render-target patching).
 - [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
       the switch; frame pacing.
 ## Phase 5 - stability
-- [ ] Vic falls through the world in some places (reported by the user 2026-10-22, after the
+- [x] Vic falls through the world in some places - **no longer happens** at the spot the user saw it (user
+      playtest 2026-10-24); fixed along the way by other work (which change is not known: the VU0 collision
+      natives, the scheduler / timing work and the renderer changes all came in between). The original report:
+      (reported by the user 2026-10-22, after the
       native renderer; not yet known whether it is new). Collision needs a look: whether the
       collision sectors / models are streamed in at those spots (CDSTREAM reads, IMG offsets),
       VU0 programs used by collision (`0x0000` in .vutext looked like line/sphere vs triangle
