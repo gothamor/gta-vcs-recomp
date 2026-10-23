@@ -200,3 +200,16 @@ The user's choices on the roadmap's open questions:
 - Windows only for now; milestone 9 (portability / distribution) is out of scope until further notice.
 - Game knowledge goes into docs/game-internals.md (successor of ENGINE.md, each fact with how it was
   found); AGENTS.md is the working contract for agents.
+
+## 2026-10-23 - Render submission on its own thread; frame-rate independence next
+- The user's order: the render submission worker first, then frame-rate independence (a variable time step:
+  "remove dependence on the framerate for gameplay"), not fixed-step interpolation. The worker comes first because
+  with game code and render submission in series on one thread (~18 + ~17 ms driving) a variable step would barely
+  raise the frame rate, and one large risky change at a time keeps bugs attributable.
+- Design (runtime/ps2_render_worker.h): the game keeps its synchronous view - chains are copied when kicked and the
+  DMA completes at once, as before - and the work runs behind it in kick order. Everything the game can read back
+  fences (waits for the worker) instead of being made asynchronous; measured, the game only reads the GS CSR (~5 a
+  frame), so fences cost little. Rare game-thread entries into the GS (library stubs, native GIF fast paths) fence
+  or step aside rather than being ported to the queue. At most one frame of lead (latency stays one frame).
+- Kept outside ps2_memory.h (a free-function module with its own buffer pool) so the change does not rebuild the
+  generated code. `PS2X_RENDER_THREAD=0` is the switch back.

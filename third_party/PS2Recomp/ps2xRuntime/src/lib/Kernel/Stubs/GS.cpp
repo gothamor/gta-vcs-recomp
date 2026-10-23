@@ -3,6 +3,7 @@
 #include "ps2_log.h"
 #include "runtime/gs/ps2_gs_common.h"
 #include "runtime/gs/ps2_gs_psmct16.h"
+#include "runtime/ps2_render_worker.h" // [gta-recomp]
 #include "runtime/ee_scheduler.h"
 
 namespace ps2_stubs
@@ -114,6 +115,7 @@ namespace ps2_stubs
                 return;
             }
 
+            ps2_render_worker::fence(ps2_render_worker::FenceReason::GsStub); // [gta-recomp] the GS belongs to the render worker
             runtime->gs().writeRegister(static_cast<uint8_t>(clear.testa.reg & 0xFFu), clear.testa.value);
             runtime->gs().writeRegister(static_cast<uint8_t>(clear.prim.reg & 0xFFu), clear.prim.value);
             runtime->gs().writeRegister(static_cast<uint8_t>(clear.rgbaq.reg & 0xFFu), clear.rgbaq.value);
@@ -745,6 +747,7 @@ namespace ps2_stubs
         mem.processPendingTransfers();
 
         ps2TraceGuestRangeWrite(rdram, dstAddr, totalImageBytes, "sceGsExecStoreImage", ctx);
+        ps2_render_worker::fence(ps2_render_worker::FenceReason::GsStub); // [gta-recomp] the GS belongs to the render worker
         runtime->gs().consumeLocalToHostBytes(dst, totalImageBytes);
         runtime->guestFree(pktAddr);
 
@@ -779,6 +782,7 @@ namespace ps2_stubs
             setReturnS32(ctx, -1);
             return;
         }
+        ps2_render_worker::fence(ps2_render_worker::FenceReason::GsStub); // [gta-recomp] the GS belongs to the render worker
         applyGsRegPairs(runtime, pairs, 8u);
         setReturnS32(ctx, 0);
     }
@@ -1162,6 +1166,7 @@ namespace ps2_stubs
         }
         if (which == 0u)
         {
+            ps2_render_worker::fence(ps2_render_worker::FenceReason::GsStub); // [gta-recomp] the GS belongs to the render worker
             applyGsRegPairs(runtime, reinterpret_cast<const GsRegPairMem *>(&db.draw01), 8u);
             applyGsRegPairs(runtime, reinterpret_cast<const GsRegPairMem *>(&db.draw02), 8u);
             if (hasSeededGsClearPacket(db.clear0))
@@ -1173,6 +1178,7 @@ namespace ps2_stubs
         }
         else
         {
+            ps2_render_worker::fence(ps2_render_worker::FenceReason::GsStub); // [gta-recomp] the GS belongs to the render worker
             applyGsRegPairs(runtime, reinterpret_cast<const GsRegPairMem *>(&db.draw11), 8u);
             applyGsRegPairs(runtime, reinterpret_cast<const GsRegPairMem *>(&db.draw12), 8u);
             if (hasSeededGsClearPacket(db.clear1))

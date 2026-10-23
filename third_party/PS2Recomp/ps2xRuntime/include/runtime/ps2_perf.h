@@ -36,6 +36,9 @@ namespace ps2perf
 
     void add(Counter counter, uint64_t amount = 1u);
 
+    // The render submission worker (runtime/ps2_render_worker.h) was busy for `ns`: worker_ms per game frame. Any thread.
+    void addWorkerTime(uint64_t ns);
+
     // Time spent until the scope ends goes to `phase` (nested scopes are subtracted from their parent).
     // EE thread only.
     class PhaseScope

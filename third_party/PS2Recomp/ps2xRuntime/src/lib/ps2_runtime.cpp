@@ -1,3 +1,4 @@
+#include "runtime/ps2_render_worker.h" // [gta-recomp]
 #include "ps2_runtime.h"
 #include "runtime/gs/gs_gpu.h"
 #include "runtime/gs/gs_hw.h"
@@ -539,9 +540,14 @@ void PS2Runtime::presentGpuVBlank(uint64_t vsyncTick)
     }
     if (m_hw)
     {
-        uint64_t hwRegs[15];
-        std::memcpy(hwRegs, &m_memory.gs(), sizeof(hwRegs));
-        m_hw->endFrame(hwRegs);
+        // [gta-recomp] the display registers as of this VBlank; the frame ends after the GS work posted before it
+        struct Regs
+        {
+            uint64_t v[15];
+        } regs;
+        std::memcpy(regs.v, &m_memory.gs(), sizeof(regs.v));
+        ps2perf::PhaseScope renderTime(ps2perf::Phase::Render); // waiting for the worker counts as render time
+        ps2_render_worker::post([hw = m_hw, regs] { hw->endFrame(regs.v); }, true);
     }
     if (!m_gpu)
         return;
@@ -919,21 +925,30 @@ bool PS2Runtime::syncCoreSubsystems()
                 std::cerr << "[gs] GPU renderer unavailable (" << whyNot << "), using the CPU renderer" << std::endl;
         }
         m_gs.setGpuRenderer(m_gpu.get(), mode == GSRendererMode::Gpu || mode == GSRendererMode::Null);
+        // [gta-recomp] render submission on its own thread with the hardware renderer (runtime/ps2_render_worker.h)
+        ps2_render_worker::configure(m_hw != nullptr);
     }
     m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
                                     { m_gs.processGIFPacket(data, size); });
     m_memory.setGifArbiter(&m_gifArbiter);
     m_memory.setVu1MscalCallback([this](uint32_t startPC, uint32_t top, uint32_t itop)
                                  {
-                                     R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
-                                     if (!cpuContext)
+                                     // [gta-recomp] On the render worker the game thread's context is not ours to read or
+                                     // write (the scheduler's thread table, FBRST, VPU-STAT): VU1 runs without D / T stops
+                                     // there - VCS never enables them.
+                                     R5900Context *cpuContext = nullptr;
+                                     if (!ps2_render_worker::onWorker())
                                      {
-                                         cpuContext = &m_cpuContext;
+                                         cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
+                                         if (!cpuContext)
+                                         {
+                                             cpuContext = &m_cpuContext;
+                                         }
                                      }
                                      m_vu1.state().dBitEnabled =
-                                         (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
+                                         cpuContext && (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
-                                         (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+                                         cpuContext && (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
                                      { // [gta-recomp] PS2X_VU1_DUMP=418,478,...: dump VU1 code+data before the 50th run of these programs
                                          static std::map<uint32_t, uint32_t> dumpRuns = []
                                          {
@@ -967,24 +982,33 @@ bool PS2Runtime::syncCoreSubsystems()
                                                    m_gs, &m_memory, startPC, top, itop, 65536);
                                      traceVu1Program(startPC, g_vu1XgkickCount - kicksBefore, m_vu1.state().pc);
                                      ps2perf::add(ps2perf::Counter::Vu1Programs); // [gta-recomp]
+                                     if (cpuContext)
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
                                          (m_vu1.state().stoppedByT ? 0x0400u : 0u); });
     m_memory.setVu1MscntCallback([this](uint32_t top, uint32_t itop)
                                  {
-                                     R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
-                                     if (!cpuContext)
+                                     // [gta-recomp] On the render worker the game thread's context is not ours to read or
+                                     // write (the scheduler's thread table, FBRST, VPU-STAT): VU1 runs without D / T stops
+                                     // there - VCS never enables them.
+                                     R5900Context *cpuContext = nullptr;
+                                     if (!ps2_render_worker::onWorker())
                                      {
-                                         cpuContext = &m_cpuContext;
+                                         cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
+                                         if (!cpuContext)
+                                         {
+                                             cpuContext = &m_cpuContext;
+                                         }
                                      }
                                      m_vu1.state().dBitEnabled =
-                                         (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
+                                         cpuContext && (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
-                                         (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+                                         cpuContext && (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
                                      m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                   m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                   m_gs, &m_memory, top, itop, 65536);
+                                     if (cpuContext)
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
@@ -3024,6 +3048,7 @@ void PS2Runtime::run()
     {
         gameThread.join();
     }
+    ps2_render_worker::shutdown(); // [gta-recomp] what the game posted runs, then the worker ends
 
     if (m_debugUiInitialized && m_debugUiShutdownCallback)
     {

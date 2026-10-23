@@ -2,6 +2,7 @@
 #include "runtime/ps2_vu1_tap.h"
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_vu_code_log.h" // [gta-recomp]
+#include "runtime/ps2_render_worker.h" // [gta-recomp]
 #include <cstring>
 
 enum VIFCmd : uint8_t
@@ -367,6 +368,8 @@ void PS2Memory::submitVif1DirectData(const uint8_t *data, uint32_t qwCount, bool
 
 void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 {
+    if (ps2_render_worker::enabled() && !ps2_render_worker::onWorker()) // [gta-recomp] a game-thread path not moved to the worker
+        ps2_render_worker::fence(ps2_render_worker::FenceReason::Other);
     if (sizeBytes == 0u)
         return;
 

@@ -25,6 +25,7 @@
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/gs/gs_hw.h"
+#include "runtime/ps2_render_worker.h"
 
 #include <algorithm>
 #include <atomic>
@@ -33,6 +34,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <numeric>
 #include <unordered_map>
 #include <vector>
@@ -137,7 +139,10 @@ namespace vcs
         std::atomic<bool> g_hooked{false}, g_layer{false}; // the HUD context is known; the native HUD layer is on
         std::vector<Prim> g_prims;                       // this frame's HUD primitives (one per Im2D call); game thread
         std::vector<uint32_t> g_primKeys;                // their vertex positions (positionKey)
-        std::unordered_map<uint32_t, uint8_t> g_anchors; // the kicked frame's vertex positions -> anchor
+        using AnchorMap = std::unordered_map<uint32_t, uint8_t>;
+        // the kicked frame's vertex positions -> anchor: built here at the kick, handed to the GS side (the render worker,
+        // runtime/ps2_render_worker.h) in order with the frame's display list, read there by classify
+        std::shared_ptr<const AnchorMap> g_anchors = std::make_shared<AnchorMap>();
         int g_traceKeys = 0;                             // VCS_TRACE_HUDKEY=<n>
 
         uint32_t positionKey(int x, int y) { return uint32_t(uint16_t(x)) | (uint32_t(uint16_t(y)) << 16); } // whole pixels
@@ -169,7 +174,7 @@ namespace vcs
         // off to that side, the middle otherwise; full-width draws (fades, letterbox bars) stretch.
         void resolveAnchors()
         {
-            g_anchors.clear();
+            auto anchors = std::make_shared<AnchorMap>();
             const uint32_t n = static_cast<uint32_t>(g_prims.size());
             std::vector<uint32_t> parent(n), order(n);
             std::iota(parent.begin(), parent.end(), 0u);
@@ -216,16 +221,18 @@ namespace vcs
                                        : centre > 360.0f && b.x1 > 480.0f            ? GSHwAnchorRight
                                                                                      : GSHwAnchorCentre;
                 for (uint32_t k = 0; k < p.keyCount; ++k)
-                    g_anchors[g_primKeys[p.firstKey + k]] = anchor;
+                    (*anchors)[g_primKeys[p.firstKey + k]] = anchor;
             }
             g_prims.clear();
             g_primKeys.clear();
+            ps2_render_worker::post([anchors] { g_anchors = anchors; });
         }
 
         // gsHwSetHudClassifier: a primitive whose every vertex is a HUD vertex of the kicked frame takes its anchor
         uint8_t classify(const float *xy, uint32_t count)
         {
-            if (g_anchors.empty())
+            const AnchorMap &anchors = *g_anchors;
+            if (anchors.empty())
                 return GSHwAnchorNone;
             // The GS sees the game's whole-pixel positions half a pixel up-left (the 2D drawing's pixel-centre bias) or
             // within a sixteenth of them: either rounding finds the pixel.
@@ -235,10 +242,10 @@ namespace vcs
                 const float x = xy[2 * i], y = xy[2 * i + 1];
                 const int xs[2] = {static_cast<int>(std::lround(x)), static_cast<int>(std::lround(x + 0.5f))};
                 const int ys[2] = {static_cast<int>(std::lround(y)), static_cast<int>(std::lround(y + 0.5f))};
-                auto it = g_anchors.end();
-                for (int k = 0; k < 4 && it == g_anchors.end(); ++k)
-                    it = g_anchors.find(positionKey(xs[k & 1], ys[k >> 1]));
-                if (it == g_anchors.end())
+                auto it = anchors.end();
+                for (int k = 0; k < 4 && it == anchors.end(); ++k)
+                    it = anchors.find(positionKey(xs[k & 1], ys[k >> 1]));
+                if (it == anchors.end())
                 {
                     if (g_traceKeys > 0)
                     {

@@ -12,9 +12,25 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <memory>
+#include "runtime/ps2_render_worker.h" // [gta-recomp]
 
 namespace
 {
+    // [gta-recomp] VIF1 FIFO data went to the render worker since its GIF arbiter last drained (game thread)
+    bool g_renderWorkerNeedsDrain = false;
+
+    // [gta-recomp] Game-thread reads / writes of what the render worker changes wait for it (runtime/ps2_render_worker.h)
+    inline void renderFenceIo(uint32_t address)
+    {
+        if (address >= 0x10003000u && address < 0x10003800u)
+            ps2_render_worker::fence(ps2_render_worker::FenceReason::GifRegister);
+        else if (address >= 0x10003C00u && address < 0x10004000u)
+            ps2_render_worker::fence(ps2_render_worker::FenceReason::Vif1Register);
+        else if (address >= 0x10005000u && address < 0x10007000u)
+            ps2_render_worker::fence(ps2_render_worker::FenceReason::Fifo);
+    }
+
     inline void inRange(uint32_t offset, size_t bytes, size_t regionSize, const char *op, uint32_t address)
     {
         if (static_cast<uint64_t>(offset) + static_cast<uint64_t>(bytes) > static_cast<uint64_t>(regionSize))
@@ -562,11 +578,16 @@ const uint8_t *PS2Memory::mapVuMemory(uint32_t physAddr, uint32_t size, uint32_t
     {
         return ptr;
     }
+    // [gta-recomp] VU1 memory belongs to the render worker while it runs: the game waits for it (no-op on the worker)
     if (const uint8_t *ptr = mapRange(PS2_VU1_CODE_BASE, PS2_VU1_CODE_SIZE, m_vu1Code))
     {
+        ps2_render_worker::fence(ps2_render_worker::FenceReason::Vu1Memory);
         return ptr;
     }
-    return mapRange(PS2_VU1_DATA_BASE, PS2_VU1_DATA_SIZE, m_vu1Data);
+    const uint8_t *vu1Data = mapRange(PS2_VU1_DATA_BASE, PS2_VU1_DATA_SIZE, m_vu1Data);
+    if (vu1Data)
+        ps2_render_worker::fence(ps2_render_worker::FenceReason::Vu1Memory);
+    return vu1Data;
 }
 
 uint32_t PS2Memory::translateAddress(uint32_t virtualAddress)
@@ -750,6 +771,8 @@ uint32_t PS2Memory::read32(uint32_t address)
     {
         uint32_t off = address & 7;
         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+        if (regOff == kGsCsrRegOffset || regOff == 0x1080u) // [gta-recomp] CSR / SIGLBLID: set by GS work
+            ps2_render_worker::fence(ps2_render_worker::FenceReason::GsPrivileged);
         if (regOff == kGsCsrRegOffset)
         {
             uint64_t val = gs_regs.csr.load();
@@ -797,6 +820,8 @@ uint64_t PS2Memory::read64(uint32_t address)
     if (isGsPrivReg(address))
     {
         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+        if (regOff == kGsCsrRegOffset || regOff == 0x1080u) // [gta-recomp] CSR / SIGLBLID: set by GS work
+            ps2_render_worker::fence(ps2_render_worker::FenceReason::GsPrivileged);
         if (regOff == kGsCsrRegOffset)
         {
             return gs_regs.csr.load();
@@ -961,6 +986,7 @@ void PS2Memory::write32(uint32_t address, uint32_t value)
         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
         if (regOff == kGsCsrRegOffset)
         {
+            ps2_render_worker::fence(ps2_render_worker::FenceReason::GsPrivileged); // [gta-recomp] after the GS work's own bits
             // CSR: bits 0..1 of the low dword are write-one-to-clear status bits.
             // Done as a single atomic RMW -- see writeCsrHalf's comment.
             writeCsrHalf(gs_regs.csr, off, value);
@@ -1020,6 +1046,7 @@ void PS2Memory::write64(uint32_t address, uint64_t value)
         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
         if (regOff == kGsCsrRegOffset)
         {
+            ps2_render_worker::fence(ps2_render_worker::FenceReason::GsPrivileged); // [gta-recomp] after the GS work's own bits
             // CSR: bits 0..1 are write-one-to-clear status bits. Done as a single
             // atomic RMW -- see writeCsrFull's comment.
             writeCsrFull(gs_regs.csr, value);
@@ -1083,6 +1110,16 @@ void PS2Memory::write128(uint32_t address, __m128i value)
     }
     if (!scratch && physAddr == 0x10005000u) // VIF1_FIFO
     {
+        if (ps2_render_worker::enabled()) // [gta-recomp] in order with the chains on the render worker
+        {
+            g_renderWorkerNeedsDrain = true;
+            ps2_render_worker::post([this, value]
+                                    {
+                alignas(16) uint8_t fifoData[16];
+                _mm_storeu_si128(reinterpret_cast<__m128i *>(fifoData), value);
+                processVIF1Data(fifoData, sizeof(fifoData)); });
+            return;
+        }
         alignas(16) uint8_t fifoData[16];
         _mm_storeu_si128(reinterpret_cast<__m128i *>(fifoData), value);
         processVIF1Data(fifoData, sizeof(fifoData));
@@ -1162,8 +1199,10 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
         return true;
     }
 
+    renderFenceIo(address); // [gta-recomp]
     if (isGsPrivReg(address))
     {
+        ps2_render_worker::fence(ps2_render_worker::FenceReason::GsPrivileged); // [gta-recomp]
         // NB: unreachable from write8/16/32/64 today since those all funnel IO
         // register writes through addresses in PS2_IO_BASE's range, which is
         // disjoint from PS2_GS_PRIV_REG_BASE; kept correct for direct callers.
@@ -1372,7 +1411,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     static const int kMaxChainTags = std::getenv("PS2X_DMA_MAX_TAGS") ? std::atoi(std::getenv("PS2X_DMA_MAX_TAGS")) : (1 << 20);
                     // [gta-recomp] Reuse a chain buffer from earlier transfers: VCS's per-frame VIF1 chain gathers
                     // several MB; a fresh vector each time cost reallocation copies and OS page frees (~5% of a frame).
-                    std::vector<uint8_t> chainBuf = takeChainBuffer();
+                    // (the render worker hands them back through its own pool)
+                    std::vector<uint8_t> chainBuf = ps2_render_worker::enabled() ? ps2_render_worker::takeBuffer() : takeChainBuffer();
 
                     auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
                     {
@@ -1828,6 +1868,57 @@ void PS2Memory::processPendingTransfers()
         gifStat = (gifStat & ~kGifFqcMask) | (observedGifQwc << 24u);
     }
 
+    // [gta-recomp] Render worker (runtime/ps2_render_worker.h): the GIF and VIF1 transfers - copied now when they would
+    // read memory as they go - run on it in the order below (GIF, VIF1, then the GIF arbiter drains); VIF0 stays here.
+    struct RenderBatch
+    {
+        std::vector<std::vector<uint8_t>> gif, vif1;
+        std::vector<std::vector<ps2hle::ChainSegment>> vif1Segments;
+        std::vector<uint8_t> vif1Chain; // was a chain (the HLE survey's chain end)
+    };
+    const bool toWorker = ps2_render_worker::enabled();
+    std::shared_ptr<RenderBatch> batch;
+    auto copyTransfer = [&](const PendingTransfer &p)
+    {
+        std::vector<uint8_t> data = ps2_render_worker::takeBuffer();
+        uint32_t src = 0u;
+        try
+        {
+            src = translateAddress(p.srcAddr);
+        }
+        catch (const std::exception &)
+        {
+            return data;
+        }
+        const uint8_t *base = p.fromScratchpad ? m_scratchpad : m_rdram;
+        const uint32_t size = p.fromScratchpad ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
+        uint64_t left = static_cast<uint64_t>(p.qwc) * 16u;
+        while (left > 0u)
+        {
+            if (src >= size)
+                src = 0u;
+            const uint32_t chunk = static_cast<uint32_t>(std::min<uint64_t>(left, size - src));
+            data.insert(data.end(), base + src, base + src + chunk);
+            left -= chunk;
+            src += chunk;
+        }
+        return data;
+    };
+    if (toWorker)
+    {
+        batch = std::make_shared<RenderBatch>();
+        for (auto &p : m_pendingGifTransfers)
+        {
+            std::vector<uint8_t> data = !p.chainData.empty() ? std::move(p.chainData) : (p.qwc > 0u ? copyTransfer(p) : std::vector<uint8_t>{});
+            if (data.size() < 16u)
+                continue;
+            m_seenGifCopy = true;
+            m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
+            batch->gif.push_back(std::move(data));
+        }
+        m_pendingGifTransfers.clear();
+    }
+
     for (size_t idx = 0; idx < m_pendingGifTransfers.size(); ++idx)
     {
         auto &p = m_pendingGifTransfers[idx];
@@ -1955,6 +2046,20 @@ void PS2Memory::processPendingTransfers()
     m_pendingVif0Transfers.clear();
 
     const bool hadVif1 = !m_pendingVif1Transfers.empty();
+    if (toWorker)
+    {
+        for (auto &p : m_pendingVif1Transfers)
+        {
+            const bool chain = !p.chainData.empty();
+            std::vector<uint8_t> data = chain ? std::move(p.chainData) : (p.qwc > 0u ? copyTransfer(p) : std::vector<uint8_t>{});
+            if (data.empty())
+                continue;
+            batch->vif1.push_back(std::move(data));
+            batch->vif1Segments.push_back(std::move(p.segments));
+            batch->vif1Chain.push_back(chain ? 1u : 0u);
+        }
+        m_pendingVif1Transfers.clear();
+    }
     for (auto &p : m_pendingVif1Transfers)
     {
         if (!p.chainData.empty())
@@ -2018,7 +2123,32 @@ void PS2Memory::processPendingTransfers()
         recycleChainBuffer(std::move(p.chainData));
     m_pendingVif1Transfers.clear();
 
-    if (m_gifArbiter)
+    if (toWorker)
+    {
+        if (!batch->gif.empty() || !batch->vif1.empty() || g_renderWorkerNeedsDrain)
+        {
+            g_renderWorkerNeedsDrain = false;
+            ps2_render_worker::post([this, batch]
+                                    {
+                for (auto &g : batch->gif)
+                    submitGifPacket(GifPathId::Path3, g.data(), static_cast<uint32_t>(g.size()), false);
+                for (size_t i = 0; i < batch->vif1.size(); ++i)
+                {
+                    m_vif1Segments = batch->vif1Segments[i].empty() ? nullptr : &batch->vif1Segments[i];
+                    processVIF1Data(batch->vif1[i].data(), static_cast<uint32_t>(batch->vif1[i].size()));
+                    m_vif1Segments = nullptr;
+                    if (batch->vif1Chain[i] && ps2hle::surveyEnabled())
+                        ps2hle::onChainEnd();
+                }
+                if (m_gifArbiter)
+                    m_gifArbiter->drain();
+                for (auto &g : batch->gif)
+                    ps2_render_worker::recycleBuffer(std::move(g));
+                for (auto &v : batch->vif1)
+                    ps2_render_worker::recycleBuffer(std::move(v)); });
+        }
+    }
+    else if (m_gifArbiter)
         m_gifArbiter->drain();
 
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000;
@@ -2104,6 +2234,8 @@ void PS2Memory::flushMaskedPath3Packets(bool drainImmediately)
 
 void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool drainImmediately, bool path2DirectHl)
 {
+    if (ps2_render_worker::enabled() && !ps2_render_worker::onWorker()) // [gta-recomp] a game-thread path not moved to the worker
+        ps2_render_worker::fence(ps2_render_worker::FenceReason::Other);
     if (!data || sizeBytes < 16)
         return;
 
@@ -2162,6 +2294,8 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
 
 bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr)
 {
+    if (ps2_render_worker::enabled()) // [gta-recomp] the GS belongs to the render worker: the chain goes there instead
+        return false;
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
     static constexpr uint32_t D_STAT = 0x1000E010u;
     static constexpr uint32_t D_CTRL = 0x1000E000u;
@@ -2354,6 +2488,8 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
 
 bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t chcr)
 {
+    if (ps2_render_worker::enabled()) // [gta-recomp] the GS belongs to the render worker: the chain goes there instead
+        return false;
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
     static constexpr uint32_t D_STAT = 0x1000E010u;
     static constexpr uint32_t D_CTRL = 0x1000E000u;
@@ -2459,8 +2595,10 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
         }
     }
 
+    renderFenceIo(address); // [gta-recomp]
     if (isGsPrivReg(address))
     {
+        ps2_render_worker::fence(ps2_render_worker::FenceReason::GsPrivileged); // [gta-recomp]
         // NB: unreachable from read8/16/32/64 today, same reasoning as the write
         // path above; kept correct for direct callers.
         const uint32_t off = address & 7u;

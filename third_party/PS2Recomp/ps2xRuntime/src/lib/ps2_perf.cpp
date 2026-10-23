@@ -47,9 +47,11 @@ namespace ps2perf
             float hostFps = 0.0f, hostMs = 0.0f, glMs = 0.0f; // host frames presented during this game frame
             float audioMs = 0.0f;
             uint32_t underruns = 0;
+            float workerMs = 0.0f; // [gta-recomp] render submission worker busy
         };
 
         std::atomic<uint64_t> g_phaseNs[kPhases];
+        std::atomic<uint64_t> g_workerNs{0};
         std::atomic<uint64_t> g_counters[kCounters];
         std::atomic<uint64_t> g_hostFrames{0}, g_hostNs{0}, g_glNs{0};
         thread_local PhaseScope *t_current = nullptr;
@@ -133,6 +135,7 @@ namespace ps2perf
             double counters[kCounters]{};
             double vblanksPerS = 0.0, hostFps = 0.0, hostMs = 0.0, glMs = 0.0, audioMs = 0.0;
             uint64_t underruns = 0;
+            double workerMs = 0.0;
         };
 
         Summary summarize(const std::vector<Sample> &s)
@@ -161,12 +164,14 @@ namespace ps2perf
                     hostW += 1.0;
                 }
                 r.underruns += x.underruns;
+                r.workerMs += x.workerMs;
             }
             const double n = static_cast<double>(s.size());
             for (double &p : r.phaseMs)
                 p /= n;
             for (double &c : r.counters)
                 c /= n;
+            r.workerMs /= n;
             if (hostW > 0.0)
             {
                 r.hostFps /= hostW;
@@ -216,6 +221,7 @@ namespace ps2perf
                 s.counters[c] = static_cast<uint32_t>(g_counters[c].exchange(0, std::memory_order_relaxed));
             s.vblanks = g_vblanks;
             g_vblanks = 0;
+            s.workerMs = static_cast<float>(g_workerNs.exchange(0, std::memory_order_relaxed) / 1e6);
             const uint64_t hostFrames = g_hostFrames.exchange(0, std::memory_order_relaxed);
             const uint64_t hostNs = g_hostNs.exchange(0, std::memory_order_relaxed);
             const uint64_t glNs = g_glNs.exchange(0, std::memory_order_relaxed);
@@ -405,6 +411,11 @@ namespace ps2perf
         g_counters[static_cast<size_t>(counter)].fetch_add(amount, std::memory_order_relaxed);
     }
 
+    void addWorkerTime(uint64_t ns)
+    {
+        g_workerNs.fetch_add(ns, std::memory_order_relaxed);
+    }
+
     PhaseScope::PhaseScope(Phase phase) noexcept : m_parent(t_current), m_start(nowNs()), m_childNs(0), m_phase(phase)
     {
         t_current = this;
@@ -558,7 +569,8 @@ namespace ps2perf
                    r.counters[2], r.counters[3], r.counters[4], r.hostFps, r.glMs, r.audioMs) +
                fmt(" black_frames=%llu dip_frames=%llu probed_frames=%llu", static_cast<unsigned long long>(g_blackFrames.load()),
                    static_cast<unsigned long long>(g_dipFrames.load()),
-                   static_cast<unsigned long long>(g_probedFrames.load())); // [gta-recomp] brightness probe
+                   static_cast<unsigned long long>(g_probedFrames.load())) + // [gta-recomp] brightness probe
+               fmt(" worker_ms=%.1f", r.workerMs); // [gta-recomp] render submission worker
     }
 
     void shutdown()

@@ -464,6 +464,34 @@ it is 1920x1080, 3 x 2.41 pixels per PS2 pixel.
 - Not done yet: higher-precision depth (D32F already holds the PS2's 24-bit Z exactly); the radar / reflection map at
   higher resolution.
 
+### Render submission worker (milestone 4 performance, 2026-10-23)
+
+Render submission - the VIF1 / GIF chains, VU1 microprograms (and the native draws they reach), the GS front end and
+the HW backend's frame building - runs on its own thread, `RenderWorker` (`runtime/ps2_render_worker.h`,
+`PS2X_RENDER_THREAD=0` for the old synchronous path; on by default with `PS2X_GS=hw`). The game thread copies each
+chain when kicked (as before), marks the DMA complete at once (as before), and posts the work; the worker runs it in
+kick order. The frame's end (`endFrame` at VBlank, with the display registers read then) is posted too, and the game
+thread waits rather than get more than one frame ahead (`PS2X_RENDER_THREAD_AHEAD`).
+- **Fences**: whatever the game can observe of that work waits until the worker has run everything posted before:
+  GS CSR / SIGLBLID reads and CSR writes, GIF / VIF1 registers, VIF1 / GIF FIFOs, VU1 memory, the HLE GS library
+  stubs, and any other direct call into the GIF / VIF1 from the game thread (`FenceReason::Other`, a safety net).
+  In gameplay only the CSR is read, ~5 times a frame (game-internals.md 4); waiting costs 2-8 ms per second.
+- **In order with the chains**: VIF1 FIFO writes; the HUD anchor map (built at the frame kick, handed to the
+  classifier through the queue - `vcs_hud.cpp`). The native GIF fast paths (`tryProcessNativeGif*`) step aside: their
+  chains take the copied path to the worker.
+- **Thread safety**: the VU1 start callbacks don't touch the game thread's context on the worker (no VU1 D / T stops
+  there - VCS never enables them); the VU decode's MAC-read tables are locked (VU0 decodes on the game thread at the
+  same time); chain buffers come from a pool shared by both threads; the worker runs with the game thread's MXCSR.
+- `PS2X_RENDER_THREAD_LOG=1`: items / frames per second, game-thread waits, fences by reason. The perf line gains
+  `worker_ms` (the worker's busy time per frame); `render_ms` is now only the game thread's part (copying chains,
+  waiting). `VCS_PROFILE_THREAD=RenderWorker` samples the worker.
+- Checked: reference scenes, worker off vs on: static scenes the same (loading 0.00, pause map 0.40 mean difference),
+  gameplay / cutscene pictures alike apart from timing; HUD at the screen edges (16:9) and the pause menu pages
+  right; world tour subset (18 points) without crash; soak below.
+- Measured (60 fps mode, i7-7700K): outside the barracks at the 60 cap with 4 ms to spare (game thread 11.5 ms, worker
+  ~5 ms); driving (AI car from Fort Baxter) 26-29 -> 44-54 fps - game code ~17-20 ms is now the limit, worker ~17 ms
+  in parallel; reference scenes' flyover 42.5 -> 59.9 fps.
+
 ### Stage 8 - Enhancements (M each, optional order) - internal resolution done
 
 - Internal resolution: native draws render into the same scaled render targets as the GS path, so

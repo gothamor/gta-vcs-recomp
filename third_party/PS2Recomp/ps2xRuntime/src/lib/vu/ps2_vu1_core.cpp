@@ -1865,6 +1865,8 @@ namespace
         static std::unordered_map<const void *, std::array<uint8_t, 0x4000u / 8u>> tables;
         return tables;
     }
+    // [gta-recomp] VU0 (game thread) and VU1 (the render worker) find / add their tables at the same time
+    std::mutex g_programMacReadTablesMutex;
 
     template <typename Decoded>
     void recomputeProgramMacReads(const void *owner, const Decoded *decoded, uint32_t pairCount)
@@ -1879,7 +1881,12 @@ namespace
             const char *value = std::getenv("PS2X_VU1_MAC_WINDOW");
             return value && *value ? static_cast<uint32_t>(std::max(0, std::atoi(value))) : 16u;
         }();
-        auto &table = programMacReadTables()[owner];
+        std::array<uint8_t, 0x4000u / 8u> *tablePtr = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_programMacReadTablesMutex);
+            tablePtr = &programMacReadTables()[owner]; // map nodes are stable
+        }
+        auto &table = *tablePtr;
         table.fill(0u);
         uint32_t start = 0u;
         bool readsStatus = false;
@@ -1916,6 +1923,7 @@ namespace
         thread_local const std::array<uint8_t, 0x4000u / 8u> *cachedTable = nullptr;
         if (owner != cachedOwner || cachedTable == nullptr)
         {
+            std::lock_guard<std::mutex> lock(g_programMacReadTablesMutex);
             const auto &tables = programMacReadTables();
             const auto it = tables.find(owner);
             if (it == tables.end())

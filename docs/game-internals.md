@@ -94,6 +94,12 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   frame costs ~27 ms on the game thread (game code 19-24 ms, render submission ~8 ms), more than 1/60 s; the
   emulated VBlank keeps real-time pace only while the game thread keeps up (events need both the EE cycle and the
   host deadline). A steady 60 needs ~40% less game-thread time per frame (milestone 7).
+- **What the game watches of the GS / VIF1** (counted by the render worker's fences, `PS2X_RENDER_THREAD_LOG=1`,
+  2026-10-23): in gameplay the GS privileged CSR / SIGLBLID ~5 reads a frame (300/s at 60 fps); GIF and VIF1
+  registers only a few times at boot; never VU1 memory or the VIF1 / GIF FIFOs. The work it hands over is ~3 items a
+  frame: the frame's VIF1 display list (one chain, FUN_00272268 above), one or two GIF chains (texture uploads), then
+  the VBlank. It never enables the VU1 D / T stop bits (FBRST). So the GS and VU1 can run behind the game thread
+  as long as the CSR reads see the finished work (runtime/ps2_render_worker.h).
 
 ## 5. Camera, projection and widescreen
 

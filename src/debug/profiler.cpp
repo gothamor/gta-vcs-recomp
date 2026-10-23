@@ -61,6 +61,10 @@ namespace vcs
             std::vector<HANDLE> out;
             if (!getDesc)
                 return out;
+            // VCS_PROFILE_THREAD=RenderWorker: sample the render submission worker instead of the game thread
+            std::wstring wanted = L"GameThread";
+            if (const char *thread = std::getenv("VCS_PROFILE_THREAD"))
+                wanted = std::wstring(thread, thread + std::strlen(thread));
             HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
             THREADENTRY32 te{sizeof(te)};
             const DWORD pid = GetCurrentProcessId();
@@ -75,7 +79,7 @@ namespace vcs
                 bool keep = false;
                 if (SUCCEEDED(getDesc(h, &name)) && name)
                 {
-                    keep = wcscmp(name, L"GameThread") == 0;
+                    keep = wanted == name;
                     LocalFree(name);
                 }
                 if (keep)

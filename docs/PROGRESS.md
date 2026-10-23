@@ -225,6 +225,13 @@ dropped on uploads (lazy render-target patching).
       game ~18 ms + render ~17 ms one after the other on the game thread; 30 mode also dips to 27-28 there. Holding 60
       when driving needs render submission off the game thread (VIF1 / VU1 / GS front end on a worker), not more
       trimming.
+- [x] Render submission worker (2026-10-23, NATIVE_RENDERER.md "Render submission worker", `PS2X_RENDER_THREAD=0`
+      for the old path): chains, VU1 and the GS front end run on their own thread behind the game thread. 60 mode:
+      outside the barracks at the cap with ~4 ms to spare; driving 26-29 -> 44-54 fps; flyover 42.5 -> 59.9 fps.
+      Game code (~17-20 ms driving) is now the limit.
+- [ ] Frame-rate independence (the user's choice over interpolation, DECISIONS.md 2026-10-23): CTimer on the host
+      clock, a frame-rate cap setting, a forced-step test rig, then the audit of frame-count assumptions. Replaces
+      the "60 fps fixes" item below.
 - [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
       the switch; frame pacing.
 ## Phase 5 - stability
@@ -247,6 +254,9 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_VIF_UNPACK_FAST=0\|verify` | VIF1 UNPACK general loop only / both, compared |
 | `PS2X_GS_RECT_VERIFY=1` | every 64th rect upload also written pixel by pixel and compared |
 | `PS2X_HW_LAZY_INDEX=0` | lazy uploads to write found by rescanning the queue (the old way) |
+| `PS2X_RENDER_THREAD=0\|1` | render submission on the game thread / on its own thread (default with `PS2X_GS=hw`) |
+| `PS2X_RENDER_THREAD_LOG=1`, `PS2X_RENDER_THREAD_AHEAD=n` | worker items / fences every 5 s; frames the game may run ahead (1) |
+| `VCS_PROFILE_THREAD=RenderWorker` | `VCS_PROFILE` samples the render worker instead of the game thread |
 | `VCS_WATCHDOG=s` | EE + IOP thread states |
 | `VCS_WATCH=lo,hi[,val]` | guest write watchpoint |
 | `VCS_TRACE_FILES=1` | game file API / inflate / GTAG relocation trace |
