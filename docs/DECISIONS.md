@@ -96,6 +96,23 @@ Newest at the bottom. Each entry: what, why, and what would change it.
 - Next: a conventional hardware-rasterized GS backend (GSdx-HW style) behind the
   existing `GSRasterBackend` interface - broad GPU support, upscaling-friendly.
 
+## 2026-10-23 - Native HUD: the game names its primitives, the GS packets still carry them
+
+Milestone 3 step 2 draws the HUD natively (docs/NATIVE_RENDERER.md "HUD layer"). Choices:
+- **The game's own Im2D calls still run** and build their GS packets; the renderer takes the HUD's primitives out of
+  the frame by matching them against the Im2D calls of the frame (vertex positions), then draws them at the window's
+  size. Replacing Im2D outright would also need RenderWare's texture cache (VRAM placement, CLUT uploads) and its
+  render-state translation reproduced; going through the packets keeps those exact and leaves a switch back
+  (`VCS_HUD_NATIVE=0`) at no cost.
+- **Textures from the GS backend's decoded cache**, not a decoder for RenderWare rasters: the HUD textures reach VRAM
+  through the game's own uploads, and the cache keys them by content. A raster decoder becomes worth having when 2D is
+  drawn without GS packets (milestone 3 step 4, a native frame).
+- **Anchors from where an element sits** (grouped boxes, the 4:3 screen in thirds with a dead zone around the middle),
+  not a table of HUD call sites: it covers text boxes, timers and counters the game positions itself, with nothing to
+  keep in step with the code. Elements may change side as they grow (a help box past the middle stays left: the
+  rule uses its middle and its left edge).
+- The HUD placement **default stays "Keep 4:3"**; "Screen edges" is a choice in the menu (authentic by default).
+
 ## 2026-10-23 - Clipped world packets: correct picture first, then the C++ clipper
 
 GPU clipping of the packets the VU sends through its clipper drew GON_C3's poolside ground black. The user chose the

@@ -288,8 +288,27 @@ calls (`VCS_TRACE_IM2D=<n>`, `VCS_TRACE_IM2D_MARKERS=5`):
 
 The **16:9 weapon-icon bug** (the icon at the right edge, away from its ammo count): the renderer's widescreen placement
 treats far-plane 2D as HUD, and the icon is not at the far plane. Fixed at the source: from CHud::Draw to the frame's
-end, Im2D primitives drawn with the depth test off get the HUD's z (`VCS_HUD_RW=0` = off). Next for milestone 3 step 2:
-drawing these primitives natively (RenderWare raster -> texture, render states) with per-element placement.
+end, Im2D primitives drawn with the depth test off get the HUD's z (`VCS_HUD_RW=0` = off).
+
+**From Im2D to the screen (2026-10-23, F12 draw dumps at 16:9, `PS2X_HW_DUMP`; `VCS_TRACE_HUDKEY=<n>`).**
+- The GS sees an Im2D vertex at (x - 0.5, y - 0.5) (the 2D code's pixel-centre bias) for most HUD draws, within 1/16 of
+  (x, y) for others (the zone name, fades): a vertex's whole-pixel position finds it again with either rounding.
+- The game draws the frame into the buffer at FBP 140 and copies it into the displayed one (FBP 0, DISPFB DBY = 2)
+  with a plain full-screen copy in 40 strips (decal, no blending) at the start of the **next** frame. So what is shown
+  is the previous frame's FBP 140, HUD included.
+- Just before the HUD, a full-screen draw writes Z = 0 everywhere (FBMSK 0xffffffff: Z only). HUD draws use ZTST
+  ALWAYS (most) or GEQUAL with Z writes at z = 1.0 (help text, zone name): later depth-tested HUD draws do not overlap
+  earlier ones. Blending is (Cs - Cd) * As + Cd or additive; no draw seen uses the destination alpha.
+- After the colour filter and before the HUD the radar's map is drawn into its own target (FBP 420, 128x128; the radar
+  on screen samples it).
+- Indoors the radar is the ring alone. Help text hides the rest of the HUD while it is up.
+
+Milestone 3 step 2 builds on this (docs/NATIVE_RENDERER.md "HUD layer"): `vcs_hud.cpp` collects the HUD context's Im2D
+primitives each frame, groups them into elements (boxes closer than 12 px across / 3 px down: a line of text, the
+radar and its blips, the clock / weapon / money cluster) and gives each an anchor from where it sits on the 4:3
+screen: left edge when its middle is left of 280 and it starts before 160, right edge when its middle is right of 360
+and it ends after 480, the middle otherwise; full-width draws (fades, letterbox bars) stretch. At the frame kick the
+whole-pixel positions of its vertices go to the renderer, which finds each GS primitive's element by them.
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 

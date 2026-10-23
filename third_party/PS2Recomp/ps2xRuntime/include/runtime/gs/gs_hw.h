@@ -57,3 +57,25 @@ std::unique_ptr<GSHwBackendHandle> makeHwRasterBackend(const GSHwOptions &option
 // covering the whole width) are squeezed horizontally by `factor` around the middle, so the HUD keeps its 4:3 shape in a
 // wider picture. 1 = off. Any thread.
 void gsHwSetHudSqueeze(float factor);
+
+// [gta-recomp] Per-element HUD placement in widescreen: the game names a 2D primitive's anchor from its vertices'
+// positions (x, y pairs in pixels, XYOFFSET removed). Squeezed (as above) towards the anchor: the left edge, the right
+// edge or the middle; Stretch keeps the 640-wide position (full-screen draws). None = the squeeze heuristic alone.
+// Called on the thread that processes GS packets; set it from any thread. nullptr = off.
+enum : uint8_t
+{
+    GSHwAnchorNone = 0,
+    GSHwAnchorCentre,
+    GSHwAnchorLeft,
+    GSHwAnchorRight,
+    GSHwAnchorStretch,
+};
+using GSHwAnchorFn = uint8_t (*)(const float *xy, uint32_t count);
+void gsHwSetHudClassifier(GSHwAnchorFn fn);
+
+// [gta-recomp] Native HUD layer: the primitives the classifier names are kept out of the PS2 frame buffer and drawn over
+// the displayed picture at the output size (gsHwSetOutputSize) - sharp at any window size, in its aspect. The displayed
+// buffer's latest HUD is drawn; a new scene in that buffer starts the next one. Any thread.
+void gsHwSetHudLayer(bool on);
+// [gta-recomp] The size the picture is shown at (the window's letterboxed area); 0 = the render targets' size.
+void gsHwSetOutputSize(uint32_t width, uint32_t height);

@@ -169,7 +169,17 @@ dropped on uploads (lazy render-target patching).
         renderer's HUD placement missed it; HUD-context primitives without a depth test now get the HUD's z. Checked at
         16:9 (icon beside the clock / ammo as at 4:3, radar still round) and over the reference scenes (no other
         change). `VCS_HUD_RW=0` = before.
-  - [ ] Native drawing of the 2D primitives (raster -> texture, render states), per-element anchoring.
+  - [x] **Per-element anchoring**: HUD "Screen edges" (`VCS_HUD=2`) - each HUD element squeezed towards the edge it
+        sits near (radar left; clock / weapon / money / zone name right; help text left), the elements found from the
+        frame's Im2D calls (game-internals.md 6f, DECISIONS.md).
+  - [x] **Native HUD layer**: the HUD's primitives kept out of the PS2 frame buffer and drawn over the shown picture
+        at the window's size (NATIVE_RENDERER.md "HUD layer"); on by default, `VCS_HUD_NATIVE=0` = into the frame
+        buffer. Textures from the GS backend's decoded cache, not a RenderWare raster decoder (DECISIONS.md).
+        Checked with `scenes.py` at 4:3 and 16:9 against `VCS_HUD_NATIVE=0` (build/m3/cmp43, cmp169): same HUD, the
+        radar round and clipped, the static scenes (loading 0.95, pause map 0.8-0.9 mean difference) as close as two
+        runs of one build; at 16:9 the HUD is sharper (no squeeze-then-stretch). No cost: 4:3 flyover 29.3 -> 30.0
+        fps, gameplay at the 30 fps cap in both.
+  - [ ] Menus (frontend, pause map) and 2D outside CHud::Draw's frame: still the far-plane squeeze in the frame.
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
@@ -213,7 +223,11 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HLE_CLIPPER=0` | clipped world packets on the VU1 instead of the C++ clipper |
 | `PS2X_HLE_ENV=0` | the environment-map pass (stage table 0x13) on the VU1 |
 | `PS2X_HLE_REDRAW=0` | 0x02c0's re-draws / shine passes and the float-image prelit packets on the VU1 |
-| `VCS_HUD_RW=0` | no HUD context at the RenderWare level (the 16:9 weapon icon goes back to the screen edge) |
+| `VCS_HUD_RW=0` | no HUD context at the RenderWare level (the 16:9 weapon icon goes back to the screen edge; no native HUD, no anchoring) |
+| `VCS_HUD=0/2/1` | HUD in widescreen: keep 4:3 in the middle / screen edges / stretch (the menu's Display > HUD) |
+| `VCS_HUD_NATIVE=0` | the HUD drawn into the PS2 frame buffer instead of the native layer at the window's size |
+| `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier did not find (positions) |
+| `PS2X_HW_HUD_LOG=1` | the renderer's HUD layers (per frame buffer, stale or not) and the output size, every 2 s |
 | `VCS_TRACE_IM2D=n`, `VCS_TRACE_IM2D_MARKERS=1..5` | log n Im2D calls (caller, primitive, vertices) / the 2D pass's calls, from 30 s on |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
 | `PS2X_CLIP_DUMP=dir[,n]` | with `PS2X_HLE_VERIFY=1`: write n clipped packets (VU memory + the VU's kicks) for offline checks |

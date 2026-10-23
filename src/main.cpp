@@ -19,6 +19,7 @@
 #include "debug/watchdog.h"
 #include "disc/iso_image.h"
 #include "game/vcs_display.h"
+#include "game/vcs_hud.h"
 #include "platform/platform.h"
 #include "render/presenter.h"
 #include "settings/settings.h"
@@ -150,8 +151,10 @@ namespace
         const float aspect = code == 169 ? 16.0f / 9.0f : code == 1610 ? 16.0f / 10.0f : 4.0f / 3.0f;
         present::setDisplayAspect(aspect);
         vcs::setAspectWidening(aspect / (4.0f / 3.0f));
-        gsHwSetHudSqueeze(settings::value("display.hud") == 0 ? (4.0f / 3.0f) / aspect : 1.0f);
-        std::fprintf(stderr, "[settings] display aspect %.3f, HUD %s\n", aspect, settings::value("display.hud") == 0 ? "4:3" : "stretched");
+        const int hud = settings::value("display.hud");
+        gsHwSetHudSqueeze(hud != 1 ? (4.0f / 3.0f) / aspect : 1.0f);
+        vcs::setHudAnchoring(hud == 2); // per-element placement (game/vcs_hud.h)
+        std::fprintf(stderr, "[settings] display aspect %.3f, HUD %s\n", aspect, hud == 0 ? "4:3" : hud == 2 ? "screen edges" : "stretched");
     }
 
     // The player settings (settings/settings.h; the menu shows them in this order). vcs.ini next to vcs.exe holds
@@ -178,9 +181,11 @@ namespace
         s.key = "display.hud";
         s.page = "Display";
         s.label = "HUD";
-        s.help = "In widescreen: keep the HUD, text and menus at 4:3 in the middle, or stretch them to the screen.";
+        s.help = "In widescreen: keep the HUD, text and menus at 4:3 in the middle, move each HUD element to the screen "
+                 "edge it is near (keeping its 4:3 shape), or stretch them to the screen.";
         s.type = Type::Choice;
-        s.choices = {{"Keep 4:3", 0}, {"Stretch", 1}};
+        s.choices = {{"Keep 4:3", 0}, {"Screen edges", 2}, {"Stretch", 1}};
+        s.env = "VCS_HUD";
         s.defaultValue = 0;
         s.onChange = [](int) { applyAspect(); };
         settings::add(s);

@@ -12,17 +12,30 @@
 // (far plane = HUD) left it out, at the 4:3 position on a 16:9 picture. Without a depth test the z changes nothing
 // else; depth-tested HUD draws keep theirs (the radar map is masked to its circle by depth). VCS_HUD_RW=0 turns it off.
 //
+// Native HUD (docs/NATIVE_RENDERER.md "HUD layer"): the HUD context's primitives are collected per frame, grouped into
+// elements and anchored (resolveAnchors); at the frame kick their vertex positions go to the renderer, which asks
+// classify() about each 2D primitive it gets. Named ones are squeezed towards their anchor in widescreen (HUD "Screen
+// edges"; otherwise all to the middle) and drawn over the picture at the window's size (VCS_HUD_NATIVE=0: into the
+// frame buffer as before). VCS_TRACE_HUDKEY=<n> logs n primitives that were not found.
+//
 // VCS_TRACE_IM2D=<n>: log n Im2D calls (caller, primitive, vertex count, the first vertices' raw words) and markers at
 // the 2D pass's calls (VCS_TRACE_IM2D_MARKERS=<1..6>), from 30 s on.
 #include "game/vcs_hud.h"
 
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
+#include "runtime/gs/gs_hw.h"
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <numeric>
+#include <unordered_map>
+#include <vector>
 
 namespace vcs
 {
@@ -87,6 +100,139 @@ namespace vcs
             g_markers[I].original(rdram, ctx, runtime);
         }
 
+        // ---- Per-element anchoring (widescreen, HUD "Screen edges"; see the top) ----
+        struct Prim
+        {
+            float x0, y0, x1, y1;        // bounding box, 640x448 pixels
+            uint32_t firstKey, keyCount; // into g_primKeys
+        };
+        std::atomic<bool> g_anchoring{false};            // HUD primitives are captured and classified (updateClassifier)
+        std::atomic<bool> g_edges{false};                // anchored to the screen edges (else all to the middle)
+        std::atomic<bool> g_hooked{false}, g_layer{false}; // the HUD context is known; the native HUD layer is on
+        std::vector<Prim> g_prims;                       // this frame's HUD primitives (one per Im2D call); game thread
+        std::vector<uint32_t> g_primKeys;                // their vertex positions (positionKey)
+        std::unordered_map<uint32_t, uint8_t> g_anchors; // the kicked frame's vertex positions -> anchor
+        int g_traceKeys = 0;                             // VCS_TRACE_HUDKEY=<n>
+
+        uint32_t positionKey(int x, int y) { return uint32_t(uint16_t(x)) | (uint32_t(uint16_t(y)) << 16); } // whole pixels
+
+        void capture(uint8_t *rdram, R5900Context *ctx)
+        {
+            if (!g_inHud || !g_anchoring.load(std::memory_order_relaxed) || g_prims.size() >= 8192u)
+                return;
+            const uint32_t verts = GPR_U32(ctx, 5) & 0x01FFFFFFu;
+            const uint32_t n = GPR_U32(ctx, 6);
+            if (n == 0u || n > 1024u || verts + n * 16u > 0x02000000u)
+                return;
+            Prim p{1e9f, 1e9f, -1e9f, -1e9f, static_cast<uint32_t>(g_primKeys.size()), n};
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                int16_t xy[2];
+                std::memcpy(xy, rdram + verts + i * 16u + 8u, 4);
+                p.x0 = std::min<float>(p.x0, xy[0]);
+                p.x1 = std::max<float>(p.x1, xy[0]);
+                p.y0 = std::min<float>(p.y0, xy[1]);
+                p.y1 = std::max<float>(p.y1, xy[1]);
+                g_primKeys.push_back(positionKey(xy[0], xy[1]));
+            }
+            g_prims.push_back(p);
+        }
+
+        // The frame's HUD primitives grouped into elements (boxes closer than a word gap merge: a line of text, the
+        // radar and its blips), each anchored by where it sits on the 4:3 screen: the left or right edge when it is
+        // off to that side, the middle otherwise; full-width draws (fades, letterbox bars) stretch.
+        void resolveAnchors()
+        {
+            g_anchors.clear();
+            const uint32_t n = static_cast<uint32_t>(g_prims.size());
+            std::vector<uint32_t> parent(n), order(n);
+            std::iota(parent.begin(), parent.end(), 0u);
+            std::iota(order.begin(), order.end(), 0u);
+            auto find = [&](uint32_t i) {
+                while (parent[i] != i)
+                    i = parent[i] = parent[parent[i]];
+                return i;
+            };
+            auto full = [](const Prim &p) { return p.x0 <= 1.0f && p.x1 >= 639.0f; };
+            constexpr float gapX = 12.0f, gapY = 3.0f;
+            std::sort(order.begin(), order.end(), [](uint32_t a, uint32_t b) { return g_prims[a].x0 < g_prims[b].x0; });
+            for (uint32_t oi = 0; oi < n; ++oi)
+            {
+                const Prim &a = g_prims[order[oi]];
+                if (full(a))
+                    continue;
+                for (uint32_t oj = oi + 1; oj < n && g_prims[order[oj]].x0 <= a.x1 + gapX; ++oj)
+                {
+                    const Prim &b = g_prims[order[oj]];
+                    if (full(b) || b.y0 > a.y1 + gapY || a.y0 > b.y1 + gapY)
+                        continue;
+                    parent[find(order[oj])] = find(order[oi]);
+                }
+            }
+            const bool edges = g_edges.load(std::memory_order_relaxed);
+            std::vector<Prim> boxes(n, Prim{1e9f, 1e9f, -1e9f, -1e9f, 0u, 0u});
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                Prim &b = boxes[find(i)];
+                b.x0 = std::min(b.x0, g_prims[i].x0);
+                b.x1 = std::max(b.x1, g_prims[i].x1);
+            }
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                const Prim &p = g_prims[i];
+                const Prim &b = boxes[find(i)];
+                const float centre = (b.x0 + b.x1) * 0.5f;
+                const uint8_t anchor = full(p)                                      ? GSHwAnchorStretch
+                                       : !edges                                      ? GSHwAnchorCentre
+                                       : centre < 280.0f && b.x0 < 160.0f            ? GSHwAnchorLeft
+                                       : centre > 360.0f && b.x1 > 480.0f            ? GSHwAnchorRight
+                                                                                     : GSHwAnchorCentre;
+                for (uint32_t k = 0; k < p.keyCount; ++k)
+                    g_anchors[g_primKeys[p.firstKey + k]] = anchor;
+            }
+            g_prims.clear();
+            g_primKeys.clear();
+        }
+
+        // gsHwSetHudClassifier: a primitive whose every vertex is a HUD vertex of the kicked frame takes its anchor
+        uint8_t classify(const float *xy, uint32_t count)
+        {
+            if (g_anchors.empty())
+                return GSHwAnchorNone;
+            // The GS sees the game's whole-pixel positions half a pixel up-left (the 2D drawing's pixel-centre bias) or
+            // within a sixteenth of them: either rounding finds the pixel.
+            uint8_t anchor = GSHwAnchorNone;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const float x = xy[2 * i], y = xy[2 * i + 1];
+                const int xs[2] = {static_cast<int>(std::lround(x)), static_cast<int>(std::lround(x + 0.5f))};
+                const int ys[2] = {static_cast<int>(std::lround(y)), static_cast<int>(std::lround(y + 0.5f))};
+                auto it = g_anchors.end();
+                for (int k = 0; k < 4 && it == g_anchors.end(); ++k)
+                    it = g_anchors.find(positionKey(xs[k & 1], ys[k >> 1]));
+                if (it == g_anchors.end())
+                {
+                    if (g_traceKeys > 0)
+                    {
+                        --g_traceKeys;
+                        std::fprintf(stderr, "[hud-key] miss %.4f,%.4f (vertex %u of %u)\n", x, y, i, count);
+                    }
+                    return GSHwAnchorNone;
+                }
+                anchor = it->second;
+            }
+            return anchor;
+        }
+
+        // HUD primitives are classified for the renderer while there is a use for it: the native layer or edge anchoring
+        void updateClassifier()
+        {
+            const bool on = g_hooked.load(std::memory_order_relaxed) &&
+                            (g_layer.load(std::memory_order_relaxed) || g_edges.load(std::memory_order_relaxed));
+            g_anchoring.store(on, std::memory_order_relaxed);
+            gsHwSetHudClassifier(on ? &classify : nullptr);
+        }
+
         // HUD context: everything but the far plane moved onto it (see the top)
         void toHudPlane(uint8_t *rdram, R5900Context *ctx)
         {
@@ -109,6 +255,7 @@ namespace vcs
         void im2dRender(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             trace(rdram, ctx, false);
+            capture(rdram, ctx);
             toHudPlane(rdram, ctx);
             g_origRender(rdram, ctx, runtime);
         }
@@ -116,6 +263,7 @@ namespace vcs
         void im2dRenderIndexed(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             trace(rdram, ctx, true);
+            capture(rdram, ctx);
             toHudPlane(rdram, ctx);
             g_origRenderIndexed(rdram, ctx, runtime);
         }
@@ -141,12 +289,22 @@ namespace vcs
         if (traceNow())
             std::fprintf(stderr, "[im2d] --- frame kick\n");
         g_inHud = false;
+        if (g_anchoring.load(std::memory_order_relaxed))
+            resolveAnchors(); // the display list goes to the GS from here on
+    }
+
+    void setHudAnchoring(bool on)
+    {
+        g_edges.store(on, std::memory_order_relaxed);
+        updateClassifier();
     }
 
     void installHudHooks(PS2Runtime &runtime)
     {
         const char *rw = std::getenv("VCS_HUD_RW");
         const bool on = !(rw && rw[0] == '0');
+        if (const char *keys = std::getenv("VCS_TRACE_HUDKEY"))
+            g_traceKeys = std::atoi(keys);
         const char *traceEnv = std::getenv("VCS_TRACE_IM2D");
         if (!on && !traceEnv)
             return;
@@ -165,7 +323,14 @@ namespace vcs
         runtime.replaceFunction(kIm2DRender, &im2dRender);
         runtime.replaceFunction(kIm2DRenderIndexed, &im2dRenderIndexed);
         if (on)
+        {
             runtime.replaceFunction(kHudDraw, &hudDraw);
+            const char *native = std::getenv("VCS_HUD_NATIVE");
+            g_layer = !(native && native[0] == '0');
+            g_hooked = true;
+            gsHwSetHudLayer(g_layer);
+            updateClassifier();
+        }
         const PS2Runtime::RecompiledFunction markers[] = {&marker<0>, &marker<1>, &marker<2>, &marker<3>, &marker<4>};
         const int markerCount = std::getenv("VCS_TRACE_IM2D_MARKERS") ? std::atoi(std::getenv("VCS_TRACE_IM2D_MARKERS")) : 0;
         for (int i = 0; i < markerCount && i < 5; ++i)

@@ -29,9 +29,19 @@
 namespace
 {
     std::atomic<float> g_hudSqueeze{1.0f}; // [gta-recomp] gsHwSetHudSqueeze
+    std::atomic<GSHwAnchorFn> g_hudClassifier{nullptr}; // [gta-recomp] gsHwSetHudClassifier
+    std::atomic<bool> g_hudLayer{false};                // [gta-recomp] gsHwSetHudLayer
+    std::atomic<uint32_t> g_outputW{0}, g_outputH{0};   // [gta-recomp] gsHwSetOutputSize
 }
 
 void gsHwSetHudSqueeze(float factor) { g_hudSqueeze.store(factor, std::memory_order_relaxed); }
+void gsHwSetHudClassifier(GSHwAnchorFn fn) { g_hudClassifier.store(fn, std::memory_order_relaxed); }
+void gsHwSetHudLayer(bool on) { g_hudLayer.store(on, std::memory_order_relaxed); }
+void gsHwSetOutputSize(uint32_t width, uint32_t height)
+{
+    g_outputW.store(width, std::memory_order_relaxed);
+    g_outputH.store(height, std::memory_order_relaxed);
+}
 
 GSHwOptions GSHwOptions::fromEnvironment()
 {
@@ -83,6 +93,7 @@ namespace
         MeshCreate, // [gta-recomp] packet-level HLE (GSNativeDraw)
         MeshDelete,
         NativeDraw,
+        HudDraw, // [gta-recomp] a DrawCmd for the native HUD layer (gsHwSetHudLayer)
     };
 
     struct Cmd
@@ -386,8 +397,8 @@ namespace
         bool ready() const { return m_ready; }
         rhi::Device &device() { return m_dev; }
         rhi::Texture *display() const { return m_display.get(); }
-        uint32_t displayWidth() const { return m_displayW * m_scale; }
-        uint32_t displayHeight() const { return m_displayH * m_scale; }
+        uint32_t displayWidth() const { return m_display ? m_display->desc().width : m_displayW * m_scale; }
+        uint32_t displayHeight() const { return m_display ? m_display->desc().height : m_displayH * m_scale; }
 
         void execute(const Frame &f, bool logDraws)
         {
@@ -432,13 +443,35 @@ namespace
                 case CmdType::RtDrop:
                     endPass();
                     m_rts.erase(f.rtDrops[c.index]);
+                    m_hud.erase(f.rtDrops[c.index]);
                     break;
                 case CmdType::RtUpload:
+                    hudSceneDraw(f.rtUploads[c.index].fbp);
                     rtUpload(f.rtUploads[c.index]);
                     break;
                 case CmdType::Clear:
+                    hudSceneDraw(f.clears[c.index].s.fbp);
                     clear(f.clears[c.index]);
                     break;
+                case CmdType::HudDraw:
+                {
+                    const DrawCmd &d = f.draws[c.index];
+                    if (logDraws)
+                    {
+                        std::fprintf(stderr, "[draw] (hud layer)\n");
+                        logDraw(f, d);
+                    }
+                    HudLayer &layer = m_hud[d.s.fbp];
+                    if (layer.stale)
+                    {
+                        layer.vertices.clear();
+                        layer.draws.clear();
+                        layer.stale = false;
+                    }
+                    layer.draws.push_back({d.s, static_cast<uint32_t>(layer.vertices.size()), d.count});
+                    layer.vertices.insert(layer.vertices.end(), f.vertices.begin() + d.first, f.vertices.begin() + d.first + d.count);
+                    break;
+                }
                 case CmdType::DepthFill:
                     depthFill(f.depthFills[c.index], logDraws);
                     break;
@@ -450,6 +483,15 @@ namespace
                     // copies, screen effects), 2 skips untextured full-screen draws, 4 skips everything but native draws
                     static const unsigned skip = std::getenv("PS2X_HW_SKIP") ? std::strtoul(std::getenv("PS2X_HW_SKIP"), nullptr, 0) : 0u;
                     const HwState &ds = f.draws[c.index].s;
+                    hudSceneDraw(ds.fbp);
+                    // a plain copy of another buffer takes its HUD along (VCS draws into one buffer and copies the
+                    // finished frame into the displayed one at the start of the next)
+                    if (ds.tme && ds.texIsRt && !ds.abe && ds.rtFbp != ds.fbp && !m_hud.empty())
+                        if (auto it = m_hud.find(ds.rtFbp); it != m_hud.end() && !it->second.stale)
+                        {
+                            HudLayer copy = it->second;
+                            m_hud[ds.fbp] = std::move(copy);
+                        }
                     if (skip && (((skip & 1u) && ds.texIsRt) || (skip & 4u)))
                         break;
                     draw(ds, f.draws[c.index].first, f.draws[c.index].count, nullptr);
@@ -491,6 +533,7 @@ namespace
                     if (logDraws)
                         std::fprintf(stderr, "[draw] native kind=%u n=%u mesh=%016llx fbp=%u zbp=%u tme=%u abe=%u fge=%u\n", n.kind, n.drawCount,
                                      (unsigned long long)n.meshKey, n.s.fbp, n.s.zbp, n.s.tme, n.s.abe, n.s.fge);
+                    hudSceneDraw(n.s.fbp);
                     draw(n.s, 0, n.drawCount, &n);
                     break;
                 }
@@ -504,7 +547,34 @@ namespace
         {
             m_displayW = f.displayW;
             m_displayH = f.displayH;
-            const uint32_t w = m_displayW * m_scale, h = m_displayH * m_scale;
+            uint32_t w = m_displayW * m_scale, h = m_displayH * m_scale;
+            // [gta-recomp] native HUD layer: the picture at the output size (its aspect), the HUD drawn over it there
+            const HudLayer *layer = nullptr;
+            if (g_hudLayer.load(std::memory_order_relaxed) && w && h)
+            {
+                const uint32_t ow = g_outputW.load(std::memory_order_relaxed), oh = g_outputH.load(std::memory_order_relaxed);
+                if (ow >= 64u && oh >= 64u && ow <= 8192u && oh <= 8192u)
+                {
+                    // never below the render targets' resolution (a small window; screenshots are taken larger)
+                    const double up = std::max(1.0, static_cast<double>(h) / oh);
+                    w = static_cast<uint32_t>(std::lround(ow * up));
+                    h = static_cast<uint32_t>(std::lround(oh * up));
+                }
+                auto it = m_hud.find(f.displayFbp);
+                if (f.displayFromRt && it != m_hud.end() && !it->second.stale && !it->second.draws.empty())
+                    layer = &it->second;
+                static const bool log = std::getenv("PS2X_HW_HUD_LOG") != nullptr; // the layers, every 2 s
+                static auto last = std::chrono::steady_clock::now();
+                if (log && std::chrono::steady_clock::now() - last > std::chrono::seconds(2))
+                {
+                    last = std::chrono::steady_clock::now();
+                    std::string s;
+                    for (const auto &[fbp, l] : m_hud)
+                        s += " " + std::to_string(fbp) + (l.stale ? "(stale," : "(") + std::to_string(l.draws.size()) + " draws)";
+                    std::fprintf(stderr, "[gs-hw] hud layer: display fbp %u at %u,%u fromRt %d, output %ux%u, layers:%s\n", f.displayFbp,
+                                 f.displayX, f.displayY, f.displayFromRt ? 1 : 0, w, h, s.c_str());
+                }
+            }
             if (!w || !h)
                 return;
             if (!m_display || m_display->desc().width != w || m_display->desc().height != h)
@@ -519,7 +589,11 @@ namespace
                 const Rt &rt = it->second;
                 const float tw = static_cast<float>(rt.color->desc().width), th = static_cast<float>(rt.color->desc().height);
                 const float x0 = static_cast<float>(f.displayX * m_scale), y0 = static_cast<float>(f.displayY * m_scale);
-                blit(*rt.color, {x0 / tw, y0 / th, (x0 + w) / tw, (y0 + h) / th}, *m_display, 0, 0, w, h, false, true);
+                const float sw = static_cast<float>(m_displayW * m_scale), sh = static_cast<float>(m_displayH * m_scale);
+                const bool scaled = w != m_displayW * m_scale || h != m_displayH * m_scale;
+                blit(*rt.color, {x0 / tw, y0 / th, (x0 + sw) / tw, (y0 + sh) / th}, *m_display, 0, 0, w, h, scaled, true);
+                if (layer)
+                    drawHudLayer(*layer, f.displayX, f.displayY);
             }
             else if (!f.cpuDisplay.empty())
             {
@@ -817,9 +891,81 @@ namespace
             return *p;
         }
 
-        void draw(const HwState &s, uint32_t first, uint32_t count, const NativeDrawCmd *native)
+        // [gta-recomp] Native HUD layer (gsHwSetHudLayer): per frame buffer, the HUD primitives of the latest frame drawn
+        // into it, drawn over the displayed picture at its output size (composeDisplay). Any other drawing into the
+        // buffer is the next frame's scene: the layer is stale, and the next HUD draw starts it afresh.
+        struct HudLayer
         {
-            rhi::Buffer *vertices = m_vb.get();
+            std::vector<HwVertex> vertices;
+            std::vector<DrawCmd> draws;
+            bool stale = false;
+        };
+        struct LayerTarget // where draw() puts a HUD layer draw
+        {
+            rhi::Texture *color = nullptr, *depth = nullptr;
+            float scaleX = 1.0f, scaleY = 1.0f; // target pixels per PS2 pixel
+            int originX = 0, originY = 0;       // the PS2 pixel at the target's top-left (vertices come shifted by it)
+        };
+
+        void hudSceneDraw(uint32_t fbp)
+        {
+            if (!m_hud.empty())
+                if (auto it = m_hud.find(fbp); it != m_hud.end())
+                    it->second.stale = true;
+        }
+
+        // the layer over m_display, which shows the buffer from PS2 pixel (displayX, displayY)
+        void drawHudLayer(const HudLayer &layer, uint32_t displayX, uint32_t displayY)
+        {
+            const size_t bytes = layer.vertices.size() * sizeof(HwVertex);
+            if (!bytes || !m_display)
+                return;
+            const std::vector<HwVertex> *vertices = &layer.vertices;
+            if (displayX || displayY)
+            {
+                m_hudShifted = layer.vertices;
+                for (HwVertex &v : m_hudShifted)
+                {
+                    v.x -= static_cast<float>(displayX);
+                    v.y -= static_cast<float>(displayY);
+                }
+                vertices = &m_hudShifted;
+            }
+            if (!m_hudVb || m_hudVbCapacity < bytes)
+            {
+                m_hudVbCapacity = std::max<size_t>(bytes + bytes / 2, 256u << 10);
+                m_hudVb = m_dev.createBuffer({m_hudVbCapacity, rhi::BufferUsage::Vertex, true, "gs hud vertices"});
+            }
+            if (!m_hudVb)
+                return;
+            m_dev.updateBuffer(*m_hudVb, vertices->data(), bytes);
+            const uint32_t w = m_display->desc().width, h = m_display->desc().height;
+            if (!m_hudDepth || m_hudDepth->desc().width != w || m_hudDepth->desc().height != h)
+            {
+                endPass();
+                m_hudDepth = m_dev.createTexture({w, h, rhi::Format::D32F, rhi::UsageDepth, "gs hud depth"});
+            }
+            if (!m_hudDepth)
+                return;
+            // the game clears Z to 0 just before its HUD (a full-screen Z-only draw); the HUD's depth tests start there
+            fill(nullptr, m_hudDepth.get(), 0, 0, w, h, {0, 0, 0, 0}, 0.0f);
+            LayerTarget t;
+            t.color = m_display.get();
+            t.depth = m_hudDepth.get();
+            t.scaleX = static_cast<float>(w) / static_cast<float>(std::max(m_displayW, 1u));
+            t.scaleY = static_cast<float>(h) / static_cast<float>(std::max(m_displayH, 1u));
+            t.originX = static_cast<int>(displayX);
+            t.originY = static_cast<int>(displayY);
+            m_dev.pushMarker("gs hud layer");
+            for (const DrawCmd &d : layer.draws)
+                draw(d.s, d.first, d.count, nullptr, &t);
+            m_dev.popMarker();
+            endPass();
+        }
+
+        void draw(const HwState &s, uint32_t first, uint32_t count, const NativeDrawCmd *native, const LayerTarget *layer = nullptr)
+        {
+            rhi::Buffer *vertices = layer ? m_hudVb.get() : m_vb.get();
             uint32_t vertexOffset = 0;
             if (native && native->transient)
             {
@@ -837,14 +983,30 @@ namespace
             }
             if (!count || !vertices)
                 return;
-            Rt &rt = rtFor(s.fbp, s.fbw, s.scy1 + 1u);
             const bool depthOn = s.zte != 0u;
-            Depth *depth = nullptr;
-            if (depthOn)
+            rhi::Texture *colorTarget = nullptr, *depthTarget = nullptr;
+            float targetW = 0.0f, targetH = 0.0f; // PS2 pixels
+            if (layer)
             {
-                // D3D binds a depth buffer only with a colour target of the same size: grow whichever is smaller
-                depth = &depthFor(s.zbp, rt.w, rt.h);
-                growRt(rt, depth->w, depth->h);
+                colorTarget = layer->color;
+                depthTarget = depthOn ? layer->depth : nullptr;
+                targetW = static_cast<float>(layer->color->desc().width) / layer->scaleX;
+                targetH = static_cast<float>(layer->color->desc().height) / layer->scaleY;
+            }
+            else
+            {
+                Rt &rt = rtFor(s.fbp, s.fbw, s.scy1 + 1u);
+                Depth *depth = nullptr;
+                if (depthOn)
+                {
+                    // D3D binds a depth buffer only with a colour target of the same size: grow whichever is smaller
+                    depth = &depthFor(s.zbp, rt.w, rt.h);
+                    growRt(rt, depth->w, depth->h);
+                }
+                colorTarget = rt.color.get();
+                depthTarget = depth ? depth->tex.get() : nullptr;
+                targetW = static_cast<float>(rt.w);
+                targetH = static_cast<float>(rt.h);
             }
 
             // texture: decoded VRAM, another render target, or this target itself (sampled from a copy)
@@ -870,12 +1032,22 @@ namespace
                 }
             }
 
-            bindPass(rt.color.get(), depth ? depth->tex.get() : nullptr);
-            m_dev.setScissor(s.scx0 * m_scale, s.scy0 * m_scale, (s.scx1 - s.scx0 + 1) * m_scale, (s.scy1 - s.scy0 + 1) * m_scale);
+            bindPass(colorTarget, depthTarget);
+            if (layer)
+            {
+                const int tw = static_cast<int>(colorTarget->desc().width), th = static_cast<int>(colorTarget->desc().height);
+                const int x0 = std::clamp(static_cast<int>(std::floor((static_cast<int>(s.scx0) - layer->originX) * layer->scaleX)), 0, tw);
+                const int y0 = std::clamp(static_cast<int>(std::floor((static_cast<int>(s.scy0) - layer->originY) * layer->scaleY)), 0, th);
+                const int x1 = std::clamp(static_cast<int>(std::ceil((static_cast<int>(s.scx1) + 1 - layer->originX) * layer->scaleX)), x0, tw);
+                const int y1 = std::clamp(static_cast<int>(std::ceil((static_cast<int>(s.scy1) + 1 - layer->originY) * layer->scaleY)), y0, th);
+                m_dev.setScissor(x0, y0, x1 - x0, y1 - y0);
+            }
+            else
+                m_dev.setScissor(s.scx0 * m_scale, s.scy0 * m_scale, (s.scx1 - s.scx0 + 1) * m_scale, (s.scy1 - s.scy0 + 1) * m_scale);
 
             DrawConstants c{};
-            c.targetRtFix[0] = static_cast<float>(rt.w);
-            c.targetRtFix[1] = static_cast<float>(rt.h);
+            c.targetRtFix[0] = targetW;
+            c.targetRtFix[1] = targetH;
             c.targetRtFix[2] = rtScale;
             c.targetRtFix[3] = s.fix;
             c.tmeTfxTccFst[0] = s.tme;
@@ -918,6 +1090,8 @@ namespace
             const uint8_t mr = (s.fbmsk & 0xFFu) != 0xFFu, mg = (s.fbmsk & 0xFF00u) != 0xFF00u, mb = (s.fbmsk & 0xFF0000u) != 0xFF0000u,
                           ma = (s.fbmsk & 0xFF000000u) != 0xFF000000u;
             uint8_t mask = static_cast<uint8_t>(mr | (mg << 1) | (mb << 2) | (ma << 3));
+            if (layer)
+                mask &= 7u; // the shown picture stays opaque (the GS writes the source alpha, the window would show it)
             bool zwrite = depthOn && !s.zmsk;
 
             // pass 1: pixels passing the alpha test (or all of them)
@@ -975,6 +1149,11 @@ namespace
         std::unordered_map<uint32_t, Depth> m_depth;
         std::unordered_map<uint64_t, std::unique_ptr<rhi::Texture>> m_textures;
         std::unique_ptr<rhi::Texture> m_display, m_feedback;
+        std::unordered_map<uint32_t, HudLayer> m_hud; // [gta-recomp] native HUD layer per frame buffer
+        std::unique_ptr<rhi::Buffer> m_hudVb;
+        std::vector<HwVertex> m_hudShifted;
+        size_t m_hudVbCapacity = 0;
+        std::unique_ptr<rhi::Texture> m_hudDepth;
         uint32_t m_displayW = 640, m_displayH = 448;
         std::unordered_set<uint32_t> m_reportedBlend;
         uint64_t m_feedbackReported = 0;
@@ -1091,17 +1270,38 @@ namespace
             // widescreen: the HUD keeps its 4:3 shape in the middle (gsHwSetHudSqueeze) while the picture is shown
             // wide - draws at the far plane, except full-width ones (sky, fades) and the screen effects that sample the
             // frame (drawn in strips). The scissor goes with them (the radar and menu labels are clipped by it).
-            if (far && s.fbw == 10u && !s.texIsRt && !(x0 <= 1.0f && x1 >= 639.0f) && m_showing3d.load(std::memory_order_relaxed))
+            // [gta-recomp] With a HUD classifier (gsHwSetHudClassifier) the game's own HUD primitives are squeezed towards their
+            // element's anchor instead, whatever their depth.
+            const float squeeze = g_hudSqueeze.load(std::memory_order_relaxed);
+            const GSHwAnchorFn classify = g_hudClassifier.load(std::memory_order_relaxed);
+            bool hud = false; // a HUD primitive for the native layer
+            if ((squeeze < 0.9999f || classify) && s.fbw == 10u && m_showing3d.load(std::memory_order_relaxed))
             {
-                const float squeeze = g_hudSqueeze.load(std::memory_order_relaxed);
-                if (squeeze < 0.9999f)
+                uint8_t anchor = GSHwAnchorNone;
+                if (classify)
                 {
+                    float xy[2 * 8];
+                    const uint32_t count = std::min<uint32_t>(batch.vertexCount, 8u);
+                    for (uint32_t i = 0; i < count; ++i)
+                    {
+                        xy[2 * i] = batch.vertices[i].x - ofx;
+                        xy[2 * i + 1] = batch.vertices[i].y - ofy;
+                    }
+                    anchor = classify(xy, count);
+                    hud = anchor != GSHwAnchorNone && g_hudLayer.load(std::memory_order_relaxed);
+                }
+                if (anchor == GSHwAnchorNone && far && !s.texIsRt && !(x0 <= 1.0f && x1 >= 639.0f))
+                    anchor = GSHwAnchorCentre;
+                if (anchor != GSHwAnchorNone && anchor != GSHwAnchorStretch && squeeze < 0.9999f)
+                {
+                    // x' = pivot + (x - pivot) * squeeze: the pivot stays where it is (an edge or the middle)
+                    const float pivot = anchor == GSHwAnchorLeft ? 0.0f : anchor == GSHwAnchorRight ? 640.0f : 320.0f;
                     for (uint32_t i = 0; i < n; ++i)
-                        out[i].x = 320.0f + (out[i].x - 320.0f) * squeeze;
+                        out[i].x = pivot + (out[i].x - pivot) * squeeze;
                     if (s.scx0 > 0u || s.scx1 < 639u)
                     {
-                        s.scx0 = static_cast<uint16_t>(std::max(0.0f, std::floor(320.0f + (s.scx0 - 320.0f) * squeeze)));
-                        s.scx1 = static_cast<uint16_t>(std::min(639.0f, std::ceil(320.0f + (s.scx1 + 1.0f - 320.0f) * squeeze) - 1.0f));
+                        s.scx0 = static_cast<uint16_t>(std::max(0.0f, std::floor(pivot + (s.scx0 - pivot) * squeeze)));
+                        s.scx1 = static_cast<uint16_t>(std::min(639.0f, std::ceil(pivot + (s.scx1 + 1.0f - pivot) * squeeze) - 1.0f));
                     }
                 }
             }
@@ -1116,10 +1316,11 @@ namespace
                 return;
             noteTarget(s.fbp, s.fbw, s.fpsm, out, n, s.scy1);
             Frame &f = *m_frame;
-            if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != CmdType::Draw ||
+            const CmdType cmdType = hud ? CmdType::HudDraw : CmdType::Draw;
+            if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != cmdType ||
                 std::memcmp(&f.draws.back().s, &s, sizeof(HwState)) != 0)
             {
-                f.cmds.push_back({CmdType::Draw, static_cast<uint32_t>(f.draws.size())});
+                f.cmds.push_back({cmdType, static_cast<uint32_t>(f.draws.size())});
                 f.draws.push_back({s, static_cast<uint32_t>(f.vertices.size()), 0u});
             }
             f.vertices.insert(f.vertices.end(), out, out + n);

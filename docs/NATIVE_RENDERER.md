@@ -355,6 +355,27 @@ on the exact VU path until a profile says otherwise; the method for adding them 
 - Particles, water, shadows, sky, 2D sprites drawn through VU1. Whatever the
   coverage report shows is left; anything rare can stay emulated.
 
+### HUD layer (milestone 3 step 2, 2026-10-23)
+
+The HUD, text and radar are drawn over the shown picture at the window's size instead of into the PS2 frame buffer:
+- **Which draws.** `src/game/vcs_hud.cpp` collects the Im2D primitives of the HUD context (CHud::Draw to the frame
+  kick), groups them into elements and anchors each one (game-internals.md 6f). The renderer asks it about every 2D
+  primitive into a 640-wide target while 3D is shown (`gsHwSetHudClassifier`, by vertex positions); a named one is
+  squeezed towards its anchor (widescreen) and recorded as a `HudDraw`, not a `Draw`.
+- **Which frame.** The executor keeps a layer per frame buffer: HUD draws go to their buffer's layer; any other
+  drawing into the buffer (the next frame's scene) makes it stale, and the next HUD draw starts it afresh. A plain
+  copy of a buffer takes its layer along: VCS copies its finished frame (FBP 140) into the displayed buffer (FBP 0)
+  at the start of the next frame.
+- **Drawing.** `composeDisplay` makes the picture at the output size (`gsHwSetOutputSize`: the window's letterboxed
+  area, set by the runtime each host frame), blits the displayed buffer into it (bilinear, as the presenter scaled it
+  before) and draws the displayed buffer's layer on top with the same draw shaders, textures and blend modes: target
+  size in PS2 pixels = output / (640x448), scissor scaled likewise, its own depth buffer cleared to 0 (the game
+  clears Z to 0 just before the HUD), alpha not written (the shown picture stays opaque).
+- `VCS_HUD_NATIVE=0` = the HUD drawn into the frame buffer as before (with the anchoring still applied);
+  `PS2X_HW_HUD_LOG=1` logs the layers every 2 s.
+- Textures: the GS backend's decoded texture cache (the same textures the emulated path samples) rather than a
+  decoder for RenderWare rasters (DECISIONS.md).
+
 ### Stage 8 - Enhancements (M each, optional order) - internal resolution done
 
 - Internal resolution: native draws render into the same scaled render targets as the GS path, so

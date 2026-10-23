@@ -82,7 +82,7 @@ pause map) are shown at 4:3, pillarboxed.
   and after it closes until every key / button is released (so the B or Escape that closed it
   never reaches the game).
 - Settings (main.cpp `registerSettings`): Display > Aspect ratio (`display.aspect` = 43 / 1610 /
-  169, env `VCS_ASPECT`), HUD (`display.hud`: keep 4:3 / stretch), Internal resolution
+  169, env `VCS_ASPECT`), HUD (`display.hud`, env `VCS_HUD`: 0 keep 4:3 / 2 screen edges / 1 stretch), Internal resolution
   (`display.scale`, restart, env `PS2X_HW_SCALE`); Graphics > Performance overlay; Controls >
   Settings menu key.
 - Widescreen: the Hor+ route from the spike - `vcs_display.cpp` wraps `FUN_001ab9e0`, the presenter
@@ -105,6 +105,11 @@ pause map) are shown at 4:3, pillarboxed.
     a round, clipped radar; flyovers and the intro cutscene wide (the cutscene keeps its own
     letterbox bars inside the 16:9 picture); loading screen and pause map at 4:3. Not yet looked
     at: vehicles' HUD, the phone / mission text boxes, the frontend menus over a 3D background.
+- **HUD: Screen edges** (milestone 3 step 2, 2026-10-23): each HUD element keeps its 4:3 shape but is squeezed towards
+  the screen edge it sits near (radar left; clock, weapon, money, zone name right; help text left; centred text in the
+  middle) instead of all towards the middle. The game names its own HUD primitives (`src/game/vcs_hud.cpp`, found by
+  their vertex positions; game-internals.md 6f), so the "far plane = HUD" heuristic only covers 2D outside CHud::Draw's
+  frame. `gsHwSetHudClassifier` in the renderer; the pivot is x 0 / 640 / 320 of the 640-wide frame.
 - Not done from the plan: 21:9 and "match window" (the same mechanism; streaming at the edges
   needs a look first), separate horizontal / vertical internal scale, window mode, pausing,
   control-channel `menu` / `set` commands (environment overrides cover scripted captures:

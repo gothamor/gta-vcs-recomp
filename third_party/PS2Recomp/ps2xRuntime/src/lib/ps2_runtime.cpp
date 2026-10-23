@@ -443,6 +443,27 @@ static bool UploadGpuFrame(present::Picture &owned, present::Picture &shown, PS2
         // [gta-recomp] the HW renderer draws on the window's device: its display texture is shown directly
         rhi::Texture *display = nullptr;
         uint32_t w = 0, h = 0;
+        {
+            // [gta-recomp] the size the picture is shown at: the window's letterboxed area (the native HUD layer)
+            int windowW = 0, windowH = 0;
+            platform::windowSize(windowW, windowH);
+            const float aspect = present::displayAspect(hw->presenter().showing3d());
+            uint32_t outW = 0, outH = 0;
+            if (windowW > 0 && windowH > 0 && aspect > 0.0f)
+            {
+                if (static_cast<float>(windowW) / static_cast<float>(windowH) > aspect)
+                {
+                    outH = static_cast<uint32_t>(windowH);
+                    outW = static_cast<uint32_t>(std::lround(windowH * aspect));
+                }
+                else
+                {
+                    outW = static_cast<uint32_t>(windowW);
+                    outH = static_cast<uint32_t>(std::lround(windowW / aspect));
+                }
+            }
+            gsHwSetOutputSize(outW, outH);
+        }
         if (hw->presenter().executeAndGetDisplay(*present::device(), display, w, h))
         {
             shown.texture = std::shared_ptr<rhi::Texture>(display, [](rhi::Texture *) {}); // owned by the HW renderer
