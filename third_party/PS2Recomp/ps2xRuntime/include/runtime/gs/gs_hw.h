@@ -77,5 +77,8 @@ void gsHwSetHudClassifier(GSHwAnchorFn fn);
 // the displayed picture at the output size (gsHwSetOutputSize) - sharp at any window size, in its aspect. The displayed
 // buffer's latest HUD is drawn; a new scene in that buffer starts the next one. Any thread.
 void gsHwSetHudLayer(bool on);
+// [gta-recomp] Widescreen: how much wider than 4:3 the game's 640-wide frame is shown (display aspect / (4/3)); the
+// native post effects widen their buffers by it so blur and warp keep their 4:3 proportions on screen. Any thread.
+void gsHwSetAspectWidening(float widening);
 // [gta-recomp] The size the picture is shown at (the window's letterboxed area); 0 = the render targets' size.
 void gsHwSetOutputSize(uint32_t width, uint32_t height);

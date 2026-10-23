@@ -356,7 +356,10 @@ UV mapping per primitive fitted from the vertices, u = du/dx * x + offset in tex
   sampling, tap offsets of a texel), added into 140 at FIX 100 (bilinear upsample, 0.4 x 0.57 texels per pixel).
 - Trails: 640x448 -> 512x512 at FBP 384 (bilinear, 1.25 x 0.875), blended back at FIX 7 from 103 strips with offsets
   of up to 11 texels (a smear), then added at FIX 128 with a tint colour (0x10 0x03 0x09 at noon).
-- A 128x128 sample of the picture (5 x 3.5 texels per pixel, no offset) goes into FBP 420 before the radar.
+- A 128x128 sample of the picture (5 x 3.5 texels per pixel, no offset) goes into the corner of FBP 420, blended
+  with what is there at FIX ~6-19 (a running average), plus an additive sun / glow sprite (64x64); right after,
+  3D draws (vehicles, z ~0.001, blend FIX 6) are textured from that 128x128 corner - a reflection map refreshed
+  every frame. After the bloom (which overwrites FBP 420) the sample is added again for the next frame.
 
 **Pixel centres** (found from the copies above, fixed 2026-10-23): the GS samples a pixel at its integer position,
 D3D at +0.5. Our renderer had drawn without the offset, so the copies (u = x + 0.5) read halfway between two texels:

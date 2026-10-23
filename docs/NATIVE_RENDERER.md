@@ -411,8 +411,19 @@ then makes it hold at higher resolutions:
 - Checked: 640x448 before / after (sharper, matching the GS's sampling; static regions of a frame identical with and
   without `rtFull`), 3x internal (fence and wire at full detail instead of a 640x448 picture scaled up), HUD at
   1080p, reference scenes; game fps unchanged.
-- Not done yet: the effects as native passes (needed for a native frame, step 4); in widescreen the bloom / trails
-  kernels work in the anamorphic 640-wide frame, so they are 4:3 / aspect wider horizontally than at 4:3.
+- **Native bloom and trails** (`nativePost`, `PS2X_HW_POSTFX=0` = as recorded, `=b` / `=t` one of them): the two
+  chains are recognised in a frame's commands (bloom: downsample into a 256-wide buffer, threshold, n x (clear, 4-tap
+  cross), add back; trails: downsample into a 512-wide buffer, warped blend back at FIX ~8, tint add) and drawn into
+  buffers of our own with the same draws, shader and blend states (draw() overrides: target, texture, vertices,
+  scissor scale). At 4:3 they give the emulation's picture (static regions as close as two runs of one build). In
+  widescreen the buffers are w = display aspect / (4/3) times wider: positions in a buffer scale by w and texture
+  coordinates into one become u + (w - 1) * s * x (s = buffer texels per target unit at 4:3), so the taps and the
+  warp, in texels, cover the same screen distance as at 4:3 - before, both were w times wider on screen (the glow
+  beside a pole at 16:9 is narrower by about that). The buffers are written back, squeezed, into the effect buffers
+  in VRAM for later readers (the game textures vehicles with the 128x128 corner of FBP 420). REPEAT wrapping is a
+  modulo in the shader (the widened buffers are not powers of two; same result for GS sizes).
+- Not done yet: the motion blur, self-copy and frame copy stay GS draws (1:1 copies: already exact and
+  resolution-aware); a native frame (step 4) will move them too.
 
 ### Stage 8 - Enhancements (M each, optional order) - internal resolution done
 

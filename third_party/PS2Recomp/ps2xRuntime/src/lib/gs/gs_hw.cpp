@@ -32,7 +32,10 @@ namespace
     std::atomic<GSHwAnchorFn> g_hudClassifier{nullptr}; // [gta-recomp] gsHwSetHudClassifier
     std::atomic<bool> g_hudLayer{false};                // [gta-recomp] gsHwSetHudLayer
     std::atomic<uint32_t> g_outputW{0}, g_outputH{0};   // [gta-recomp] gsHwSetOutputSize
+    std::atomic<float> g_aspectWidening{1.0f};          // [gta-recomp] gsHwSetAspectWidening
 }
+
+void gsHwSetAspectWidening(float widening) { g_aspectWidening.store(widening, std::memory_order_relaxed); }
 
 void gsHwSetHudSqueeze(float factor) { g_hudSqueeze.store(factor, std::memory_order_relaxed); }
 void gsHwSetHudClassifier(GSHwAnchorFn fn) { g_hudClassifier.store(fn, std::memory_order_relaxed); }
@@ -438,8 +441,16 @@ namespace
                 }
                 m_dev.updateBuffer(*m_nativeVb, f.nativeBytes.data(), f.nativeBytes.size());
             }
-            for (const Cmd &c : f.cmds)
+            for (size_t ci = 0; ci < f.cmds.size(); ++ci)
             {
+                const Cmd &c = f.cmds[ci];
+                // [gta-recomp] VCS's bloom / trails chains as native passes (nativePost): the commands it took are done
+                if (c.type == CmdType::Draw)
+                    if (const size_t taken = nativePost(f, ci, logDraws))
+                    {
+                        ci += taken - 1;
+                        continue;
+                    }
                 switch (c.type)
                 {
                 case CmdType::TexCreate:
@@ -944,11 +955,15 @@ namespace
             bool stale = false;  // the buffer has new drawing: this HUD is gone
             bool closed = false; // copied out as a finished frame: still shown from the copy, the next HUD replaces it
         };
-        struct LayerTarget // where draw() puts a HUD layer draw
+        struct LayerTarget // where draw() puts a HUD layer draw, or a native post-effect pass (see nativePost)
         {
-            rhi::Texture *color = nullptr, *depth = nullptr;
+            rhi::Texture *color = nullptr, *depth = nullptr; // null color: the draw's own render target
             float scaleX = 1.0f, scaleY = 1.0f; // target pixels per PS2 pixel
             int originX = 0, originY = 0;       // the PS2 pixel at the target's top-left (vertices come shifted by it)
+            float scissorScaleX = 1.0f;         // the draw's scissor x in target units (a widened native buffer)
+            bool opaque = true;                 // alpha not written (the shown picture)
+            rhi::Texture *texture = nullptr;    // read instead of the draw's texture, as a plain texture
+            rhi::Buffer *vertices = nullptr;    // null: the HUD layer's
         };
 
         // A HUD draw into its layer. Textured quads (two triangles over one rectangle of a clamped texture) sample only
@@ -1098,6 +1113,213 @@ namespace
 
         static float pixelCentreOffset() { return gsPixelCentreOffset(); }
 
+        // ---- [gta-recomp] Native post effects (docs/NATIVE_RENDERER.md "Post effects") ----------------------------
+        // VCS's bloom and trails are chains of draws through effect buffers inside VRAM (bloom: 256x256 at FBP 420 /
+        // 452, trails: 512x512 at FBP 384; game-internals.md 6g). Recognised here, they run against buffers of our own
+        // instead, with the same draws, shaders and blend states - so at 4:3 the result is the emulation's - and the
+        // buffers widened by the display's widening w: positions in a buffer scale by w, texture coordinates into it
+        // become u + (w - 1) * s * x (s: buffer texels per target unit at 4:3), so the bloom's +-1 texel taps and the
+        // trails' warp offsets (in texels) cover the same distance on screen as at 4:3 instead of w times more.
+        // PS2X_HW_POSTFX=0: the draws run as recorded; =b / =t: bloom / trails only.
+        static unsigned postNative() // bit 0 bloom, bit 1 trails
+        {
+            static const unsigned on = [] {
+                const char *e = std::getenv("PS2X_HW_POSTFX");
+                if (!e || !e[0])
+                    return 3u;
+                return e[0] == 'b' ? 1u : e[0] == 't' ? 2u : e[0] == '0' ? 0u : 3u;
+            }();
+            return on;
+        }
+
+        static bool blendIs(const HwState &s, unsigned a, unsigned b, unsigned c, unsigned d)
+        {
+            return s.abe && s.ba == a && s.bb == b && s.bc == c && s.bd == d;
+        }
+
+        const DrawCmd *drawAt(const Frame &f, size_t k) const
+        {
+            return k < f.cmds.size() && f.cmds[k].type == CmdType::Draw ? &f.draws[f.cmds[k].index] : nullptr;
+        }
+
+        struct PostItem
+        {
+            const DrawCmd *d;
+            HwState s;              // the draw's state, texture size adjusted for a native buffer it reads
+            uint32_t first;         // into m_postVerts
+            rhi::Texture *target;   // a native buffer, or null: the draw's own render target
+            rhi::Texture *texture;  // a native buffer read instead of the draw's texture, or null
+        };
+
+        // Adds a draw to the pass list: its vertices copied into m_postVerts, positions widened when it draws into a
+        // native buffer, texture coordinates remapped when it reads one (texWBase: that buffer's width at 4:3).
+        void postAdd(std::vector<PostItem> &items, const Frame &f, const DrawCmd *d, rhi::Texture *target, rhi::Texture *texture,
+                     float w, float texWBase)
+        {
+            PostItem it{d, d->s, static_cast<uint32_t>(m_postVerts.size()), target, texture};
+            const float targetUnits = static_cast<float>(d->s.fbw) * 64.0f; // target width at 4:3
+            const float slope = texture ? texWBase / targetUnits : 0.0f;
+            const float su = d->s.fst ? 1.0f : static_cast<float>(d->s.tw);
+            if (texture)
+            {
+                it.s.tw = static_cast<uint16_t>(texture->desc().width);
+                it.s.th = static_cast<uint16_t>(texture->desc().height);
+            }
+            for (uint32_t i = 0; i < d->count; ++i)
+            {
+                HwVertex v = f.vertices[d->first + i];
+                if (texture)
+                {
+                    const float u = v.s / v.q * su + (w - 1.0f) * slope * v.x; // texels
+                    v.s = d->s.fst ? u : u / static_cast<float>(it.s.tw) * v.q;
+                    if (!d->s.fst)
+                        v.t = v.t / v.q * static_cast<float>(d->s.th) / static_cast<float>(it.s.th) * v.q;
+                }
+                if (target)
+                    v.x *= w;
+                m_postVerts.push_back(v);
+            }
+            items.push_back(it);
+        }
+
+        rhi::Texture *postBuffer(std::unique_ptr<rhi::Texture> &t, uint32_t w, uint32_t h, const char *name)
+        {
+            if (!t || t->desc().width != w || t->desc().height != h)
+            {
+                endPass();
+                t = m_dev.createTexture({w, h, rhi::Format::RGBA8, rhi::UsageRenderTarget | rhi::UsageSampled, name});
+            }
+            return t.get();
+        }
+
+        void postRun(const std::vector<PostItem> &items, float w, bool log, const char *what)
+        {
+            const size_t bytes = m_postVerts.size() * sizeof(HwVertex);
+            if (!m_postVb || m_postVbCapacity < bytes)
+            {
+                m_postVbCapacity = std::max<size_t>(bytes + bytes / 2, 64u << 10);
+                m_postVb = m_dev.createBuffer({m_postVbCapacity, rhi::BufferUsage::Vertex, true, "gs post vertices"});
+            }
+            if (!m_postVb)
+                return;
+            m_dev.updateBuffer(*m_postVb, m_postVerts.data(), bytes);
+            m_dev.pushMarker(what);
+            for (const PostItem &it : items)
+            {
+                hudSceneDraw(it.d->s.fbp);
+                LayerTarget t;
+                t.color = it.target;
+                t.scissorScaleX = it.target ? w : 1.0f;
+                t.opaque = false;
+                t.texture = it.texture;
+                t.vertices = m_postVb.get();
+                draw(it.s, it.first, it.d->count, nullptr, &t);
+            }
+            m_dev.popMarker();
+            if (log)
+                std::fprintf(stderr, "[draw] native %s: %zu draws, widening %.3f\n", what, items.size(), w);
+        }
+
+        // what the recorded chain leaves in the effect buffers (VRAM) for later readers: the native buffer, squeezed
+        void postWriteBack(rhi::Texture *native, uint32_t fbp, uint32_t fbw, uint32_t w, uint32_t h)
+        {
+            Rt &rt = rtFor(fbp, fbw, h);
+            blit(*native, {0.0f, 0.0f, 1.0f, 1.0f}, *rt.color, 0, 0, w * m_scale, h * m_scale, false, false);
+        }
+
+        size_t nativePost(const Frame &f, size_t ci, bool log)
+        {
+            const unsigned on = postNative();
+            if (on & 1u)
+                if (const size_t n = nativeBloom(f, ci, log))
+                    return n;
+            return (on & 2u) ? nativeTrails(f, ci, log) : 0u;
+        }
+
+        // Bloom: downsample the frame into a 256x256 buffer, subtract a threshold, n passes of a 4-tap cross blur
+        // (ping-pong: clear, add the taps), added back into the frame.
+        size_t nativeBloom(const Frame &f, size_t ci, bool log)
+        {
+            const DrawCmd *down = drawAt(f, ci);
+            if (!down || !down->s.tme || !down->s.texIsRt || down->s.abe || down->s.fbw != 4u || down->s.rtFbp == down->s.fbp)
+                return 0;
+            const uint32_t frame = down->s.rtFbp, first = down->s.fbp;
+            const DrawCmd *thr = drawAt(f, ci + 1);
+            if (!thr || thr->s.fbp != first || thr->s.tme || !blendIs(thr->s, 2u, 0u, 2u, 1u))
+                return 0;
+            std::vector<std::pair<const DrawCmd *, const DrawCmd *>> passes; // (clear, taps)
+            size_t k = ci + 2;
+            uint32_t last = first;
+            for (;;)
+            {
+                const DrawCmd *clr = drawAt(f, k), *taps = drawAt(f, k + 1);
+                if (!clr || !taps || clr->s.tme || clr->s.fbw != 4u || !blendIs(clr->s, 0u, 2u, 2u, 2u))
+                    break;
+                if (taps->s.fbp != clr->s.fbp || !taps->s.tme || !taps->s.texIsRt || taps->s.rtFbp != last || !blendIs(taps->s, 0u, 2u, 2u, 1u))
+                    break;
+                passes.push_back({clr, taps});
+                last = clr->s.fbp;
+                k += 2;
+            }
+            const DrawCmd *add = drawAt(f, k);
+            if (passes.empty() || !add || add->s.fbp != frame || !add->s.tme || !add->s.texIsRt || add->s.rtFbp != last ||
+                !blendIs(add->s, 0u, 2u, 2u, 1u))
+                return 0;
+            const float w = std::max(1.0f, g_aspectWidening.load(std::memory_order_relaxed));
+            const uint32_t bw = static_cast<uint32_t>(std::lround(256.0f * w)), bh = 256u;
+            rhi::Texture *bufs[2] = {postBuffer(m_postBloom[0], bw, bh, "gs post bloom 0"), postBuffer(m_postBloom[1], bw, bh, "gs post bloom 1")};
+            if (!bufs[0] || !bufs[1])
+                return 0;
+            const uint32_t other = passes[0].first->s.fbp == first ? passes[0].second->s.rtFbp : passes[0].first->s.fbp;
+            auto buf = [&](uint32_t fbp) { return fbp == first ? bufs[0] : bufs[1]; };
+            m_postVerts.clear();
+            std::vector<PostItem> items;
+            postAdd(items, f, down, buf(first), nullptr, w, 0.0f);
+            postAdd(items, f, thr, buf(first), nullptr, w, 0.0f);
+            for (const auto &[clr, taps] : passes)
+            {
+                postAdd(items, f, clr, buf(clr->s.fbp), nullptr, w, 0.0f);
+                postAdd(items, f, taps, buf(taps->s.fbp), buf(taps->s.rtFbp), w, 256.0f);
+            }
+            postAdd(items, f, add, nullptr, buf(last), w, 256.0f);
+            postRun(items, w, log, "bloom");
+            postWriteBack(buf(first), first, 4u, 256u, 256u);
+            if (other != first)
+                postWriteBack(buf(other), other, 4u, 256u, 256u);
+            return k + 1 - ci;
+        }
+
+        // Trails: downsample the frame into a 512x512 buffer, blend it back through warped strips (FIX ~8) and add it
+        // with a tint.
+        size_t nativeTrails(const Frame &f, size_t ci, bool log)
+        {
+            const DrawCmd *down = drawAt(f, ci);
+            if (!down || !down->s.tme || !down->s.texIsRt || down->s.abe || down->s.fbw != 8u || down->s.rtFbp == down->s.fbp)
+                return 0;
+            const uint32_t frame = down->s.rtFbp, buffer = down->s.fbp;
+            auto back = [&](const DrawCmd *d) { return d && d->s.fbp == frame && d->s.tme && d->s.texIsRt && d->s.rtFbp == buffer; };
+            const DrawCmd *blend = drawAt(f, ci + 1);
+            if (!back(blend) || !blendIs(blend->s, 0u, 1u, 2u, 1u))
+                return 0;
+            const DrawCmd *tint = drawAt(f, ci + 2);
+            if (!back(tint) || !blendIs(tint->s, 0u, 2u, 2u, 1u))
+                tint = nullptr;
+            const float w = std::max(1.0f, g_aspectWidening.load(std::memory_order_relaxed));
+            const uint32_t th = std::max<uint32_t>(down->s.scy1, 1u);
+            rhi::Texture *t = postBuffer(m_postTrails, static_cast<uint32_t>(std::lround(512.0f * w)), th, "gs post trails");
+            if (!t)
+                return 0;
+            m_postVerts.clear();
+            std::vector<PostItem> items;
+            postAdd(items, f, down, t, nullptr, w, 0.0f);
+            postAdd(items, f, blend, nullptr, t, w, 512.0f);
+            if (tint)
+                postAdd(items, f, tint, nullptr, t, w, 512.0f);
+            postRun(items, w, log, "trails");
+            postWriteBack(t, buffer, 8u, 512u, th);
+            return tint ? 3u : 2u;
+        }
+
         void hudSceneDraw(uint32_t fbp)
         {
             if (!m_hud.empty())
@@ -1156,7 +1378,7 @@ namespace
 
         void draw(const HwState &s, uint32_t first, uint32_t count, const NativeDrawCmd *native, const LayerTarget *layer = nullptr)
         {
-            rhi::Buffer *vertices = layer ? m_hudVb.get() : m_vb.get();
+            rhi::Buffer *vertices = layer ? (layer->vertices ? layer->vertices : m_hudVb.get()) : m_vb.get();
             uint32_t vertexOffset = 0;
             if (native && native->transient)
             {
@@ -1177,12 +1399,13 @@ namespace
             const bool depthOn = s.zte != 0u;
             rhi::Texture *colorTarget = nullptr, *depthTarget = nullptr;
             float targetW = 0.0f, targetH = 0.0f; // PS2 pixels
-            if (layer)
+            const LayerTarget *target = layer && layer->color ? layer : nullptr; // a target other than the draw's own
+            if (target)
             {
-                colorTarget = layer->color;
-                depthTarget = depthOn ? layer->depth : nullptr;
-                targetW = static_cast<float>(layer->color->desc().width) / layer->scaleX;
-                targetH = static_cast<float>(layer->color->desc().height) / layer->scaleY;
+                colorTarget = target->color;
+                depthTarget = depthOn ? target->depth : nullptr;
+                targetW = static_cast<float>(target->color->desc().width) / target->scaleX;
+                targetH = static_cast<float>(target->color->desc().height) / target->scaleY;
             }
             else
             {
@@ -1203,7 +1426,10 @@ namespace
             // texture: decoded VRAM, another render target, or this target itself (sampled from a copy)
             rhi::Texture *tex = nullptr;
             float rtScale = 1.0f;
-            if (s.tme)
+            const bool plainTexture = layer && layer->texture; // a native buffer, read like decoded VRAM
+            if (s.tme && plainTexture)
+                tex = layer->texture;
+            else if (s.tme)
             {
                 if (s.texIsRt)
                 {
@@ -1228,13 +1454,14 @@ namespace
                 // [gta-recomp] the scissor passes GS pixels scx0..scx1, sampled at their integer positions: moved by the
                 // pixel-centre offset like the geometry, a target pixel passes when its centre does
                 const float o = pixelCentreOffset();
-                const float sx = layer ? layer->scaleX : static_cast<float>(m_scale), sy = layer ? layer->scaleY : static_cast<float>(m_scale);
-                const float ox = layer ? static_cast<float>(layer->originX) : 0.0f, oy = layer ? static_cast<float>(layer->originY) : 0.0f;
+                const float sx = target ? target->scaleX : static_cast<float>(m_scale), sy = target ? target->scaleY : static_cast<float>(m_scale);
+                const float ox = target ? static_cast<float>(target->originX) : 0.0f, oy = target ? static_cast<float>(target->originY) : 0.0f;
+                const float scw = target ? target->scissorScaleX : 1.0f;
                 const int tw = static_cast<int>(colorTarget->desc().width), th = static_cast<int>(colorTarget->desc().height);
                 auto edge = [&](float e, float scale, float origin, int size) {
                     return std::clamp(static_cast<int>(std::ceil((e + o - origin) * scale - 0.5f)), 0, size);
                 };
-                const int x0 = edge(static_cast<float>(s.scx0), sx, ox, tw), x1 = std::max(x0, edge(s.scx1 + 1.0f, sx, ox, tw));
+                const int x0 = edge(s.scx0 * scw, sx, ox, tw), x1 = std::max(x0, edge((s.scx1 + 1.0f) * scw, sx, ox, tw));
                 const int y0 = edge(static_cast<float>(s.scy0), sy, oy, th), y1 = std::max(y0, edge(s.scy1 + 1.0f, sy, oy, th));
                 m_dev.setScissor(x0, y0, x1 - x0, y1 - y0);
             }
@@ -1255,7 +1482,7 @@ namespace
             c.atstArefAfailRt[0] = s.atst;
             c.atstArefAfailRt[1] = s.aref;
             c.atstArefAfailRt[2] = 0;
-            c.atstArefAfailRt[3] = s.texIsRt ? (s.rtFull ? 2 : 1) : 0; // [gta-recomp] 2: read 1:1 at full resolution (rtFull)
+            c.atstArefAfailRt[3] = (s.texIsRt && !plainTexture) ? (s.rtFull ? 2 : 1) : 0; // [gta-recomp] 2: read 1:1 at full resolution
             c.texSizeWrap[0] = s.tw;
             c.texSizeWrap[1] = s.th;
             c.texSizeWrap[2] = s.wms;
@@ -1285,7 +1512,7 @@ namespace
             const uint8_t mr = (s.fbmsk & 0xFFu) != 0xFFu, mg = (s.fbmsk & 0xFF00u) != 0xFF00u, mb = (s.fbmsk & 0xFF0000u) != 0xFF0000u,
                           ma = (s.fbmsk & 0xFF000000u) != 0xFF000000u;
             uint8_t mask = static_cast<uint8_t>(mr | (mg << 1) | (mb << 2) | (ma << 3));
-            if (layer)
+            if (layer && layer->opaque)
                 mask &= 7u; // the shown picture stays opaque (the GS writes the source alpha, the window would show it)
             bool zwrite = depthOn && !s.zmsk;
 
@@ -1347,6 +1574,10 @@ namespace
         std::unordered_map<uint32_t, HudLayer> m_hud; // [gta-recomp] native HUD layer per frame buffer
         std::unique_ptr<rhi::Buffer> m_hudVb;
         std::vector<HwVertex> m_hudShifted;
+        std::unique_ptr<rhi::Texture> m_postBloom[2], m_postTrails; // [gta-recomp] native post-effect buffers
+        std::unique_ptr<rhi::Buffer> m_postVb;
+        size_t m_postVbCapacity = 0;
+        std::vector<HwVertex> m_postVerts;
         size_t m_hudVbCapacity = 0;
         std::unique_ptr<rhi::Texture> m_hudDepth;
         uint32_t m_displayW = 640, m_displayH = 448;

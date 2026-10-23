@@ -151,6 +151,7 @@ namespace
         const float aspect = code == 169 ? 16.0f / 9.0f : code == 1610 ? 16.0f / 10.0f : 4.0f / 3.0f;
         present::setDisplayAspect(aspect);
         vcs::setAspectWidening(aspect / (4.0f / 3.0f));
+        gsHwSetAspectWidening(aspect / (4.0f / 3.0f)); // post effects keep their 4:3 proportions
         const int hud = settings::value("display.hud");
         gsHwSetHudSqueeze(hud != 1 ? (4.0f / 3.0f) / aspect : 1.0f);
         vcs::setHudAnchoring(hud == 2); // per-element placement (game/vcs_hud.h)

@@ -134,7 +134,7 @@ Texture2D<float4> tex : register(t0);
 int wrapc(int c, int size, int mode, int mn, int mx)
 {
     int r = (c & mn) | mx;                       // REGION_REPEAT
-    if (mode == 0) r = c & (size - 1);           // REPEAT
+    if (mode == 0) r = ((c % size) + size) % size; // REPEAT (GS sizes are powers of two; native effect buffers need not be)
     else if (mode == 1) r = clamp(c, 0, size - 1); // CLAMP
     else if (mode == 2) r = clamp(c, mn, mx);    // REGION_CLAMP
     return r;
