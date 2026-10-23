@@ -360,26 +360,175 @@ namespace GSMem
         }
 
         template <PixelStorageMode psm, typename Fetch>
+        void writeRectFast(const typename PixelStorageTraits<psm>::PageLookupTableT& table, u8* data, u32 bp, u32 bw, u32 x0, u32 y0,
+                           u32 w, u32 h, Fetch fetch);
+
+        template <PixelStorageMode psm, typename Fetch>
         bool writeRect(const typename PixelStorageTraits<psm>::PageLookupTableT& table, u8* data, u32 bp, u32 bw, u32 x0, u32 y0, u32 w,
                        u32 h, Fetch fetch)
         {
             static const bool ok = sliceMatches<psm>(table);
             if (!ok)
                 return false;
+            // PS2X_GS_RECT_VERIFY=1: every 64th upload also written pixel by pixel (Write) into a copy and compared
+            static const bool verify = std::getenv("PS2X_GS_RECT_VERIFY") != nullptr;
+            static u32 uploads = 0u;
+            if (verify && (uploads++ & 63u) == 0u)
+            {
+                std::vector<u8> expected(data, data + MEMORY_SIZE);
+                u32 j = 0;
+                for (u32 y = y0; y < y0 + h; ++y)
+                    for (u32 x = x0; x < x0 + w; ++x, ++j)
+                        PixelStorageTraits<psm>::Write(table, expected.data(), bp, bw, x, y,
+                                                       static_cast<typename PixelStorageTraits<psm>::PackedT>(fetch(j)));
+                writeRectFast<psm>(table, data, bp, bw, x0, y0, w, h, fetch);
+                static u32 checked = 0u, differing = 0u;
+                ++checked;
+                if (std::memcmp(expected.data(), data, MEMORY_SIZE) != 0 && differing++ < 20u)
+                    std::fprintf(stderr, "[gs-rect-verify] psm 0x%x bp %u bw %u %ux%u at %u,%u differs\n", static_cast<unsigned>(psm), bp,
+                                 bw, w, h, x0, y0);
+                if ((checked & 255u) == 0u)
+                    std::fprintf(stderr, "[gs-rect-verify] psm 0x%x: %u checked, %u differ\n", static_cast<unsigned>(psm), checked, differing);
+                return true;
+            }
+            writeRectFast<psm>(table, data, bp, bw, x0, y0, w, h, fetch);
+            return true;
+        }
+
+        // Where each pixel of a block lies inside it: the same for every block of a page (checked), so a block the upload
+        // covers completely is written byte by byte from its two pixels - no per-pixel addressing, no read-modify-write.
+        struct BlockLayout
+        {
+            bool ok = false;
+            u32 origin = 0;             // offset of the block's pixel (0, 0)
+            std::vector<u8> x, y;       // pixel of each offset in the block
+        };
+
+        template <PixelStorageMode psm>
+        BlockLayout blockLayout(const typename PixelStorageTraits<psm>::PageLookupTableT& table)
+        {
             using T = PixelStorageTraits<psm>;
             constexpr auto pe = T::PageExtent();
+            constexpr auto be = T::BlockExtent();
+            constexpr u32 bwPx = pe.x / be.x, bhPx = pe.y / be.y, ppb = static_cast<u32>(T::PixelsPerBlock());
+            BlockLayout layout;
+            layout.x.assign(ppb, 0u);
+            layout.y.assign(ppb, 0u);
+            std::vector<u32> offsets(ppb);
+            for (u32 by = 0; by < pe.y; by += bhPx)
+                for (u32 bx = 0; bx < pe.x; bx += bwPx)
+                {
+                    u32 lowest = ~0u;
+                    for (u32 yl = 0; yl < bhPx; ++yl)
+                        for (u32 xl = 0; xl < bwPx; ++xl)
+                            lowest = std::min<u32>(lowest, table[0][by + yl][bx + xl]);
+                    if (lowest % ppb != 0u)
+                        return layout;
+                    std::vector<u8> seen(ppb, 0u);
+                    for (u32 yl = 0; yl < bhPx; ++yl)
+                        for (u32 xl = 0; xl < bwPx; ++xl)
+                        {
+                            const u32 offset = table[0][by + yl][bx + xl] - lowest;
+                            if (offset >= ppb || seen[offset]++)
+                                return layout;
+                            if (bx == 0u && by == 0u)
+                            {
+                                layout.x[offset] = static_cast<u8>(xl);
+                                layout.y[offset] = static_cast<u8>(yl);
+                                offsets[yl * bwPx + xl] = offset;
+                            }
+                            else if (offsets[yl * bwPx + xl] != offset)
+                                return layout;
+                        }
+                }
+            layout.origin = offsets[0];
+            layout.ok = true;
+            return layout;
+        }
+
+        template <PixelStorageMode psm, typename Fetch>
+        void writeRectFast(const typename PixelStorageTraits<psm>::PageLookupTableT& table, u8* data, u32 bp, u32 bw, u32 x0, u32 y0,
+                           u32 w, u32 h, Fetch fetch)
+        {
+            using T = PixelStorageTraits<psm>;
+            constexpr auto pe = T::PageExtent();
+            constexpr u32 ppp = static_cast<u32>(T::PixelsPerPage());
             const u32 blockBase = (bp % static_cast<u32>(T::BlocksPerPage())) * static_cast<u32>(T::PixelsPerBlock());
+            if constexpr (psm == P4)
+            {
+                // Whole blocks at once when no two pixels of the rectangle share an address (the rectangle fits the
+                // buffer width and spans less than GS memory): then the order of the writes doesn't matter.
+                static const BlockLayout layout = [&] {
+                    BlockLayout built = blockLayout<P4>(table);
+                    if (!built.ok)
+                        std::fprintf(stderr, "[gs] PSMT4 block layout self-check failed: uploads written pixel by pixel\n");
+                    return built;
+                }();
+                constexpr auto be = T::BlockExtent();
+                constexpr u32 bwPx = pe.x / be.x, bhPx = pe.y / be.y;
+                const u32 pagesPerRow = (bw * 64u) / pe.x;
+                const u32 pageRows = (y0 + h - 1u) / pe.y - y0 / pe.y + 1u;
+                if (layout.ok && pagesPerRow != 0u && (x0 + w + pe.x - 1u) / pe.x <= pagesPerRow &&
+                    (static_cast<uint64_t>(pageRows) * pagesPerRow + 1u) * ppp / 2u <= MEMORY_SIZE)
+                {
+                    const u32 xEnd = x0 + w, yEnd = y0 + h;
+                    u32 rowStart[bhPx];
+                    for (u32 by = y0 - y0 % bhPx; by < yEnd; by += bhPx)
+                        for (u32 bx = x0 - x0 % bwPx; bx < xEnd; bx += bwPx)
+                        {
+                            if (bx >= x0 && by >= y0 && bx + bwPx <= xEnd && by + bhPx <= yEnd)
+                            {
+                                const u32 blockAddr = static_cast<u32>(T::PageId(bp, bw, bx, by)) * ppp + blockBase +
+                                                      table[0][by % pe.y][bx % pe.x] - layout.origin;
+                                u8* out = data + ((blockAddr >> 1) & (MEMORY_SIZE - 1u));
+                                for (u32 yl = 0; yl < bhPx; ++yl)
+                                    rowStart[yl] = (by + yl - y0) * w + (bx - x0);
+                                for (u32 k = 0; k < bwPx * bhPx / 2u; ++k)
+                                {
+                                    const u32 lo = fetch(rowStart[layout.y[2u * k]] + layout.x[2u * k]) & 0x0Fu;
+                                    const u32 hi = fetch(rowStart[layout.y[2u * k + 1u]] + layout.x[2u * k + 1u]) & 0x0Fu;
+                                    out[k] = static_cast<u8>(lo | (hi << 4u));
+                                }
+                                continue;
+                            }
+                            // an edge block: its pixels inside the rectangle one by one
+                            for (u32 y = std::max(by, y0); y < std::min(by + bhPx, yEnd); ++y)
+                                for (u32 x = std::max(bx, x0); x < std::min(bx + bwPx, xEnd); ++x)
+                                {
+                                    const u32 addr = static_cast<u32>(T::PageId(bp, bw, x, y)) * ppp + blockBase + table[0][y % pe.y][x % pe.x];
+                                    u8& byte = data[(addr >> 1) & (MEMORY_SIZE - 1u)];
+                                    const u32 shift = (addr & 1u) * 4u;
+                                    byte = static_cast<u8>((byte & ~(0x0Fu << shift)) | ((fetch((y - y0) * w + (x - x0)) & 0x0Fu) << shift));
+                                }
+                        }
+                    return;
+                }
+            }
             u32 i = 0;
             for (u32 y = y0; y < y0 + h; ++y)
             {
                 const auto& row = table[0][y % pe.y];
-                for (u32 x = x0; x < x0 + w; ++x, ++i)
+                // sliceAddress with the page's row and column hoisted: PageId(bp, bw, x, y) is PageId(bp, bw, 0, y) plus x / pe.x
+                const u32 rowBase = static_cast<u32>(T::PageId(bp, bw, 0u, y)) * ppp + blockBase;
+                for (u32 x = x0; x < x0 + w;)
                 {
-                    const u32 addr = static_cast<u32>(T::PageId(bp, bw, x, y)) * static_cast<u32>(T::PixelsPerPage()) + blockBase + row[x % pe.x];
-                    T::WriteAddress(data, addr, static_cast<typename T::PackedT>(fetch(i)));
+                    const u32 pageEnd = std::min(x0 + w, (x / static_cast<u32>(pe.x) + 1u) * static_cast<u32>(pe.x));
+                    const u32 base = rowBase + (x / static_cast<u32>(pe.x)) * ppp;
+                    for (; x < pageEnd; ++x, ++i)
+                    {
+                        const u32 addr = base + row[x % pe.x];
+                        if constexpr (psm == P4)
+                        {
+                            // WriteAddress for 4-bit pixels: the nibble at addr / 2, low first
+                            u8& byte = data[(addr >> 1) & (MEMORY_SIZE - 1u)];
+                            const u32 shift = (addr & 1u) * 4u;
+                            byte = static_cast<u8>((byte & ~(0x0Fu << shift)) | ((fetch(i) & 0x0Fu) << shift));
+                        }
+                        else
+                            T::WriteAddress(data, addr, static_cast<typename T::PackedT>(fetch(i)));
+                    }
                 }
             }
-            return true;
         }
     }
 

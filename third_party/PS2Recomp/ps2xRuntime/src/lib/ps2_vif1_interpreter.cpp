@@ -665,7 +665,94 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
             const bool zeroExtend = (imm & 0x4000u) != 0u;
 
-            if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+            // PS2X_VIF_UNPACK_FAST=0: the general loop only; =verify: both, compared (reported as [vif1-unpack-verify])
+            static const int unpackFast = [] {
+                const char *e = std::getenv("PS2X_VIF_UNPACK_FAST");
+                return !e ? 1 : *e == '0' ? 0 : *e == 'v' ? 2 : 1;
+            }();
+            bool fastDone = false;
+            std::vector<uint8_t> verifyBefore, verifyFast;
+            uint32_t verifyRowBefore[4] = {}, verifyRowFast[4] = {};
+            if (unpackFast && m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes && !maskEnable && cl == wl &&
+                (vl != 3u || vn == 3u))
+            {
+                if (unpackFast == 2)
+                {
+                    verifyBefore.assign(m_vu1Data, m_vu1Data + PS2_VU1_DATA_SIZE);
+                    std::memcpy(verifyRowBefore, vif1_regs.row, sizeof(verifyRowBefore));
+                }
+                fastDone = true;
+                // [gta-recomp] The common UNPACK - no mask, CL == WL, so vector i goes to VU address + i - with one
+                // format switch per UNPACK and no divisions per vector. The same writes as the general loop below
+                // (fields the format doesn't supply keep their old value, MODE 1 / 2 add / accumulate ROW).
+                const uint8_t *src = data + pos;
+                const uint32_t mode = vif1_regs.mode & 3u;
+                const bool add = vl != 3u && (mode == 1u || mode == 2u);
+                const uint32_t limit = components > 4 ? 4u : static_cast<uint32_t>(components);
+                for (uint32_t i = 0; i < writeVectorCount; ++i)
+                {
+                    uint8_t *dst = m_vu1Data + ((vuAddr + i) & 0x3FFu) * 16u;
+                    const uint8_t *v = src + i * bytesPerVector;
+                    uint32_t lanes[4];
+                    std::memcpy(lanes, dst, sizeof(lanes));
+                    switch (vl)
+                    {
+                    case 0u:
+                        if (components == 1)
+                        {
+                            uint32_t scalar;
+                            std::memcpy(&scalar, v, 4u);
+                            lanes[0] = lanes[1] = lanes[2] = lanes[3] = scalar;
+                        }
+                        else
+                            std::memcpy(lanes, v, limit * 4u);
+                        break;
+                    case 1u:
+                        for (uint32_t c = 0; c < limit; ++c)
+                        {
+                            uint16_t raw;
+                            std::memcpy(&raw, v + (components == 1 ? 0u : c * 2u), 2u);
+                            lanes[c] = zeroExtend ? raw : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(raw)));
+                        }
+                        if (components == 1)
+                            lanes[1] = lanes[2] = lanes[3] = lanes[0];
+                        break;
+                    case 2u:
+                        for (uint32_t c = 0; c < limit; ++c)
+                            lanes[c] = zeroExtend ? v[c] : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(v[c])));
+                        if (components == 1)
+                            lanes[1] = lanes[2] = lanes[3] = lanes[0];
+                        break;
+                    default:
+                    {
+                        uint16_t packed;
+                        std::memcpy(&packed, v, 2u);
+                        lanes[0] = (packed & 0x001Fu) << 3u;
+                        lanes[1] = (packed & 0x03E0u) >> 2u;
+                        lanes[2] = (packed & 0x7C00u) >> 7u;
+                        lanes[3] = (packed & 0x8000u) >> 8u;
+                        break;
+                    }
+                    }
+                    if (add)
+                        for (uint32_t field = 0u; field < 4u; ++field)
+                        {
+                            lanes[field] += vif1_regs.row[field];
+                            if (mode == 2u)
+                                vif1_regs.row[field] = lanes[field];
+                        }
+                    std::memcpy(dst, lanes, sizeof(lanes));
+                }
+                if (unpackFast == 2)
+                {
+                    verifyFast.assign(m_vu1Data, m_vu1Data + PS2_VU1_DATA_SIZE);
+                    std::memcpy(verifyRowFast, vif1_regs.row, sizeof(verifyRowFast));
+                    std::memcpy(m_vu1Data, verifyBefore.data(), PS2_VU1_DATA_SIZE);
+                    std::memcpy(vif1_regs.row, verifyRowBefore, sizeof(verifyRowBefore));
+                    fastDone = false;
+                }
+            }
+            if (!fastDone && m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
             {
                 const uint8_t *srcBase = data + pos;
                 uint32_t srcIndex = 0u;
@@ -863,6 +950,21 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
                     std::memcpy(m_vu1Data + destOff, lanes, sizeof(lanes));
                 }
+            }
+            if (!verifyFast.empty())
+            {
+                static uint64_t checked = 0u, differing = 0u;
+                ++checked;
+                if (std::memcmp(verifyFast.data(), m_vu1Data, PS2_VU1_DATA_SIZE) != 0 ||
+                    std::memcmp(verifyRowFast, vif1_regs.row, sizeof(verifyRowFast)) != 0)
+                {
+                    if (differing++ < 20u)
+                        std::fprintf(stderr, "[vif1-unpack-verify] UNPACK 0x%02x num %u imm 0x%04x cl %u wl %u mode %u differs%c", opcode,
+                                     num, imm, cl, wl, vif1_regs.mode & 3u, 10);
+                }
+                if ((checked & 0xFFFFu) == 0u)
+                    std::fprintf(stderr, "[vif1-unpack-verify] %llu checked, %llu differ%c", static_cast<unsigned long long>(checked),
+                                 static_cast<unsigned long long>(differing), 10);
             }
             pos += totalBytes;
 

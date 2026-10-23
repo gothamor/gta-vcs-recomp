@@ -2380,6 +2380,7 @@ namespace
             std::vector<uint16_t> blocks; // touched
             uint32_t live = 0;            // blocks not yet completely overwritten by a later upload
             bool done = false;            // written or dropped
+            uint32_t takeStamp = 0;       // == m_wantGeneration: chosen by the current materializeBlocks
         };
 
         static bool lazyUploadsEnabled()
@@ -2465,6 +2466,11 @@ namespace
             {
                 ++m_blockPending[b];
                 m_blockWriters[b].push_back(id);
+                std::vector<uint64_t> &uploads = m_blockUploads[b];
+                if (uploads.size() >= 64u) // ids of written / dropped uploads leave when met; blocks nobody reads, here
+                    uploads.erase(std::remove_if(uploads.begin(), uploads.end(), [this](uint64_t old) { return !pendingById(old); }),
+                                  uploads.end());
+                uploads.push_back(id);
             }
             m_pendingBytes += sizeBytes;
             m_pendingUploads.push_back(std::move(pu));
@@ -2489,38 +2495,95 @@ namespace
             if (++m_wantGeneration == 0u)
             {
                 std::fill(m_wantStamp.begin(), m_wantStamp.end(), 0u);
+                for (PendingUpload &u : m_pendingUploads)
+                    u.takeStamp = 0u;
                 m_wantGeneration = 1u;
             }
             const uint32_t stamp = m_wantGeneration;
-            auto wanted = [&](uint16_t b) { return all || m_wantStamp[b] == stamp; };
-            for (uint16_t b : blocks)
-                m_wantStamp[b] = stamp;
-            std::vector<uint8_t> &take = m_scratchTake;
-            take.assign(m_pendingUploads.size(), 0u);
-            for (bool changed = true; changed;)
+            // The queued uploads to write: those touching a wanted block, where the blocks of every upload taken are
+            // wanted too (closure), written in queue order. PS2X_HW_LAZY_INDEX=0: found by rescanning the whole queue
+            // until nothing changes (the original; quadratic in the queue, 8% of the game thread when driving)
+            static const bool indexed = [] {
+                const char *v = std::getenv("PS2X_HW_LAZY_INDEX");
+                return !(v && *v == '0');
+            }();
+            std::vector<size_t> &takeList = m_scratchTakeList;
+            takeList.clear();
+            if (all)
             {
-                changed = false;
                 for (size_t i = 0; i < m_pendingUploads.size(); ++i)
+                    if (!m_pendingUploads[i].done)
+                        takeList.push_back(i);
+            }
+            else if (indexed)
+            {
+                std::vector<uint16_t> &work = m_scratchWork;
+                work.clear();
+                auto want = [&](uint16_t b) {
+                    if (m_wantStamp[b] == stamp)
+                        return;
+                    m_wantStamp[b] = stamp;
+                    if (m_blockPending[b])
+                        work.push_back(b);
+                };
+                for (uint16_t b : blocks)
+                    want(b);
+                while (!work.empty())
                 {
-                    const PendingUpload &u = m_pendingUploads[i];
-                    if (take[i] || u.done)
-                        continue;
-                    bool hit = false;
-                    for (size_t k = 0; k < u.blocks.size() && !hit; ++k)
-                        hit = wanted(u.blocks[k]);
-                    if (!hit)
-                        continue;
-                    take[i] = 1u;
-                    changed = true;
-                    for (uint16_t b : u.blocks)
-                        m_wantStamp[b] = stamp;
+                    const uint16_t b = work.back();
+                    work.pop_back();
+                    std::vector<uint64_t> &ids = m_blockUploads[b];
+                    size_t kept = 0;
+                    for (size_t k = 0; k < ids.size(); ++k)
+                    {
+                        PendingUpload *u = pendingById(ids[k]);
+                        if (!u)
+                            continue; // written or dropped: pruned
+                        ids[kept++] = ids[k];
+                        if (u->takeStamp == stamp)
+                            continue;
+                        u->takeStamp = stamp;
+                        takeList.push_back(static_cast<size_t>(ids[k] - m_pendingFrontId));
+                        for (uint16_t ub : u->blocks)
+                            want(ub);
+                    }
+                    ids.resize(kept);
                 }
+                std::sort(takeList.begin(), takeList.end());
+            }
+            else
+            {
+                auto wanted = [&](uint16_t b) { return m_wantStamp[b] == stamp; };
+                for (uint16_t b : blocks)
+                    m_wantStamp[b] = stamp;
+                std::vector<uint8_t> &take = m_scratchTake;
+                take.assign(m_pendingUploads.size(), 0u);
+                for (bool changed = true; changed;)
+                {
+                    changed = false;
+                    for (size_t i = 0; i < m_pendingUploads.size(); ++i)
+                    {
+                        const PendingUpload &u = m_pendingUploads[i];
+                        if (take[i] || u.done)
+                            continue;
+                        bool hit = false;
+                        for (size_t k = 0; k < u.blocks.size() && !hit; ++k)
+                            hit = wanted(u.blocks[k]);
+                        if (!hit)
+                            continue;
+                        take[i] = 1u;
+                        changed = true;
+                        for (uint16_t b : u.blocks)
+                            m_wantStamp[b] = stamp;
+                    }
+                }
+                for (size_t i = 0; i < take.size(); ++i)
+                    if (take[i])
+                        takeList.push_back(i);
             }
             bool wrote = false;
-            for (size_t i = 0; i < take.size(); ++i)
+            for (size_t i : takeList)
             {
-                if (!take[i])
-                    continue;
                 PendingUpload &u = m_pendingUploads[i];
                 m_cpu.BeginTransfer(u.cmd);
                 m_cpu.UploadImage(u.data.data(), static_cast<uint32_t>(u.data.size()));
@@ -3474,6 +3537,11 @@ namespace
         uint64_t m_pendingFrontId = 0;                    // id of m_pendingUploads.front()
         std::vector<uint16_t> m_blockPending = std::vector<uint16_t>(kBlocks, 0u); // queued uploads touching each block
         std::vector<std::vector<uint64_t>> m_blockWriters = std::vector<std::vector<uint64_t>>(kBlocks); // their ids
+        // ids of every queued upload touching each block, also after a later one overwrote it completely (m_blockWriters
+        // forgets those) - materializeBlocks' index; ids of uploads no longer queued are pruned when met
+        std::vector<std::vector<uint64_t>> m_blockUploads = std::vector<std::vector<uint64_t>>(kBlocks);
+        std::vector<uint16_t> m_scratchWork;
+        std::vector<size_t> m_scratchTakeList;
         std::vector<uint16_t> m_scratchTouched, m_scratchFull, m_scratchRead;
         std::vector<uint32_t> m_wantStamp = std::vector<uint32_t>(kBlocks, 0u);
         uint32_t m_wantGeneration = 0;

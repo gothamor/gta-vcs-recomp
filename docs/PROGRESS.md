@@ -217,6 +217,14 @@ dropped on uploads (lazy render-target patching).
       first for a steady 60).
 - [x] Performance (milestone 7 work, 2026-10-23): VU0 collision programs 0x020 / 0x3A0 native (bit-exact): game code
       19-24 -> ~12 ms a frame; 60 fps mode 31-37 -> 45-50 fps outside the barracks (render submission ~8 ms is next).
+- [x] Render submission, round 1 (all checked against the old path): VU1 code-write log (only re-uploaded ranges
+      re-decoded); UNPACK fast path (`PS2X_VIF_UNPACK_FAST=verify`); rect uploads with hoisted addressing and whole
+      PSMT4 blocks (`PS2X_GS_RECT_VERIFY=1`); lazy uploads found through a per-block index (`PS2X_HW_LAZY_INDEX=0` for
+      the old scan). 60 mode outside the barracks 45-50 -> 56-60 fps (frame 16.6-17.8 ms: game ~10.5, render ~6).
+      Driving (AI car from Fort Baxter, `fpsdrive.py`) is the hard case: 24-28 -> 26-29 fps, ~1,700 draws a frame,
+      game ~18 ms + render ~17 ms one after the other on the game thread; 30 mode also dips to 27-28 there. Holding 60
+      when driving needs render submission off the game thread (VIF1 / VU1 / GS front end on a worker), not more
+      trimming.
 - [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
       the switch; frame pacing.
 ## Phase 5 - stability
@@ -235,6 +243,10 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_SCALE=n`, `PS2X_HW_DEBUG=1` | hardware renderer scale / stats |
 | `VCS_FPS=1` | VBlanks and flips per second |
 | `VCS_PROFILE=s` | sampling profiler (guest functions + host symbols) |
+| `VCS_PROFILE_LINES=name` | with `VCS_PROFILE`: source lines of the host functions whose name contains `name` |
+| `PS2X_VIF_UNPACK_FAST=0\|verify` | VIF1 UNPACK general loop only / both, compared |
+| `PS2X_GS_RECT_VERIFY=1` | every 64th rect upload also written pixel by pixel and compared |
+| `PS2X_HW_LAZY_INDEX=0` | lazy uploads to write found by rescanning the queue (the old way) |
 | `VCS_WATCHDOG=s` | EE + IOP thread states |
 | `VCS_WATCH=lo,hi[,val]` | guest write watchpoint |
 | `VCS_TRACE_FILES=1` | game file API / inflate / GTAG relocation trace |

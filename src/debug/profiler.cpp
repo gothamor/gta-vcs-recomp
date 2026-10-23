@@ -195,6 +195,36 @@ namespace vcs
                 std::sort(rest.begin(), rest.end(), [](auto &a, auto &b) { return a.second > b.second; });
                 for (size_t i = 0; i < rest.size() && i < 30; ++i)
                     std::fprintf(stderr, "[profile]   %5.1f%%  host %s\n", 100.0 * rest[i].second / total, rest[i].first.c_str());
+                // VCS_PROFILE_LINES=<name>: the source lines of the host functions whose name contains it
+                static const char *linesOf = std::getenv("VCS_PROFILE_LINES");
+                if (linesOf && *linesOf)
+                {
+                    std::unordered_map<std::string, uint64_t> byLine;
+                    for (const auto &[rip, count] : other)
+                    {
+                        alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 256];
+                        auto *sym = reinterpret_cast<SYMBOL_INFO *>(buffer);
+                        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+                        sym->MaxNameLen = 255;
+                        DWORD64 displacement = 0;
+                        if (!SymFromAddr(GetCurrentProcess(), rip, &displacement, sym) || !std::strstr(sym->Name, linesOf))
+                            continue;
+                        IMAGEHLP_LINE64 line{};
+                        line.SizeOfStruct = sizeof(line);
+                        DWORD lineDisplacement = 0;
+                        std::string key = "?";
+                        if (SymGetLineFromAddr64(GetCurrentProcess(), rip, &lineDisplacement, &line))
+                        {
+                            const char *leaf = std::strrchr(line.FileName, '\\');
+                            key = std::string(leaf ? leaf + 1 : line.FileName) + ":" + std::to_string(line.LineNumber);
+                        }
+                        byLine[key] += count;
+                    }
+                    std::vector<std::pair<std::string, uint64_t>> lines(byLine.begin(), byLine.end());
+                    std::sort(lines.begin(), lines.end(), [](auto &a, auto &b) { return a.second > b.second; });
+                    for (size_t i = 0; i < lines.size() && i < 25; ++i)
+                        std::fprintf(stderr, "[profile]     %5.1f%%  line %s\n", 100.0 * lines[i].second / total, lines[i].first.c_str());
+                }
                 std::fflush(stderr);
                 hits.clear();
                 other.clear();
