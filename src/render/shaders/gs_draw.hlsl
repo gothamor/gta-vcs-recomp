@@ -10,7 +10,8 @@ cbuffer Draw : register(b0)
     int4 atstArefAfailRt;  // ATST, AREF, pass (0: alpha-test passing pixels, 1: failing ones), texture is a render target
     int4 texSizeWrap;      // texture w, h, WMS, WMT
     int4 region;           // MINU, MAXU, MINV, MAXV
-    float4 rtOrigin;       // xy: texture origin inside the render target (PS2 pixels)
+    float4 rtOrigin;       // xy: texture origin inside the render target (PS2 pixels); z: pixel-centre offset (0.5: the
+                           // GS samples pixel X at X, D3D at X + 0.5 - geometry moves by z to sample where the GS does)
     int4 blendCPremul;     // C (0 As, 1 Ad, 2 FIX), premultiply (0 none, 1 rgb *= C, 2 rgb *= 1 + C)
     float4 fogColor;       // rgb 0..255
 };
@@ -37,7 +38,7 @@ struct VSOut
 VSOut vs_main(VSIn i)
 {
     VSOut o;
-    const float2 p = i.pos.xy / targetRtFix.xy;
+    const float2 p = (i.pos.xy + rtOrigin.z) / targetRtFix.xy;
     o.pos = float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, i.pos.z, 1.0);
     o.depth = i.pos.z;
     o.stq = i.stq;
@@ -70,7 +71,7 @@ void nativePosition(float4 S, float4 C, float3 st, inout VSOut o)
     const float2 xy = trunc(s.xy * 16.0) / 16.0 - nat[31].xy;
     const float z = floor(trunc(s.z * 16.0) / 16.0);
     const float depth = min(z * nat[31].z, 1.0);
-    const float2 p = xy / targetRtFix.xy;
+    const float2 p = (xy + rtOrigin.z) / targetRtFix.xy;
     o.pos = float4((p.x * 2.0 - 1.0) * S.w, (1.0 - p.y * 2.0) * S.w, depth * S.w, S.w);
     o.depth = depth;
     o.clip = float2(C.z + C.w, C.w - C.z); // the PS2 clip test's near / far planes
@@ -149,10 +150,44 @@ float4 fetchTexel(int2 t)
     return tex.Load(int3(at, 0)) * 255.0;
 }
 
+// A render target read 1:1 (a copy of the picture, texture texel = target pixel; atstArefAfailRt.w == 2): sampled at the
+// target's own resolution instead of once per PS2 texel, so a copy keeps the internal resolution. The wrap / clamp
+// still works on PS2 texels (a clamped coordinate takes the nearest sample inside the allowed texel). At scale 1 this
+// fetches the same texels as fetchTexel.
+float4 fetchRtFull(int2 c)
+{
+    const int n = int(targetRtFix.z);
+    const int2 o = int2(rtOrigin.xy) * n;
+    const int2 t = int2(floor(float2(c - o) / float(n)));
+    int2 w;
+    w.x = wrapc(t.x, texSizeWrap.x, texSizeWrap.z, region.x, region.y);
+    w.y = wrapc(t.y, texSizeWrap.y, texSizeWrap.w, region.z, region.w);
+    const int2 sub = (w == t) ? (c - o - t * n) : ((w > t) ? int2(0, 0) : int2(n - 1, n - 1));
+    const int2 at = o + w * n + clamp(sub, 0, n - 1);
+    return tex.Load(int3(at, 0)) * 255.0;
+}
+
+float4 sampleRtFull(float2 uv)
+{
+    const float2 h = (uv + rtOrigin.xy) * targetRtFix.z; // target texels
+    [branch] if (linearIipFgeAte.x == 0)
+        return fetchRtFull(int2(floor(h)));
+    const float2 p = h - 0.5;
+    const int2 i = int2(floor(p));
+    const float2 f = p - float2(i);
+    const float4 c00 = fetchRtFull(i), c10 = fetchRtFull(i + int2(1, 0));
+    const float4 c01 = fetchRtFull(i + int2(0, 1)), c11 = fetchRtFull(i + int2(1, 1));
+    return lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
+}
+
 float4 sampleTex(float2 uv)
 {
     float4 r;
-    [branch] if (linearIipFgeAte.x == 0)
+    [branch] if (atstArefAfailRt.w == 2)
+    {
+        r = sampleRtFull(uv);
+    }
+    else if (linearIipFgeAte.x == 0)
     {
         r = fetchTexel(int2(floor(uv)));
     }

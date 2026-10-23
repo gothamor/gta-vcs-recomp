@@ -189,6 +189,13 @@ dropped on uploads (lazy render-target patching).
         map, which differs by its sharper text). HUD placement default stays "Keep 4:3"; "Screen edges" is the menu
         choice Display > HUD (user's decision).
   - [ ] Loading screens and the title menu over the flyover: not looked at yet (loading unchanged).
+- [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
+  - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
+        picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
+  - [x] **Higher internal resolutions kept through the copies** (`rtFull`): before, the shown picture was always a
+        640x448 copy scaled up. `PS2X_HW_RT_FULL=0` = before.
+  - [ ] Effects as native passes (bloom, trails, motion blur, self-copy) checked against the emulation at 640x448;
+        aspect-correct kernels in widescreen.
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
@@ -235,6 +242,9 @@ dropped on uploads (lazy render-target patching).
 | `VCS_HUD_RW=0` | no HUD context at the RenderWare level (the 16:9 weapon icon goes back to the screen edge; no native HUD, no anchoring) |
 | `VCS_HUD=0/2/1` | HUD in widescreen: keep 4:3 in the middle / screen edges / stretch (the menu's Display > HUD) |
 | `VCS_HUD_NATIVE=0` | the HUD drawn into the PS2 frame buffer instead of the native layer at the window's size |
+| `PS2X_HW_PIXEL_CENTRE=0` | draws without the GS pixel-centre offset (softer copies, as before 2026-10-23) |
+| `PS2X_HW_RT_FULL=0` | render targets read once per PS2 texel everywhere (higher internal resolutions lost in the copies) |
+| `PS2X_HW_DUMP_ALLVERTS=1` | the F12 draw log prints every vertex of every draw |
 | `VCS_MENU_NATIVE=0` | menus drawn into the PS2 frame buffer instead of the native layer |
 | `VCS_TRACE_IM2D_DELAY=s`, `VCS_TRACE_IM2D_STACK=1` | start the Im2D trace after s seconds (default 30); print the guest stack's return addresses per call |
 | `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier did not find (positions) |

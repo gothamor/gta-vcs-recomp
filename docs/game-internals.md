@@ -344,6 +344,25 @@ the next (30 fps). In order:
 8. Blend with the previous picture: FBP 0 -> 140 at FIX 16 (motion blur), alpha-only clear.
 9. HUD / text at the far plane; the cinematic bars (zero height when closed) and text boxes (alpha 0x40).
 
+**The post effects' exact draws** (2026-10-23, noon outside the barracks, 640x448 4:3, `PS2X_HW_DUMP_ALLVERTS=1`;
+UV mapping per primitive fitted from the vertices, u = du/dx * x + offset in texels, x the GS position):
+- Copy 140 -> 0 (frame start) and motion blur 0 -> 140 (`(Cs-Cd)*16/128 + Cd`): bilinear, **u = x + 0.5,
+  v = y + 0.5** - on the GS (which samples pixel X at X) exactly texel X's centre: a plain copy.
+- Self-copy 140 -> 140 after the 3D: point sampling, REGION_CLAMP, colour 0x7f, alpha 0, ZTST GEQUAL at z = 0 (only
+  where nothing was drawn: the sky); strips with u = x + 0.94..1.88, v = 1.004 y + 0.94 - the sky shifted by about
+  a pixel.
+- Bloom: 640x448 -> 256x256 at FBP 420 (bilinear, 2.5 x 1.75 texels per pixel, +0.5), threshold `Cd - 255 * 35/128`,
+  four blur passes (420 <-> 452: clear, then 35 quads at FIX 128 with colour 0x13 = a ~15% weight each, point
+  sampling, tap offsets of a texel), added into 140 at FIX 100 (bilinear upsample, 0.4 x 0.57 texels per pixel).
+- Trails: 640x448 -> 512x512 at FBP 384 (bilinear, 1.25 x 0.875), blended back at FIX 7 from 103 strips with offsets
+  of up to 11 texels (a smear), then added at FIX 128 with a tint colour (0x10 0x03 0x09 at noon).
+- A 128x128 sample of the picture (5 x 3.5 texels per pixel, no offset) goes into FBP 420 before the radar.
+
+**Pixel centres** (found from the copies above, fixed 2026-10-23): the GS samples a pixel at its integer position,
+D3D at +0.5. Our renderer had drawn without the offset, so the copies (u = x + 0.5) read halfway between two texels:
+the shown picture and the motion-blur feedback were averaged with their neighbours every frame - visibly softer than
+the PS2 (barbed wire and fences smeared at 640x448). NATIVE_RENDERER.md "Post effects".
+
 **Evening black frames (fixed 2026-10-23)**: between about 20:00 and 22:15 most frames came out black -
 everything but the last text - with normal draw counts, native and VU path alike. Found by dumping the render target
 after every full-screen draw (`PS2X_HW_DUMP_STEPS`): the scene in FBP 140 was fine until the bloom was added back

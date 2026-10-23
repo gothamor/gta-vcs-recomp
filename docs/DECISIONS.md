@@ -96,6 +96,15 @@ Newest at the bottom. Each entry: what, why, and what would change it.
 - Next: a conventional hardware-rasterized GS backend (GSdx-HW style) behind the
   existing `GSRasterBackend` interface - broad GPU support, upscaling-friendly.
 
+## 2026-10-23 - Post effects: exact GS emulation at 640x448 first, resolution-aware reads for higher resolutions
+
+The user asked for the post effects to stay as authentic as possible at the original resolution first, then at
+higher resolutions and other aspect ratios. At 640x448 the emulated GS draws are the reference, so the first step
+made them match the GS (pixel centres) instead of replacing them with approximations, and kept them correct at
+higher internal resolutions by reading 1:1 copies at full resolution. Effect-level shaders (one pass per effect,
+independent of the PS2 frame-buffer layout) come with the native frame (milestone 3 step 4), checked against this
+emulation at 640x448.
+
 ## 2026-10-23 - Native HUD: the game names its primitives, the GS packets still carry them
 
 Milestone 3 step 2 draws the HUD natively (docs/NATIVE_RENDERER.md "HUD layer"). Choices:

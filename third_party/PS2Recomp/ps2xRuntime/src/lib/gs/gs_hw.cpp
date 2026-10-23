@@ -73,7 +73,7 @@ namespace
         uint8_t zte, ztst, zmsk, ate, atst, aref, afail, abe;
         uint8_t ba, bb, bc, bd, fix, tme, tfx, tcc;
         uint8_t fst, linear, wms, wmt, fge, fogR, fogG, fogB;
-        uint8_t iip, mode, texIsRt, pad0;
+        uint8_t iip, mode, texIsRt, rtFull; // rtFull [gta-recomp]: a render target read 1:1 (rtFullScale)
         uint16_t tw, th, minu, maxu, minv, maxv;
         uint32_t rtFbp;
         uint16_t rtOx, rtOy;
@@ -176,6 +176,19 @@ namespace
         bool displayFromRt = false;
         uint32_t displayFbp = 0, displayX = 0, displayY = 0, displayW = 0, displayH = 0;
     };
+
+    // [gta-recomp] The GS samples pixel X (coverage, colour, texture coordinates) at its integer position X; D3D at
+    // X + 0.5. Draws move by half a pixel so each pixel samples where the GS would: without it a plain bilinear copy
+    // (u = x + 0.5: texel X's centre on the GS) averaged texels X and X + 1, and VCS copies its frame every frame
+    // (the shown picture, motion blur) - softer than the PS2 and shifted. PS2X_HW_PIXEL_CENTRE=0 = before.
+    float gsPixelCentreOffset()
+    {
+        static const float offset = [] {
+            const char *e = std::getenv("PS2X_HW_PIXEL_CENTRE");
+            return (e && e[0] == '0') ? 0.0f : 0.5f;
+        }();
+        return offset;
+    }
 
     // GS page geometry per PSM: 8 KiB pages.
     // [gta-recomp] PS2X_HW_LOG_DROPS, read once (it is tested per upload - thousands of times a second)
@@ -346,8 +359,10 @@ namespace
         if (s.texIsRt) // [gta-recomp] which render target a frame copy / screen effect reads, and where in it
             std::fprintf(stderr, "[draw]   src rt fbp=%u at %u,%u tex %ux%u tbw? st=(%.1f,%.1f)\n", s.rtFbp, s.rtOx, s.rtOy, s.tw, s.th,
                          d.count ? f.vertices[d.first].s : 0.0f, d.count ? f.vertices[d.first].t : 0.0f);
-        if (d.count <= 96 || s.texIsRt) // [gta-recomp] small draws (overlays, fades) and copies: their vertices
-            for (uint32_t i = 0; i < std::min<uint32_t>(d.count, 96u); ++i)
+        // PS2X_HW_DUMP_ALLVERTS=1: every vertex of every draw (post-effect strips)
+        static const bool allVerts = std::getenv("PS2X_HW_DUMP_ALLVERTS") != nullptr;
+        if (d.count <= 96 || s.texIsRt || allVerts) // [gta-recomp] small draws (overlays, fades) and copies: their vertices
+            for (uint32_t i = 0; i < (allVerts ? d.count : std::min<uint32_t>(d.count, 96u)); ++i)
             {
                 const HwVertex &v = f.vertices[d.first + i];
                 std::fprintf(stderr, "[draw]   v%u (%.1f, %.1f, %.6f) rgba %02x %02x %02x %02x stq %.4f %.4f %.3f\n", i, v.x, v.y, v.z,
@@ -1023,7 +1038,10 @@ namespace
         // that cover nothing then are dropped. Returns the vertices kept from `start` on.
         static uint32_t snapToPixels(std::vector<HwVertex> &vs, size_t start, uint8_t mode)
         {
-            auto snap = [](float x) { return std::ceil(x - 0.5f); };
+            // the first pixel an edge at x covers is ceil(x) on the GS (its pixels sample at integer positions); the
+            // boundary of that pixel's area, in drawing coordinates, is half a pixel before it (pixelCentreOffset)
+            const float o = pixelCentreOffset();
+            auto snap = [o](float x) { return std::ceil(x - 0.5f + o) - o; };
             const uint32_t count = static_cast<uint32_t>(vs.size() - start);
             if (mode != 0 || count % 3u != 0u)
             {
@@ -1077,6 +1095,8 @@ namespace
             }
             return static_cast<uint32_t>(out - start);
         }
+
+        static float pixelCentreOffset() { return gsPixelCentreOffset(); }
 
         void hudSceneDraw(uint32_t fbp)
         {
@@ -1204,17 +1224,20 @@ namespace
             }
 
             bindPass(colorTarget, depthTarget);
-            if (layer)
             {
+                // [gta-recomp] the scissor passes GS pixels scx0..scx1, sampled at their integer positions: moved by the
+                // pixel-centre offset like the geometry, a target pixel passes when its centre does
+                const float o = pixelCentreOffset();
+                const float sx = layer ? layer->scaleX : static_cast<float>(m_scale), sy = layer ? layer->scaleY : static_cast<float>(m_scale);
+                const float ox = layer ? static_cast<float>(layer->originX) : 0.0f, oy = layer ? static_cast<float>(layer->originY) : 0.0f;
                 const int tw = static_cast<int>(colorTarget->desc().width), th = static_cast<int>(colorTarget->desc().height);
-                const int x0 = std::clamp(static_cast<int>(std::floor((static_cast<int>(s.scx0) - layer->originX) * layer->scaleX)), 0, tw);
-                const int y0 = std::clamp(static_cast<int>(std::floor((static_cast<int>(s.scy0) - layer->originY) * layer->scaleY)), 0, th);
-                const int x1 = std::clamp(static_cast<int>(std::ceil((static_cast<int>(s.scx1) + 1 - layer->originX) * layer->scaleX)), x0, tw);
-                const int y1 = std::clamp(static_cast<int>(std::ceil((static_cast<int>(s.scy1) + 1 - layer->originY) * layer->scaleY)), y0, th);
+                auto edge = [&](float e, float scale, float origin, int size) {
+                    return std::clamp(static_cast<int>(std::ceil((e + o - origin) * scale - 0.5f)), 0, size);
+                };
+                const int x0 = edge(static_cast<float>(s.scx0), sx, ox, tw), x1 = std::max(x0, edge(s.scx1 + 1.0f, sx, ox, tw));
+                const int y0 = edge(static_cast<float>(s.scy0), sy, oy, th), y1 = std::max(y0, edge(s.scy1 + 1.0f, sy, oy, th));
                 m_dev.setScissor(x0, y0, x1 - x0, y1 - y0);
             }
-            else
-                m_dev.setScissor(s.scx0 * m_scale, s.scy0 * m_scale, (s.scx1 - s.scx0 + 1) * m_scale, (s.scy1 - s.scy0 + 1) * m_scale);
 
             DrawConstants c{};
             c.targetRtFix[0] = targetW;
@@ -1232,7 +1255,7 @@ namespace
             c.atstArefAfailRt[0] = s.atst;
             c.atstArefAfailRt[1] = s.aref;
             c.atstArefAfailRt[2] = 0;
-            c.atstArefAfailRt[3] = s.texIsRt;
+            c.atstArefAfailRt[3] = s.texIsRt ? (s.rtFull ? 2 : 1) : 0; // [gta-recomp] 2: read 1:1 at full resolution (rtFull)
             c.texSizeWrap[0] = s.tw;
             c.texSizeWrap[1] = s.th;
             c.texSizeWrap[2] = s.wms;
@@ -1243,6 +1266,7 @@ namespace
             c.region[3] = s.maxv;
             c.rtOrigin[0] = s.rtOx;
             c.rtOrigin[1] = s.rtOy;
+            c.rtOrigin[2] = pixelCentreOffset();
             c.fogColor[0] = s.fogR;
             c.fogColor[1] = s.fogG;
             c.fogColor[2] = s.fogB;
@@ -1424,6 +1448,8 @@ namespace
                     out[i].b = out[n - 1].b;
                     out[i].a = out[n - 1].a;
                 }
+            if (s.texIsRt && rtFullScale())
+                s.rtFull = isOneToOne(s, out, n) ? 1u : 0u;
             // [gta-recomp] VCS draws its HUD, text, radar and menus (RwIm2D) at the largest Z, whatever the depth test
             // (RenderWare keeps ZTE on: ZTE=0 is prohibited on the GS); projected sprites (clouds, coronas) take the
             // same path at their real depth.
@@ -1473,8 +1499,13 @@ namespace
                         out[i].x = pivot + (out[i].x - pivot) * squeeze;
                     if (s.scx0 > 0u || s.scx1 < 639u)
                     {
-                        s.scx0 = static_cast<uint16_t>(std::max(0.0f, std::floor(pivot + (s.scx0 - pivot) * squeeze)));
-                        s.scx1 = static_cast<uint16_t>(std::min(639.0f, std::ceil(pivot + (s.scx1 + 1.0f - pivot) * squeeze) - 1.0f));
+                        // the squeezed scissor passes the pixels whose sample position falls in the squeezed span of
+                        // the original pixels (GS: pixel X samples at X); outward rounding let the radar map show in
+                        // a pixel column beside its corner mask
+                        const float a = pivot + (s.scx0 - pivot) * squeeze, b = pivot + (s.scx1 + 1.0f - pivot) * squeeze;
+                        const bool gs = gsPixelCentreOffset() > 0.0f;
+                        s.scx0 = static_cast<uint16_t>(std::max(0.0f, gs ? std::ceil(a) : std::floor(a)));
+                        s.scx1 = static_cast<uint16_t>(std::min(639.0f, std::ceil(b) - 1.0f));
                     }
                 }
             }
@@ -1499,6 +1530,38 @@ namespace
             f.vertices.insert(f.vertices.end(), out, out + n);
             f.draws.back().count += n;
             ps2hle::g_gsVerticesRecorded += n; // [gta-recomp] PS2X_HLE_SURVEY
+        }
+
+        // [gta-recomp] A render target read 1:1: one texel per pixel, no rotation (VCS's copies of its picture: the shown
+        // buffer, the self-copy over the sky, motion blur). The shader then reads the target at its own resolution
+        // (sampleRtFull) - otherwise every copy brought the picture back to 640x448 and a higher internal resolution
+        // was lost. Resampling reads (the bloom and trails downsamples, their blends back) keep PS2-texel sampling, so
+        // those effects look as at 640x448. PS2X_HW_RT_FULL=0 = PS2-texel sampling everywhere.
+        static bool rtFullScale()
+        {
+            static const bool on = [] {
+                const char *e = std::getenv("PS2X_HW_RT_FULL");
+                return !(e && e[0] == '0');
+            }();
+            return on;
+        }
+
+        static bool isOneToOne(const HwState &s, const HwVertex *v, uint32_t n)
+        {
+            if (n < 3u || s.mode != 0u)
+                return false;
+            const float su = s.fst ? 1.0f : static_cast<float>(s.tw), sv = s.fst ? 1.0f : static_cast<float>(s.th);
+            auto u = [&](const HwVertex &p) { return p.s / p.q * su; };
+            auto w = [&](const HwVertex &p) { return p.t / p.q * sv; };
+            const double x1 = v[1].x - v[0].x, y1 = v[1].y - v[0].y, x2 = v[2].x - v[0].x, y2 = v[2].y - v[0].y;
+            const double det = x1 * y2 - x2 * y1;
+            if (std::fabs(det) < 1e-6)
+                return false;
+            const double u1 = u(v[1]) - u(v[0]), u2 = u(v[2]) - u(v[0]), v1 = w(v[1]) - w(v[0]), v2 = w(v[2]) - w(v[0]);
+            const double dudx = (u1 * y2 - u2 * y1) / det, dudy = (u2 * x1 - u1 * x2) / det;
+            const double dvdx = (v1 * y2 - v2 * y1) / det, dvdy = (v2 * x1 - v1 * x2) / det;
+            constexpr double tol = 0.01; // the self-copy maps 448 rows to 450 texels (1.004)
+            return std::fabs(dudx - 1.0) < tol && std::fabs(dvdy - 1.0) < tol && std::fabs(dudy) < tol && std::fabs(dvdx) < tol;
         }
 
         struct DepthInfo // [gta-recomp] depth buffers seen in use (see depthFill)

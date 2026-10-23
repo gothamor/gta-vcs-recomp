@@ -391,6 +391,29 @@ The HUD, text and radar are drawn over the shown picture at the window's size in
 - Textures: the GS backend's decoded texture cache (the same textures the emulated path samples) rather than a
   decoder for RenderWare rasters (DECISIONS.md).
 
+### Post effects (milestone 3 step 3, started 2026-10-23)
+
+The user's priority: authentic at the original 640x448 first, then at higher resolutions and other aspect ratios.
+VCS's effects (game-internals.md 6g: frame copies, self-copy, bloom, trails, motion blur) are GS draws that read
+render targets; at 640x448 the emulation of those draws is the reference, so the work so far makes that exact and
+then makes it hold at higher resolutions:
+- **GS pixel centres** (`gsPixelCentreOffset`, `PS2X_HW_PIXEL_CENTRE=0` = before): every draw (GS path and native
+  draws: `rtOrigin.z` in the vertex shaders) moves by +0.5 pixel and the scissor with it, so each target pixel
+  samples coverage, colour and texture coordinates where the GS samples (pixel X at X). Before, the per-frame copies
+  averaged neighbouring texels and the picture was softer than the PS2's. The HUD layer's pixel snapping and the
+  widescreen scissor squeeze follow the same rule.
+- **Copies at full resolution** (`rtFull`, `PS2X_HW_RT_FULL=0` = before): a draw that reads a render target 1:1 (one
+  texel per pixel, no rotation; checked per draw from its vertices) reads it at the target's resolution
+  (`sampleRtFull`; wrap / clamp still in PS2 texels). At scale 1 it fetches the same texels. Before, every copy
+  brought the picture back to 640x448, so a higher internal resolution was lost (the shown buffer is a copy).
+  Resampling reads (bloom / trails downsamples and their blends back) keep PS2-texel sampling: they look as at
+  640x448 at any scale.
+- Checked: 640x448 before / after (sharper, matching the GS's sampling; static regions of a frame identical with and
+  without `rtFull`), 3x internal (fence and wire at full detail instead of a 640x448 picture scaled up), HUD at
+  1080p, reference scenes; game fps unchanged.
+- Not done yet: the effects as native passes (needed for a native frame, step 4); in widescreen the bloom / trails
+  kernels work in the anamorphic 640-wide frame, so they are 4:3 / aspect wider horizontally than at 4:3.
+
 ### Stage 8 - Enhancements (M each, optional order) - internal resolution done
 
 - Internal resolution: native draws render into the same scaled render targets as the GS path, so
