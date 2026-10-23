@@ -301,7 +301,16 @@ end, Im2D primitives drawn with the depth test off get the HUD's z (`VCS_HUD_RW=
   earlier ones. Blending is (Cs - Cd) * As + Cd or additive; no draw seen uses the destination alpha.
 - After the colour filter and before the HUD the radar's map is drawn into its own target (FBP 420, 128x128; the radar
   on screen samples it).
-- Indoors the radar is the ring alone. Help text hides the rest of the HUD while it is up.
+- Indoors the radar is the ring alone. Help text hides the rest of the HUD while it is up; on leaving the barracks
+  the radar flashes for a while (a tutorial).
+- **Radar on screen** (dump outside the barracks door, 16:9): first an untextured, colourless draw (blend
+  (0 - 0) * As + Cd, Z write) of 24 triangles fills the radar box's corners outside the circle with Z 0xFFFFFE; then
+  the map as four 128x128 tiles (large quads around the box) at Z 0xFFFFFD with ZTST GEQUAL, scissored to the box:
+  they fail in the corners. Then the ring (64x64), the north / blip icons (16x16), all with bilinear filtering.
+- **HUD textures**: the clock and money digits (orange and green, with outlines) and the wanted star are one
+  128x64 atlas with 16-texel cells side by side; the ammo count and text use a 256x256 font atlas. All HUD textures
+  are bilinear-filtered (TEX1 MMAG / MMIN linear) and drawn smaller than their texels (a clock digit: 15 x 21.5
+  texels into about 5 x 9 pixels).
 
 Milestone 3 step 2 builds on this (docs/NATIVE_RENDERER.md "HUD layer"): `vcs_hud.cpp` collects the HUD context's Im2D
 primitives each frame, groups them into elements (boxes closer than 12 px across / 3 px down: a line of text, the

@@ -371,8 +371,19 @@ The HUD, text and radar are drawn over the shown picture at the window's size in
   before) and draws the displayed buffer's layer on top with the same draw shaders, textures and blend modes: target
   size in PS2 pixels = output / (640x448), scissor scaled likewise, its own depth buffer cleared to 0 (the game
   clears Z to 0 just before the HUD), alpha not written (the shown picture stays opaque).
+- **The PS2's pixels, drawn larger** (lines seen at 1080p fullscreen, fixed 2026-10-23). The layer keeps what
+  640x448 would have shown:
+  - Coverage: every layer vertex moves to the pixel boundary the PS2's coverage gives (x' = ceil(x - 0.5)), its
+    triangle's STQ / colour / Z / fog re-evaluated there; triangles that then cover nothing are dropped. Without it
+    sub-pixel gaps between pieces got pixels of their own: the radar map showed in a line left of its circle (map
+    scissored from pixel 27, corner mask from x 27.4).
+  - Sampling: a textured quad (two triangles over one rectangle, CLAMP) samples only the texels inside its own
+    rectangle (REGION_CLAMP). The fonts are atlases with cells side by side; at 1080p a glyph's edge pixels sample
+    within half a texel of the cell border and bilinear filtering pulled in the next cell's outline (lines under the
+    clock's digits, beside its colon).
 - `VCS_HUD_NATIVE=0` = the HUD drawn into the frame buffer as before (with the anchoring still applied);
-  `PS2X_HW_HUD_LOG=1` logs the layers every 2 s.
+  `PS2X_HW_HUD_LOG=1` logs the layers every 2 s; `PS2X_HW_OUTPUT=WxH` forces the output size (a full-screen window
+  in a test run, with `PS2X_CAPTURE_SIZE`).
 - Textures: the GS backend's decoded texture cache (the same textures the emulated path samples) rather than a
   decoder for RenderWare rasters (DECISIONS.md).
 

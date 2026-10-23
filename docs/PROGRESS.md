@@ -179,6 +179,11 @@ dropped on uploads (lazy render-target patching).
         radar round and clipped, the static scenes (loading 0.95, pause map 0.8-0.9 mean difference) as close as two
         runs of one build; at 16:9 the HUD is sharper (no squeeze-then-stretch). No cost: 4:3 flyover 29.3 -> 30.0
         fps, gameplay at the 30 fps cap in both.
+  - [x] **Lines in the HUD at full-screen sizes** (reported by the user at 1080p: a line through the radar's north
+        icon, lines under / beside the clock's digits): sub-pixel gaps and atlas bleeding that 640x448 never showed.
+        The layer now covers the PS2's pixels and samples inside each quad's own texels (NATIVE_RENDERER.md "HUD
+        layer"). Checked at 1920x1080 (`PS2X_HW_OUTPUT`) outside the barracks; at 640x448 the layer still matches the
+        emulated HUD.
   - [ ] Menus (frontend, pause map) and 2D outside CHud::Draw's frame: still the far-plane squeeze in the frame.
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
@@ -227,6 +232,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_HUD=0/2/1` | HUD in widescreen: keep 4:3 in the middle / screen edges / stretch (the menu's Display > HUD) |
 | `VCS_HUD_NATIVE=0` | the HUD drawn into the PS2 frame buffer instead of the native layer at the window's size |
 | `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier did not find (positions) |
+| `PS2X_HW_OUTPUT=WxH` | the renderer's output size whatever the window (full-screen sizes in test runs; with `PS2X_CAPTURE_SIZE`) |
+| `PS2X_HW_DUMP_TEX=<key hex>` | write that decoded texture (colour + alpha PPM, keys from the F12 draw log) - analysis only, never commit |
 | `PS2X_HW_HUD_LOG=1` | the renderer's HUD layers (per frame buffer, stale or not) and the output size, every 2 s |
 | `VCS_TRACE_IM2D=n`, `VCS_TRACE_IM2D_MARKERS=1..5` | log n Im2D calls (caller, primitive, vertices) / the 2D pass's calls, from 30 s on |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |

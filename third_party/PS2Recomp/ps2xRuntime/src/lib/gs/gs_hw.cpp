@@ -338,18 +338,19 @@ namespace
             fogMin = std::min<uint32_t>(fogMin, static_cast<uint32_t>(v.fog * 255.0f));
         }
         std::fprintf(stderr,
-                     "[draw] n=%u fbp=%u zbp=%u zte=%u ztst=%u zmsk=%u tme=%u tex(psm? key=%llx %ux%u rt=%u) tfx=%u tcc=%u abe=%u blend=%u%u%u%u fix=%u ate=%u atst=%u aref=%u afail=%u fge=%u fogMin=%u fogCol=%u,%u,%u fbmsk=%x prim=%u iip=%u fst=%u bounds=(%.0f,%.0f)-(%.0f,%.0f) z=%.5f..%.5f rgbaOr=%08x\n",
+                     "[draw] n=%u fbp=%u zbp=%u zte=%u ztst=%u zmsk=%u tme=%u tex(psm? key=%llx %ux%u rt=%u) tfx=%u tcc=%u abe=%u blend=%u%u%u%u fix=%u ate=%u atst=%u aref=%u afail=%u fge=%u fogMin=%u fogCol=%u,%u,%u fbmsk=%x prim=%u iip=%u fst=%u lin=%u wrap=%u,%u bounds=(%.0f,%.0f)-(%.0f,%.0f) z=%.8f..%.8f rgbaOr=%08x sc=%u,%u-%u,%u\n",
                      d.count, s.fbp, s.zbp, s.zte, s.ztst, s.zmsk, s.tme, (unsigned long long)s.texKey, s.tw, s.th, s.texIsRt,
                      s.tfx, s.tcc, s.abe, s.ba, s.bb, s.bc, s.bd, s.fix, s.ate, s.atst, s.aref, s.afail, s.fge, fogMin,
-                     s.fogR, s.fogG, s.fogB, s.fbmsk, s.mode, s.iip, s.fst, x0, y0, x1, y1, z0, z1, rgbaOr);
+                     s.fogR, s.fogG, s.fogB, s.fbmsk, s.mode, s.iip, s.fst, s.linear, s.wms, s.wmt, x0, y0, x1, y1, z0, z1, rgbaOr,
+                     s.scx0, s.scy0, s.scx1, s.scy1);
         if (s.texIsRt) // [gta-recomp] which render target a frame copy / screen effect reads, and where in it
             std::fprintf(stderr, "[draw]   src rt fbp=%u at %u,%u tex %ux%u tbw? st=(%.1f,%.1f)\n", s.rtFbp, s.rtOx, s.rtOy, s.tw, s.th,
                          d.count ? f.vertices[d.first].s : 0.0f, d.count ? f.vertices[d.first].t : 0.0f);
-        if (d.count <= 24 || s.texIsRt) // [gta-recomp] small draws (overlays, fades) and copies: their vertices
-            for (uint32_t i = 0; i < std::min<uint32_t>(d.count, 24u); ++i)
+        if (d.count <= 96 || s.texIsRt) // [gta-recomp] small draws (overlays, fades) and copies: their vertices
+            for (uint32_t i = 0; i < std::min<uint32_t>(d.count, 96u); ++i)
             {
                 const HwVertex &v = f.vertices[d.first + i];
-                std::fprintf(stderr, "[draw]   v%u (%.1f, %.1f, %.6f) rgba %02x %02x %02x %02x stq %.2f %.2f %.3f\n", i, v.x, v.y, v.z,
+                std::fprintf(stderr, "[draw]   v%u (%.1f, %.1f, %.6f) rgba %02x %02x %02x %02x stq %.4f %.4f %.3f\n", i, v.x, v.y, v.z,
                              v.r, v.g, v.b, v.a, v.s, v.t, v.q);
             }
     }
@@ -435,6 +436,19 @@ namespace
                     d.usage = rhi::UsageSampled;
                     d.name = "gs texture";
                     m_textures[t.key] = m_dev.createTexture(d, t.pixels.data(), t.w * 4u);
+                    // [gta-recomp] PS2X_HW_DUMP_TEX=<key hex>: write that decoded texture (hw_tex_<key>.ppm, alpha dropped)
+                    static const uint64_t dumpTex = std::getenv("PS2X_HW_DUMP_TEX") ? std::strtoull(std::getenv("PS2X_HW_DUMP_TEX"), nullptr, 16) : 0u;
+                    if (dumpTex && t.key == dumpTex)
+                    {
+                        char name[64];
+                        std::snprintf(name, sizeof(name), "hw_tex_%llx.ppm", static_cast<unsigned long long>(t.key));
+                        writePpm(name, reinterpret_cast<const uint8_t *>(t.pixels.data()), t.w, t.h);
+                        std::vector<uint32_t> alpha(t.pixels.size());
+                        for (size_t i = 0; i < alpha.size(); ++i)
+                            alpha[i] = (t.pixels[i] >> 24) * 0x010101u; // alpha as grey
+                        std::snprintf(name, sizeof(name), "hw_tex_%llx_alpha.ppm", static_cast<unsigned long long>(t.key));
+                        writePpm(name, reinterpret_cast<const uint8_t *>(alpha.data()), t.w, t.h);
+                    }
                     break;
                 }
                 case CmdType::TexDelete:
@@ -468,8 +482,7 @@ namespace
                         layer.draws.clear();
                         layer.stale = false;
                     }
-                    layer.draws.push_back({d.s, static_cast<uint32_t>(layer.vertices.size()), d.count});
-                    layer.vertices.insert(layer.vertices.end(), f.vertices.begin() + d.first, f.vertices.begin() + d.first + d.count);
+                    appendHudDraw(layer, f, d);
                     break;
                 }
                 case CmdType::DepthFill:
@@ -552,7 +565,20 @@ namespace
             const HudLayer *layer = nullptr;
             if (g_hudLayer.load(std::memory_order_relaxed) && w && h)
             {
-                const uint32_t ow = g_outputW.load(std::memory_order_relaxed), oh = g_outputH.load(std::memory_order_relaxed);
+                uint32_t ow = g_outputW.load(std::memory_order_relaxed), oh = g_outputH.load(std::memory_order_relaxed);
+                // PS2X_HW_OUTPUT=WxH (testing): the output size of a full-screen window whatever the window
+                static const std::pair<uint32_t, uint32_t> forced = [] {
+                    unsigned fw = 0, fh = 0;
+                    if (const char *e = std::getenv("PS2X_HW_OUTPUT"))
+                        if (std::sscanf(e, "%ux%u", &fw, &fh) != 2)
+                            fw = fh = 0;
+                    return std::pair<uint32_t, uint32_t>(fw, fh);
+                }();
+                if (forced.first && forced.second)
+                {
+                    ow = forced.first;
+                    oh = forced.second;
+                }
                 if (ow >= 64u && oh >= 64u && ow <= 8192u && oh <= 8192u)
                 {
                     // never below the render targets' resolution (a small window; screenshots are taken larger)
@@ -906,6 +932,148 @@ namespace
             float scaleX = 1.0f, scaleY = 1.0f; // target pixels per PS2 pixel
             int originX = 0, originY = 0;       // the PS2 pixel at the target's top-left (vertices come shifted by it)
         };
+
+        // A HUD draw into its layer. Textured quads (two triangles over one rectangle of a clamped texture) sample only
+        // the texels inside their own rectangle (REGION_CLAMP): the HUD's fonts and icons are atlases with cells side by
+        // side, and drawn larger than the PS2's 640x448 the pixels along a quad's edge sample within half a texel of
+        // the cell border, where bilinear filtering pulls in the next cell's outline (lines under the clock's digits,
+        // beside its colon). At 640x448 the PS2's samples stay further inside.
+        void appendHudDraw(HudLayer &layer, const Frame &f, const DrawCmd &d)
+        {
+            const HwVertex *v = f.vertices.data() + d.first;
+            const bool clampable = d.s.tme && !d.s.texIsRt && d.s.mode == 0 && d.s.wms == 1u && d.s.wmt == 1u && d.s.tw && d.s.th;
+            auto add = [&](const HwState &s, const HwVertex *from, uint32_t count) {
+                const size_t start = layer.vertices.size();
+                layer.vertices.insert(layer.vertices.end(), from, from + count);
+                const uint32_t kept = snapToPixels(layer.vertices, start, s.mode);
+                layer.vertices.resize(start + kept);
+                if (!kept)
+                    return;
+                if (!layer.draws.empty() && std::memcmp(&layer.draws.back().s, &s, sizeof(HwState)) == 0 &&
+                    layer.draws.back().first + layer.draws.back().count == start)
+                    layer.draws.back().count += kept;
+                else
+                    layer.draws.push_back({s, static_cast<uint32_t>(start), kept});
+            };
+            if (!clampable)
+            {
+                add(d.s, v, d.count);
+                return;
+            }
+            const float su = d.s.fst ? 1.0f : static_cast<float>(d.s.tw), sv = d.s.fst ? 1.0f : static_cast<float>(d.s.th);
+            uint32_t i = 0;
+            for (; i + 6u <= d.count; i += 6u)
+            {
+                // a quad: both triangles cover the same position and texel rectangle, no perspective
+                float b[2][8];
+                bool ok = true;
+                for (int tri = 0; tri < 2 && ok; ++tri)
+                {
+                    float *r = b[tri];
+                    r[0] = r[2] = r[4] = r[6] = 1e30f;
+                    r[1] = r[3] = r[5] = r[7] = -1e30f;
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        const HwVertex &p = v[i + tri * 3 + k];
+                        if (!d.s.fst && p.q != 1.0f)
+                            ok = false;
+                        const float vals[4] = {p.x, p.y, p.s * su, p.t * sv};
+                        for (int c = 0; c < 4; ++c)
+                        {
+                            r[2 * c] = std::min(r[2 * c], vals[c]);
+                            r[2 * c + 1] = std::max(r[2 * c + 1], vals[c]);
+                        }
+                    }
+                }
+                if (ok)
+                    for (int c = 0; c < 8; ++c)
+                        ok = ok && b[0][c] == b[1][c];
+                if (!ok)
+                {
+                    add(d.s, v + i, 6u);
+                    continue;
+                }
+                // texels whose centres lie inside the rectangle
+                auto range = [](float lo, float hi, uint16_t size, uint16_t &mn, uint16_t &mx) {
+                    int a = static_cast<int>(std::ceil(lo - 0.5f)), z = static_cast<int>(std::floor(hi - 0.5f));
+                    if (a > z)
+                        a = z = static_cast<int>(std::floor((lo + hi) * 0.5f));
+                    mn = static_cast<uint16_t>(std::clamp(a, 0, size - 1));
+                    mx = static_cast<uint16_t>(std::clamp(z, 0, size - 1));
+                };
+                HwState s = d.s;
+                s.wms = s.wmt = 2u; // REGION_CLAMP
+                range(b[0][4], b[0][5], s.tw, s.minu, s.maxu);
+                range(b[0][6], b[0][7], s.th, s.minv, s.maxv);
+                add(s, v + i, 6u);
+            }
+            if (i < d.count)
+                add(d.s, v + i, d.count - i);
+        }
+
+        // The PS2 at 640x448 covers whole pixels: pixel X is drawn when its centre X + 0.5 is inside. Drawn larger, the
+        // fraction of a pixel between an edge and the next pixel boundary gets pixels of its own, and the HUD's pieces
+        // stop lining up: the radar map is scissored from pixel 27, the mask that hides its corners starts at x 27.4,
+        // and at 1080p the map showed in a line of pixels between them. So the layer's vertices move to the pixel
+        // boundaries the PS2's coverage gives (x' = ceil(x - 0.5)), each triangle's other values (STQ, colour, Z, fog)
+        // re-evaluated there from the original triangle, so a covered pixel samples what it sampled before. Triangles
+        // that cover nothing then are dropped. Returns the vertices kept from `start` on.
+        static uint32_t snapToPixels(std::vector<HwVertex> &vs, size_t start, uint8_t mode)
+        {
+            auto snap = [](float x) { return std::ceil(x - 0.5f); };
+            const uint32_t count = static_cast<uint32_t>(vs.size() - start);
+            if (mode != 0 || count % 3u != 0u)
+            {
+                for (size_t i = start; i < vs.size(); ++i)
+                {
+                    vs[i].x = snap(vs[i].x);
+                    vs[i].y = snap(vs[i].y);
+                }
+                return count;
+            }
+            size_t out = start;
+            for (size_t i = start; i + 3 <= vs.size(); i += 3)
+            {
+                const HwVertex t[3] = {vs[i], vs[i + 1], vs[i + 2]};
+                const double area = (double(t[1].x) - t[0].x) * (double(t[2].y) - t[0].y) - (double(t[2].x) - t[0].x) * (double(t[1].y) - t[0].y);
+                float sx[3], sy[3];
+                for (int k = 0; k < 3; ++k)
+                {
+                    sx[k] = snap(t[k].x);
+                    sy[k] = snap(t[k].y);
+                }
+                const double snappedArea = (double(sx[1]) - sx[0]) * (double(sy[2]) - sy[0]) - (double(sx[2]) - sx[0]) * (double(sy[1]) - sy[0]);
+                if (std::fabs(area) < 1e-6 || snappedArea == 0.0)
+                    continue; // covers no pixel
+                for (int k = 0; k < 3; ++k)
+                {
+                    // barycentric coordinates of the snapped position in the original triangle
+                    const double px = sx[k] - t[0].x, py = sy[k] - t[0].y;
+                    const double l1 = (px * (double(t[2].y) - t[0].y) - py * (double(t[2].x) - t[0].x)) / area;
+                    const double l2 = (py * (double(t[1].x) - t[0].x) - px * (double(t[1].y) - t[0].y)) / area;
+                    const double l0 = 1.0 - l1 - l2;
+                    auto lerp3 = [&](float a, float b, float c) { return static_cast<float>(l0 * a + l1 * b + l2 * c); };
+                    auto lerpByte = [&](uint8_t a, uint8_t b, uint8_t c) {
+                        return static_cast<uint8_t>(std::clamp(std::lround(l0 * a + l1 * b + l2 * c), 0l, 255l));
+                    };
+                    HwVertex v = t[k];
+                    v.x = sx[k];
+                    v.y = sy[k];
+                    v.z = std::clamp(lerp3(t[0].z, t[1].z, t[2].z), 0.0f, 1.0f);
+                    v.s = lerp3(t[0].s, t[1].s, t[2].s);
+                    v.t = lerp3(t[0].t, t[1].t, t[2].t);
+                    v.q = lerp3(t[0].q, t[1].q, t[2].q);
+                    v.r = lerpByte(t[0].r, t[1].r, t[2].r);
+                    v.g = lerpByte(t[0].g, t[1].g, t[2].g);
+                    v.b = lerpByte(t[0].b, t[1].b, t[2].b);
+                    v.a = lerpByte(t[0].a, t[1].a, t[2].a);
+                    v.fog = std::clamp(lerp3(t[0].fog, t[1].fog, t[2].fog), 0.0f, 1.0f);
+                    vs[out + k] = v;
+                }
+                out += 3;
+            }
+            return static_cast<uint32_t>(out - start);
+        }
 
         void hudSceneDraw(uint32_t fbp)
         {
