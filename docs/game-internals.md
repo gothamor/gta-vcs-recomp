@@ -271,6 +271,26 @@ Found from frame dumps (`PS2X_HW_DUMP`, draw lists with depth) during the widesc
 - Pause menus have no depth-tested geometry below the far plane (that is how "3D frame" vs "2D
   frame" is told apart for the widescreen presentation).
 
+**At the RenderWare level (2026-10-23, `src/game/vcs_hud.cpp`).** Found from the HUD's format strings (`$%08d` at
+0x4b73a0, `%02d:%02d` at 0x4b73a8, used at 0x31ec08 in the money / clock routine FUN_0031eb18) and a trace of the
+calls (`VCS_TRACE_IM2D=<n>`, `VCS_TRACE_IM2D_MARKERS=5`):
+- **Im2D**: FUN_002fbe08(prim, vertices, count) = RwIm2DRenderPrimitive, FUN_002fbe68(prim, vertices, count, indices,
+  indexCount) = the indexed one. **RwRenderStateSet** = FUN_00175198(state, value) (a switch over states 1..12; 6 =
+  ZTESTENABLE). Font setters around 0x3f4000-0x3f4050 write the font state at 0x711f30.
+- **Vertex** (16 bytes; the PSP-style packed form): u, v as u16 fractions | RGBA bytes | x, y as s16 pixels in
+  640x448 | z (u32; the HUD's is 0xfffffe).
+- **The 2D pass** (FUN_0021f348, after the 3D): sky gradient (0x3e0c6c) and horizon band (0x3e0d4c), the radar map into
+  its off-screen target (indexed, 0x39fec4), clouds (0x3a1260), then **CHud::Draw = FUN_0031c628**: text glyphs
+  (0x3dffc0, quads), the weapon icon (0x3a07a8: a sprite routine, z 0x4dcc3, depth test off), ammo digits (0x3dfe24),
+  the radar on screen (0x3e0018, 0x3e0094, 0x3dff64); then FUN_001676c8, FUN_00396670, FUN_003aee80, FUN_002a9708,
+  FUN_0025cd98 (messages / text when shown); the frame's display list goes out after (FUN_002723e8).
+- The radar map is masked to its circle by **depth**: its HUD draws are depth-tested and their z matters.
+
+The **16:9 weapon-icon bug** (the icon at the right edge, away from its ammo count): the renderer's widescreen placement
+treats far-plane 2D as HUD, and the icon is not at the far plane. Fixed at the source: from CHud::Draw to the frame's
+end, Im2D primitives drawn with the depth test off get the HUD's z (`VCS_HUD_RW=0` = off). Next for milestone 3 step 2:
+drawing these primitives natively (RenderWare raster -> texture, render states) with per-element placement.
+
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 
 From `PS2X_HW_DUMP` / F12 with `PS2X_HW_DUMP_BATCHES=4` at the hospital (-884, -470), noon and 20:00; the draw

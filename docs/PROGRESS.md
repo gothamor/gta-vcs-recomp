@@ -162,6 +162,14 @@ dropped on uploads (lazy render-target patching).
       against the VU (174,110 packets exact over the reference scenes; two missions and a drive exact too). Only clipped
       environment-pass packets still run on the VU1 (63 in two minutes of scenes). Render time 0.3-0.7 ms lower per
       section; pictures identical (game-internals.md 6d). `PS2X_HLE_REDRAW=0` = VU1. Milestone 3 step 1 done.
+- [ ] **Step 2: 2D at the RenderWare level** (started 2026-10-23). Found: Im2D (FUN_002fbe08 / FUN_002fbe68), its
+      vertex format, RwRenderStateSet, CHud::Draw (FUN_0031c628) and the 2D pass's order (game-internals.md 6f);
+      `src/game/vcs_hud.cpp` hooks them.
+  - [x] **16:9 weapon icon at the screen edge** (reported by the user): the icon is drawn off the far plane, so the
+        renderer's HUD placement missed it; HUD-context primitives without a depth test now get the HUD's z. Checked at
+        16:9 (icon beside the clock / ammo as at 4:3, radar still round) and over the reference scenes (no other
+        change). `VCS_HUD_RW=0` = before.
+  - [ ] Native drawing of the 2D primitives (raster -> texture, render states), per-element anchoring.
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
@@ -205,6 +213,8 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HLE_CLIPPER=0` | clipped world packets on the VU1 instead of the C++ clipper |
 | `PS2X_HLE_ENV=0` | the environment-map pass (stage table 0x13) on the VU1 |
 | `PS2X_HLE_REDRAW=0` | 0x02c0's re-draws / shine passes and the float-image prelit packets on the VU1 |
+| `VCS_HUD_RW=0` | no HUD context at the RenderWare level (the 16:9 weapon icon goes back to the screen edge) |
+| `VCS_TRACE_IM2D=n`, `VCS_TRACE_IM2D_MARKERS=1..5` | log n Im2D calls (caller, primitive, vertices) / the 2D pass's calls, from 30 s on |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
 | `PS2X_CLIP_DUMP=dir[,n]` | with `PS2X_HLE_VERIFY=1`: write n clipped packets (VU memory + the VU's kicks) for offline checks |
 | `PS2X_HW_LAZY_UPLOADS=0`, `PS2X_HW_UPSTATS=1` | write texture uploads immediately / upload stats |

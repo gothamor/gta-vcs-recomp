@@ -7,6 +7,7 @@
 #include "game_overrides.h"
 #include "debug/rig.h"
 #include "game/vcs_display.h"
+#include "game/vcs_hud.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/ps2_perf.h"
@@ -631,6 +632,7 @@ namespace
         ps2perf::markGameFrame();
         vcs::applyDisplay(rdram); // widescreen preference / aspect (settings menu)
         vcs::rig::onGameFrame(rdram, ctx, runtime); // automation rig jobs (debug/rig.h)
+        vcs::onFrameKick();                         // the HUD context ends (game/vcs_hud.h)
         FUN_002723e8_0x2723e8(rdram, ctx, runtime);
     }
 
@@ -638,6 +640,7 @@ namespace
     {
         runtime.replaceFunction(0x002723E8u, &markFrameKick);
         vcs::installDisplayHooks(runtime); // widescreen (settings menu)
+        vcs::installHudHooks(runtime);     // 2D at the RenderWare level
         if (std::getenv("VCS_TRACE_PACKETS"))
             runtime.replaceFunction(0x00476770u, &tracePacketUse);
         if (std::getenv("VCS_TRACE_TELEPORT"))

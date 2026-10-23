@@ -1054,9 +1054,6 @@ namespace
             const uint64_t h = fnv(c.vuCode, 0x30, 0x2790, 0xCBF29CE484222325ull);
             checkedGeneration = c.codeGeneration;
             resident = h == 0x301ED1C437E36FF8ull || h == 0x9CF596AA7BF61264ull; // the second differs only in padding after a JR (0x1030)
-            static int logged = 0;
-            if (!resident && logged++ < 8)
-                std::fprintf(stderr, "[hle] prelit code image hash %016llx (not the float one)\n", (unsigned long long)h);
         }
         return resident;
     }
