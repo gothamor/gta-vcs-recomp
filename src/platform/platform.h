@@ -137,12 +137,15 @@ namespace platform
     //                     backend starts its frame just before)
     //   endUiFrame()      Dear ImGui output finished (ImGui::GetDrawData), for the renderer to draw
     //   ...the renderer draws and presents...
-    //   waitNextFrame()   sleeps until the next 1/60 s
+    //   waitNextFrame()   sleeps until the next host frame (1/60 s unless setFrameRate says otherwise)
     void pumpEvents();
     bool quitRequested(); // window closed
     void beginFrame();
     void endUiFrame();
     void waitNextFrame();
+    void setFrameRate(double hz); // host frames per second for waitNextFrame (any thread; 60 by default)
+    double displayRefreshHz();    // the window's monitor's refresh rate (60 when unknown)
+    void delayPrecise(uint64_t ns); // sleep with sub-millisecond precision (any thread)
 
     void windowSize(int &width, int &height); // drawable pixels
 

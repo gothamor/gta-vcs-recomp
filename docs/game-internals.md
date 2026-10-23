@@ -85,11 +85,42 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   FUN_00317ac8: +1, registered by FUN_00317788). At the frame's end **FUN_003179a0** (from FUN_0018f450) waits for
   the previous frame's work, kicks the next display list (FUN_00272268), then `do { WaitVBlank(); } while (vblanks
   < 2);` (0x317a48..0x317a58) and resets the count: **30 fps**, two VBlanks a frame.
-- **CTimer**: FUN_002f4858 = Initialise (registers a VBlank callback 0x2f4840; time scale 0x4CD168 = 1.0),
-  **FUN_002f4960 = Update**: a 64-bit bus-clock tick count (FUN_00451C00; previous at 0x488298) gives the frame's
-  ticks; `ms = ticks / 147456` added to the time in milliseconds (0x488280); **time step (0x4CD174) = ticks * time
-  scale * 50 / 147456000** (1.0 = 1/50 s; 0x34B60B61 = 3.3908e-7). So the step follows the measured frame time.
-- **60 fps** (`src/game/vcs_framerate.cpp`): the VBlank-counting callback adds 2 instead of 1, so the limiter lets a
+- **CTimer** (read from the generated code of Update and Initialise, 2026-10-23; names as in reVC, whose
+  CTimer::Update has the same shape): FUN_002f4858 = Initialise (registers VBlank callback 0x2f4840, which only
+  counts VBlanks at 0x488290; step = 1.0, time scale 0x4CD168 = 1.0, pauses / times / frame counter = 0).
+  **FUN_002f4960 = Update**:
+  - Ticks: **FUN_00451C00(timer id 0x488288)** = a kernel timer's 64-bit count at the bus clock (147.456 MHz),
+    only ever called from here; previous count at 0x488298, this frame's ticks at 0x4CD564. FUN_002f47c0 creates
+    the timer when missing (called twice per Update); FUN_0030c984 = `cvt.w.s` (float -> int, truncating).
+  - Clocks: 0x488280 (ms, also while paused) += ticks / 147456; `m_snPreviousTimeInMilliseconds` 0x4CD16C;
+    **`m_snTimeInMilliseconds` 0x4CD104** and 0x4CD448 += (int)(ticks * scale / 147456) - truncated per frame.
+  - Paused (`m_UserPause` 0x4CD2AC or `m_CodePause` 0x4CD11C): the step goes to 0x4CD174 (pause-mode step) and the
+    frame's ticks are zeroed, so the game clocks stand still.
+  - **`ms_fTimeStep` 0x4CD110** = ticks * scale * 50 / 147456000 (1.0 = 1/50 s; 0x34B60B61 = 3.3908e-7), then
+    **at least 0.5** (1/100 s; VC had 0.01) unless paused or a chase recording (0x481CF8) is on;
+    `ms_fTimeStepNonClipped` 0x4CD300 = that; then unless replaying (0x4CD444 == 2) **at most 3.333** (1/15 s) and
+    the ms clock at most +60 per frame. Chase recording mode (0x4CD138 == 1): step 1.0, clock +16 ms.
+  - **`m_FrameCounter` 0x4CD124** += 1.
+  - (The earlier note "time step at 0x4CD174" was wrong: that is the pause-mode step.)
+- **Frame-rate dependence found in CTimer itself**: the ms clock adds each frame's milliseconds truncated, losing up to
+  1 ms a frame - game time (script waits, timers, the in-game clock) ran 1.5% slow at 30 fps and ~4% at 80 fps
+  (measured: game clock vs wall clock, `m_snTimeInMilliseconds`). And the 0.5 minimum step makes the game run fast
+  above 100 fps. Independent timing feeds whole milliseconds of ticks and lifts the minimum (below).
+- **Display flip FUN_003706c8** (right after the limiter's wait): toggles the buffer index (+0x44 of the struct at
+  *0x488E88), reads CSR, writes PMODE, SMODE2, DISPLAY1/2, DISPFB1/2. The limiter's first loop waits VBlanks until
+  the previous display list is done (+0xC of 0x520F90 back to -1; set by the DMA end); with our DMA completing at
+  once it does not loop. In gameplay the limiter is the only caller of WaitVBlank (counted by return address).
+- **Independent timing** (`src/game/vcs_framerate.cpp`, Display > Game timing): FUN_00451C00 returns the host clock
+  in whole milliseconds of bus ticks (`VCS_TIMESTEP=<fps>`: exactly 1/N s per frame, unpaced); the second
+  FUN_002f47c0 call (ra 0x2F4C04) puts back a step the 0.5 minimum raised (floor 0.05); the limiter's WaitVBlank
+  (ra 0x317A50) presents the frame, paces to the cap on the host clock, brings the EE clock up to real time on the
+  VBlank chain (`EeScheduler::syncToRealTime`) and sets the VBlank count to 2. Measured: game clock = wall clock
+  (x1.001) at 30 and 144; steps 1.65-1.70 at 30, 0.55-0.60 at ~85 fps.
+- **Emulated time and the VBlank chain** (found when independent timing first ran at 5 fps): VBlank events are chained
+  in EE cycles (+1/60 s each) and each is also held to its host-clock moment. An EE clock moved past the chain makes
+  every following VBlank due at once by cycles, and the EE is held at each until its real-time moment - the game
+  crawls. Topping the clock up must therefore aim at the chain's real-time position, not at elapsed host time.
+- **60 fps, original timing** (`src/game/vcs_framerate.cpp`): the VBlank-counting callback adds 2 instead of 1, so the limiter lets a
   frame through after one VBlank. Measured outside the barracks (2026-10-23, i7-7700K): 31-37 fps - a gameplay
   frame costs ~27 ms on the game thread (game code 19-24 ms, render submission ~8 ms), more than 1/60 s; the
   emulated VBlank keeps real-time pace only while the game thread keeps up (events need both the EE cycle and the

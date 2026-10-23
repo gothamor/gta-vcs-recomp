@@ -416,6 +416,26 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
     }
 }
 
+void EeScheduler::syncToRealTime(uint64_t maxCycles) noexcept
+{
+    if (m_lastVBlankHost == std::chrono::steady_clock::time_point{})
+        return;
+    const auto since = std::chrono::steady_clock::now() - m_lastVBlankHost;
+    if (since.count() <= 0)
+        return;
+    const uint64_t target =
+        m_lastVBlankCycle + static_cast<uint64_t>(std::chrono::duration<double>(since).count() * static_cast<double>(kEeClockHz));
+    if (target <= m_clock.cycle)
+        return;
+    uint64_t behind = std::min<uint64_t>(target - m_clock.cycle, maxCycles);
+    while (behind)
+    {
+        const uint32_t step = static_cast<uint32_t>(std::min<uint64_t>(behind, 0x7FFFFFFFu));
+        accountCycles(step);
+        behind -= step;
+    }
+}
+
 bool EeScheduler::isExecutingGuest() const noexcept
 {
     return m_guestExecuting.load(std::memory_order_acquire);
@@ -1870,6 +1890,8 @@ void EeScheduler::processDueDeadlines()
         {
             if (scheduled.event.type == EeEventType::VBlankStart)
             {
+                m_lastVBlankCycle = scheduled.deadlineCycle; // [gta-recomp] syncToRealTime
+                m_lastVBlankHost = scheduled.hostDeadline;
                 scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
                               scheduled.hostDeadline + kVBlankDuration,
                               EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});

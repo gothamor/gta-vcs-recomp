@@ -212,16 +212,32 @@ namespace
         settings::add(s);
 
         s = {};
+        s.key = "display.timing";
+        s.page = "Display";
+        s.label = "Game timing";
+        s.help = "Original: the game paces itself on the PS2's 60 Hz VBlank (30 fps, or 60 with a cap of 60 or more) and "
+                 "slows down when the PC can't keep up. Frame-rate independent: paced by the PC's clock to the frame "
+                 "rate cap, game time follows real time. Behaviour at high frame rates is still being fixed.";
+        s.type = Type::Choice;
+        s.choices = {{"Original (PS2)", 0}, {"Frame-rate independent", 1}};
+        s.defaultValue = 0;
+        s.apply = Apply::Restart;
+        s.env = "VCS_TIMING";
+        s.onChange = [](int v) { vcs::setTiming(v == 1 ? vcs::Timing::Independent : vcs::Timing::Original); };
+        settings::add(s);
+
+        s = {};
         s.key = "display.fps";
         s.page = "Display";
-        s.label = "Frame rate";
-        s.help = "60 runs the game's update twice as often (smoother; the game was made for 30). Needs a fast CPU: "
-                 "a frame that takes longer than 1/60 s falls back to 30.";
+        s.label = "Frame rate cap";
+        s.help = "30 is the original. With original timing anything above 30 runs at 60 (the VBlank allows no more); "
+                 "with frame-rate independent timing the game runs up to the cap.";
         s.type = Type::Choice;
-        s.choices = {{"30 (original)", 30}, {"60", 60}};
+        s.choices = {{"30 (original)", 30}, {"60", 60}, {"120", 120}, {"144", 144}, {"Display refresh", vcs::kCapRefresh},
+                     {"Unlimited", vcs::kCapUnlimited}};
         s.defaultValue = 30;
         s.env = "VCS_FPS";
-        s.onChange = [](int v) { vcs::setFrameRate60(v == 60); };
+        s.onChange = [](int v) { vcs::setFrameCap(v); };
         settings::add(s);
 
         s = {};

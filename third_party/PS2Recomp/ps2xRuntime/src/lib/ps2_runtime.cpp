@@ -1,4 +1,5 @@
 #include "runtime/ps2_render_worker.h" // [gta-recomp]
+#include "runtime/ps2_present.h" // [gta-recomp]
 #include "ps2_runtime.h"
 #include "runtime/gs/gs_gpu.h"
 #include "runtime/gs/gs_hw.h"
@@ -516,11 +517,51 @@ static bool UploadGpuFrame(present::Picture &owned, present::Picture &shown, PS2
     return true;
 }
 
+namespace
+{
+    // [gta-recomp] runtime/ps2_present.h
+    GSHwBackendHandle *g_presentHw = nullptr;
+    PS2Memory *g_presentMemory = nullptr;
+    std::atomic<bool> g_presentOnGameFrames{false};
+    std::atomic<int64_t> g_lastGameFrameNs{0};
+
+    int64_t presentNowNs()
+    {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    // the display registers as they are now; the frame ends after the GS work posted before it
+    void postFrameEnd(GSHwBackendHandle *hw, PS2Memory &memory)
+    {
+        struct Regs
+        {
+            uint64_t v[15];
+        } regs;
+        std::memcpy(regs.v, &memory.gs(), sizeof(regs.v));
+        ps2perf::PhaseScope renderTime(ps2perf::Phase::Render); // waiting for the worker counts as render time
+        ps2_render_worker::post([hw, regs] { hw->endFrame(regs.v); }, true);
+    }
+}
+
+void ps2PresentGameFrame()
+{
+    if (!g_presentHw || !g_presentMemory || !g_presentOnGameFrames.load(std::memory_order_relaxed))
+        return;
+    g_lastGameFrameNs.store(presentNowNs(), std::memory_order_relaxed);
+    postFrameEnd(g_presentHw, *g_presentMemory);
+}
+
+void ps2SetPresentOnGameFrames(bool on)
+{
+    g_presentOnGameFrames.store(on, std::memory_order_relaxed);
+}
+
 void PS2Runtime::presentGpuVBlank(uint64_t vsyncTick)
 {
     ps2perf::markVBlank(); // [gta-recomp]
-    // [gta-recomp] VCS_FPS=1: count game frames (display buffer flips) per second of host time.
-    static const bool s_fps = std::getenv("VCS_FPS") != nullptr;
+    // [gta-recomp] VCS_FPS_LOG=1: count game frames (display buffer flips) per second of host time. (Was VCS_FPS, which
+    // is also the frame rate setting's override, so setting the frame rate turned this log on.)
+    static const bool s_fps = std::getenv("VCS_FPS_LOG") != nullptr;
     if (s_fps)
     {
         static uint64_t s_lastFb = 0, s_flips = 0, s_vblanks = 0;
@@ -538,17 +579,11 @@ void PS2Runtime::presentGpuVBlank(uint64_t vsyncTick)
             s_since = now;
         }
     }
-    if (m_hw)
-    {
-        // [gta-recomp] the display registers as of this VBlank; the frame ends after the GS work posted before it
-        struct Regs
-        {
-            uint64_t v[15];
-        } regs;
-        std::memcpy(regs.v, &m_memory.gs(), sizeof(regs.v));
-        ps2perf::PhaseScope renderTime(ps2perf::Phase::Render); // waiting for the worker counts as render time
-        ps2_render_worker::post([hw = m_hw, regs] { hw->endFrame(regs.v); }, true);
-    }
+    // [gta-recomp] with present-on-game-frames (runtime/ps2_present.h) a VBlank ends a frame only when no game frame
+    // did for 100 ms (loading screens, movies)
+    if (m_hw && !(g_presentOnGameFrames.load(std::memory_order_relaxed) &&
+                  presentNowNs() - g_lastGameFrameNs.load(std::memory_order_relaxed) < 100000000))
+        postFrameEnd(m_hw, m_memory);
     if (!m_gpu)
         return;
     uint64_t regs[GSGpuRenderer::kPrivRegCount];
@@ -914,6 +949,8 @@ bool PS2Runtime::syncCoreSubsystems()
         {
             auto hw = makeHwRasterBackend(GSHwOptions::fromEnvironment());
             m_hw = hw.get();
+            g_presentHw = m_hw; // [gta-recomp] ps2_present.h
+            g_presentMemory = &m_memory;
             m_gs.setRasterBackend(std::move(hw));
             std::cerr << "[gs] hardware GS renderer (D3D11)" << std::endl;
         }

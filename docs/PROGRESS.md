@@ -246,7 +246,13 @@ dropped on uploads (lazy render-target patching).
       PGO + ThinLTO ~20-30% of game code. Checked: static reference scenes unchanged (loading 0.00, pause map 0.33),
       world tour subset classes unchanged, its worst frame 21.0 -> 16.7 ms. Remaining on the game thread (driving):
       game code ~65%, memmove ~3%, VU0 programs ~6%, IOP ~2%.
-- [ ] Frame-rate independence (the user's choice over interpolation, DECISIONS.md 2026-10-23): CTimer on the host
+- [x] Frame-rate independence, phase 1 - timing (2026-10-23): Display > Game timing (Original / Frame-rate
+      independent, restart) and Frame rate cap (30 / 60 / 120 / 144 / display refresh / unlimited). Independent:
+      host-clock CTimer in whole ms, the 0.5 minimum step lifted, host pacing in the limiter, frames presented as the
+      game finishes them, EE clock kept at real time on the VBlank chain. Game clock = wall clock at 30 and 144
+      (was 1.5-4% slow from CTimer's per-frame ms truncation, in original timing too). Original timing unchanged
+      (static reference scenes 0.00). game-internals.md 4.
+- [ ] Frame-rate independence, phases 2-4 (the user's choice over interpolation, DECISIONS.md 2026-10-23): CTimer on the host
       clock, a frame-rate cap setting, a forced-step test rig, then the audit of frame-count assumptions. Replaces
       the "60 fps fixes" item below.
 - [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
@@ -265,7 +271,11 @@ dropped on uploads (lazy render-target patching).
 |---|---|
 | `PS2X_GS=cpu\|hw\|gpu\|null` | GS renderer (default cpu) |
 | `PS2X_HW_SCALE=n`, `PS2X_HW_DEBUG=1` | hardware renderer scale / stats |
-| `VCS_FPS=1` | VBlanks and flips per second |
+| `VCS_FPS_LOG=1` | VBlanks and flips per second (was `VCS_FPS=1`; `VCS_FPS` is the frame rate cap) |
+| `VCS_TIMING=0\|1`, `VCS_FPS=30\|60\|120\|144\|-1\|0` | game timing original / frame-rate independent; frame rate cap (-1 display refresh, 0 unlimited) |
+| `VCS_TIMESTEP=N` | independent timing: exactly 1/N s per game frame, unpaced (frame-dependence tests) |
+| `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
+| `VCS_PERF_OVERLAY=0\|1` | the perf overlay setting for one run |
 | `VCS_PROFILE=s` | sampling profiler (guest functions + host symbols) |
 | `VCS_PROFILE_LINES=name` | with `VCS_PROFILE`: source lines of the host functions whose name contains `name` |
 | `PS2X_VIF_UNPACK_FAST=0\|verify` | VIF1 UNPACK general loop only / both, compared |

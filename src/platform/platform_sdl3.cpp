@@ -23,6 +23,7 @@ namespace platform
         bool g_quit = false;
         bool g_imgui = false;
         uint64_t g_nextFrameNs = 0;
+        std::atomic<uint64_t> g_framePeriodNs{1000000000ull / 60u}; // setFrameRate
 
         std::array<std::atomic<bool>, KEY_COUNT> g_keys{};
         std::array<bool, KEY_COUNT> g_keysPrev{}; // main thread
@@ -434,10 +435,24 @@ namespace platform
             ImGui::Render();
     }
 
+    void setFrameRate(double hz)
+    {
+        g_framePeriodNs.store(static_cast<uint64_t>(1e9 / std::clamp(hz, 24.0, 1000.0)), std::memory_order_relaxed);
+    }
+
+    double displayRefreshHz()
+    {
+        const SDL_DisplayID display = g_window ? SDL_GetDisplayForWindow(g_window) : SDL_GetPrimaryDisplay();
+        const SDL_DisplayMode *mode = display ? SDL_GetCurrentDisplayMode(display) : nullptr;
+        return mode && mode->refresh_rate > 1.0f ? mode->refresh_rate : 60.0;
+    }
+
+    void delayPrecise(uint64_t ns) { SDL_DelayPrecise(ns); }
+
     void waitNextFrame()
     {
-        // 60 host frames per second, as raylib's SetTargetFPS(60) did
-        constexpr uint64_t kPeriodNs = 1000000000ull / 60u;
+        // 60 host frames per second by default, as raylib's SetTargetFPS(60) did; setFrameRate changes it
+        const uint64_t kPeriodNs = g_framePeriodNs.load(std::memory_order_relaxed);
         const uint64_t now = SDL_GetTicksNS();
         g_nextFrameNs = g_nextFrameNs ? g_nextFrameNs + kPeriodNs : now + kPeriodNs;
         if (g_nextFrameNs < now)
