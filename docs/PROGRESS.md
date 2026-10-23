@@ -215,6 +215,8 @@ dropped on uploads (lazy render-target patching).
 - [x] 60 fps switch (Display > Frame rate, `VCS_FPS=60`; off by default): the limiter lets a frame through after one
       VBlank. On the i7-7700K it reaches 31-37 fps in gameplay: the game thread needs ~27 ms a frame (milestone 7
       first for a steady 60).
+- [x] Performance (milestone 7 work, 2026-10-23): VU0 collision programs 0x020 / 0x3A0 native (bit-exact): game code
+      19-24 -> ~12 ms a frame; 60 fps mode 31-37 -> 45-50 fps outside the barracks (render submission ~8 ms is next).
 - [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
       the switch; frame pacing.
 ## Phase 5 - stability

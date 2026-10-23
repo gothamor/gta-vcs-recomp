@@ -170,7 +170,12 @@ the globals each frame:
 
 - `.vutext` holds four small VIF `MPG` packets (DVP overlays: `0x48055C` -> VU 0x000, 245 pairs;
   `0x4810EC` -> 0x400, 4; `0x48146C` -> 0x000, 24; `0x48176C` -> 0x200, 20). They are **VU0**
-  helpers: program 0 has E-bit exits at 0x000 / 0x010, converts fixed point with `ITOF0` /
+  helpers: program 0 (0x000..0x7A8; identical in VU0 code memory during play) holds **0x020 = segment vs
+  triangle** and **0x3A0 = sphere vs triangle** (with the nearest-point-on-segment subroutine at 0x228, called with
+  `BAL vi15`); they were ~22% of the EE thread interpreted (2026-10-23, `PS2X_TRACE_VU0`) and are native now
+  (`src/game/vcs_vu0_native.cpp`, checked bit-exact with `PS2X_VU0_VERIFY=1` over 4.7M runs while driving). Inputs:
+  vf17 (12.4 / 7-bit fixed point: normal or segment), vf14..16 the triangle (7-bit fixed point), vf12 / vf13 the
+  sphere or segment; out vi1 = hit, vf1 contact point, vf2 / vf3 direction and depth. Program 0 has E-bit exits at 0x000 / 0x010, converts fixed point with `ITOF0` /
   `MULi 1/128`, builds edge vectors and runs `CLIP` / `FMAND` / `FCAND` / `DIV` - most likely
   collision (line / sphere vs triangle). Found by disassembling with hctp-recomp's `vu1dis.py`.
 - The **VU1** rendering microcode is not a static MPG packet: it is uploaded from `.text` each frame

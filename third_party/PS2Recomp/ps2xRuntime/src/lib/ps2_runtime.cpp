@@ -1735,6 +1735,7 @@ namespace
     struct Vu0NativeEntry
     {
         uint32_t startPc = 0;
+        uint32_t rangeStart = 0; // [gta-recomp] the checked code: [rangeStart, rangeStart + codeBytes)
         uint32_t codeBytes = 0;
         uint64_t codeHash = 0;
         Ps2Vu0NativeFn fn = nullptr;
@@ -1760,9 +1761,9 @@ namespace
             return nullptr;
         for (Vu0NativeEntry &entry : vu0Natives())
         {
-            if (entry.startPc != startPc || startPc + entry.codeBytes > PS2_VU0_CODE_SIZE)
+            if (entry.startPc != startPc || entry.rangeStart + entry.codeBytes > PS2_VU0_CODE_SIZE)
                 continue;
-            const uint8_t *code = vu0Code + startPc;
+            const uint8_t *code = vu0Code + entry.rangeStart;
             if (!entry.verifiedCode.empty())
             {
                 if (std::memcmp(entry.verifiedCode.data(), code, entry.codeBytes) == 0)
@@ -1833,7 +1834,21 @@ void ps2RegisterVu0Native(uint32_t startPc, uint32_t codeBytes, uint64_t codeHas
 {
     Vu0NativeEntry entry;
     entry.startPc = startPc;
+    entry.rangeStart = startPc;
     entry.codeBytes = codeBytes;
+    entry.codeHash = codeHash;
+    entry.fn = fn;
+    entry.name = name;
+    vu0Natives().push_back(std::move(entry));
+}
+
+void ps2RegisterVu0NativeRange(uint32_t startPc, uint32_t rangeStart, uint32_t rangeBytes, uint64_t codeHash, Ps2Vu0NativeFn fn,
+                               const char *name) // [gta-recomp]
+{
+    Vu0NativeEntry entry;
+    entry.startPc = startPc;
+    entry.rangeStart = rangeStart;
+    entry.codeBytes = rangeBytes;
     entry.codeHash = codeHash;
     entry.fn = fn;
     entry.name = name;
@@ -1887,6 +1902,23 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
         copyVu0StateToContext(m_vu0.state(), ctx);
         if (native)
             verifyVu0Native(*native, nativeCtx, nativeData.data(), *ctx, vu0Data);
+    }
+    { // [gta-recomp] PS2X_VU0_DUMP=<start hex>: VU0 code + data memory at the first call of that program (vu0_<start>.bin)
+        static const long dumpAt = std::getenv("PS2X_VU0_DUMP") ? std::strtol(std::getenv("PS2X_VU0_DUMP"), nullptr, 16) : -1;
+        static bool dumped = false;
+        if (!dumped && dumpAt >= 0 && startPC == static_cast<uint32_t>(dumpAt))
+        {
+            dumped = true;
+            char name[64];
+            std::snprintf(name, sizeof(name), "vu0_%04x.bin", static_cast<unsigned>(startPC));
+            if (FILE *f = std::fopen(name, "wb"))
+            {
+                std::fwrite(m_memory.getVU0Code(), 1, PS2_VU0_CODE_SIZE, f);
+                std::fwrite(m_memory.getVU0Data(), 1, PS2_VU0_DATA_SIZE, f);
+                std::fclose(f);
+                std::fprintf(stderr, "[vu0] dumped %s (code %u + data %u bytes)\n", name, PS2_VU0_CODE_SIZE, PS2_VU0_DATA_SIZE);
+            }
+        }
     }
     { // [gta-recomp] PS2X_TRACE_VU0=1: VU0 microprogram calls and host time per start address, every 5 s
         static const bool trace = std::getenv("PS2X_TRACE_VU0") != nullptr;

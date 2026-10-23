@@ -14,6 +14,10 @@ using Ps2Vu0NativeFn = void (*)(R5900Context *ctx, uint8_t *vu0Data, uint32_t vu
 
 // codeBytes: length of the program from startPc (byte address); codeHash: ps2Vu0CodeHash of those bytes.
 void ps2RegisterVu0Native(uint32_t startPc, uint32_t codeBytes, uint64_t codeHash, Ps2Vu0NativeFn fn, const char *name);
+// [gta-recomp] The same for a program that also depends on code before its start (subroutines, exit stubs): the hash
+// covers [rangeStart, rangeStart + rangeBytes) of VU0 code memory.
+void ps2RegisterVu0NativeRange(uint32_t startPc, uint32_t rangeStart, uint32_t rangeBytes, uint64_t codeHash, Ps2Vu0NativeFn fn,
+                               const char *name);
 
 // FNV-1a 64 of a code range (for registering and checking).
 uint64_t ps2Vu0CodeHash(const uint8_t *code, uint32_t bytes);
