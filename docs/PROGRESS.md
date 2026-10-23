@@ -81,7 +81,8 @@
       (* flyover load varies run to run; compare per-vertex.) Next: HwBackend::Submit (7%),
       VIF1 unpack (5%), compiled-VU1 pipeline bookkeeping (runLoop / progressXgkick /
       commitReadyPipelines ~8%), GS::writeRegisterPacked (4%), lazy-upload closure (3%).
-- [ ] Whole screen goes black for a few frames now and then (reported 2026-10-22 after the
+- [x] Whole screen goes black for a few frames now and then - **no longer seen** in the user's testing
+      (2026-10-24); gone with the renderer / timing work since (which change is not known). The report: (2026-10-22, after the
       DMA chain fix; not investigated yet). Still seen by the user after the native renderer
       (2026-10-22): objects and the world turn black for a few frames. To check first: whether
       it follows native draws (PS2X_HLE=0 run for comparison), the prelit colour stage inputs
@@ -89,7 +90,7 @@
       render-target drops (RtDrop) around the black frames.
 - [x] Water surface looks missing (dark grey where sea should be): the sea draws (turquoise, waves) in the
       2026-10-23 tours - gone with the render-target fix (milestone 2)
-- [ ] Movies
+- [x] Movies (milestone 5, 2026-10-24: played natively)
 ## Milestone 1 - automation and coverage rig (NATIVE_PORT_ROADMAP.md), started 2026-10-22
 - [x] Control-channel extension (`ps2control::addCommand`) and the rig (`src/debug/rig.cpp`, `tools/rig.py`):
       memory peek / poke / search / dump, pause, frame counter
