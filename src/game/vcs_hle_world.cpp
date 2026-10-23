@@ -5,7 +5,8 @@
 // path's output (ST, RGBA, XYZF per vertex), let the VU1 run, and compare. Reports every 10 s on stderr.
 // Default (PS2X_HLE=0 turns it off): draw world packets natively instead (GS::submitNative, vertex program vs_world in
 // src/render/shaders/gs_draw.hlsl): the VU1 program is skipped; culled packets draw nothing; packets the VU would
-// clip are clipped by the GPU (at the clip test's near / far planes, drawn with the unclipped path's GIF tag).
+// clip stay on the VU1 (PS2X_HLE_CLIPPED=1: clipped by the GPU at the clip test's near / far planes, drawn with the
+// unclipped path's GIF tag - wrong in places, see drawNative).
 #include "runtime/ps2_hle_survey.h"
 #include "runtime/gs/gs_frontend.h"
 
@@ -793,6 +794,18 @@ namespace
             return true; // the VU program ends without drawing or touching VU memory the game reads
         }
         const bool clipped = (any & 0xFC0u) != 0u;
+        // Packets the VU would send through its clipper stay on the VU1 by default: GPU clipping drew some of them
+        // black (the poolside ground in GON_C3's cutscene, game-internals.md 6h); PS2X_HLE_CLIPPED=1 draws them
+        // natively (GPU-clipped at the clip test's near / far planes) for working on that.
+        static const bool clippedNative = [] {
+            const char *e = std::getenv("PS2X_HLE_CLIPPED");
+            return e && e[0] == '1';
+        }();
+        if (clipped && !clippedNative)
+        {
+            ++g_native.fallback;
+            return false;
+        }
 
         GSNativeDraw d;
         d.kind = GSNativeDraw::VcsWorld;

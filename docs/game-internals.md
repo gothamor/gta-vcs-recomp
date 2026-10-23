@@ -269,6 +269,27 @@ game:
   view FBP 280. Copying uploads into targets block by block (`PS2X_HW_PATCH_TARGETS=1`) is exact but costs ~200 ms
   a frame with VCS's upload rate; it needs lazy patching (resolve only when the target is read) - milestone 3.
 
+### 6h. The VU1 clipper and native drawing (GON_C3, 2026-10-23)
+
+Found by the full mission smoke test: in mission 94 (`GON_C3`) the poolside cutscene showed the ground as black /
+fog-blue on the native path, dim brown on the VU1 path (`PS2X_HLE=0`). `PS2X_HLE_VERIFY=1` was clean (26.5M
+fast-path vertices exact, every cull decision right), and drawing only the *clipper* packets on the VU1
+(`PS2X_HLE_CLIPPED`, now the default) reproduced the reference - so the difference is the GPU clipping that native
+drawing used for packets the VU sends through its clipper. Not the cause (each tried and reverted): the GIF tag
+(the kick's tag 49 is right - tag 50 is the second lit pass's, routine 0x2b2 = byte 0x1590, PRIM 0x20c: context 2,
+untextured; stage table 0x19 always ends with 0x2b6 = 0x15b0, tag 49), perspective-correct ST, perspective-correct
+depth, and the near / far clip planes.
+
+What the VU's clipper path does (vu1_code_full.txt): 0x11f8 fog per vertex (same formula as the fast path, from the
+output buffer's w), 0x13d8 then the kick variant 52.z = 711 (byte 0x1638), which is a **per-triangle clipper**: it
+copies tag 49 into qwords 66 / 111 with the y lane replaced by the w lane, kicks a prepared packet at qword 58, walks
+the strip three vertices at a time (skipping triangles with the ADC bit 0x8000 in XYZF.w), converts RGBA to float
+(ITOF0), clips against up to six planes (flags 32, 16, 8 ... with plane data from qwords 64, 63, ...; routines
+0x1b10, 0x1f68, ...), scales the attributes by a per-vertex w after clipping (MULw), and kicks the pieces. Reproducing
+it is milestone 3 work; until then clipped world packets stay on the VU1 (cost: flyover 30 -> 25.5 game fps, render
+18.2 -> 24.6 ms; cutscene and gameplay still at the 30 fps cap). The intro office, which the stage-5 notes called
+black on the VU clipper, draws correctly on it now.
+
 ## 7. Textures: `.XTX`
 
 Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):

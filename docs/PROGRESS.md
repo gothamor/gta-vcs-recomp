@@ -87,7 +87,8 @@
       it follows native draws (PS2X_HLE=0 run for comparison), the prelit colour stage inputs
       (0x9c-0x9e tint) and lighting constants at those moments, texture cache misses, and
       render-target drops (RtDrop) around the black frames.
-- [ ] Water surface looks missing (dark grey where sea should be) - to check
+- [x] Water surface looks missing (dark grey where sea should be): the sea draws (turquoise, waves) in the
+      2026-10-23 tours - gone with the render-target fix (milestone 2)
 - [ ] Movies
 ## Milestone 1 - automation and coverage rig (NATIVE_PORT_ROADMAP.md), started 2026-10-22
 - [x] Control-channel extension (`ps2control::addCommand`) and the rig (`src/debug/rig.cpp`, `tools/rig.py`):
@@ -123,6 +124,20 @@ Findings so far (rig runs; details in game-internals.md):
       and VU path agree (hospital, luma 90 / 95 at 12:00, 73 / 76 at 20:00).
 - [x] Black flashes at teleports / car warps are the game's own load transitions (not bugs).
 - [x] "Relocations" after loading: the safehouse script (rig.Game.prime).
+- [x] Sea: drawn correctly everywhere the full tour went (240 points, 2026-10-23); the old "dark grey sea" was
+      the dropped render targets too.
+- [x] Audio: the missing SPU2 features are implemented (reverb, Gaussian interpolation, PMON, noise, exact
+      envelopes / sweeps) with unit tests; the game itself uses none of reverb / PMON / noise (traced over
+      gameplay and missions 36-54: 0 of 532 samples) - it is a PSP game first.
+- [x] Saves: save to another slot, Load Game, Delete Game through the game's own menus (`tools/saves.py`, regress
+      step "saves"); a card written by older builds (the user's) loads in the current one.
+- [x] Full mission smoke test (`tools/missions.py`, missions 6-100, 2026-10-23): 95 / 95 ok (started, no crash or
+      hang, pictures); dark shots were fades and night cutscenes except one bug:
+- [x] **GON_C3 poolside ground black** on the native path: GPU clipping of the packets the VU sends through its
+      clipper. Clipped world packets stay on the VU1 by default now (`PS2X_HLE_CLIPPED=1` for GPU clipping); cost
+      flyover 30 -> 25.5 game fps (render 18.2 -> 24.6 ms), cutscene / gameplay still at 30. Reproducing the VU's
+      per-triangle clipper natively is milestone 3 (game-internals.md 6h).
+- [ ] Soak: `tools/soak.py --hours 3` (crash / hang / leak / falling) - after the mission run.
 
 ## Phase 5 - stability
 - [ ] Vic falls through the world in some places (reported by the user 2026-10-22, after the
@@ -159,6 +174,7 @@ Findings so far (rig runs; details in game-internals.md):
 | `PS2X_DMA_HIST=1` | VIF1 payload per MB of RAM every 5 s |
 | `VCS_TRACE_PACKETS=1` | peak use of the game's DMA packet buffer |
 | F3 / F4, `PS2X_PERF_LOG=f.csv` | perf overlay / CSV recording (see CONTROLS.md); `python tools/perf_report.py f.csv` |
+| `PS2X_HLE_CLIPPED=1` | draw world packets that cross the clip planes natively (GPU clipping; wrong in places, game-internals.md 6h) |
 | `PS2X_HW_LAZY_UPLOADS=0`, `PS2X_HW_UPSTATS=1` | write texture uploads immediately / upload stats |
 | `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate a slow PC) |
 | `PS2X_VU0_VERIFY=1`, `PS2X_VU0_NATIVE=0` | check / disable native VU0 programs |

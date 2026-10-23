@@ -302,6 +302,10 @@ packets, and the VU memory at MSCAL holds everything a draw needs):
   appear on screen - interiors where the camera sits inside the room (the intro cutscene's office)
   were black. Native GPU clipping draws them (with context 1 and fog, as the unclipped path
   would). Not investigated further in the emulated path.
+  **Superseded 2026-10-23** (game-internals.md 6h): the clipper path does not use tag 50 (that is the second lit
+  pass's), and the VU clipper's output now draws the office correctly. GPU clipping drew the GON_C3 poolside ground
+  black, so clipped world packets are back on the VU1 by default (`PS2X_HLE_CLIPPED=1` = GPU clipping) until the
+  VU's per-triangle clipper is reproduced (milestone 3). Cost: flyover 30 -> 25.5 game fps.
 - Remaining VU1 work: the lit-model pipelines (stage tables 0x16 / 0x13: peds, vehicles, props with
   normals; ~10% of vertices) and sprites / particles (0x02c0).
 

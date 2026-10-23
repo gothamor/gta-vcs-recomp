@@ -7,7 +7,8 @@ them with a stored baseline.
 Steps (each a tool of its own, run in turn; the game window shows):
   scenes    tools/scenes.py capture + compare with the baseline's scenes (picture diffs, perf)
   tour      tools/tour.py on a fixed subset of the map grid (classes per point)
-  missions  tools/missions.py on a few story missions (crash / hang / dark / frame time)
+  missions  tools/missions.py on a few story missions (crash / hang / dark / frame time; 94 = GON_C3, the
+            poolside ground the GPU clipping drew black)
   drive     tools/drive.py on two spots (frame time, black / dip frames)
   evening   the hospital at 12:00 / 20:00 / 21:00 - no black pictures (the evening black frames)
   saves     tools/saves.py: save to slot 2, Load Game slot 1, Delete Game slot 2 through the game's menus
@@ -66,7 +67,7 @@ def step_missions(out, quick):
     if quick:
         return {}
     d = os.path.join(out, "missions")
-    run([os.path.join(TOOLS, "missions.py"), d, "--only", "45,46,50,55", "--seconds", "30"], os.path.join(out, "missions.log"))
+    run([os.path.join(TOOLS, "missions.py"), d, "--only", "45,46,50,55,94", "--seconds", "30"], os.path.join(out, "missions.log"))
     path = os.path.join(d, "results.jsonl")
     recs = [json.loads(l) for l in open(path)] if os.path.isfile(path) else []
     return {str(r["mission"]): {k: r.get(k) for k in ("name", "result", "mission_running", "worst_frame_ms", "dark_shots")} for r in recs}
