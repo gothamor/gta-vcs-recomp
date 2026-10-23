@@ -289,6 +289,13 @@ dropped on uploads (lazy render-target patching).
       VU0 programs used by collision (`0x0000` in .vutext looked like line/sphere vs triangle
       tests, docs/game-internals.md "VU microcode"), and float edge cases in the recompiled code
       (FP contraction, round-to-zero, denormals). Compare with PS2X_HLE=0 to rule the renderer out.
+- [x] Settings menu (F2) flickered between two layouts while the mouse sat between rows, and a click on a toggle
+      (Skip intro movies) did not register - **fixed 2026-10-24**: the menu was an auto-sized, centred window whose
+      help line grew and shrank with the hovered row, so the rows moved under a still mouse every other frame. Now a
+      fixed-size window with a fixed-height help area (SETTINGS_MENU_WIDESCREEN.md "Menu v2"). Checked with real
+      mouse / keyboard input (a script moving the cursor over the window, rows' boundary, clicks, arrows, Q / E,
+      Escape). Settings locked by an environment variable (tools/run.py sets `VCS_SKIP_MOVIES=1`) now name it beside
+      the label: that alone makes a click do nothing.
 ## Phase 6 - enhancements
 
 ## Useful switches

@@ -164,8 +164,9 @@ namespace
         std::fprintf(stderr, "[settings] display aspect %.3f, HUD %s\n", aspect, hud == 0 ? "4:3" : hud == 2 ? "screen edges" : "stretched");
     }
 
-    // The player settings (settings/settings.h; the menu shows them in this order). vcs.ini next to vcs.exe holds
-    // them along with iso=.
+    // The player settings (settings/settings.h). The menu shows pages (tabs) in the order they first appear here, each
+    // page's sections likewise, and the rows of a section in this order. vcs.ini next to vcs.exe holds them along
+    // with iso=; a setting's vcs.ini key stays the same when it moves to another page.
     void registerSettings()
     {
         using settings::Apply;
@@ -175,6 +176,7 @@ namespace
         s = {};
         s.key = "display.aspect";
         s.page = "Display";
+        s.section = "Screen";
         s.label = "Aspect ratio";
         s.help = "Widescreen shows more to the sides (Hor+); 4:3 is the original picture.";
         s.type = Type::Choice;
@@ -187,6 +189,7 @@ namespace
         s = {};
         s.key = "display.hud";
         s.page = "Display";
+        s.section = "Screen";
         s.label = "HUD";
         s.help = "In widescreen: keep the HUD, text and menus at 4:3 in the middle, move each HUD element to the screen "
                  "edge it is near (keeping its 4:3 shape), or stretch them to the screen.";
@@ -200,7 +203,8 @@ namespace
         s = {};
         s.key = "display.scale";
         s.alias = "scale";
-        s.page = "Display";
+        s.page = "Graphics";
+        s.section = "Image quality";
         s.label = "Internal resolution";
         s.help = "Renders the game at a multiple of 640x448, or at the window's own resolution (sharpest; the "
                  "effects keep the original's look). Costs GPU time.";
@@ -215,6 +219,7 @@ namespace
         s = {};
         s.key = "display.timing";
         s.page = "Display";
+        s.section = "Frame rate";
         s.label = "Game timing";
         s.help = "Original: the game paces itself on the PS2's 60 Hz VBlank (30 fps, or 60 with a cap of 60 or more) and "
                  "slows down when the PC can't keep up. Frame-rate independent: paced by the PC's clock to the frame "
@@ -230,6 +235,7 @@ namespace
         s = {};
         s.key = "display.fps";
         s.page = "Display";
+        s.section = "Frame rate";
         s.label = "Frame rate cap";
         s.help = "30 is the original. With original timing anything above 30 runs at 60 (the VBlank allows no more); "
                  "with frame-rate independent timing the game runs up to the cap - at most 100 for now (the game's "
@@ -244,7 +250,8 @@ namespace
 
         s = {};
         s.key = "display.skip_intro";
-        s.page = "Display";
+        s.page = "Game";
+        s.section = "Start-up";
         s.label = "Skip intro movies";
         s.help = "The Rockstar logos and the intro movie at start-up. Off plays them as on the PS2 (Start or Cross skips the "
                  "intro, not the logos); on goes straight to the game.";
@@ -256,7 +263,8 @@ namespace
 
         s = {};
         s.key = "display.msaa";
-        s.page = "Display";
+        s.page = "Graphics";
+        s.section = "Image quality";
         s.label = "Anti-aliasing (MSAA)";
         s.help = "Smooths the edges of the 3D picture. Off is the original. Costs GPU time.";
         s.type = Type::Choice;
@@ -269,7 +277,8 @@ namespace
 
         s = {};
         s.key = "display.aniso";
-        s.page = "Display";
+        s.page = "Graphics";
+        s.section = "Image quality";
         s.label = "Texture filtering";
         s.help = "Anisotropic filtering keeps textures sharp at a slant (roads, walls into the distance). Off is the "
                  "original bilinear filtering.";
@@ -283,23 +292,25 @@ namespace
         settings::add(s);
 
         s = {};
+        s.key = "controls.menu_key";
+        s.page = "Controls";
+        s.section = "Menu";
+        s.label = "Settings menu key";
+        s.help = "Opens and closes this menu. On a gamepad: press Back + Start together.";
+        s.type = Type::Key;
+        s.defaultValue = platform::KEY_F2;
+        settings::add(s);
+
+        s = {};
         s.key = "graphics.perf_overlay";
-        s.page = "Graphics";
+        s.page = "Advanced";
+        s.section = "Diagnostics";
         s.label = "Performance overlay";
         s.help = "Frame times and counters in the corner (F3 toggles it too; F4 records a CSV).";
         s.type = Type::Toggle;
         s.env = "VCS_PERF_OVERLAY";
         s.onChange = [](int v) { ps2perf::setOverlay(v != 0); };
         s.read = [] { return ps2perf::overlayOn() ? 1 : 0; };
-        settings::add(s);
-
-        s = {};
-        s.key = "controls.menu_key";
-        s.page = "Controls";
-        s.label = "Settings menu key";
-        s.help = "Opens and closes this menu. On a gamepad: hold Back + Start.";
-        s.type = Type::Key;
-        s.defaultValue = platform::KEY_F2;
         settings::add(s);
     }
 

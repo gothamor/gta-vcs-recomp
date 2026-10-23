@@ -118,6 +118,49 @@ pause map) are shown at 4:3, pillarboxed.
   (and open its pause menu) before the block applies. A hold time would not avoid that either; a
   later fix is to delay Start to the game by a frame while Back is held.
 
+## Menu v2 (2026-10-24): stable layout, pages and sections
+
+Reported by the user: hovering between two rows made the menu switch between two states every other frame, and
+clicking the new "Skip intro movies" toggle did nothing. Causes and fixes (`src/ui/settings_menu.cpp`):
+- **Layout feedback loop.** The window was `AlwaysAutoResize` and centred with pivot 0.5 every frame; the help line
+  below the table showed the hovered row's help (one to four wrapped lines) or nothing. Hovering a row grew the window,
+  re-centring moved the rows up under the still mouse, the row was no longer hovered, the help vanished, the window
+  shrank, and so on - two layouts alternating. A click whose press and release fell in different layouts was lost
+  (ImGui buttons and checkboxes fire on release over the same item). The "applies after a restart" line inserted
+  under a changed Restart row moved the rows below it too.
+- Now: the window size comes from the viewport only (0.92 x width up to 720 px, 0.88 x height up to 540 px, both
+  times the menu scale); the rows scroll in a child of the remaining height; the help area is as tall as the longest
+  help text of any setting at the current width, so nothing changes size with the selection or the page. The restart
+  note is a `*` after the label and one footer line that always keeps its space.
+- **Help is sticky**: it shows the row last hovered (only when the mouse moves or clicks, so a resting cursor doesn't
+  fight the keyboard) or navigated to with keyboard / gamepad, highlighted, and stays when the mouse is between rows.
+- **Whole-row hit area**: a row counts as hovered across its label, control and the gap; clicking anywhere on a
+  toggle's row flips it.
+- **Locked settings** (set by their environment variable for this run) show the variable beside the greyed label
+  (`Skip intro movies (VCS_SKIP_MOVIES)`) and say how to unlock them in the help: `tools/run.py` sets
+  `VCS_SKIP_MOVIES=1` for test runs, which locks that toggle - a click that does nothing by design looked like a bug.
+- The menu window takes keyboard focus back when it lost it (a click on the game picture), except while a combo's
+  list is open (focusing the window would close it). A key capture is cancelled by clicking elsewhere or by B.
+- The F3 overlay draws on Dear ImGui's background draw list (under windows; it covered the menu's first tabs).
+
+Pages and sections (`settings::Spec::section`; pages in order of first registration, sections likewise, rows in
+registration order; the vcs.ini keys did not change):
+
+| Page | Section | Settings |
+|---|---|---|
+| Display | Screen | Aspect ratio, HUD |
+| Display | Frame rate | Game timing, Frame rate cap |
+| Graphics | Image quality | Internal resolution, Anti-aliasing (MSAA), Texture filtering |
+| Game | Start-up | Skip intro movies (`display.skip_intro`) |
+| Controls | Menu | Settings menu key |
+| Advanced | Diagnostics | Performance overlay (`graphics.perf_overlay`) |
+
+Checked in the game with real input (a ctypes script moving the cursor and pressing keys in the window - it must be
+DPI-aware, and arrow keys need scan codes and the extended flag or SDL sees keypad keys): a cursor parked on a row
+boundary gives the same layout frame after frame; clicking a toggle's label flips it and writes vcs.ini; arrows move
+the selection and the help follows; Enter opens a list, Escape closes the list, a second Escape the menu; Q / E
+switch pages.
+
 ## Part 1 - the settings menu
 
 ### What the player sees

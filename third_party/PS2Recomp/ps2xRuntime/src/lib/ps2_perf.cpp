@@ -277,22 +277,23 @@ namespace ps2perf
             }
         }
 
-        // ---- overlay (main thread): Dear ImGui foreground draw list ---------------------------------------------
+        // ---- overlay (main thread): Dear ImGui background draw list ---------------------------------------------
+        // [gta-recomp] background, not foreground: over the game picture but under windows (the settings menu)
         using Color = ImU32;
         constexpr Color rgba(int r, int g, int b, int a) { return IM_COL32(r, g, b, a); }
         int screenWidth() { return static_cast<int>(ImGui::GetIO().DisplaySize.x); }
         int screenHeight() { return static_cast<int>(ImGui::GetIO().DisplaySize.y); }
         void rect(float x, float y, float w, float h, Color c)
         {
-            ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), c);
+            ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), c);
         }
         void text(const char *t, float x, float y, float size, Color c)
         {
-            ImGui::GetForegroundDrawList()->AddText(ImGui::GetFont(), size, ImVec2(x, y), c, t);
+            ImGui::GetBackgroundDrawList()->AddText(ImGui::GetFont(), size, ImVec2(x, y), c, t);
         }
         void line(float x0, float y0, float x1, float y1, Color c)
         {
-            ImGui::GetForegroundDrawList()->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), c);
+            ImGui::GetBackgroundDrawList()->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), c);
         }
         int textWidth(const char *t, float size) { return static_cast<int>(ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.0f, t).x); }
 

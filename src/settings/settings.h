@@ -38,7 +38,8 @@ namespace settings
     {
         std::string key;     // vcs.ini key, e.g. "display.aspect"
         std::string alias;   // an older vcs.ini key, read when `key` is absent (e.g. "scale")
-        std::string page;    // menu page, e.g. "Display"
+        std::string page;    // menu page (a tab), e.g. "Display"; independent of `key`, so settings can move pages
+        std::string section; // heading inside the page, e.g. "Screen" (rows of one section are registered together)
         std::string label;   // "Aspect ratio"
         std::string help;    // one line, shown for the selected setting
         Type type = Type::Toggle;

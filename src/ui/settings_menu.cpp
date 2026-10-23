@@ -1,4 +1,10 @@
 // See settings_menu.h.
+//
+// Layout: a fixed-size window (from the viewport alone), the page tabs, the page's sections in a scrolling child, and a
+// footer of fixed height (help text sized for the longest help of any setting, the restart note, the buttons). Nothing
+// in the window changes size with what the mouse is over: an auto-sized, centred window whose help line grew and
+// shrank with the hovered row moved the rows under a still mouse every other frame, and a click whose press and release
+// landed in different layouts was lost (2026-10-24).
 #include "ui/settings_menu.h"
 
 #include "platform/platform.h"
@@ -21,9 +27,12 @@ namespace ui
         bool g_releaseWait = false;  // closed, but the keys / buttons that closed it are still down
         bool g_chordWasDown = false; // Back + Start
         bool g_popupWasOpen = false; // a combo's list: Escape / B close it, not the menu
+        bool g_wasFocused = false;   // the menu window had focus last frame
         bool g_focusWindow = false;
         int g_page = 0, g_selectPage = -1;
-        std::string g_capturing; // the Key setting waiting for a key press
+        std::string g_capturing;  // the Key setting waiting for a key press
+        std::string g_helpKey;    // the row whose help shows: the last one hovered or navigated to (kept in between)
+        std::string g_navFocused; // the row whose control had keyboard / gamepad focus last frame
 
         const char *keyName(int key)
         {
@@ -95,6 +104,8 @@ namespace ui
             g_open = true;
             g_focusWindow = true;
             g_capturing.clear();
+            g_helpKey.clear();
+            g_navFocused.clear();
             ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
         }
 
@@ -106,32 +117,77 @@ namespace ui
             ImGui::GetIO().ConfigFlags &= ~(ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad);
         }
 
-        // One row: the label, then the setting's control. Returns the help text when the row is selected or hovered.
-        void row(const settings::Spec &s, std::string &help)
+        bool restartPending(const settings::Spec &s) { return s.apply == settings::Apply::Restart && settings::changedSinceStart(s.key); }
+
+        // What the help area shows for a setting.
+        std::string helpText(const settings::Spec &s)
         {
+            std::string text = s.help;
+            if (s.apply == settings::Apply::Restart)
+                text += " Applies the next time the game starts.";
+            if (settings::overridden(s.key))
+                text += " Locked: the environment variable " + s.env + " sets it for this run (tools/run.py sets some for "
+                        "test runs); start the game without it to change it here.";
+            return text;
+        }
+
+        // A page's sections in the order their first setting was registered.
+        std::vector<std::string> sections(const std::string &page)
+        {
+            std::vector<std::string> out;
+            for (const settings::Spec &s : settings::all())
+                if (s.page == page && std::find(out.begin(), out.end(), s.section) == out.end())
+                    out.push_back(s.section);
+            return out;
+        }
+
+        // The label, then the setting's control. A row is hovered when the mouse is anywhere across it (label, control or
+        // the space between); clicking anywhere on a toggle's row flips it.
+        void row(const settings::Spec &s, std::string &focusedNow)
+        {
+            const ImGuiStyle &style = ImGui::GetStyle();
             const bool locked = settings::overridden(s.key);
             int v = settings::value(s.key);
-            ImGui::TableNextRow();
+            ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight() + style.CellPadding.y * 2.0f);
             ImGui::TableNextColumn();
+            const float top = ImGui::GetCursorScreenPos().y - style.CellPadding.y;
             ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted(s.label.c_str());
+            if (locked) // greyed out with the reason beside it, so a click that does nothing doesn't look like a bug
+                ImGui::TextDisabled("%s (%s)", s.label.c_str(), s.env.c_str());
+            else
+                ImGui::TextUnformatted(s.label.c_str());
+            if (restartPending(s))
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "*");
+            }
             ImGui::TableNextColumn();
             ImGui::PushID(s.key.c_str());
             ImGui::BeginDisabled(locked);
             ImGui::SetNextItemWidth(-FLT_MIN);
+            bool overItem = false;
+            auto noteItem = [&] { // right after the control itself (a combo's list is another window)
+                overItem = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+                if (ImGui::IsItemFocused())
+                    focusedNow = s.key;
+            };
             switch (s.type)
             {
             case settings::Type::Toggle:
             {
                 bool on = v != 0;
-                if (ImGui::Checkbox(on ? "On###v" : "Off###v", &on))
+                const bool changed = ImGui::Checkbox(on ? "On###v" : "Off###v", &on);
+                noteItem();
+                if (changed)
                     settings::set(s.key, on ? 1 : 0);
                 break;
             }
             case settings::Type::Choice:
             {
                 auto current = std::find_if(s.choices.begin(), s.choices.end(), [&](const settings::Choice &c) { return c.value == v; });
-                if (ImGui::BeginCombo("##v", current != s.choices.end() ? current->label.c_str() : "?"))
+                const bool listOpen = ImGui::BeginCombo("##v", current != s.choices.end() ? current->label.c_str() : "?");
+                noteItem();
+                if (listOpen)
                 {
                     for (const settings::Choice &c : s.choices)
                     {
@@ -145,14 +201,22 @@ namespace ui
                 break;
             }
             case settings::Type::Integer:
-                if (ImGui::SliderInt("##v", &v, s.min, s.max, s.format.c_str(), ImGuiSliderFlags_AlwaysClamp))
-                    settings::set(s.key, v);
+            {
+                int edited = v;
+                const bool changed = ImGui::SliderInt("##v", &edited, s.min, s.max, s.format.c_str(), ImGuiSliderFlags_AlwaysClamp);
+                noteItem();
+                if (changed)
+                    settings::set(s.key, edited);
                 break;
+            }
             case settings::Type::Key:
                 if (g_capturing == s.key)
                 {
                     ImGui::Button("Press a key... (Esc: cancel)", ImVec2(-FLT_MIN, 0));
-                    if (platform::keyPressed(platform::KEY_ESCAPE))
+                    noteItem();
+                    const bool clickedAway = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsItemHovered();
+                    if (platform::keyPressed(platform::KEY_ESCAPE) || clickedAway ||
+                        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
                         g_capturing.clear();
                     else
                         for (int k = 1; k < platform::KEY_COUNT; ++k)
@@ -163,26 +227,31 @@ namespace ui
                                 break;
                             }
                 }
-                else if (ImGui::Button(keyName(v), ImVec2(-FLT_MIN, 0)))
-                    g_capturing = s.key;
+                else
+                {
+                    const bool pressed = ImGui::Button(keyName(v), ImVec2(-FLT_MIN, 0));
+                    noteItem();
+                    if (pressed)
+                        g_capturing = s.key;
+                }
                 break;
             }
-            const bool selected = ImGui::IsItemHovered() || ImGui::IsItemFocused();
             ImGui::EndDisabled();
             ImGui::PopID();
-            if (selected || ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            {
-                help = s.help;
-                if (locked)
-                    help += " (set by " + s.env + " for this run)";
-            }
-            if (s.apply == settings::Apply::Restart && settings::changedSinceStart(s.key))
-            {
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::TableNextColumn();
-                ImGui::TextDisabled("applies after a restart");
-            }
+
+            const float bottom = top + ImGui::GetFrameHeight() + style.CellPadding.y * 2.0f; // every control is one frame high
+            const ImVec2 mouse = ImGui::GetMousePos();
+            const bool hovered = ImGui::IsWindowHovered() && mouse.y >= top && mouse.y < bottom;
+            const ImGuiIO &io = ImGui::GetIO();
+            // the mouse takes the help over only when it moves or clicks, so a resting cursor doesn't fight the keyboard
+            if (hovered && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f || ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                            g_helpKey.empty()))
+                g_helpKey = s.key;
+            if (hovered && !overItem && !locked && s.type == settings::Type::Toggle && !g_popupWasOpen &&
+                ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                settings::set(s.key, v != 0 ? 0 : 1);
+            if (g_helpKey == s.key)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImGuiCol_Header, hovered ? 0.6f : 0.35f));
         }
     }
 
@@ -212,65 +281,133 @@ namespace ui
         if (!g_open)
             return;
 
+        const std::vector<std::string> pages = settings::pages();
+        const int n = static_cast<int>(pages.size());
+        if (n == 0)
+            return;
+        g_page = std::clamp(g_page, 0, n - 1);
+
         const ImGuiViewport *vp = ImGui::GetMainViewport();
         const float scale = std::max(1.0f, vp->Size.y / 720.0f);
         ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * scale * 1.25f);
         ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(std::min(vp->Size.x * 0.9f, 640.0f * scale), 0.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(std::min(vp->Size.x * 0.92f, 720.0f * scale), std::min(vp->Size.y * 0.88f, 540.0f * scale)),
+                                 ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.92f);
-        if (g_focusWindow)
+        // keeps keyboard / gamepad focus after a click on the game picture behind it (not while a combo list is open:
+        // focusing the window would close it)
+        if (g_focusWindow || (!g_wasFocused && !g_popupWasOpen))
         {
             ImGui::SetNextWindowFocus();
             g_focusWindow = false;
         }
         const ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
+                                       ImGuiWindowFlags_NoScrollWithMouse;
         if (ImGui::Begin("Settings", nullptr, flags))
         {
-            const std::vector<std::string> pages = settings::pages();
+            const ImGuiStyle &style = ImGui::GetStyle();
             // LB / RB (or Q / E with the keyboard) switch pages
-            const int n = static_cast<int>(pages.size());
-            if (n > 1 && g_capturing.empty())
+            if (n > 1 && g_capturing.empty() && !g_popupWasOpen)
             {
                 if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false) || ImGui::IsKeyPressed(ImGuiKey_Q, false))
                     g_selectPage = (g_page + n - 1) % n;
                 if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false) || ImGui::IsKeyPressed(ImGuiKey_E, false))
                     g_selectPage = (g_page + 1) % n;
             }
-            std::string help;
+
+            // the help area fits the longest help of any page, so it is the same height whatever is selected
+            const float wrap = ImGui::GetContentRegionAvail().x;
+            float helpHeight = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
+            for (const settings::Spec &s : settings::all())
+                helpHeight = std::max(helpHeight, ImGui::CalcTextSize(helpText(s).c_str(), nullptr, false, wrap).y);
+            const float footer = (1.0f + style.ItemSpacing.y) + (helpHeight + style.ItemSpacing.y) +
+                                 (ImGui::GetTextLineHeight() + style.ItemSpacing.y) + ImGui::GetFrameHeight() + style.ItemSpacing.y +
+                                 2.0f;
+
+            const int shownPage = g_page;
             if (ImGui::BeginTabBar("pages"))
             {
                 for (int i = 0; i < n; ++i)
                 {
                     const ImGuiTabItemFlags tf = g_selectPage == i ? ImGuiTabItemFlags_SetSelected : 0;
-                    if (!ImGui::BeginTabItem(pages[i].c_str(), nullptr, tf))
-                        continue;
-                    g_page = i;
-                    if (ImGui::BeginTable("rows", 2, ImGuiTableFlags_SizingStretchProp))
+                    if (ImGui::BeginTabItem(pages[i].c_str(), nullptr, tf))
                     {
-                        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthStretch, 0.45f);
-                        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.55f);
-                        for (const settings::Spec &s : settings::all())
-                            if (s.page == pages[i])
-                                row(s, help);
-                        ImGui::EndTable();
+                        g_page = i;
+                        ImGui::EndTabItem();
                     }
-                    ImGui::Spacing();
-                    if (ImGui::Button("Reset page to defaults"))
-                        for (const settings::Spec &s : settings::all())
-                            if (s.page == pages[i])
-                                settings::set(s.key, s.defaultValue);
-                    ImGui::EndTabItem();
                 }
                 g_selectPage = -1;
                 ImGui::EndTabBar();
             }
+            if (g_page != shownPage)
+                g_helpKey.clear();
+            const std::string &page = pages[g_page];
+
+            std::string focusedNow;
+            ImGui::PushID(page.c_str());
+            if (ImGui::BeginChild("rows", ImVec2(0.0f, -footer), ImGuiChildFlags_NavFlattened))
+            {
+                for (const std::string &section : sections(page))
+                {
+                    if (!section.empty())
+                        ImGui::SeparatorText(section.c_str());
+                    if (ImGui::BeginTable(section.c_str(), 2, ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthStretch, 0.45f);
+                        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.55f);
+                        for (const settings::Spec &s : settings::all())
+                            if (s.page == page && s.section == section)
+                                row(s, focusedNow);
+                        ImGui::EndTable();
+                    }
+                    ImGui::Spacing();
+                }
+            }
+            ImGui::EndChild();
+            ImGui::PopID();
+            // keyboard / gamepad navigation moved to another row: its help shows
+            if (!focusedNow.empty() && focusedNow != g_navFocused)
+                g_helpKey = focusedNow;
+            g_navFocused = focusedNow;
+
             ImGui::Separator();
-            ImGui::PushTextWrapPos(0.0f);
-            ImGui::TextUnformatted(help.empty() ? " " : help.c_str());
-            ImGui::PopTextWrapPos();
-            ImGui::TextDisabled("%s or Back+Start: close    Q / E, LB / RB: pages", keyName(settings::value("controls.menu_key")));
+            const settings::Spec *helpSpec = nullptr;
+            bool anyRestart = false;
+            for (const settings::Spec &s : settings::all())
+            {
+                if (s.page == page && s.key == g_helpKey)
+                    helpSpec = &s;
+                anyRestart = anyRestart || restartPending(s);
+            }
+            if (ImGui::BeginChild("help", ImVec2(0.0f, helpHeight), ImGuiChildFlags_None, ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar))
+            {
+                ImGui::PushTextWrapPos(0.0f);
+                if (helpSpec)
+                    ImGui::TextUnformatted(helpText(*helpSpec).c_str());
+                else
+                    ImGui::TextDisabled("Point at or select a setting to see what it does.");
+                ImGui::PopTextWrapPos();
+            }
+            ImGui::EndChild();
+            if (anyRestart)
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "* changed: applies the next time the game starts");
+            else
+                ImGui::TextUnformatted(" ");
+
+            if (ImGui::Button("Reset page to defaults"))
+                for (const settings::Spec &s : settings::all())
+                    if (s.page == page)
+                        settings::set(s.key, s.defaultValue);
+            char hint[96];
+            std::snprintf(hint, sizeof(hint), "%s / Back+Start: close    Q / E, LB / RB: page", keyName(settings::value("controls.menu_key")));
+            ImGui::SameLine();
+            if (const float room = ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(hint).x; room > 0.0f)
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + room); // right-aligned
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", hint);
         }
+        g_wasFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
         ImGui::End();
         ImGui::PopFont();
         g_popupWasOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
