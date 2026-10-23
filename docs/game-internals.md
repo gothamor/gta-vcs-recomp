@@ -126,14 +126,21 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   2026-10-24): game clock exact (1/15 gets 60 ms a frame: the +60 ms cap, below ~17 fps the game slows, as on the
   PS2); car acceleration the same within 3% (speed at 2 / 3 / 4 s, distance in 4 s); running / sprinting the same
   from 1/30 up (1/15 runs ~10% faster); **falling and jumping depend on the frame rate**: 15 m of fall takes 0.90 /
-  1.11 / 1.19 / 1.20 s at 1/15 / 30 / 60 / 100, a jump rises 0.73 / 0.81 / 0.86 / 0.88 m - a per-frame factor in
-  the ped's vertical movement, not found yet.
+  1.11 / 1.19 / 1.20 s at 1/15 / 30 / 60 / 100, a jump rises 0.73 / 0.81 / 0.86 / 0.88 m. **This is the
+  engine's integration, not a per-frame bug**: the jump heights follow explicit Euler's error exactly - a peak
+  v0^2/2g - v0*dt/2 with a continuous peak of 0.893 m predicts 0.726 / 0.81 / 0.85 / 0.868 (measured 0.725 / 0.814 /
+  0.864 / 0.884) - and the ped's vertical speed agrees within 1-3% between 1/30 and 1/60 through a whole fall,
+  quadratic air drag included (traced at ped+0x148). Shorter frames are closer to the continuous motion, as on the
+  PC GTAs; matching 1/30 exactly would need a correction term in the integration (not done: <= 6%).
 - **A `max(step, 0.5)` in ped code**: FUN_00337208 (25 KB, ped processing) divides by `max(ms_fTimeStep, 0.5) *
   0.008` (GRAVITY) at 0x33bb2c - one of the places that assume the 0.5 minimum (found by searching the gravity
   constant 0x3C03126F near the move speed's z, +0x14C).
 - **Physics read for the audit**: ped -> its vehicle at ped+0x450 (also +0x480 / +0x484; found by scanning the ped for
-  the address of the car it was warped into); CPhysical move speed at +0x144 (units per 1/50 s, x 50 = m/s; found by
-  comparing with the car's measured speed). A new car (`CREATE_CAR`) faces north; its matrix can be poked (right
+  the address of the car it was warped into); **CPhysical move speed (x, y, z) at +0x140** (units per 1/50 s, x 50 =
+  m/s; z found at +0x148 mid-fall, y at +0x144 in a car driving north); written through a vector setter
+  FUN_00356288 / FUN_003562c0 (write watch on +0x148: callers FUN_001f93b0, 00232de8, 001f25f0 (peds),
+  00348128 / 00348538 / 00348628); FUN_00348098 = ApplyMoveSpeed (position += move speed * step). Terminal fall
+  speed ~1.0 units (50 m/s) after 3.5 s. A new car (`CREATE_CAR`) faces north; its matrix can be poked (right
   +0x00, forward +0x10, up +0x20, position +0x30).
 - **Frame counter readers** (`m_FrameCounter` 0x4CD124; the generated code has constant addresses folded, so a text
   search of generated/ee lists them - 52 functions; the time step 0x4CD110 has 93, the ms clock 0x4CD104 198):

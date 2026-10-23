@@ -34,7 +34,7 @@ import rig  # noqa: E402
 ROOT = rig.ROOT
 CLOCK_MS = 0x4CD104      # CTimer::m_snTimeInMilliseconds
 PED_VEHICLE = 0x450      # ped -> its vehicle (found by scanning the ped for the car's address, game-internals.md 12)
-MOVE_SPEED = 0x144       # CPhysical move speed, units per 1/50 s (found by comparing with the car's measured speed)
+MOVE_SPEED = 0x140       # CPhysical move speed (x, y, z), units per 1/50 s (z found mid-fall at +0x148)
 FRAME_COUNTER = 0x4CD124  # CTimer::m_FrameCounter
 # open ground for the on-foot and car runs (spots from the world tour, checked by screenshot): x, y, heading - a long
 # straight pavement beside the open tarmac near the airport (the Fort Baxter door faces a fence; -675,-75 is sea)

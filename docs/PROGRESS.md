@@ -257,9 +257,11 @@ dropped on uploads (lazy render-target patching).
       Findings: steps below 0.5 break ped movement (independent timing capped at 100 fps, DECISIONS.md); in
       1/15-1/100 car acceleration and running agree, falling and jumping vary with the rate (+7% fall time,
       +6-9% jump height from 30 to 60-100). game-internals.md 4 has the numbers and the frame counter worklist.
-- [ ] Frame-rate independence, phases 3-4: fix the ped's vertical movement (fall / jump), the blinking (frame &
-      mask) HUD / radar code, what breaks below step 0.5 (FUN_00337208's max(step, 0.5) is one) to lift the 100 cap;
-      pacing polish (VRR, frame-time variance). (Phase 1 / 2 above; the user's choice over interpolation, DECISIONS.md 2026-10-23): CTimer on the host
+- [ ] Frame-rate independence, phases 3-4. Done: falling / jumping explained (Euler integration error, <= 6%, not a
+      bug - game-internals.md 4); real-time pacing checked (game clock = wall clock at caps 60 / 100 / refresh,
+      presents at the cap). Left: the blinking (frame & mask) HUD / radar code (confirm by picture, then hook);
+      what breaks below step 0.5 (FUN_00337208's max(step, 0.5) is one) to lift the 100 cap; missions at 60 / 100
+      (driving, shooting, flying, cutscenes); VRR / frame-time variance. (Phase 1 / 2 above; the user's choice over interpolation, DECISIONS.md 2026-10-23): CTimer on the host
       clock, a frame-rate cap setting, a forced-step test rig, then the audit of frame-count assumptions. Replaces
       the "60 fps fixes" item below.
 - [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
