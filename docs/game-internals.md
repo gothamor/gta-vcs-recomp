@@ -610,6 +610,14 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   ATTR bit 7 (effects enable) is clear (`0xC000` / `0xC041`), EVOL and vIIR are 0. Main volumes `0x3FFF` (direct).
   Gameplay peaks at Fort Baxter are low (~400-1700 of 32767); AutoDMA input is idle on foot.
 
+- **CDSTREAM.IRX's structure** (48,540 bytes, ~6,400 MIPS I instructions; `tools/irxdis.py`, 2026-10-24): the three
+  servers are registered with handlers at module offsets 0xDF4 (0x65686577, streaming), 0x36DC (0x65686578) and
+  0x57C0 (0x65686579, sound effects); the sound code is ~4,800 instructions (module 0x0F00-0x5A00). It drives the
+  SPU2 only through libsd - no direct SPU2 register access: SetParam x36, VoiceTrans x7 + VoiceTransStatus x8
+  (bank / stream data into SPU2 RAM), SetSwitch x7 (key on / off), SetCoreAttr x6, SetAddr x5, GetParam x1 (ENVX),
+  Set{Trans,IRQ}Callback, Init; cdvdman (Read / Sync / SearchFile / GetError / DiskReady / Break ...) for its own
+  reads; 7 threads, 8 semaphores. libsd's import ordinals (LIBSD.IRX's order, 4 = sceSdInit) were told apart by the
+  call arguments (GetParam(core | voice << 1 | 0x500 = ENVX), 36 SetParam sites).
 - **What the EE asks of the IOP** (`PS2X_TRACE_RPC`, boot + 35 s of play including driving, 2026-10-24): only
   CDSTREAM's three servers. 0x65686579 (sound effects) 23,901 calls in 46 functions: `0xA0A00`-`0xA0A2B` (0xA0A07,
   0xA0A09, 0xA0A2B ~950 each), `0xA0B00` / `0xA0C00` x7722 each (per-sound queries), `0xB0000` x3016, `0xB0100`

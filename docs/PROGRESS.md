@@ -286,7 +286,8 @@ dropped on uploads (lazy render-target patching).
       (boot 6.3-7.8 s, five LOAD_SCENE teleports 2.1 s - the game is the limit, not the reads: 14 MB in ~5 ms).
       Static reference scenes unchanged; world tour subset clean.
 - [ ] Step 2, sound: CDSTREAM's sound servers (0x65686578 / 0x65686579) and libsd natively, the SPU2 emulation as
-      the reference.
+      the reference. Mapped (game-internals.md 9): ~4,800 instructions of Rockstar's sound engine driving the SPU2
+      through libsd. `tools/irxdis.py` no longer needs capstone (`tools/mipsdis.py`, MIPS I, standard library).
 - [ ] Step 3: no IOP in the normal run (modules not loaded, no interpreter); the emulated IOP switchable.
 ## Phase 5 - stability
 - [x] Vic falls through the world in some places - **no longer happens** at the spot the user saw it (user

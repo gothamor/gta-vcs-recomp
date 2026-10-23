@@ -6,12 +6,14 @@ is derived from game code: keep it under build/analysis/ (not committed).
 
     python -I tools/irxdis.py <module.irx> [base_hex] > build/analysis/<module>.txt
 
-Needs: pip install capstone
+Standard library only: the decoder is tools/mipsdis.py (MIPS I, the IOP's instruction set).
 """
+import os
 import struct
 import sys
 
-import capstone
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mipsdis  # noqa: E402
 
 # Common IOP library export names by (library, ordinal). Partial; extend as needed.
 NAMES = {
@@ -36,7 +38,16 @@ NAMES = {
                 28: "sceCdStatus", 37: "sceCdCallback", 38: "sceCdPause", 39: "sceCdBreak", 44: "sceCdGetReadPos",
                 50: "sceCdSC", 75: "sceCdMmode", 112: "sceCdLayerSearchFile"},
     "stdio": {4: "printf"},
-    "sysclib": {12: "memcpy", 13: "memmove", 14: "memset", 23: "strcmp", 27: "strcpy", 30: "strlen", 36: "strncpy"},
+    "sysclib": {12: "memcpy", 13: "memmove", 14: "memset", 23: "strcmp", 27: "strcpy", 30: "strlen", 36: "strncpy",
+                19: "sprintf"},
+    # libsd, in LIBSD.IRX's export order (4 = sceSdInit): told apart by CDSTREAM's calls - 36 x SetParam(entry, value),
+    # GetParam(core | voice << 1 | 0x500 = ENVX), Set{Trans,IRQ}Callback (21 / 22) as docs/game-internals.md 9 has them
+    "libsd": {4: "sceSdInit", 5: "sceSdSetParam", 6: "sceSdGetParam", 7: "sceSdSetSwitch", 8: "sceSdGetSwitch",
+              9: "sceSdSetAddr", 10: "sceSdGetAddr", 11: "sceSdSetCoreAttr", 12: "sceSdGetCoreAttr", 13: "sceSdNote2Pitch",
+              14: "sceSdPitch2Note", 15: "sceSdProcBatch", 16: "sceSdProcBatchEx", 17: "sceSdVoiceTrans",
+              18: "sceSdBlockTrans", 19: "sceSdVoiceTransStatus", 20: "sceSdBlockTransStatus", 21: "sceSdSetTransCallback",
+              22: "sceSdSetIRQCallback", 23: "sceSdSetEffectAttr", 24: "sceSdGetEffectAttr", 25: "sceSdClearEffectWorkArea",
+              26: "sceSdSetTransIntrHandler", 27: "sceSdSetSpu2IntrHandler"},
 }
 
 
@@ -68,17 +79,15 @@ def main(path, base=0):
         else:
             i += 4
 
-    md = capstone.Cs(capstone.CS_ARCH_MIPS, capstone.CS_MODE_MIPS32 + capstone.CS_MODE_LITTLE_ENDIAN)
-    md.skipdata = True  # keep going past words capstone cannot decode
-    for ins in md.disasm(code, 0):
+    for addr in range(0, len(code) - 3, 4):
+        word = struct.unpack_from("<I", code, addr)[0]
+        mnemonic, operands, target = mipsdis.decode(word, addr)
         note = ""
-        if ins.mnemonic in ("jal", "j"):
-            tgt = int(ins.op_str, 16) if ins.op_str.startswith("0x") else None
-            if tgt is not None and tgt in stubs:
-                note = "  ; " + stubs[tgt]
-        if ins.address in stubs:
-            note = "  ; <stub %s>" % stubs[ins.address]
-        print("%05x %05x: %-8s %-30s%s" % (ins.address, ins.address + base, ins.mnemonic, ins.op_str, note))
+        if mnemonic in ("jal", "j") and target in stubs:
+            note = "  ; " + stubs[target]
+        if addr in stubs:
+            note = "  ; <stub %s>" % stubs[addr]
+        print("%05x %05x: %-8s %-30s%s" % (addr, addr + base, mnemonic, operands, note))
 
 
 if __name__ == "__main__":
