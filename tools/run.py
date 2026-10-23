@@ -39,6 +39,7 @@ def main():
         env = dict(os.environ)
         env.setdefault("PS2X_GS", "hw")  # the hardware (D3D11) renderer; the runtime's own default is the slow software one
         env.setdefault("PS2X_CAPTURE_SIZE", "960x672")  # control-channel screenshots independent of the window size
+        env.setdefault("VCS_SKIP_MOVIES", "1")  # test runs boot straight on (VCS_SKIP_MOVIES=0 plays the intro movies)
         if a.hidden:
             env["PS2X_HIDDEN"] = "1"
         if a.control:

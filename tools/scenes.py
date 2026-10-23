@@ -64,7 +64,7 @@ def launch(out, hidden, extra_env=None):
     env.setdefault("PS2X_CAPTURE_SIZE", "960x672")  # screenshots independent of the window size
     # the original display settings whatever vcs.ini says (captures compare across runs); a caller's env wins
     for key, value in (("VCS_PERF_OVERLAY", "0"), ("VCS_ASPECT", "43"), ("VCS_HUD", "0"), ("VCS_FPS", "30"),
-                       ("PS2X_HW_SCALE", "1"), ("PS2X_HW_MSAA", "1"), ("PS2X_HW_ANISO", "0")):
+                       ("PS2X_HW_SCALE", "1"), ("PS2X_HW_MSAA", "1"), ("PS2X_HW_ANISO", "0"), ("VCS_SKIP_MOVIES", "1")):
         env.setdefault(key, value)
     env["PS2X_CONTROL"] = "1"
     env["VCS_DATA_DIR"] = data

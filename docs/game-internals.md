@@ -64,8 +64,23 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   `sceCdSearchFile`-like `0x44E480` and appends (name ptr, lsn, size) to a table at `0x5038A8`
   (count at `0x486E8C`, string pool cursor at `0x486E88`). Every file is resolved to an LSN up
   front; reads are by sector afterwards.
-- Movies: `FUN_0021CA70` (from `main`) plays `STINGS.PSS` then `INTRO.PSS` through the movie player
-  at `0x40D8B8` (libmpeg + IPU). Skipped today (`vcs_overrides.cpp`; DECISIONS.md).
+- **Movies** (milestone 5, 2026-10-24): `FUN_0021CA70` (from `main`) initialises the player (FUN_0040D7D8), calls
+  **CMoviePlayer::Play(path, 0, n) at 0x40D8B8** for `cdrom0:\MOVIES\STINGS.PSS;1` (0x4AC5F8, the Rockstar logos,
+  n = 1,000,000) and `cdrom0:\MOVIES\INTRO.PSS;1` (0x4AC618, n = 10), shuts it down (FUN_0040D898) and clears
+  the scratchpad. Play -> FUN_0040D930 (libmpeg + IPU, sound through the IOP) compares a frame count with n before
+  it reads the pad: the logos can't be skipped, the intro can after 10 frames. `INTROP` / `STINGSP` are the PAL
+  versions (unused by the USA game).
+- **PSS layout** (read from the files): an MPEG-2 program stream; video in stream 0xE0 (MPEG-2, 512x448, 29.97 fps,
+  shown across a 4:3 TV; STINGS 10.6 s, INTRO 84 s); sound in private stream 1 (0xBD), sub-stream 0xFF, each
+  packet's payload behind a 4-byte header (`ff a0 00 00`) and split at odd byte counts. The joined bytes are a Sony
+  "SShd" header (u32 size 0x18, type 1 = **16-bit little-endian PCM**, 48000 Hz, 2 channels, interleave 512 bytes),
+  "SSbd" + u32 data size, then blocks of 256 left samples, then 256 right (byte order and interleave told apart by
+  how smooth the samples are). First PTS: sound 0.043 s, video 0.110 s. FFmpeg's demuxer finds the video only.
+- **Played natively** (`src/game/vcs_movie.cpp`): Play is replaced; the file read from the disc, demuxed, the video
+  decoded with FFmpeg and shown by the presenter at 4:3 (`ps2ShowMovieFrame`), the sound mixed into the audio
+  output (`ps2AudioMoviePush`), whose played-sample count is the clock (the host clock without audio output, and
+  after the sound ends - the last pictures are due 30 ms after it). Start / Cross skip once the game's count
+  allows. Display > Skip intro movies skips both. The game thread waits in Play, as in the game's player.
 
 ## 4. Frame and timing
 

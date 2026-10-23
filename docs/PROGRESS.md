@@ -272,6 +272,13 @@ dropped on uploads (lazy render-target patching).
       the "60 fps fixes" item below.
 - [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
       the switch; frame pacing.
+## Milestone 5 - movies (2026-10-24) - done
+- [x] STINGS.PSS (the Rockstar logos) and INTRO.PSS play natively at boot (`src/game/vcs_movie.cpp`): own PSS
+      demuxer, MPEG-2 video through FFmpeg, shown by the presenter at 4:3 (pillarboxed in widescreen), 48 kHz PCM
+      sound mixed into the audio output and used as the clock. Checked: logos 10.8 s, 321 pictures, none dropped;
+      Start during the logos ignored (as on the PS2), the intro skipped by Start, the game then loads the save.
+- [x] Display > Skip intro movies (`display.skip_intro`, `VCS_SKIP_MOVIES`; off = play them as on the PS2).
+      Test tools (run.py, the rig, scenes) default to skipping them.
 ## Phase 5 - stability
 - [x] Vic falls through the world in some places - **no longer happens** at the spot the user saw it (user
       playtest 2026-10-24); fixed along the way by other work (which change is not known: the VU0 collision
@@ -292,6 +299,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_FPS_LOG=1` | VBlanks and flips per second (was `VCS_FPS=1`; `VCS_FPS` is the frame rate cap) |
 | `VCS_TIMING=0\|1`, `VCS_FPS=30\|60\|120\|144\|-1\|0` | game timing original / frame-rate independent; frame rate cap (-1 display refresh, 0 unlimited) |
 | `VCS_TIMESTEP=N` | independent timing: exactly 1/N s per game frame, unpaced (frame-dependence tests) |
+| `VCS_SKIP_MOVIES=0\|1` | play / skip the intro movies (Display > Skip intro movies); test tools default to 1 |
+| `VCS_MOVIE_LOG=1` | movie playback: sound pushed / queued / played vs the pictures, every second |
 | `VCS_MIN_STEP=x` | independent timing's step floor (0.5, the game's; lower lifts the 100 fps cap - breaks ped movement) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
 | `VCS_PERF_OVERLAY=0\|1` | the perf overlay setting for one run |

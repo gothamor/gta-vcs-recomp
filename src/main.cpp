@@ -20,6 +20,7 @@
 #include "disc/iso_image.h"
 #include "game/vcs_display.h"
 #include "game/vcs_framerate.h"
+#include "game/vcs_movie.h"
 #include "game/vcs_hud.h"
 #include "platform/platform.h"
 #include "render/presenter.h"
@@ -239,6 +240,18 @@ namespace
         s.defaultValue = 30;
         s.env = "VCS_FPS";
         s.onChange = [](int v) { vcs::setFrameCap(v); };
+        settings::add(s);
+
+        s = {};
+        s.key = "display.skip_intro";
+        s.page = "Display";
+        s.label = "Skip intro movies";
+        s.help = "The Rockstar logos and the intro movie at start-up. Off plays them as on the PS2 (Start or Cross skips the "
+                 "intro, not the logos); on goes straight to the game.";
+        s.type = Type::Toggle;
+        s.defaultValue = 0;
+        s.env = "VCS_SKIP_MOVIES";
+        s.onChange = [](int v) { vcs::setSkipIntroMovies(v != 0); };
         settings::add(s);
 
         s = {};

@@ -556,6 +556,38 @@ void ps2SetPresentOnGameFrames(bool on)
     g_presentOnGameFrames.store(on, std::memory_order_relaxed);
 }
 
+namespace
+{
+    // [gta-recomp] movie pictures (ps2_present.h): the latest one, taken by the main loop
+    struct MovieFrame
+    {
+        std::mutex mutex;
+        std::vector<uint8_t> rgba;
+        int width = 0, height = 0;
+        float aspect = 4.0f / 3.0f;
+        bool active = false;
+        uint64_t sequence = 0;
+    } g_movieFrame;
+}
+
+void ps2ShowMovieFrame(const uint8_t *rgba, int width, int height, float aspect)
+{
+    std::lock_guard<std::mutex> lock(g_movieFrame.mutex);
+    g_movieFrame.rgba.assign(rgba, rgba + static_cast<size_t>(width) * height * 4u);
+    g_movieFrame.width = width;
+    g_movieFrame.height = height;
+    g_movieFrame.aspect = aspect;
+    g_movieFrame.active = true;
+    ++g_movieFrame.sequence;
+}
+
+void ps2EndMovieFrames()
+{
+    std::lock_guard<std::mutex> lock(g_movieFrame.mutex);
+    g_movieFrame.active = false;
+    std::vector<uint8_t>().swap(g_movieFrame.rgba);
+}
+
 void PS2Runtime::presentGpuVBlank(uint64_t vsyncTick)
 {
     ps2perf::markVBlank(); // [gta-recomp]
@@ -2996,7 +3028,26 @@ void PS2Runtime::run()
         ps2perf::hostFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - uploadStart).count()); // [gta-recomp]
 
         // [gta-recomp] display aspect: 4:3 (the PS2's TV), the widescreen ratio for 3D frames (render/presenter.h)
-        const float aspect = present::displayAspect(!hwRenderer() || hwRenderer()->presenter().showing3d());
+        float aspect = present::displayAspect(!hwRenderer() || hwRenderer()->presenter().showing3d());
+        { // [gta-recomp] a movie playing (ps2_present.h): its picture instead of the game's
+            static present::Picture moviePicture;
+            static uint64_t movieSequence = 0;
+            std::lock_guard<std::mutex> lock(g_movieFrame.mutex);
+            if (g_movieFrame.active && g_movieFrame.width > 0)
+            {
+                if (moviePicture.width != g_movieFrame.width || moviePicture.height != g_movieFrame.height)
+                    moviePicture = present::createPicture(g_movieFrame.width, g_movieFrame.height, true);
+                if (movieSequence != g_movieFrame.sequence)
+                {
+                    present::updatePicture(moviePicture, g_movieFrame.rgba.data());
+                    movieSequence = g_movieFrame.sequence;
+                }
+                shownTex = moviePicture;
+                presentWidth = static_cast<uint32_t>(g_movieFrame.width);
+                presentHeight = static_cast<uint32_t>(g_movieFrame.height);
+                aspect = g_movieFrame.aspect;
+            }
+        }
         static float lastAspect = 0.0f; // [gta-recomp] log the presentation shape when it changes
         if (aspect != lastAspect)
         {

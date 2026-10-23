@@ -6,8 +6,16 @@
 // presented for a while (loading screens, movies), so nothing freezes.
 #pragma once
 
+#include <cstdint>
+
 // Game thread: end the GS frame now (the display registers as they are), as a VBlank would.
 void ps2PresentGameFrame();
 
 // Any thread: on = frames end at ps2PresentGameFrame (VBlanks only as the fallback); off = at every VBlank (default).
 void ps2SetPresentOnGameFrames(bool on);
+
+// Movie pictures (a game's movies played natively, e.g. VCS's STINGS / INTRO): shown in the window instead of the game
+// picture, at display aspect `aspect`, until ps2EndMovieFrames. rgba: width x height, rows top-down, R G B A bytes.
+// Any thread (copies the picture).
+void ps2ShowMovieFrame(const uint8_t *rgba, int width, int height, float aspect);
+void ps2EndMovieFrames();

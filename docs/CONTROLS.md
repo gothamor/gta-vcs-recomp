@@ -22,7 +22,8 @@ same PS2 controller (DualShock 2, analog mode), so they can be mixed.
 | Select | Backspace | Back / View |
 
 The game's own PS2 controls apply on top (e.g. driving: Cross accelerates,
-Square brakes). Mapping lives in `third_party/PS2Recomp/ps2xRuntime/src/lib/ps2_pad.cpp`;
+Square brakes). Start or Cross (Enter / Shift) skips the intro movie; the Rockstar logos before it can't be
+skipped, as on the PS2 (Display > Skip intro movies skips both). Mapping lives in `third_party/PS2Recomp/ps2xRuntime/src/lib/ps2_pad.cpp`;
 a remappable `vcs.ini` section is planned.
 
 ## Debug keys

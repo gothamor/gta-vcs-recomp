@@ -44,6 +44,11 @@ namespace
     std::atomic<uint64_t> g_underrunsTotal{0};
     std::atomic<float> g_queuedMs{0.0f};
 
+    // [gta-recomp] movie sound (g_mutex): mixed 1:1 after the SPU2 output
+    std::vector<int16_t> g_movieRing(kCapacityFrames * 2u);
+    size_t g_movieRead = 0, g_movieWrite = 0, g_movieQueued = 0;
+    std::atomic<uint64_t> g_moviePlayed{0};
+
     void writeWavHeader(FILE *f, uint32_t frames)
     {
         const uint32_t dataBytes = frames * 4u;
@@ -116,6 +121,19 @@ namespace
             }
             ++g_playedFrames;
         }
+        // [gta-recomp] movie sound on top
+        uint32_t mixed = 0;
+        for (; mixed < frames && g_movieQueued; ++mixed)
+        {
+            for (int c = 0; c < 2; ++c)
+            {
+                const int v = out[mixed * 2u + c] + g_movieRing[g_movieRead * 2u + c];
+                out[mixed * 2u + c] = static_cast<int16_t>(std::clamp(v, -32768, 32767));
+            }
+            g_movieRead = (g_movieRead + 1u) % kCapacityFrames;
+            --g_movieQueued;
+        }
+        g_moviePlayed.fetch_add(mixed, std::memory_order_relaxed);
     }
 
     void reportStats()
@@ -194,3 +212,34 @@ void ps2AudioShutdown()
 
 float ps2AudioQueuedMs() { return g_queuedMs.load(std::memory_order_relaxed); }
 uint64_t ps2AudioUnderrunCount() { return g_underrunsTotal.load(std::memory_order_relaxed); }
+
+bool ps2AudioMovieActive() { return g_started; }
+
+uint32_t ps2AudioMoviePush(const int16_t *stereo, uint32_t frames)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    uint32_t taken = 0;
+    for (; taken < frames && g_movieQueued < kCapacityFrames; ++taken)
+    {
+        g_movieRing[g_movieWrite * 2u] = stereo[taken * 2u];
+        g_movieRing[g_movieWrite * 2u + 1u] = stereo[taken * 2u + 1u];
+        g_movieWrite = (g_movieWrite + 1u) % kCapacityFrames;
+        ++g_movieQueued;
+    }
+    return taken;
+}
+
+uint64_t ps2AudioMoviePlayed() { return g_moviePlayed.load(std::memory_order_relaxed); }
+
+uint32_t ps2AudioMovieQueued()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return static_cast<uint32_t>(g_movieQueued);
+}
+
+void ps2AudioMovieReset()
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_movieRead = g_movieWrite = g_movieQueued = 0;
+    g_moviePlayed.store(0, std::memory_order_relaxed);
+}

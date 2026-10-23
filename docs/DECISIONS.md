@@ -230,3 +230,11 @@ The user's choices on the roadmap's open questions:
   game's 0.5 floor and caps the frame rate at 100. The cap setting offers 30 / 60 / 100 / display refresh (up to
   100) / unlimited (up to 100). Finding and fixing what breaks below 0.5 (then 120 / 144) is phase 3 work;
   `VCS_MIN_STEP` lowers the floor to test it.
+
+## 2026-10-24 - Movies played natively; the intro skippable from the settings
+- CMoviePlayer::Play is replaced at its entry rather than feeding the game's own libmpeg / IPU player: no IPU, no
+  movie sound through the IOP, the picture drawn by our presenter at 4:3 like the PS2's TV. The game thread waits in
+  Play as it did in the game's player.
+- Skipping as on the PS2: the logos can't be skipped (the game passes a threshold of 1,000,000 frames), the intro can
+  with Start / Cross. The user asked to keep skipping the intro possible: Display > Skip intro movies skips both
+  movies; off by default (authentic). Test tools set VCS_SKIP_MOVIES=1 so their boot timelines stay as they were.

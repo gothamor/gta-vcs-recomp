@@ -8,6 +8,7 @@
 #include "debug/rig.h"
 #include "game/vcs_display.h"
 #include "game/vcs_framerate.h"
+#include "game/vcs_movie.h"
 #include "game/vcs_hud.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -46,9 +47,8 @@ namespace
         const char *why;
     };
     constexpr Skip kSkips[] = {
-        // Movie player (STINGS.PSS / INTRO.PSS). Its IPU/sceMpeg path stalls on the
-        // runtime's MPEG stubs; skipped until native playback (Phase 4).
-        {0x0040D8B8, "CMoviePlayer::Play(path)"},
+        // (the movie player, CMoviePlayer::Play 0x40D8B8, was skipped here until native playback: game/vcs_movie.h)
+        {0, nullptr},
     };
 
     // ---- VCS_TRACE_FILES=1: log the game's own file API (CFileMgr-like, 0x220xxx) ----
@@ -643,6 +643,7 @@ namespace
         vcs::installDisplayHooks(runtime); // widescreen (settings menu)
         vcs::installHudHooks(runtime);     // 2D at the RenderWare level
         vcs::installFrameRateHooks(runtime); // 30 / 60 fps (game/vcs_framerate.h)
+        vcs::installMovieHooks(runtime);     // STINGS / INTRO played natively (game/vcs_movie.h)
         if (std::getenv("VCS_TRACE_PACKETS"))
             runtime.replaceFunction(0x00476770u, &tracePacketUse);
         if (std::getenv("VCS_TRACE_TELEPORT"))
@@ -701,7 +702,7 @@ namespace
         }
         for (const Skip &s : kSkips)
         {
-            if (!runtime.replaceFunction(s.address, &returnZero))
+            if (s.address && !runtime.replaceFunction(s.address, &returnZero))
                 std::cerr << "[vcs] failed to skip 0x" << std::hex << s.address << std::dec << " (" << s.why << ")" << std::endl;
         }
         if (std::getenv("VCS_TRACE_FILES"))
