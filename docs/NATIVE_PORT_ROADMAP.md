@@ -106,6 +106,9 @@ mission, and the regression suite runs in one command and reports differences ag
 
 ### Milestone 2 - Correctness sweep driven by the rig (L, open-ended)
 
+**Done 2026-10-23** (PROGRESS.md): tour 200/240 ok with no falling, 95/95 missions, saves through the menus, SPU2
+complete, a 30-minute soak clean. Carried to milestone 3: the VU1 clipper natively, lazy render-target patching.
+
 Work through what milestone 1 finds, worst first. Known items to start with:
 
 - **Black frames** (objects / world black for a few frames): bisect with `PS2X_HLE=0`, prelit tint

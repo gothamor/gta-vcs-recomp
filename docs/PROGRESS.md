@@ -137,7 +137,14 @@ Findings so far (rig runs; details in game-internals.md):
       clipper. Clipped world packets stay on the VU1 by default now (`PS2X_HLE_CLIPPED=1` for GPU clipping); cost
       flyover 30 -> 25.5 game fps (render 18.2 -> 24.6 ms), cutscene / gameplay still at 30. Reproducing the VU's
       per-triangle clipper natively is milestone 3 (game-internals.md 6h).
-- [ ] Soak: `tools/soak.py --hours 3` (crash / hang / leak / falling) - after the mission run.
+- [x] Soak (`tools/soak.py --hours 0.5`, 2026-10-23; the user settled on a short one): 60 samples over 30 min of
+      autodrive across six spots, no crash, hang or falling; private memory 347 MB at start, then a saw-tooth between
+      486 and 560 MB from minute 10 on (streaming), no drift. Driving frame time median 46.8 ms, p90 70.7 ms - about
+      6-8 ms worse than before clipped world packets went back to the VU1 (trial soaks: median 38.8-41.2 ms).
+      One car per leg spawned against something and was replaced (the tool's retry).
+
+Milestone 2 closed 2026-10-23. Open, carried to milestone 3: the VU clipper reproduced natively (the frame time
+above), bloom buffers dropped on uploads (lazy render-target patching).
 
 ## Phase 5 - stability
 - [ ] Vic falls through the world in some places (reported by the user 2026-10-22, after the

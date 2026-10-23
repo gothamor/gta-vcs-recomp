@@ -129,7 +129,7 @@ def main():
     # memory trend after warm-up (20 min): least squares MB/h on private bytes
     pts = [(r[0] / 3600.0, r[3]) for r in rows if r[3] is not None and r[0] > 1200]
     slope = None
-    if len(pts) > 4:
+    if len(pts) > 4 and pts[-1][0] - pts[0][0] >= 0.5:  # a trend over less than 30 minutes is noise (streaming saw-tooth)
         n = len(pts)
         mx, my = sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n
         den = sum((p[0] - mx) ** 2 for p in pts)
@@ -142,6 +142,7 @@ def main():
                "crashed": any(e[1] == "crash" for e in events), "private_mb_first": rows[0][3] if rows else None,
                "private_mb_last": rows[-1][3] if rows else None,
                "private_mb_per_hour_after_20min": round(slope, 2) if slope is not None else None,
+               "private_mb_range_after_20min": [min(p[1] for p in pts), max(p[1] for p in pts)] if pts else None,
                "frame_ms_median": fms[len(fms) // 2] if fms else None, "frame_ms_max": fms[-1] if fms else None,
                "events": events[:200]}
     json.dump(summary, open(os.path.join(out, "summary.json"), "w"), indent=1)
