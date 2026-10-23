@@ -212,12 +212,35 @@ checked against the VU's three kicks: 27,243 packets over the reference scenes, 
 as a rigid lit model on the GPU, the TEXFLUSH and the second pass as the VU's kicks (PATH1). Clipped table-0x13
 packets stay on the VU1.
 
-**What still runs on the VU1** (survey with native drawing, `PS2X_HLE_SURVEY=1` now reports native and VU1 calls
-apart; `PS2X_HLE_STATS=1` lists the 0x0030 stage tables left): after the environment pass, the setup program
-0x02c0 (re-draws resident geometry with a new matrix through the dispatcher - entry 0x1c: 0x0da + kick, 52.x =
-0x0de - and particle stages 0x4ff-0x513; ~19 ms/s VU1 over three code variants, ~165k verts/s), a few prelit world
-packets (table 0x19; ~9k calls per 10 s, cause not yet looked at), 0x0030 code 19635180 (V4-32 x72 layouts, ~2 ms/s)
-and the clipped lit packets. Together ~1 ms per game frame.
+**Code images.** The code below 0x2700 is not fixed either: VCS uploads different variants of the transform
+(0x07f0) and clip test (0x0c38) per pass - every reproduction is tied to a hash of the exact code it was read from.
+Seen so far:
+- the prelit world image (integer positions folded with 42 / 43, integer UVs through the texture matrix 44-46 / 255,
+  prelit colour stage at 0x2700);
+- the **float images**: positions are floats, the matrices 24-27 / 28-31 are used as stored (no fold), RGBA is
+  qword 51 from the transform, the fog stage FTOI4s into XYZF.w. Two flavours: the one 0x02c0 runs with (UVs as
+  floats, used as they are) and the "variant C" prelit one (UVs ITOF0'd through the texture matrix, a colour stage
+  at 0x2700 that copies the colour qwords - layout V4-32 @001 / @049 / @091 x72; a second copy differs only in
+  padding after a JR). Variant C's transform epilogue leaves the *next* vertex's w in STQ.w for vertices N-4..N-2
+  (N = max(count, 7) processed): a MOVE.w waits for the MULw right before it - and the fog reads w there.
+- Clip tests run over at least 5 / 6 vertices, so stale data past the count reaches CLIP: the VU treats exponent-255
+  bit patterns as huge finite numbers (no NaN / Inf), so such a vertex can flag the packet for the clipper -
+  reproduced with the VU's operand / result clamping (vcs_vu_math.h, from the runtime's vu1fast helpers).
+
+**0x02c0 - instanced re-draws** (setup slot 0xc8, entry 0x1c): copies the packet's object matrix (4 qwords at TOP)
+to 0-3, 0x04d8 builds clip (view 16-19 x object) and window (viewport 12-15 x clip) matrices into 24-27 / 28-31,
+0xc8 the camera in object space (33 = R^T (32 - T)), then transform 0x0da + kick only, over a mesh resident at
+absolute addresses (48.z mask 0). **Entry 0x0d** draws a resident mesh twice: setup slot 35 = 0x4e0 normalises the
+object's rotation rows (ERLENG) into a 3x2 environment matrix (P+5..7, P = 0x9c); 0x4ff / 0x509 write an A+D TEX0_1
+/ TEX0_2 qword at P+1 from P+2 / P+3 and kick the packet at P; pass 1 = the float transform + tag 49; 0x546 sets
+RGBA = Q.xyz (Q = 0xa4) with alpha = FTOI0(clamp(Q+1.x * w + Q+1.y)); 0x513 kicks P again and writes the
+environment ST ((P+5..7 x / y * 0.5) . normal + 0.5) * Q; pass 2 = tag 50 (context 2). A shine over a texture.
+
+All of these are reproduced in `vcs_hle_world.cpp` (floatKicks / shineKicks) with the VU memory they write, and
+checked against the VU's kicks and memory (174,110 packets over the reference scenes, MAR_A1 / GON_C3 / a drive
+~50k / 51k / 120k - all exact). With them native, **nothing of the 3D runs on the VU1** in the reference scenes
+except clipped environment-pass packets (63 in two minutes); clipped 0x02c0 / variant-C packets go through the C++
+clipper read back from VU memory (`vcsclip::clipFromOutput`).
 
 ### 6e. GS usage (VCS_GS_STATS, title / intro)
 

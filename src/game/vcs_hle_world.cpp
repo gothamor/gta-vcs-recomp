@@ -1061,11 +1061,153 @@ namespace
         return resident;
     }
 
+    // ---- 0x02c0 entry 0x0d: two passes over a resident mesh - texture, then a shine (environment map) ----------------
+    // Setup slot 35 = 0x4e0 (vi01 = P = 0x9c): the object's rotation rows normalised (ERLENG) and the 3x2 env matrix
+    // rows P+2..4 . row -> P+5..7 (x / y). Then 0x4ff: qword P+1 = A+D TEX0_1 from P+2, kick P; the float transform +
+    // kick 0x2b6 (tag 49); 0x509: P+1 = TEX0_2 from P+3, kick P; 0x546 (vi01 = Q = 0xa4): RGBA = Q.xyz, alpha =
+    // FTOI0(clamp(Q+1.x * w + Q+1.y, Q+1.z, Q+1.w)); 0x513: kick P again, ST = ((P+5..7 . xy * 0.5) . normal + 0.5) * Q
+    // over the output; kick 0x2b2 (tag 50). game-internals.md 6d.
+    bool isShine(const ps2hle::MscalContext &c, uint32_t &p, uint32_t &q)
+    {
+        if (c.startPc != 0x2C0u)
+            return false;
+        const uint8_t *vu = c.vuData;
+        const IVec4 t34 = loadI(vu, 34), t35 = loadI(vu, 35), t38 = loadI(vu, 38), t39 = loadI(vu, 39), t40 = loadI(vu, 40),
+                    t41 = loadI(vu, 41);
+        if ((t34.v[0] & 0xFFFF) != 0xC8 || (t35.v[0] & 0xFFFF) != 0x4E0 || (loadI(vu, 36).v[0] & 0xFFFF) != 0x3A ||
+            (loadI(vu, 37).v[0] & 0xFFFF) != 0x3A || (t38.v[0] & 0xFFFF) != 0x0D || (t38.v[2] & 0xFFFF) != 0x4FF ||
+            (t39.v[0] & 0xFFFF) != 0xDA || (t39.v[2] & 0xFFFF) != 0x2B6 || (t40.v[0] & 0xFFFF) != 0x509 ||
+            (t40.v[2] & 0xFFFF) != 0x546 || (t41.v[0] & 0xFFFF) != 0x513 || (t41.v[2] & 0xFFFF) != 0x2B2)
+            return false;
+        p = t35.v[1] & 0x3FF;
+        if ((t38.v[3] & 0x3FF) != static_cast<int32_t>(p) || (t40.v[1] & 0x3FF) != static_cast<int32_t>(p) ||
+            (t41.v[1] & 0x3FF) != static_cast<int32_t>(p))
+            return false;
+        q = t40.v[3] & 0x3FF;
+        const uint32_t entry = loadI(vu, 52).v[0] & 0xFFFF;
+        if (entry != 0xE9 && entry != 0xDE)
+            return false;
+        static uint64_t checkedGeneration = ~0ull;
+        static bool resident = false;
+        if (c.codeGeneration != checkedGeneration)
+        {
+            checkedGeneration = c.codeGeneration;
+            resident = fnv(c.vuCode, 0x30, 0x2B20, 0xCBF29CE484222325ull) == 0x1A8EDFFDDC5C7665ull; // through 0x546's end
+        }
+        return resident;
+    }
+
+    // 0x4e0 (after redrawSetup)
+    void shineSetup(uint8_t *vu, uint32_t p)
+    {
+        Vec4 r[3];
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            r[i] = loadF(vu, i);
+            const float x = vcsvu::vuOperand(r[i].v[0]), y = vcsvu::vuOperand(r[i].v[1]), z = vcsvu::vuOperand(r[i].v[2]);
+            const float len = std::sqrt(x * x + y * y + z * z); // ERLENG
+            const float rl = len != 0.0f ? 1.0f / len : len;
+            for (int k = 0; k < 3; ++k)
+                r[i].v[k] = r[i].v[k] * rl;
+        }
+        const Vec4 m[3] = {loadF(vu, p + 2u), loadF(vu, p + 3u), loadF(vu, p + 4u)};
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            Vec4 o = loadF(vu, p + 5u + i); // only x / y are written that matter (z / w: stale registers)
+            for (int k = 0; k < 2; ++k)
+            {
+                float acc = m[0].v[k] * r[i].v[0];
+                acc = acc + m[1].v[k] * r[i].v[1];
+                o.v[k] = acc + m[2].v[k] * r[i].v[2];
+            }
+            storeF(vu, p + 5u + i, o, 0x3u);
+        }
+    }
+
+    // 0x4ff / 0x509: qword P+1 = (src.z, src.w, reg, src.y) - an A+D write - then the packet at P
+    void shineRegisterKick(uint8_t *vu, uint32_t p, uint32_t src, int32_t reg, std::vector<std::vector<uint8_t>> &kicks)
+    {
+        const IVec4 a = loadI(vu, src);
+        const int32_t d[4] = {a.v[2], a.v[3], reg, a.v[1]};
+        std::memcpy(vu + ((p + 1u) & (kQwords - 1u)) * 16u, d, 16);
+        kicks.emplace_back();
+        gifPacketAt(vu, p, kicks.back());
+    }
+
+    bool shineKicks(uint8_t *vu, uint32_t top, uint32_t p, uint32_t q, std::vector<std::vector<uint8_t>> &kicks)
+    {
+        kicks.clear();
+        shineRegisterKick(vu, p, p + 2u, 6, kicks);
+        if (kicks.back().empty())
+            return false;
+        std::vector<std::vector<uint8_t>> pass1;
+        if (!floatKicks(vu, top, pass1, kRedrawVariant) || pass1.size() != 1u)
+            return false; // culled / clipped / unsupported: the VU1
+        kicks.push_back(std::move(pass1[0]));
+        shineRegisterKick(vu, p, p + 3u, 7, kicks);
+        const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48);
+        top &= 0x3FFu;
+        const uint32_t base = top & static_cast<uint32_t>(i48.v[2]);
+        const uint32_t posBase = static_cast<uint32_t>(i47.v[0]) + base, nrmBase = static_cast<uint32_t>(i47.v[1]) + base;
+        const uint32_t outBase = static_cast<uint32_t>(i48.v[3]) + top + 1u;
+        const IVec4 header = loadI(vu, posBase - 1u);
+        const uint32_t count = static_cast<uint32_t>(header.v[2]);
+        const uint32_t n = static_cast<uint32_t>(header.v[3]) & 0x7FFFu;
+        // 0x546: colours
+        const IVec4 rgb = loadI(vu, q);
+        const Vec4 a = loadF(vu, q + 1u);
+        const float ka = 1.0f * a.v[0], kb = 1.0f * a.v[1], lo = 1.0f * a.v[2];
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            float w;
+            std::memcpy(&w, vu + ((outBase + i * 3u) & (kQwords - 1u)) * 16u + 12u, 4);
+            const float acc = ka * w;
+            const float v = std::min(std::max(acc + kb * 1.0f, lo), a.v[3]);
+            const int32_t c[4] = {rgb.v[0], rgb.v[1], rgb.v[2], ftoi(v, 1.0f)};
+            std::memcpy(vu + ((outBase + i * 3u + 1u) & (kQwords - 1u)) * 16u, c, 16);
+        }
+        // 0x513: the packet at P again, then the environment ST (at least 5 vertices)
+        kicks.emplace_back();
+        gifPacketAt(vu, p, kicks.back());
+        Vec4 m[3] = {loadF(vu, p + 5u), loadF(vu, p + 6u), loadF(vu, p + 7u)};
+        for (auto &r : m)
+        {
+            r.v[0] = r.v[0] * 0.5f;
+            r.v[1] = r.v[1] * 0.5f;
+        }
+        const float half = 0.0f + 0.5f;
+        for (uint32_t i = 0; i < std::max(count, 5u); ++i)
+        {
+            const Vec4 nv = loadF(vu, nrmBase + i);
+            uint8_t *o = vu + ((outBase + i * 3u) & (kQwords - 1u)) * 16u;
+            float qz;
+            std::memcpy(&qz, o + 8, 4);
+            float st[2];
+            for (int k = 0; k < 2; ++k)
+            {
+                float acc = m[0].v[k] * nv.v[0];
+                acc = acc + m[1].v[k] * nv.v[1];
+                const float e = acc + m[2].v[k] * nv.v[2];
+                st[k] = (half + e) * qz;
+            }
+            std::memcpy(o, st, 8);
+        }
+        // kick 0x2b2: tag 50 over the output
+        static thread_local uint32_t outputs[256][12];
+        for (uint32_t i = 0; i < n; ++i)
+            for (uint32_t k = 0; k < 3; ++k)
+                std::memcpy(outputs[i] + k * 4u, vu + ((outBase + i * 3u + k) & (kQwords - 1u)) * 16u, 16);
+        kicks.emplace_back();
+        kickPacket(vu, 50, static_cast<uint32_t>(header.v[3]), outputs, n, kicks.back());
+        return true;
+    }
+
     // verify: the memory the re-draw reproduces, compared after the VU's run (matrices, 33, output buffer, flags, 52.z)
     struct RedrawCheck
     {
         std::vector<uint8_t> expected, before;
         bool active = false;
+        uint32_t shineP = 0; // entry 0x0d: also compare P+1 and the env matrix P+5..7 (x / y)
         uint64_t exact = 0, memBad = 0, kicksBad = 0;
     } g_redraw;
 
@@ -1152,6 +1294,22 @@ namespace
             return predictLit(c);
         if (c.startPc == 0x30u && isEnvPipeline(c.vuCode, c.vuData, c.codeGeneration))
             return predictEnv(c);
+        uint32_t shineP = 0, shineQ = 0;
+        if (isShine(c, shineP, shineQ))
+        {
+            g_redraw.expected.assign(c.vuData, c.vuData + kQwords * 16u);
+            g_redraw.before = g_redraw.expected;
+            g_pred.vuKicks.clear();
+            g_pred.clipPackets.clear();
+            redrawSetup(g_redraw.expected.data(), c.top & 0x3FFu);
+            shineSetup(g_redraw.expected.data(), shineP);
+            g_redraw.active = shineKicks(g_redraw.expected.data(), c.top, shineP, shineQ, g_pred.clipPackets);
+            g_redraw.shineP = shineP;
+            if (g_redraw.active)
+                ps2vu1tap::g_kicks = &g_pred.vuKicks;
+            return false;
+        }
+        g_redraw.shineP = 0;
         if (isRedraw(c) || isPrelitFloat(c))
         {
             g_redraw.expected.assign(c.vuData, c.vuData + kQwords * 16u);
@@ -1340,6 +1498,13 @@ namespace
         {
             const uint32_t q = (posBase + i) & (kQwords - 1u);
             memOk = std::memcmp(e + q * 16u + 12u, g + q * 16u + 12u, 4) == 0;
+        }
+        if (memOk && g_redraw.shineP)
+        {
+            const uint32_t sp = g_redraw.shineP;
+            memOk = std::memcmp(e + (sp + 1u) * 16u, g + (sp + 1u) * 16u, 16) == 0;
+            for (uint32_t i = 5; memOk && i < 8; ++i)
+                memOk = std::memcmp(e + (sp + i) * 16u, g + (sp + i) * 16u, 8) == 0;
         }
         if (kicksOk && memOk)
             ++g_redraw.exact;
@@ -1930,6 +2095,30 @@ namespace
         return true;
     }
 
+    bool drawNativeShine(const ps2hle::MscalContext &c, uint32_t p, uint32_t q)
+    {
+        static thread_local std::vector<uint8_t> saved;
+        static thread_local std::vector<std::vector<uint8_t>> kicks;
+        saved.assign(c.vuData, c.vuData + kQwords * 16u);
+        redrawSetup(c.vuData, c.top & 0x3FFu);
+        shineSetup(c.vuData, p);
+        if (!shineKicks(c.vuData, c.top, p, q, kicks))
+        {
+            std::memcpy(c.vuData, saved.data(), saved.size());
+            ++g_nativeRedraw.fallback;
+            return false;
+        }
+        const int rounding = std::fegetround();
+        std::fesetround(g_callerRounding);
+        gsSetCurrentGifPath(1u);
+        for (const auto &k : kicks)
+            ps2hle::gs()->processGIFPacket(k.data(), static_cast<uint32_t>(k.size()));
+        gsSetCurrentGifPath(3u);
+        std::fesetround(rounding);
+        ++g_nativeRedraw.drawn;
+        return true;
+    }
+
     bool beforeNative(const ps2hle::MscalContext &c)
     {
         const int rounding = std::fegetround();
@@ -1939,7 +2128,10 @@ namespace
         bool handled = false;
         static const bool env = !(std::getenv("PS2X_HLE_ENV") && *std::getenv("PS2X_HLE_ENV") == '0');
         static const bool redraw = !(std::getenv("PS2X_HLE_REDRAW") && *std::getenv("PS2X_HLE_REDRAW") == '0');
-        if (redraw && c.startPc == 0x2C0u && ps2hle::gs() && isRedraw(c))
+        uint32_t shineP = 0, shineQ = 0;
+        if (redraw && c.startPc == 0x2C0u && ps2hle::gs() && isShine(c, shineP, shineQ))
+            handled = drawNativeShine(c, shineP, shineQ);
+        else if (redraw && c.startPc == 0x2C0u && ps2hle::gs() && isRedraw(c))
             handled = drawNativeRedraw(c);
         else if (redraw && c.startPc == 0x30u && ps2hle::gs() && isPrelitFloat(c))
             handled = drawNativeRedraw(c); // the same float path, without the setup

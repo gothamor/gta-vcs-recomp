@@ -156,8 +156,12 @@ dropped on uploads (lazy render-target patching).
 - [x] **Environment-map pass** (stage table 0x13, vehicles): reproduced and checked against the VU's kicks (27,243
       packets exact); native by default (`PS2X_HLE_ENV=0` = VU1). Flyover render 14.7 -> 14.0 ms (same-session A/B);
       pictures identical. game-internals.md 6d.
-- [x] Survey reports native and VU1 work apart; what remains on the VU1 is listed in game-internals.md 6d (~1 ms
-      per frame): 0x02c0 (re-draws / particles), some prelit packets, clipped lit packets.
+- [x] Survey reports native and VU1 work apart (`PS2X_HLE_STATS=1` also lists the stage tables left).
+- [x] **0x02c0** (instanced re-draws, entry 0x1c; two-pass shine over resident meshes, entry 0x0d) and the **leftover
+      prelit packets** (a float code image, "variant C") native: reproduced with their VU memory writes and checked
+      against the VU (174,110 packets exact over the reference scenes; two missions and a drive exact too). Only clipped
+      environment-pass packets still run on the VU1 (63 in two minutes of scenes). Render time 0.3-0.7 ms lower per
+      section; pictures identical (game-internals.md 6d). `PS2X_HLE_REDRAW=0` = VU1. Milestone 3 step 1 done.
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
@@ -200,6 +204,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HLE_CLIPPED=1` | draw world packets that cross the clip planes with GPU clipping (wrong in places, game-internals.md 6h) |
 | `PS2X_HLE_CLIPPER=0` | clipped world packets on the VU1 instead of the C++ clipper |
 | `PS2X_HLE_ENV=0` | the environment-map pass (stage table 0x13) on the VU1 |
+| `PS2X_HLE_REDRAW=0` | 0x02c0's re-draws / shine passes and the float-image prelit packets on the VU1 |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
 | `PS2X_CLIP_DUMP=dir[,n]` | with `PS2X_HLE_VERIFY=1`: write n clipped packets (VU memory + the VU's kicks) for offline checks |
 | `PS2X_HW_LAZY_UPLOADS=0`, `PS2X_HW_UPSTATS=1` | write texture uploads immediately / upload stats |
