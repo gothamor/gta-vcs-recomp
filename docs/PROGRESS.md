@@ -280,6 +280,14 @@ dropped on uploads (lazy render-target patching).
       Start during the logos ignored (as on the PS2), the intro skipped by Start, the game then loads the save.
 - [x] Display > Skip intro movies (`display.skip_intro`, `VCS_SKIP_MOVIES`; off = play them as on the PS2).
       Test tools (run.py, the rig, scenes) default to skipping them.
+## Milestone 6 - retire the IOP (started 2026-10-24)
+- [x] Step 1, streaming: CDSTREAM's stream server (RPC 0x65686577) replaced on the EE side by host-thread reads from
+      the disc image (`src/game/vcs_stream.cpp`, `VCS_NATIVE_STREAM=0` for the IOP's). Loading as fast as before
+      (boot 6.3-7.8 s, five LOAD_SCENE teleports 2.1 s - the game is the limit, not the reads: 14 MB in ~5 ms).
+      Static reference scenes unchanged; world tour subset clean.
+- [ ] Step 2, sound: CDSTREAM's sound servers (0x65686578 / 0x65686579) and libsd natively, the SPU2 emulation as
+      the reference.
+- [ ] Step 3: no IOP in the normal run (modules not loaded, no interpreter); the emulated IOP switchable.
 ## Phase 5 - stability
 - [x] Vic falls through the world in some places - **no longer happens** at the spot the user saw it (user
       playtest 2026-10-24); fixed along the way by other work (which change is not known: the VU0 collision
@@ -309,6 +317,7 @@ dropped on uploads (lazy render-target patching).
 | `VCS_TIMESTEP=N` | independent timing: exactly 1/N s per game frame, unpaced (frame-dependence tests) |
 | `VCS_SKIP_MOVIES=0\|1` | play / skip the intro movies (Display > Skip intro movies); test tools default to 1 |
 | `VCS_MOVIE_LOG=1` | movie playback: sound pushed / queued / played vs the pictures, every second |
+| `VCS_NATIVE_STREAM=0`, `VCS_STREAM_LOG=1` | disc streaming through the IOP (the reference); native read stats every 5 s |
 | `VCS_MIN_STEP=x` | independent timing's step floor (0.5, the game's; lower lifts the 100 fps cap - breaks ped movement) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
 | `VCS_PERF_OVERLAY=0\|1` | the perf overlay setting for one run |

@@ -9,6 +9,7 @@
 #include "game/vcs_display.h"
 #include "game/vcs_framerate.h"
 #include "game/vcs_movie.h"
+#include "game/vcs_stream.h"
 #include "game/vcs_hud.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -644,6 +645,7 @@ namespace
         vcs::installHudHooks(runtime);     // 2D at the RenderWare level
         vcs::installFrameRateHooks(runtime); // 30 / 60 fps (game/vcs_framerate.h)
         vcs::installMovieHooks(runtime);     // STINGS / INTRO played natively (game/vcs_movie.h)
+        vcs::installStreamHooks(runtime);    // disc streaming without the IOP (game/vcs_stream.h)
         if (std::getenv("VCS_TRACE_PACKETS"))
             runtime.replaceFunction(0x00476770u, &tracePacketUse);
         if (std::getenv("VCS_TRACE_TELEPORT"))

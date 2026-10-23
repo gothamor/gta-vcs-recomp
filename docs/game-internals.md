@@ -576,6 +576,14 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   (IOP threads):
   - `0x65686577` - stream reads. EE client `0x505B48`: fn 1 = read `{channel, EE dest, LSN, -bytes}`
     (size negated), fn 2 = poll (`0xFA` busy, `0` done). The first request is GAME.DTZ (0x217E70 bytes).
+    EE side (2026-10-24): **FUN_00221818(channel, dest, lsn, size)** - size in sectors or -bytes - flushes the
+    cache over the buffer, calls fn 1 (reply 1 = accepted), then **FUN_00221678(error word)** shows the disc error
+    screens (codes 0xFB-0xFF, jump table 0x4ACFA0); **FUN_002218f0(channel)** = fn 2; **FUN_00221968()** = fn 5
+    (no arguments, always 0 seen); fn 0 = init `{6}` from FUN_002215a0. Channel 5 carries most reads. Counted in
+    boot + 35 s of play: fn 5 x3011, fn 2 x577, fn 1 x336. **Native since milestone 6 step 1**
+    (`src/game/vcs_stream.cpp`): the three EE functions replaced, reads copied from the disc image by a host
+    thread, a poll waits up to 20 ms for its read (the game polls at once and would otherwise lose a frame per
+    read). 14 MB take ~5 ms; boot and LOAD_SCENE teleports as fast as through the IOP (game-bound).
   - `0x65686578` - EE client `0x4CE2C0`, bound by `FUN_0010DCE8`.
   - `0x65686579` - EE client `0x4D3D40`, bound by `FUN_0010E918`. Commands go through
     `FUN_0010E970(cmd, arg)`: buffer `0x4CE300`, the reply's first word is the result. Seen:
@@ -601,6 +609,13 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   is an 8-halfword dummy at the top of sound RAM (core 0 ESA `0xEFFF8`..EEA `0xEFFFF`, core 1 `0xFFFF8`..`0xFFFFF`),
   ATTR bit 7 (effects enable) is clear (`0xC000` / `0xC041`), EVOL and vIIR are 0. Main volumes `0x3FFF` (direct).
   Gameplay peaks at Fort Baxter are low (~400-1700 of 32767); AutoDMA input is idle on foot.
+
+- **What the EE asks of the IOP** (`PS2X_TRACE_RPC`, boot + 35 s of play including driving, 2026-10-24): only
+  CDSTREAM's three servers. 0x65686579 (sound effects) 23,901 calls in 46 functions: `0xA0A00`-`0xA0A2B` (0xA0A07,
+  0xA0A09, 0xA0A2B ~950 each), `0xA0B00` / `0xA0C00` x7722 each (per-sound queries), `0xB0000` x3016, `0xB0100`
+  x1908 (bank status), `0xA0D00` x3 (bank loads), `0xA0000` once. 0x65686578: 6,595 calls - `0xB00` x3022,
+  `0x80E00` x3207, `0xC00` x224, `0x80700` x120, `0x80000`-`0x80221`, `0x90000`-`0x90400` a few. No PADMAN /
+  MCSERV RPCs in play (pads and the card don't go through RPC here). All nine IRX modules run as IOP code.
 
 ## 10. Memory card and saves
 
