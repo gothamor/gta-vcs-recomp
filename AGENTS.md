@@ -52,6 +52,7 @@ python tools/build.py --recompile [ISO]     # disc -> generated C++ -> build (sl
 python tools/build.py --iop-tests           # SPU2 unit tests (reverb, interpolation, noise, PMON)
 python tools/build.py --opt none|lto|pgo    # game optimisation, kept until changed (pgo: ThinLTO + profile, trains if needed)
 python tools/bench.py [OUT]                  # game-thread benchmark: fixed city spots + an AI drive (game / worker ms)
+python tools/clean.py [--apply] [--keep-days 7]   # delete test output in build/ (lists first; builds, saves, baselines kept)
 python tools/run.py 60 name                 # run 60 s, log to build/run/name.log (visible window)
 python tools/run.py 60 name --control       # + control channel for tools/gamectl.py
 python tools/scenes.py capture OUT          # reference scenes from an empty card (screenshots + perf)
@@ -78,6 +79,9 @@ card copies to start from (never the user's live card).
 - Rebuild costs: a change to `ps2_memory.h`, `gs_backend.h`, `ps2_hle_survey.h` or anything the
   generated code includes rebuilds everything (~6-10 min); runtime-only changes ~1 min; `src/` only
   seconds. Prefer `src/game/vcs_overrides.cpp` for experiments.
+- Test output (screenshots, logs, card copies) goes under `build/<tool>/<name>`; it adds up (23 GB by 2026-10-23,
+  mostly screenshots). Run `python tools/clean.py --apply --keep-days 7` after a session of test runs. A capture
+  worth keeping as a reference goes to `build/scenes/reference` (scenes compare) or `build/regress/baseline`.
 - Optimisation (`--opt`): `none` for day-to-day work (fast relinks); `pgo` / `lto` relink slower (ThinLTO) and are
   for measuring and releases. A PGO profile from older code still builds; retrain (`--opt pgo --train`, ~30 min)
   after large changes. Never edit sources while a build or the PGO pipeline is compiling them.

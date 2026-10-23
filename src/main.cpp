@@ -258,6 +258,7 @@ namespace
         s.label = "Performance overlay";
         s.help = "Frame times and counters in the corner (F3 toggles it too; F4 records a CSV).";
         s.type = Type::Toggle;
+        s.env = "VCS_PERF_OVERLAY";
         s.onChange = [](int v) { ps2perf::setOverlay(v != 0); };
         s.read = [] { return ps2perf::overlayOn() ? 1 : 0; };
         settings::add(s);

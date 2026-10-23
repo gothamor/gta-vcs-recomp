@@ -16,7 +16,9 @@ function(EnableFastReleaseMode TargetName)
         )
         if(PS2X_LTO STREQUAL "THIN")
             target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
-            target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:/lldltocache:${CMAKE_BINARY_DIR}/lto-cache>)
+            # [gta-recomp] the cache is pruned: at most 1 GB, nothing older than 3 days
+            target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:/lldltocache:${CMAKE_BINARY_DIR}/lto-cache
+                                /lldltocachepolicy:cache_size_bytes=1g:prune_after=72h>)
         elseif(PS2X_LTO STREQUAL "FULL" AND IPO_SUPPORTED)
             set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
         endif()
