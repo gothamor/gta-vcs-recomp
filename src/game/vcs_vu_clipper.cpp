@@ -139,6 +139,9 @@ namespace vcsclip
         };
     }
 
+    void clipTriangles(const uint8_t *vu, const ClipVertex *in, const IVec4 *rgbaIn, uint32_t count,
+                       std::vector<std::vector<uint8_t>> &packets);
+
     bool clipWorld(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets, bool defaultColour)
     {
         const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48), i52 = loadI(vu, 52);
@@ -201,7 +204,15 @@ namespace vcsclip
             v.col = itof(rgbaIn[i]);
         }
 
-        // kick 0x1638: per triangle of the strip
+        clipTriangles(vu, in.data(), rgbaIn.data(), count, packets);
+        return true;
+    }
+
+    // kick 0x1638 onwards: per triangle of the strip, from the vertices the clip test / fog / colour stages left
+    void clipTriangles(const uint8_t *vu, const ClipVertex *in, const IVec4 *rgbaIn, uint32_t count,
+                       std::vector<std::vector<uint8_t>> &packets)
+    {
+        const Vec4 guard = loadF(vu, 65);
         Emitter e;
         for (int r = 0; r < 4; ++r)
             e.m[r] = loadF(vu, 12 + r);
@@ -258,6 +269,31 @@ namespace vcsclip
                     cur[n] = cur[0];
             }
         }
+    }
+
+    bool clipFromOutput(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets)
+    {
+        const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48);
+        top &= 0x3FFu;
+        const uint32_t posBase = static_cast<uint32_t>(i47.v[0]) + (top & static_cast<uint32_t>(i48.v[2]));
+        const uint32_t outBase = static_cast<uint32_t>(i48.v[3]) + top + 1u;
+        const uint32_t count = static_cast<uint32_t>(loadI(vu, posBase - 1u).v[2]);
+        if (count < 3u || count > 256u)
+            return false;
+        static thread_local std::vector<ClipVertex> in;
+        static thread_local std::vector<IVec4> rgbaIn;
+        in.resize(count);
+        rgbaIn.resize(count);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            ClipVertex &v = in[i];
+            v.st = loadF(vu, outBase + i * 3u);
+            rgbaIn[i] = loadI(vu, outBase + i * 3u + 1u);
+            v.col = itof(rgbaIn[i]);
+            v.pos = loadF(vu, outBase + i * 3u + 2u);
+            v.flags = static_cast<uint32_t>(loadI(vu, posBase + i).v[3]);
+        }
+        clipTriangles(vu, in.data(), rgbaIn.data(), count, packets);
         return true;
     }
 }

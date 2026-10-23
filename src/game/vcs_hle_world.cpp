@@ -861,11 +861,27 @@ namespace
     // with - its transform / clip test / fog (0x07f0 / 0x0c38 / 0x1048) are a float variant of the world's: positions
     // and UVs are floats (no ITOF0, no 42/43 fold, no texture matrix), RGBA is always qword 51, fog FTOI4'd into
     // XYZF.w. false: not reproduced (fog off, backface pass, the clipper) - run the VU1 on the untouched memory.
-    bool redrawKicks(uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &kicks)
+    // The float code images differ in how ST and RGBA are made: 0x02c0's re-draws use the UV qword as is and qword 51;
+    // the prelit float image (variant C: world table 0x19 with float positions) runs the UVs through the texture
+    // matrix (ITOF0, 44-46 / 255) and its colour stage 0x2700 copies the colour qwords over RGBA.
+    struct FloatVariant
+    {
+        bool uvMatrix;
+        bool rawColours;
+        uint32_t clipMin, fastMin; // vertices the clip test / transform process at least
+        bool fogOffZero;           // fog off: F = 0 (vf08 cleared by the transform); else F is a stale register: VU1
+        bool epilogueSkew;         // the transform's epilogue stores the *next* vertex's w in STQ.w for vertices N-4..N-2
+                                   // (N processed): its MOVE.w waits for the MULw before it (the fog reads w there)
+    };
+    constexpr FloatVariant kRedrawVariant{false, false, 5u, 6u, false, false};
+    constexpr FloatVariant kPrelitFloatVariant{true, true, 6u, 7u, true, true};
+
+    bool floatKicks(uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &kicks, const FloatVariant &fv)
     {
         kicks.clear();
         const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48), i52 = loadI(vu, 52);
-        if ((i52.v[1] & 1) || !(i52.v[1] & 2))
+        const bool fog = (i52.v[1] & 2) != 0;
+        if ((i52.v[1] & 1) || (!fog && !fv.fogOffZero))
             return false;
         top &= 0x3FFu;
         const uint32_t base = top & static_cast<uint32_t>(i48.v[2]);
@@ -888,8 +904,23 @@ namespace
             }
             return r;
         };
-        const auto uvTimesOne = [](const Vec4 &uv) {
-            Vec4 r;
+        Vec4 uvm[3] = {loadF(vu, 44), loadF(vu, 45), loadF(vu, 46)};
+        const float inv255 = bitsToFloat(0x3B808081u);
+        for (auto &r : uvm)
+            for (int k = 0; k < 3; ++k)
+                r.v[k] *= inv255;
+        const auto uvTimesOne = [&](uint32_t q) { // ST: the UV as is, or ITOF0 through the texture matrix; then * 1
+            Vec4 r, uv = loadF(vu, q);
+            if (fv.uvMatrix)
+            {
+                const Vec4 u = itof(loadI(vu, q));
+                for (int k = 0; k < 3; ++k)
+                {
+                    float acc = uvm[0].v[k] * u.v[0];
+                    acc = acc + uvm[1].v[k] * u.v[1];
+                    uv.v[k] = acc + uvm[2].v[k] * u.v[2];
+                }
+            }
             for (int k = 0; k < 3; ++k)
                 r.v[k] = uv.v[k] * 1.0f;
             r.v[3] = 0.0f;
@@ -912,10 +943,10 @@ namespace
                 return r;
             };
             uint32_t any = 0, all = 0xFFFu;
-            for (uint32_t i = 0; i < std::max(count, 5u); ++i)
+            for (uint32_t i = 0; i < std::max(count, fv.clipMin); ++i)
             {
                 const Vec4 p = vuXform(cm, loadF(vu, posBase + i));
-                Vec4 st = uvTimesOne(loadF(vu, uvBase + i));
+                Vec4 st = uvTimesOne(uvBase + i);
                 st.v[3] = p.v[3] * 1.0f;
                 Vec4 g;
                 for (int k = 0; k < 4; ++k)
@@ -931,29 +962,68 @@ namespace
             if (all != 0u)
                 return true; // culled: only the empty kick of qword 58
             if (any & 0xFC0u)
-                return false; // the clipper on this code image: not reproduced
+            {
+                // 0x11f8 fog into the position's .w (at least 5 vertices), the colour stage, then the clipper from memory
+                const uint32_t colBase = static_cast<uint32_t>(i47.v[3]) + base;
+                if (fog)
+                {
+                    const Vec4 fogp = loadF(vu, 53);
+                    for (uint32_t i = 0; i < std::max(count, 5u); ++i)
+                    {
+                        float w;
+                        std::memcpy(&w, vu + ((outBase + i * 3u) & (kQwords - 1u)) * 16u + 12u, 4);
+                        const float acc = fogp.v[3] * w;
+                        const float f = std::max(std::min(acc + 1.0f * fogp.v[2], 255.0f), 0.0f);
+                        std::memcpy(vu + ((outBase + i * 3u + 2u) & (kQwords - 1u)) * 16u + 12u, &f, 4);
+                    }
+                }
+                if (fv.rawColours)
+                    for (uint32_t i = 0; i < count; ++i)
+                        std::memcpy(vu + ((outBase + i * 3u + 1u) & (kQwords - 1u)) * 16u, vu + ((colBase + i) & (kQwords - 1u)) * 16u, 16);
+                if (!vcsclip::clipFromOutput(vu, top, kicks))
+                    return false;
+                const int32_t variant = 711;
+                std::memcpy(vu + 52u * 16u + 8u, &variant, 4);
+                return true;
+            }
         }
         // fast path 0x06f0 (transform 0x07f0, fog 0x1048; at least 6 vertices): STQ, qword 51, XYZF2 with the fog
         const Vec4 m[4] = {loadF(vu, 28), loadF(vu, 29), loadF(vu, 30), loadF(vu, 31)};
         const Vec4 fogp = loadF(vu, 53);
         static thread_local uint32_t outputs[256][12];
-        for (uint32_t i = 0; i < std::max(count, 6u); ++i)
+        const uint32_t colBase = static_cast<uint32_t>(i47.v[3]) + base;
+        const auto vuXformW = [&](uint32_t i) { // the w of vertex i with the VU's edge cases (it may be past the count)
+            const Vec4 v = loadF(vu, posBase + i);
+            float acc = vcsvu::vuMul(m[0].v[3], v.v[0]);
+            acc = vcsvu::vuMadd(acc, m[1].v[3], v.v[1]);
+            acc = vcsvu::vuMadd(acc, m[2].v[3], v.v[2]);
+            return vcsvu::vuMadd(acc, m[3].v[3], 1.0f);
+        };
+        const uint32_t processed = std::max(count, fv.fastMin);
+        for (uint32_t i = 0; i < processed; ++i)
         {
             const Vec4 p = xform(m, loadF(vu, posBase + i));
             const float q = 1.0f / p.v[3];
-            const Vec4 st = uvTimesOne(loadF(vu, uvBase + i));
-            const float stq[4] = {st.v[0] * q, st.v[1] * q, st.v[2] * q, p.v[3]};
-            const float acc = fogp.v[3] * p.v[3];
-            const float f = std::max(std::min(acc + 1.0f * fogp.v[2], 255.0f), 0.0f);
+            const Vec4 st = uvTimesOne(uvBase + i);
+            const float w = fv.epilogueSkew && i + 4u >= processed && i + 2u <= processed ? vuXformW(i + 1u) : p.v[3];
+            const float stq[4] = {st.v[0] * q, st.v[1] * q, st.v[2] * q, w};
+            float f = 0.0f;
+            if (fog)
+            {
+                const float acc = fogp.v[3] * w;
+                f = std::max(std::min(acc + 1.0f * fogp.v[2], 255.0f), 0.0f);
+            }
             const int32_t xyzf[4] = {ftoi(p.v[0] * q, 16.0f), ftoi(p.v[1] * q, 16.0f), ftoi(p.v[2] * q, 16.0f), ftoi(f, 16.0f)};
             const uint32_t qo = outBase + i * 3u;
             std::memcpy(vu + (qo & (kQwords - 1u)) * 16u, stq, 16);
             storeF(vu, qo + 1u, def);
+            if (fv.rawColours && i < count) // colour stage 0x2700 (this image): the colour qword copied
+                std::memcpy(vu + ((qo + 1u) & (kQwords - 1u)) * 16u, vu + ((colBase + i) & (kQwords - 1u)) * 16u, 16);
             std::memcpy(vu + ((qo + 2u) & (kQwords - 1u)) * 16u, xyzf, 16);
             if (i < count)
             {
                 std::memcpy(outputs[i], stq, 16);
-                std::memcpy(outputs[i] + 4, def.v, 16);
+                std::memcpy(outputs[i] + 4, vu + ((qo + 1u) & (kQwords - 1u)) * 16u, 16);
                 std::memcpy(outputs[i] + 8, xyzf, 16);
             }
         }
@@ -962,6 +1032,33 @@ namespace
         kicks.emplace_back();
         kickPacket(vu, 49, static_cast<uint32_t>(header.v[3]), outputs, n, kicks.back());
         return true;
+    }
+
+    // the prelit float image: world stage table 0x19 (0x0da, 0x4e0 / 0x9c, 0x2b6), its own code below 0x2790
+    bool isPrelitFloat(const ps2hle::MscalContext &c)
+    {
+        if (c.startPc != 0x30u)
+            return false;
+        const uint8_t *vu = c.vuData;
+        const IVec4 t38 = loadI(vu, 38), t40 = loadI(vu, 40), t41 = loadI(vu, 41);
+        if ((t38.v[0] & 0xFFFF) != 0x19 || (t40.v[2] & 0xFFFF) != 0xDA || (t41.v[0] & 0xFFFF) != 0x4E0 ||
+            (t41.v[2] & 0xFFFF) != 0x2B6)
+            return false;
+        const uint32_t entry = loadI(vu, 52).v[0] & 0xFFFF;
+        if (entry != 0xE9 && entry != 0xDE)
+            return false;
+        static uint64_t checkedGeneration = ~0ull;
+        static bool resident = false;
+        if (c.codeGeneration != checkedGeneration)
+        {
+            const uint64_t h = fnv(c.vuCode, 0x30, 0x2790, 0xCBF29CE484222325ull);
+            checkedGeneration = c.codeGeneration;
+            resident = h == 0x301ED1C437E36FF8ull || h == 0x9CF596AA7BF61264ull; // the second differs only in padding after a JR (0x1030)
+            static int logged = 0;
+            if (!resident && logged++ < 8)
+                std::fprintf(stderr, "[hle] prelit code image hash %016llx (not the float one)\n", (unsigned long long)h);
+        }
+        return resident;
     }
 
     // verify: the memory the re-draw reproduces, compared after the VU's run (matrices, 33, output buffer, flags, 52.z)
@@ -1055,14 +1152,15 @@ namespace
             return predictLit(c);
         if (c.startPc == 0x30u && isEnvPipeline(c.vuCode, c.vuData, c.codeGeneration))
             return predictEnv(c);
-        if (isRedraw(c))
+        if (isRedraw(c) || isPrelitFloat(c))
         {
             g_redraw.expected.assign(c.vuData, c.vuData + kQwords * 16u);
             g_redraw.before = g_redraw.expected;
             g_pred.vuKicks.clear();
             g_pred.clipPackets.clear();
-            redrawSetup(g_redraw.expected.data(), c.top & 0x3FFu);
-            g_redraw.active = redrawKicks(g_redraw.expected.data(), c.top, g_pred.clipPackets);
+            if (c.startPc == 0x2C0u)
+                redrawSetup(g_redraw.expected.data(), c.top & 0x3FFu);
+            g_redraw.active = floatKicks(g_redraw.expected.data(), c.top, g_pred.clipPackets, isRedraw(c) ? kRedrawVariant : kPrelitFloatVariant);
             if (g_redraw.active)
                 ps2vu1tap::g_kicks = &g_pred.vuKicks;
             return false;
@@ -1813,8 +1911,9 @@ namespace
         static thread_local std::vector<uint8_t> saved;
         static thread_local std::vector<std::vector<uint8_t>> kicks;
         saved.assign(c.vuData, c.vuData + kQwords * 16u);
-        redrawSetup(c.vuData, c.top & 0x3FFu);
-        if (!redrawKicks(c.vuData, c.top, kicks))
+        if (c.startPc == 0x2C0u)
+            redrawSetup(c.vuData, c.top & 0x3FFu);
+        if (!floatKicks(c.vuData, c.top, kicks, c.startPc == 0x2C0u ? kRedrawVariant : kPrelitFloatVariant))
         {
             std::memcpy(c.vuData, saved.data(), saved.size()); // the VU1 runs on what it would have seen
             ++g_nativeRedraw.fallback;
@@ -1842,6 +1941,8 @@ namespace
         static const bool redraw = !(std::getenv("PS2X_HLE_REDRAW") && *std::getenv("PS2X_HLE_REDRAW") == '0');
         if (redraw && c.startPc == 0x2C0u && ps2hle::gs() && isRedraw(c))
             handled = drawNativeRedraw(c);
+        else if (redraw && c.startPc == 0x30u && ps2hle::gs() && isPrelitFloat(c))
+            handled = drawNativeRedraw(c); // the same float path, without the setup
         else if (lit && c.startPc == 0x30u && ps2hle::gs() && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
             handled = drawNativeLit(c);
         else if (lit && env && c.startPc == 0x30u && ps2hle::gs() && isEnvPipeline(c.vuCode, c.vuData, c.codeGeneration))
