@@ -306,6 +306,9 @@ packets, and the VU memory at MSCAL holds everything a draw needs):
   pass's), and the VU clipper's output now draws the office correctly. GPU clipping drew the GON_C3 poolside ground
   black, so clipped world packets are back on the VU1 by default (`PS2X_HLE_CLIPPED=1` = GPU clipping) until the
   VU's per-triangle clipper is reproduced (milestone 3). Cost: flyover 30 -> 25.5 game fps.
+  **Done (milestone 3, 2026-10-23):** `src/game/vcs_vu_clipper.cpp` reproduces the clipper bit-exactly (1.2M + 2.8M
+  GIF packets checked against the VU's kicks); clipped world packets are drawn from its GIF packets (PATH1) - render
+  time within 0.5 ms of GPU clipping, the right picture (game-internals.md 6h).
 - Remaining VU1 work: the lit-model pipelines (stage tables 0x16 / 0x13: peds, vehicles, props with
   normals; ~10% of vertices) and sprites / particles (0x02c0).
 

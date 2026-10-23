@@ -9,6 +9,7 @@
 #include <memory>
 #include "runtime/ps2_host_profile.h"
 #include "runtime/ps2_vu1.h"
+#include "runtime/ps2_vu1_tap.h"
 #include "runtime/ps2_vu1_compiled.h"
 #include "runtime/gs/ps2_gif_arbiter.h"
 #include "runtime/gs/gs_frontend.h"
@@ -1179,6 +1180,8 @@ void VU1Interpreter::finishXgkick()
         m_xgkick.active = false;
         return;
     }
+    if (ps2vu1tap::g_kicks) // [gta-recomp] checkers' copy (runtime/ps2_vu1_tap.h)
+        ps2vu1tap::g_kicks->emplace_back(m_xgkick.packet.begin(), m_xgkick.packet.begin() + m_xgkick.totalBytes);
     const int vuRoundingMode = t_vuRoundingMode;
     std::fesetround(t_callerRoundingMode);
     if (m_activeMemory)
@@ -1190,6 +1193,7 @@ void VU1Interpreter::finishXgkick()
 }
 
 uint64_t g_vu1XgkickCount = 0; // [gta-recomp] PS2X_TRACE_VU1 (ps2_runtime.cpp)
+std::vector<std::vector<uint8_t>> *ps2vu1tap::g_kicks = nullptr;
 
 void VU1Interpreter::startXgkick(uint32_t qwordAddress)
 {

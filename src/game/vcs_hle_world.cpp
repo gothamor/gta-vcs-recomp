@@ -2,12 +2,15 @@
 // reference for a native (GPU) version. See docs/game-internals.md "VU1 renderer pipeline" for what each routine does.
 //
 // PS2X_HLE_VERIFY=1: for every world packet, predict the VU1's decision (culled / clipper / fast path) and the fast
-// path's output (ST, RGBA, XYZF per vertex), let the VU1 run, and compare. Reports every 10 s on stderr.
+// path's output (ST, RGBA, XYZF per vertex) - or for clipper packets the C++ clipper's GIF packets
+// (vcs_vu_clipper.cpp) - let the VU1 run, and compare. Reports every 10 s on stderr.
 // Default (PS2X_HLE=0 turns it off): draw world packets natively instead (GS::submitNative, vertex program vs_world in
 // src/render/shaders/gs_draw.hlsl): the VU1 program is skipped; culled packets draw nothing; packets the VU would
-// clip stay on the VU1 (PS2X_HLE_CLIPPED=1: clipped by the GPU at the clip test's near / far planes, drawn with the
-// unclipped path's GIF tag - wrong in places, see drawNative).
+// clip go through the C++ clipper, whose GIF packets the GS gets as the VU's kicks (PS2X_HLE_CLIPPER=0: the VU1;
+// PS2X_HLE_CLIPPED=1: GPU clipping at the clip test's near / far planes - wrong in places, see drawNative).
 #include "runtime/ps2_hle_survey.h"
+#include "runtime/ps2_vu1_tap.h"
+#include "vcs_vu_clipper.h"
 #include "runtime/gs/gs_frontend.h"
 
 #include <algorithm>
@@ -19,6 +22,7 @@
 #include <cstring>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -137,6 +141,27 @@ namespace
             h = fnv(code, r[0], r[1], h);
         checkedGeneration = generation;
         resident = h == 0x100E28E3AB20E014ull;
+        return resident;
+    }
+
+    // the clipper's code (0x11f8 fog, 0x13d8 / 0x1440, 0x1638-0x26ff clipper and emitters), which vcs_vu_clipper.cpp
+    // reproduces
+    bool clipperCodeResident(const uint8_t *code, uint64_t generation)
+    {
+        static uint64_t checkedGeneration = ~0ull;
+        static bool resident = false;
+        if (generation == checkedGeneration)
+            return resident;
+        static const uint32_t ranges[][2] = {{0x11F8, 0x1360}, {0x13D8, 0x15B0}, {0x1638, 0x2700}};
+        uint64_t h = 0xCBF29CE484222325ull;
+        for (const auto &r : ranges)
+            h = fnv(code, r[0], r[1], h);
+        checkedGeneration = generation;
+        resident = h == 0xBE56D05105F3611Full;
+        static int logged = 0;
+        if (!resident && logged++ < 4)
+            std::fprintf(stderr, "[hle] clipper code hash %016llx (not the reproduced one): clipped packets run on the VU1\n",
+                         (unsigned long long)h);
         return resident;
     }
 
@@ -390,6 +415,8 @@ namespace
         uint32_t expected[256][12]; // per vertex: STQ (float bits), RGBA, XYZF
         bool litLanes = false;      // lit packets: STQ.w and fog not compared
         uint64_t vertsBefore = 0;
+        bool clipChecked = false;   // prelit clipper packets: the C++ clipper's GIF packets, compared with the VU's kicks
+        std::vector<std::vector<uint8_t>> clipPackets, vuKicks;
     } g_pred;
 
     struct Stats
@@ -398,6 +425,7 @@ namespace
         uint64_t culledOk = 0, culledBad = 0, fastExact = 0, fastClose = 0, fastBad = 0, vertsExact = 0, vertsBad = 0;
         uint64_t field[3] = {}; // mismatching STQ / RGBA / XYZF qwords
         uint32_t logged = 0;
+        uint64_t clipExact = 0, clipBad = 0, clipUnsupported = 0, clipPacketsOk = 0, clipPacketsBad = 0;
     } g_stats;
 
     auto g_reportAt = std::chrono::steady_clock::now();
@@ -407,12 +435,125 @@ namespace
         const Stats &s = g_stats;
         std::fprintf(stderr,
                      "[hle-verify] world packets %llu: culled %llu (%llu ok / %llu drew), clipper %llu, fast %llu "
-                     "(%llu exact, %llu within 1, %llu off; verts %llu exact / %llu off; off qwords ST %llu RGBA %llu XYZF %llu)\n",
+                     "(%llu exact, %llu within 1, %llu off; verts %llu exact / %llu off; off qwords ST %llu RGBA %llu XYZF %llu); "
+                     "C++ clipper %llu exact / %llu off / %llu not reproduced (GIF packets %llu ok / %llu off)\n",
                      (unsigned long long)s.packets, (unsigned long long)s.culled, (unsigned long long)s.culledOk,
                      (unsigned long long)s.culledBad, (unsigned long long)s.clipper, (unsigned long long)s.fast,
                      (unsigned long long)s.fastExact, (unsigned long long)s.fastClose, (unsigned long long)s.fastBad,
                      (unsigned long long)s.vertsExact, (unsigned long long)s.vertsBad, (unsigned long long)s.field[0],
-                     (unsigned long long)s.field[1], (unsigned long long)s.field[2]);
+                     (unsigned long long)s.field[1], (unsigned long long)s.field[2], (unsigned long long)s.clipExact,
+                     (unsigned long long)s.clipBad, (unsigned long long)s.clipUnsupported, (unsigned long long)s.clipPacketsOk,
+                     (unsigned long long)s.clipPacketsBad);
+    }
+
+    // PS2X_CLIP_DUMP=<dir>[,<n>]: the first n (default 300) world packets the VU sends through its clipper, as
+    // <dir>/clip_NNNN.bin - u32 magic 'CLP1', u32 top, u32 rigid, VU1 data memory before the program (16 KB), u32
+    // kick count, then per XGKICK u32 size + the packet. For developing / checking vcs_vu_clipper.cpp offline: load
+    // a file, run vcsclip::clipWorld under FE_TOWARDZERO, compare with the non-empty kicks.
+    struct ClipDump
+    {
+        std::vector<uint8_t> before;
+        std::vector<std::vector<uint8_t>> kicks;
+        uint32_t top = 0, rigid = 0, written = 0;
+        bool pending = false;
+    } g_clipDump;
+
+    void clipDumpBegin(const ps2hle::MscalContext &c, uint32_t kind) // kind: 0 prelit world, 1 rigid lit, 2 skinned lit
+    {
+        static const char *env = std::getenv("PS2X_CLIP_DUMP");
+        static const uint32_t limit = [] {
+            const char *comma = env ? std::strchr(env, ',') : nullptr;
+            return comma ? static_cast<uint32_t>(std::atoi(comma + 1)) : 300u;
+        }();
+        g_pred.vuKicks.clear();
+        g_pred.clipPackets.clear();
+        g_pred.clipChecked = false;
+        if (kind == 0u)
+        {
+            g_pred.clipChecked = true;
+            if (!vcsclip::clipWorld(c.vuData, c.top, g_pred.clipPackets))
+            {
+                g_pred.clipChecked = false;
+                ++g_stats.clipUnsupported;
+            }
+        }
+        ps2vu1tap::g_kicks = &g_pred.vuKicks;
+        if (!env || g_clipDump.written >= limit)
+            return;
+        g_clipDump.before.assign(c.vuData, c.vuData + kQwords * 16u);
+        g_clipDump.top = c.top;
+        g_clipDump.rigid = kind;
+        g_clipDump.pending = true;
+    }
+
+    void clipCompare();
+
+    void clipDumpEnd()
+    {
+        if (ps2vu1tap::g_kicks)
+        {
+            ps2vu1tap::g_kicks = nullptr;
+            clipCompare();
+        }
+        if (!g_clipDump.pending)
+            return;
+        g_clipDump.pending = false;
+        g_clipDump.kicks = g_pred.vuKicks;
+        static const std::string dir = [] {
+            std::string d = std::getenv("PS2X_CLIP_DUMP");
+            const size_t comma = d.find(',');
+            return comma == std::string::npos ? d : d.substr(0, comma);
+        }();
+        char name[64];
+        std::snprintf(name, sizeof(name), "/clip_%04u.bin", g_clipDump.written++);
+        if (FILE *f = std::fopen((dir + name).c_str(), "wb"))
+        {
+            const uint32_t head[3] = {0x31504C43u, g_clipDump.top, g_clipDump.rigid};
+            std::fwrite(head, 4, 3, f);
+            std::fwrite(g_clipDump.before.data(), 1, g_clipDump.before.size(), f);
+            const uint32_t n = static_cast<uint32_t>(g_clipDump.kicks.size());
+            std::fwrite(&n, 4, 1, f);
+            for (const auto &k : g_clipDump.kicks)
+            {
+                const uint32_t size = static_cast<uint32_t>(k.size());
+                std::fwrite(&size, 4, 1, f);
+                std::fwrite(k.data(), 1, k.size(), f);
+            }
+            std::fclose(f);
+        }
+    }
+
+    // the C++ clipper (vcs_vu_clipper.cpp) against the VU's kicks of the same packet: tags exact, per vertex ST / Q,
+    // RGBA and XYZF2 exact (STQ.w is not read by the GS); the empty sync kicks (qword 58) are skipped
+    void clipCompare()
+    {
+        if (!g_pred.clipChecked)
+            return;
+        std::vector<const std::vector<uint8_t> *> vu;
+        for (const auto &k : g_pred.vuKicks)
+        {
+            uint32_t t0 = 0;
+            std::memcpy(&t0, k.data(), 4);
+            if (!(k.size() == 16u && (t0 & 0x7FFFu) == 0u))
+                vu.push_back(&k);
+        }
+        const auto &mine = g_pred.clipPackets;
+        bool exact = vu.size() == mine.size();
+        for (size_t i = 0; i < std::min(vu.size(), mine.size()); ++i)
+        {
+            const auto &a = mine[i], &b = *vu[i];
+            bool same = a.size() == b.size() && std::memcmp(a.data(), b.data(), 16) == 0;
+            for (size_t q = 16; same && q < a.size(); q += 16)
+                same = std::memcmp(a.data() + q, b.data() + q, ((q - 16u) / 16u) % 3u == 0u ? 12u : 16u) == 0;
+            (same ? g_stats.clipPacketsOk : g_stats.clipPacketsBad) += 1;
+            exact = exact && same;
+        }
+        (exact ? g_stats.clipExact : g_stats.clipBad) += 1;
+        if (!exact && g_stats.logged < 12)
+        {
+            ++g_stats.logged;
+            std::fprintf(stderr, "[hle-verify] clipper packet differs: %zu GIF packets, VU %zu\n", mine.size(), vu.size());
+        }
     }
 
     bool predict(const ps2hle::MscalContext &c);
@@ -480,6 +621,7 @@ namespace
         {
             g_pred.decision = Decision::Clipper;
             ++g_stats.clipper;
+            clipDumpBegin(c, rigid ? 1u : 0u);
             return false;
         }
 
@@ -572,6 +714,7 @@ namespace
         {
             g_pred.decision = Decision::Clipper;
             ++g_stats.clipper;
+            clipDumpBegin(c, 2u);
             return false;
         }
         // lit-pass transform (0x07f0: matrix 28-31 as is), fog (0x1048), lighting (0x27f8)
@@ -627,6 +770,7 @@ namespace
 
     void after(const ps2hle::MscalContext &c)
     {
+        clipDumpEnd();
         if (g_pred.decision == Decision::None)
             return;
         Stats &s = g_stats;
@@ -706,8 +850,10 @@ namespace
     // ---- native drawing -------------------------------------------------------------------------------------------
     struct NativeStats
     {
-        uint64_t packets = 0, culled = 0, clipped = 0, drawn = 0, fallback = 0, vertices = 0;
+        uint64_t packets = 0, culled = 0, clipped = 0, drawn = 0, fallback = 0, vertices = 0, clippedCpu = 0;
     } g_native;
+
+    int g_callerRounding = FE_TONEAREST; // the rounding mode beforeNative found (GS work runs in it)
 
     uint64_t hashQwords(const uint8_t *vu, uint32_t base, uint32_t count, uint64_t h)
     {
@@ -803,8 +949,27 @@ namespace
         }();
         if (clipped && !clippedNative)
         {
-            ++g_native.fallback;
-            return false;
+            // the VU's clipper in C++ (vcs_vu_clipper.cpp, checked bit-exact with PS2X_HLE_VERIFY): its GIF packets go to
+            // the GS as the VU's XGKICKs would (PATH1); PS2X_HLE_CLIPPER=0 runs the VU1 instead
+            static const bool cppClipper = !(std::getenv("PS2X_HLE_CLIPPER") && *std::getenv("PS2X_HLE_CLIPPER") == '0');
+            static thread_local std::vector<std::vector<uint8_t>> packets;
+            packets.clear();
+            if (!cppClipper || !clipperCodeResident(c.vuCode, c.codeGeneration) || !vcsclip::clipWorld(vu, c.top, packets))
+            {
+                ++g_native.fallback;
+                return false;
+            }
+            const int rounding = std::fegetround();
+            std::fesetround(g_callerRounding); // the GS runs in the caller's mode, as for the VU's kicks
+            gsSetCurrentGifPath(1u);
+            for (const auto &p : packets)
+                ps2hle::gs()->processGIFPacket(p.data(), static_cast<uint32_t>(p.size()));
+            gsSetCurrentGifPath(3u);
+            std::fesetround(rounding);
+            const int32_t variant = 711; // 52.z, as the VU leaves it after its clipper
+            std::memcpy(vu + 52u * 16u + 8u, &variant, 4);
+            ++g_native.clippedCpu;
+            return true;
         }
 
         GSNativeDraw d;
@@ -880,10 +1045,11 @@ namespace
         if (now - g_reportAt >= std::chrono::seconds(10))
         {
             g_reportAt = now;
-            std::fprintf(stderr, "[hle] world packets %llu: culled %llu, drawn %llu + %llu GPU-clipped (%llu vertices), VU fallback %llu\n",
+            std::fprintf(stderr, "[hle] world packets %llu: culled %llu, drawn %llu + %llu GPU-clipped (%llu vertices), %llu C++-clipped, "
+                                 "VU fallback %llu\n",
                          (unsigned long long)g_native.packets, (unsigned long long)g_native.culled, (unsigned long long)g_native.drawn,
                          (unsigned long long)g_native.clipped, (unsigned long long)g_native.vertices,
-                         (unsigned long long)g_native.fallback);
+                         (unsigned long long)g_native.clippedCpu, (unsigned long long)g_native.fallback);
         }
         return true;
     }
@@ -1074,8 +1240,9 @@ namespace
     bool beforeNative(const ps2hle::MscalContext &c)
     {
         const int rounding = std::fegetround();
+        g_callerRounding = rounding;
         std::fesetround(FE_TOWARDZERO);
-        static const bool lit = !(std::getenv("PS2X_HLE_LIT") && *std::getenv("PS2X_HLE_LIT") == '0');
+        static const bool lit =!(std::getenv("PS2X_HLE_LIT") && *std::getenv("PS2X_HLE_LIT") == '0');
         bool handled = false;
         if (lit && c.startPc == 0x30u && ps2hle::gs() && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
             handled = drawNativeLit(c);

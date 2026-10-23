@@ -280,15 +280,39 @@ drawing used for packets the VU sends through its clipper. Not the cause (each t
 untextured; stage table 0x19 always ends with 0x2b6 = 0x15b0, tag 49), perspective-correct ST, perspective-correct
 depth, and the near / far clip planes.
 
-What the VU's clipper path does (vu1_code_full.txt): 0x11f8 fog per vertex (same formula as the fast path, from the
-output buffer's w), 0x13d8 then the kick variant 52.z = 711 (byte 0x1638), which is a **per-triangle clipper**: it
-copies tag 49 into qwords 66 / 111 with the y lane replaced by the w lane, kicks a prepared packet at qword 58, walks
-the strip three vertices at a time (skipping triangles with the ADC bit 0x8000 in XYZF.w), converts RGBA to float
-(ITOF0), clips against up to six planes (flags 32, 16, 8 ... with plane data from qwords 64, 63, ...; routines
-0x1b10, 0x1f68, ...), scales the attributes by a per-vertex w after clipping (MULw), and kicks the pieces. Reproducing
-it is milestone 3 work; until then clipped world packets stay on the VU1 (cost: flyover 30 -> 25.5 game fps, render
-18.2 -> 24.6 ms; cutscene and gameplay still at the 30 fps cap). The intro office, which the stage-5 notes called
-black on the VU clipper, draws correctly on it now.
+The VU's clipper path, read from vu1_code_full.txt and reproduced bit-exactly in `src/game/vcs_vu_clipper.cpp`
+(milestone 3, 2026-10-23):
+- **Clip test 0x0c38** (all vertices, at least 6) writes per vertex three qwords to the output buffer: ST from the
+  texture matrix *not* divided by w, with the clip-space w in lane w; the default colour (qword 51); the clip-space
+  position (folded matrix 24-27). The 12 clip flags (plain in bits 0-5, guard band x 65 in bits 6-11) go into the
+  input position's .w.
+- **0x11f8** fog (when 52.y bit 1): F = clamp(53.w * w + 53.z, 0, 255) into the position's .w (w stays in the ST
+  qword). **0x13d8** runs the backface pass 0x1440 when 52.y bit 0 (not reproduced: such packets stay on the VU1;
+  none seen). The prelit colour stage then writes integer RGBA as on the fast path.
+- **Kick 0x2b6 -> 52.z = 711 = 0x1638**, the per-triangle clipper. Tag 49's **w lane holds a second upper half with
+  PRIM 0x7d** (triangle fan, IIP TME FGE ABE); the clipper builds its tags from it (y lane = 49.w). Qword 58 is an
+  empty GIF tag (NLOOP 0, EOP) it kicks before every triangle - a sync, draws nothing.
+- Per strip triangle (i, i+1, i+2): skip when the third vertex has ADC (0x8000) or all three share a plain flag;
+  when no vertex crosses the guard band (flags & 0xfc0 = 0), emit the three as they are (0x23c0); otherwise copy
+  them (colour as float) into a ping-pong buffer (66+1 / 111+1, four qwords per vertex) and clip:
+  - planes (a x + b y + c w + d, from qwords 64..59): w > 0.3 (near, flag 32, routine 0x1b10), w < 2000 (far, flag
+    16), y = -w, y = w, x = -w, x = w (flags 8, 4, 2, 1; 45-degree planes, routine 0x1f68) - each only when the
+    polygon's OR of flags has its bit; inside / outside by the flag bit, intersection t = d0 / (d0 - d1), every
+    lane of ST+w, colour and position lerped (a * (1 - t) + b * t, the inside vertex first), flags recomputed;
+  - after the near plane, colours are multiplied by w (perspective-correct interpolation) and divided again when
+    emitted (0x2608; after the near plane alone 0x2520 emits them undivided);
+  - rejected when the AND of the output flags is non-zero; emitted as soon as no guard-band bit of a later plane is
+    set (masks 1984, 960, 448, 192, 64, 0) - the GS scissor handles the rest.
+- Emit: viewport matrix 12-15 applied to (x, y, z, w), / w, FTOI4 with the fog in F; STQ = ST / w; colours FTOI0
+  after + 0.001. One GIF packet per polygon (fan, NLOOP = vertex count, EOP).
+
+Checked with `PS2X_HLE_VERIFY=1` against the VU1's own XGKICKs (`runtime/ps2_vu1_tap.h`): GON_C3 98,906 clipped
+packets / 1,199,117 GIF packets, the reference scenes 143,963 / 2,837,560 - all exact (ST, Q, RGBA, XYZF2; STQ.w is
+not read by the GS). Native drawing hands those packets to the GS as PATH1 (`PS2X_HLE_CLIPPER=0` = the VU1; the
+GPU clipping that drew the ground black is `PS2X_HLE_CLIPPED=1`). Cost over the reference scenes, means per
+section: flyover render 14.6 ms (GPU clipping 14.1, VU1 17.7), cutscene 11.8 (11.3, 14.5), gameplay 5.9 (5.6, 7.6);
+frame time at the 30 fps cap again. The intro office, which the stage-5 notes called black on the VU clipper, draws
+correctly on it.
 
 ## 7. Textures: `.XTX`
 

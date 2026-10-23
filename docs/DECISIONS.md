@@ -96,6 +96,14 @@ Newest at the bottom. Each entry: what, why, and what would change it.
 - Next: a conventional hardware-rasterized GS backend (GSdx-HW style) behind the
   existing `GSRasterBackend` interface - broad GPU support, upscaling-friendly.
 
+## 2026-10-23 - Clipped world packets: correct picture first, then the C++ clipper
+
+GPU clipping of the packets the VU sends through its clipper drew GON_C3's poolside ground black. The user chose the
+correct picture as the default (clipped packets on the VU1, flyover 30 -> 25.5 fps) and milestone 3 to start with the
+VU clipper. It is reproduced bit-exactly in C++ (game-internals.md 6h); its GIF packets go to the GS as the VU's
+kicks would, so the picture is the VU's and the cost is close to GPU clipping. GPU clipping stays behind
+`PS2X_HLE_CLIPPED=1`.
+
 ## 2026-10-22 - Performance status (i7-7700K)
 - With GS work discarded (`PS2X_GS=null`) the game now runs at full speed
   (60 VBlanks/s, 15% idle) after two changes: hctp's VU1 throughput mode

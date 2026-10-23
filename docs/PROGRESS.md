@@ -139,12 +139,23 @@ Findings so far (rig runs; details in game-internals.md):
       per-triangle clipper natively is milestone 3 (game-internals.md 6h).
 - [x] Soak (`tools/soak.py --hours 0.5`, 2026-10-23; the user settled on a short one): 60 samples over 30 min of
       autodrive across six spots, no crash, hang or falling; private memory 347 MB at start, then a saw-tooth between
-      486 and 560 MB from minute 10 on (streaming), no drift. Driving frame time median 46.8 ms, p90 70.7 ms - about
-      6-8 ms worse than before clipped world packets went back to the VU1 (trial soaks: median 38.8-41.2 ms).
+      486 and 560 MB from minute 10 on (streaming), no drift. Driving frame time median 46.8 ms, p90 70.7 ms. (The
+      "6-8 ms worse with clipped packets on the VU1" read from this was wrong: a same-session A/B of `drive.py --auto`
+      gave 54.8-57.1 ms mean for GPU, VU1 and C++ clipping alike - driving runs vary more than the clipping costs.)
       One car per leg spawned against something and was replaced (the tool's retry).
 
-Milestone 2 closed 2026-10-23. Open, carried to milestone 3: the VU clipper reproduced natively (the frame time
-above), bloom buffers dropped on uploads (lazy render-target patching).
+Milestone 2 closed 2026-10-23. Open, carried to milestone 3: the VU clipper reproduced natively, bloom buffers
+dropped on uploads (lazy render-target patching).
+
+## Milestone 3 - native rendering, the rest of the frame (started 2026-10-23)
+- [x] **The VU1 clipper in C++** (`src/game/vcs_vu_clipper.cpp`, game-internals.md 6h): bit-exact against the VU's
+      XGKICKs (GON_C3 1.2M GIF packets, reference scenes 2.8M, 0 off); clipped world packets drawn from it. Section
+      means over the reference scenes (C++ / VU1 / GPU clipping): flyover render 14.6 / 17.7 / 14.1 ms, cutscene
+      11.8 / 14.5 / 11.3, gameplay 5.9 / 7.6 / 5.6; flyover frame 34.3 ms (30 fps cap) vs 36.2 on the VU1. GON_C3's
+      poolside ground right natively.
+- [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
+      method when one shows up).
+- [ ] Lazy render-target patching (bloom buffers dropped on uploads).
 
 ## Phase 5 - stability
 - [ ] Vic falls through the world in some places (reported by the user 2026-10-22, after the
@@ -181,7 +192,9 @@ above), bloom buffers dropped on uploads (lazy render-target patching).
 | `PS2X_DMA_HIST=1` | VIF1 payload per MB of RAM every 5 s |
 | `VCS_TRACE_PACKETS=1` | peak use of the game's DMA packet buffer |
 | F3 / F4, `PS2X_PERF_LOG=f.csv` | perf overlay / CSV recording (see CONTROLS.md); `python tools/perf_report.py f.csv` |
-| `PS2X_HLE_CLIPPED=1` | draw world packets that cross the clip planes natively (GPU clipping; wrong in places, game-internals.md 6h) |
+| `PS2X_HLE_CLIPPED=1` | draw world packets that cross the clip planes with GPU clipping (wrong in places, game-internals.md 6h) |
+| `PS2X_HLE_CLIPPER=0` | clipped world packets on the VU1 instead of the C++ clipper |
+| `PS2X_CLIP_DUMP=dir[,n]` | with `PS2X_HLE_VERIFY=1`: write n clipped packets (VU memory + the VU's kicks) for offline checks |
 | `PS2X_HW_LAZY_UPLOADS=0`, `PS2X_HW_UPSTATS=1` | write texture uploads immediately / upload stats |
 | `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate a slow PC) |
 | `PS2X_VU0_VERIFY=1`, `PS2X_VU0_NATIVE=0` | check / disable native VU0 programs |
