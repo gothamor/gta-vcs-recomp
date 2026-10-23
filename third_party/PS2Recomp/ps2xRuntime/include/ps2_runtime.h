@@ -27,6 +27,7 @@
 #include "runtime/ps2_address.h"
 #include "runtime/gs/ps2_gif_arbiter.h"
 #include "runtime/ps2_memory.h"
+#include "runtime/ee_fast_clock.h" // [gta-recomp]
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/ps2_vu1.h"
 #include "runtime/ps2_audio.h"
@@ -399,13 +400,22 @@ public:
     bool registerFunction(uint32_t address, RecompiledFunction func);
     RecompiledFunction lookupFunction(uint32_t address);
     bool hasFunction(uint32_t address) const;
-    bool dispatchGuestBranch(uint8_t *rdram,
-                             R5900Context *ctx,
-                             uint32_t targetPc,
-                             uint32_t sourcePc,
-                             uint32_t fallthroughPc,
-                             GuestBranchKind kind,
-                             const char *debugName);
+    // [gta-recomp] Inline: a call to a recompiled function with nothing due goes straight to it (EeFastClock);
+    // everything else through dispatchGuestBranchSlow (PS2X_FAST_DISPATCH=0: always).
+    inline bool dispatchGuestBranch(uint8_t *rdram,
+                                    R5900Context *ctx,
+                                    uint32_t targetPc,
+                                    uint32_t sourcePc,
+                                    uint32_t fallthroughPc,
+                                    GuestBranchKind kind,
+                                    const char *debugName);
+    bool dispatchGuestBranchSlow(uint8_t *rdram,
+                                 R5900Context *ctx,
+                                 uint32_t targetPc,
+                                 uint32_t sourcePc,
+                                 uint32_t fallthroughPc,
+                                 GuestBranchKind kind,
+                                 const char *debugName);
     void reportMissingFunction(uint8_t *rdram,
                                R5900Context *ctx,
                                uint32_t targetPc,
@@ -454,7 +464,8 @@ public:
     EeScheduler &eeScheduler();
     const EeScheduler &eeScheduler() const;
     void postEeEvent(EeEvent event);
-    bool eeCheckpointDue(uint32_t cycles = 32u) noexcept;
+    inline bool eeCheckpointDue(uint32_t cycles = 32u) noexcept; // [gta-recomp] inline when nothing is due
+    bool eeCheckpointDueSlow(uint32_t cycles) noexcept;
     [[noreturn]] void eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc);
 
     struct EeExitHandlerRegistration
@@ -562,6 +573,7 @@ private:
     VU1Interpreter m_vu1{VU1Interpreter::Unit::VU1};
     R5900Context m_cpuContext;
     std::unique_ptr<EeScheduler> m_eeScheduler;
+    EeFastClock *m_eeClock = nullptr; // [gta-recomp] the scheduler's clock for the inline fast paths (null: off)
     std::unique_ptr<GSGpuRenderer> m_gpu; // [gta-recomp]
     GSHwBackendHandle *m_hw = nullptr; // [gta-recomp]
     uint64_t m_iopPendingEeCycles = 0u;   // [gta-recomp] see advanceIopEeCycles
@@ -616,5 +628,41 @@ extern const uint32_t g_ps2RecompiledFunctionTableBase;
 extern const uint32_t g_ps2RecompiledFunctionTableEnd;
 extern const uint32_t g_ps2RecompiledFunctionTableSlotCount;
 extern PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[];
+
+// [gta-recomp] a checkpoint asked the guest call chain to unwind to the scheduler (ps2_runtime.cpp)
+extern bool g_checkpointUnwind;
+
+inline bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc, uint32_t sourcePc,
+                                            uint32_t fallthroughPc, GuestBranchKind kind, const char *debugName)
+{
+    // [gta-recomp] The slow path's call case without its out-of-line steps: charge the dispatch cycles (when nothing
+    // is due - else the scheduler's checkpoint runs there), look the target up in the table, call it.
+    if ((kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall) && m_eeClock)
+    {
+        const uint32_t slot = (targetPc - g_ps2RecompiledFunctionTableBase) >> 2;
+        if ((targetPc & 3u) == 0u && targetPc >= g_ps2RecompiledFunctionTableBase && slot < g_ps2RecompiledFunctionTableSlotCount)
+        {
+            const RecompiledFunction fn = g_ps2RecompiledFunctionTable[slot];
+            if (fn && m_eeClock->tryAdvance(EeFastClock::kDispatchCycles))
+            {
+                ctx->pc = targetPc;
+                fn(rdram, ctx, this);
+                if (m_stopRequested.load(std::memory_order_relaxed) || ctx->pc == 0u || g_checkpointUnwind)
+                    return false;
+                if (ctx->pc == targetPc)
+                    ctx->pc = fallthroughPc;
+                return ctx->pc == fallthroughPc;
+            }
+        }
+    }
+    return dispatchGuestBranchSlow(rdram, ctx, targetPc, sourcePc, fallthroughPc, kind, debugName);
+}
+
+inline bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
+{
+    if (m_eeClock && m_eeClock->tryAdvance(cycles))
+        return false;
+    return eeCheckpointDueSlow(cycles);
+}
 
 #endif // PS2_RUNTIME_H

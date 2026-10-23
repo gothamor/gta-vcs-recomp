@@ -30,7 +30,12 @@ def exe(path):
     return path + ".exe" if IS_WINDOWS else path
 
 
-VCS_EXE = exe(os.path.join(BUILD_DIR, "third_party", "PS2Recomp", "ps2xRuntime", "vcs"))
+def game_exe(build_dir):
+    return exe(os.path.join(build_dir, "third_party", "PS2Recomp", "ps2xRuntime", "vcs"))
+
+
+# VCS_EXE=<path>: run another build (tools/run.py and everything on top of it), e.g. the instrumented PGO build
+VCS_EXE = os.environ.get("VCS_EXE") or game_exe(BUILD_DIR)
 RECOMP_EXE = exe(os.path.join(BUILD_DIR, "third_party", "PS2Recomp", "ps2xRecomp", "ps2_recomp"))
 PY = [sys.executable, "-I"]
 
@@ -139,18 +144,20 @@ def _which(name, env):
 
 
 # ---- CMake ------------------------------------------------------------------------------------------------------
-def configure(env, force=False):
-    if os.path.isfile(os.path.join(BUILD_DIR, "build.ninja")) and not force:
+def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
+    """CMake configure of `build_dir` (first time, when forced, or with `defines`: {"PS2X_LTO": "THIN", ...})."""
+    if os.path.isfile(os.path.join(build_dir, "build.ninja")) and not force and not defines:
         return
     for name in ("cmake", "ninja"):
         if not _which(name, env):
             fail(f"{name} not found on PATH")
-    cmd = ["cmake", "-S", ROOT, "-B", BUILD_DIR, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
+    cmd = ["cmake", "-S", ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
+    cmd += ["-D%s=%s" % (k, v) for k, v in (defines or {}).items()]
     if IS_WINDOWS:
         cmd += ["-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl"]
     elif _which("clang", env) and _which("clang++", env):
         cmd += ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
-    print("[build] configuring " + os.path.relpath(BUILD_DIR, ROOT))
+    print("[build] configuring " + os.path.relpath(build_dir, ROOT) + "".join(" %s=%s" % kv for kv in (defines or {}).items()))
     log = os.path.join(BUILD, "configure.log")
     with open(log, "w", encoding="utf-8") as f:
         if subprocess.run(cmd, cwd=ROOT, env=env, stdout=f, stderr=subprocess.STDOUT).returncode != 0:
@@ -161,11 +168,11 @@ def configure(env, force=False):
 _INTERESTING = re.compile(r"error|FAILED|Linking|warning: unused")
 
 
-def cmake_build(env, target, log_name, verbose=False):
+def cmake_build(env, target, log_name, verbose=False, build_dir=BUILD_DIR):
     """Builds `target`; prints errors and link steps (everything with verbose). False on failure."""
     log = os.path.join(BUILD, log_name)
     os.makedirs(BUILD, exist_ok=True)
-    cmd = ["cmake", "--build", BUILD_DIR, "--target", target]
+    cmd = ["cmake", "--build", build_dir, "--target", target]
     with open(log, "w", encoding="utf-8") as f:
         proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         for line in proc.stdout:

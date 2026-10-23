@@ -20,6 +20,23 @@ function(EnableFastReleaseMode TargetName)
         elseif(PS2X_LTO STREQUAL "FULL" AND IPO_SUPPORTED)
             set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
         endif()
+        # [gta-recomp] Profile-guided optimisation (PS2X_PGO, tools/build.py --opt pgo): GEN = instrumented build that
+        # writes a .profraw when the game exits; a .profdata path = optimise with that profile. Functions the profile
+        # doesn't match (code changed since) are optimised as without it.
+        if(PS2X_PGO STREQUAL "GEN")
+            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-generate>)
+            target_compile_definitions(${TargetName} PRIVATE $<$<CONFIG:Release>:PS2X_PGO_GEN=1>)
+            get_target_property(_type ${TargetName} TYPE)
+            if(_type STREQUAL "EXECUTABLE")
+                execute_process(COMMAND ${CMAKE_CXX_COMPILER} /clang:-print-resource-dir OUTPUT_VARIABLE _resource
+                                OUTPUT_STRIP_TRAILING_WHITESPACE)
+                target_link_options(${TargetName} PRIVATE "${_resource}/lib/windows/clang_rt.profile-x86_64.lib")
+            endif()
+        elseif(PS2X_PGO)
+            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-use=${PS2X_PGO}
+                                   -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled -Wno-profile-instr-missing
+                                   -Wno-backend-plugin>)
+        endif()
         return()
     endif()
     if(MSVC)

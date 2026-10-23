@@ -229,6 +229,23 @@ dropped on uploads (lazy render-target patching).
       for the old path): chains, VU1 and the GS front end run on their own thread behind the game thread. 60 mode:
       outside the barracks at the cap with ~4 ms to spare; driving 26-29 -> 44-54 fps; flyover 42.5 -> 59.9 fps.
       Game code (~17-20 ms driving) is now the limit.
+- [x] Game code (2026-10-23): inline dispatch / checkpoint fast paths (`PS2X_FAST_DISPATCH=0` to compare) and a
+      ThinLTO + profile-guided build (`tools/build.py --opt pgo`, trained on `tools/bench.py` + the reference scenes).
+      `tools/bench.py`, 60 mode, game-thread ms (two runs each):
+
+      | spot | plain /O2 | + fast dispatch | + PGO + ThinLTO |
+      |---|---|---|---|
+      | Fort Baxter | 10.8 / 11.0 | 13.1 / 13.3 (more draws) | 9.7 / 10.8 |
+      | city 575,175 | 7.9 / 8.2 | 6.7 / 7.5 | 5.9 / 6.0 |
+      | city -675,1425 | 14.5 / 13.6 | 13.2 / 14.2 | 9.1 / 9.3 |
+      | city 1325,-325 | 9.6 / 11.4 | 8.4 / 8.9 | 7.2 / 7.5 |
+      | city -1425,-575 | 12.2 / 12.2 | 10.5 / 11.3 | 8.0 / 8.3 |
+      | AI drive | 22.9 / 21.8 (40.6 / 42.6 fps) | 20.3 / 20.3 (45 fps) | 16.4 / 16.9 (56.7 / 55.1 fps) |
+
+      Fast dispatch alone is ~1 ms (dispatch / checkpoint / lookup left the profile but their work stays inline);
+      PGO + ThinLTO ~20-30% of game code. Checked: static reference scenes unchanged (loading 0.00, pause map 0.33),
+      world tour subset classes unchanged, its worst frame 21.0 -> 16.7 ms. Remaining on the game thread (driving):
+      game code ~65%, memmove ~3%, VU0 programs ~6%, IOP ~2%.
 - [ ] Frame-rate independence (the user's choice over interpolation, DECISIONS.md 2026-10-23): CTimer on the host
       clock, a frame-rate cap setting, a forced-step test rig, then the audit of frame-count assumptions. Replaces
       the "60 fps fixes" item below.
@@ -257,6 +274,8 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_RENDER_THREAD=0\|1` | render submission on the game thread / on its own thread (default with `PS2X_GS=hw`) |
 | `PS2X_RENDER_THREAD_LOG=1`, `PS2X_RENDER_THREAD_AHEAD=n` | worker items / fences every 5 s; frames the game may run ahead (1) |
 | `VCS_PROFILE_THREAD=RenderWorker` | `VCS_PROFILE` samples the render worker instead of the game thread |
+| `PS2X_FAST_DISPATCH=0` | guest calls / loop checkpoints always through the scheduler (no inline fast path) |
+| `VCS_EXE=path` | tools/run.py (and the rig, bench, scenes on top of it) run that build |
 | `VCS_WATCHDOG=s` | EE + IOP thread states |
 | `VCS_WATCH=lo,hi[,val]` | guest write watchpoint |
 | `VCS_TRACE_FILES=1` | game file API / inflate / GTAG relocation trace |

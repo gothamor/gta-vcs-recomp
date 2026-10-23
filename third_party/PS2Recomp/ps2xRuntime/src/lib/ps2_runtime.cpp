@@ -393,7 +393,7 @@ namespace
 // that came back with pc == its own entry as "returned normally"; when a *recursive* call is
 // the one preempted, pc == entry too, and the outer frame carried on with the inner frames
 // still on the stack (sp off by their sizes -> $ra loaded from someone's locals).
-static bool g_checkpointUnwind = false;
+bool g_checkpointUnwind = false; // [gta-recomp] extern in ps2_runtime.h (the inline dispatch)
 void ps2ClearCheckpointUnwind() { g_checkpointUnwind = false; }
 
 // [gta-recomp] PS2X_TRACE_VU1=1: per VU1 program start address, runs / XGKICKs / where it stopped, every 5 s.
@@ -677,6 +677,10 @@ PS2Runtime::PS2Runtime()
     m_iopSubsystem = std::make_unique<ps2x::iop::IopSubsystem>(*m_iopHost);
 
     m_eeScheduler = std::make_unique<EeScheduler>(*this);
+    { // [gta-recomp] inline dispatch / checkpoint fast paths (ps2_runtime.h); PS2X_FAST_DISPATCH=0 turns them off
+        const char *fast = std::getenv("PS2X_FAST_DISPATCH");
+        m_eeClock = (fast && fast[0] == '0') ? nullptr : &m_eeScheduler->fastClock();
+    }
 
     // Assign rather than memset: R5900Context's constructor zeroes itself and
     // then applies the COP0 reset values, which a memset here would discard.
@@ -1671,7 +1675,7 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
     }
 }
 
-bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+bool PS2Runtime::dispatchGuestBranchSlow(uint8_t *rdram,
                                      R5900Context *ctx,
                                      uint32_t targetPc,
                                      uint32_t sourcePc,
@@ -2728,7 +2732,7 @@ void PS2Runtime::postEeEvent(EeEvent event)
     m_eeScheduler->postEvent(event);
 }
 
-bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
+bool PS2Runtime::eeCheckpointDueSlow(uint32_t cycles) noexcept
 {
     const bool due = m_eeScheduler->checkpointDue(cycles);
     if (due)

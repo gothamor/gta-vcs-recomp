@@ -41,6 +41,10 @@
 #include <windows.h>
 #endif
 
+#if defined(PS2X_PGO_GEN)
+extern "C" int __llvm_profile_write_file(void); // clang's profile runtime (instrumented build, tools/build.py --opt pgo)
+#endif
+
 namespace fs = std::filesystem;
 
 namespace vcs
@@ -414,6 +418,9 @@ int main(int argc, char *argv[])
         vcs::startWatchdog(runtime);
         vcs::startProfiler(runtime);
         runtime.run();
+#if defined(PS2X_PGO_GEN)
+        __llvm_profile_write_file(); // instrumented build: _Exit skips the atexit handler that writes the profile
+#endif
         std::cout.flush();
         std::cerr.flush();
         std::_Exit(0);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ps2_runtime.h"
+#include "runtime/ee_fast_clock.h" // [gta-recomp]
 
 #include <array>
 #include <atomic>
@@ -280,6 +281,7 @@ public:
     void postEvent(EeEvent event);
     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
     void accountCycles(uint32_t cycles) noexcept;
+    EeFastClock &fastClock() noexcept { return m_clock; } // [gta-recomp] PS2Runtime's inline fast paths
     [[nodiscard]] bool isExecutingGuest() const noexcept;
 
     // Kernel object API. All calls except postEvent/requestStop execute on the
@@ -425,8 +427,8 @@ private:
     bool m_timeSliceExpired = false;
     bool m_insideInterrupt = false;
     uint32_t m_pendingEeTimerInterrupts = 0;
-    uint64_t m_eeCycle = 0;
-    uint64_t m_sliceEndCycle = kDefaultTimeSliceCycles;
+    // [gta-recomp] EE cycle clock and time slice end, shared with the inline fast paths (runtime/ee_fast_clock.h)
+    EeFastClock m_clock{0u, kDefaultTimeSliceCycles, 0u, &m_checkpointPending, &m_nextDeadlineCycle};
     std::thread::id m_executorThread{};
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_guestExecuting{false};

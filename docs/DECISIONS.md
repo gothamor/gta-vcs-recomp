@@ -213,3 +213,12 @@ The user's choices on the roadmap's open questions:
   or step aside rather than being ported to the queue. At most one frame of lead (latency stays one frame).
 - Kept outside ps2_memory.h (a free-function module with its own buffer pool) so the change does not rebuild the
   generated code. `PS2X_RENDER_THREAD=0` is the switch back.
+
+## 2026-10-23 - Profile-guided, ThinLTO build for play; plain build for development
+- `tools/build.py --opt pgo` (ThinLTO + PGO) is what to play and measure with: game code ~20-30% faster
+  (PROGRESS.md milestone 4). The profile comes from an instrumented build (build/pgo-gen) playing tools/bench.py and
+  the reference scenes; it lives in build/pgo (derived from the user's own game, never committed) and is retrained
+  with `--opt pgo --train` after large changes - a stale one still builds, changed functions just lose its benefit.
+- `--opt none` stays the development setting (no ThinLTO relink); the choice is kept in the CMake cache until changed.
+- Calls between recompiled functions got an inline fast path in the runtime header rather than a recompiler change:
+  same effect on every call site, no regenerated code, and `PS2X_FAST_DISPATCH=0` switches it off.
