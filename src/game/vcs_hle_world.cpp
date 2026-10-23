@@ -11,6 +11,7 @@
 #include "runtime/ps2_hle_survey.h"
 #include "runtime/ps2_vu1_tap.h"
 #include "vcs_vu_clipper.h"
+#include "vcs_vu_math.h"
 #include "runtime/gs/gs_frontend.h"
 
 #include <algorithm>
@@ -762,6 +763,215 @@ namespace
         return true;
     }
 
+    // ---- program 0x02c0, setup slot 0xc8 + entry 0x1c: instanced re-draws -------------------------------------------
+    // 0x02c0 copies the packet's object matrix (4 qwords at TOP) to 0-3, 0x04d8 builds the clip matrix 24-27 (view 16-19
+    // x object) and the window matrix 28-31 (viewport 12-15 x clip), setup slot 0xc8 (byte 0x640) the camera in object
+    // space (33 = R^T (32 - T)); then the dispatcher's entry 0x1c runs only the transform stage 0x0da and the kick 0x2b6
+    // (tag 49) - no colour stage: the RGBA the output buffer already holds is drawn (qword 51's colour when the clip test
+    // ran, 52.x = 0x0e9). Meshes stay resident at absolute addresses (48.z mask 0). game-internals.md 6d.
+    bool redrawCodeResident(const uint8_t *code, uint64_t generation)
+    {
+        static uint64_t checkedGeneration = ~0ull;
+        static bool resident = false;
+        if (generation == checkedGeneration)
+            return resident;
+        const uint64_t h = fnv(code, 0x30, 0x2700, 0xCBF29CE484222325ull);
+        checkedGeneration = generation;
+        resident = h == 0x11DD6EA54A3E572Aull;
+        static int logged = 0;
+        if (!resident && logged++ < 4)
+            std::fprintf(stderr, "[hle] re-draw code hash %016llx (not the reproduced one): 0x02c0 runs on the VU1\n",
+                         (unsigned long long)h);
+        return resident;
+    }
+
+    bool isRedraw(const ps2hle::MscalContext &c)
+    {
+        if (c.startPc != 0x2C0u)
+            return false;
+        const uint8_t *vu = c.vuData;
+        const IVec4 t34 = loadI(vu, 34), t38 = loadI(vu, 38), t41 = loadI(vu, 41);
+        if ((t34.v[0] & 0xFFFF) != 0xC8 || (loadI(vu, 35).v[0] & 0xFFFF) != 0x3A || (loadI(vu, 36).v[0] & 0xFFFF) != 0x3A ||
+            (loadI(vu, 37).v[0] & 0xFFFF) != 0x3A || (t38.v[0] & 0xFFFF) != 0x1C || (t41.v[0] & 0xFFFF) != 0xDA ||
+            (t41.v[2] & 0xFFFF) != 0x2B6)
+            return false;
+        const uint32_t entry = loadI(vu, 52).v[0] & 0xFFFF;
+        if (entry != 0xE9 && entry != 0xDE)
+            return false;
+        return redrawCodeResident(c.vuCode, c.codeGeneration);
+    }
+
+    void storeF(uint8_t *vu, uint32_t q, const Vec4 &v, uint32_t lanes = 0xFu)
+    {
+        for (int k = 0; k < 4; ++k)
+            if (lanes & (1u << k))
+                std::memcpy(vu + (q & (kQwords - 1u)) * 16u + k * 4u, &v.v[k], 4);
+    }
+
+    // 0x02c0's setup: matrices 0-3, 24-27, 28-31 and qword 33 written into vu
+    void redrawSetup(uint8_t *vu, uint32_t top)
+    {
+        Vec4 a[4];
+        for (uint32_t i = 0; i < 4; ++i)
+        {
+            a[i] = loadF(vu, top + i);
+            storeF(vu, i, a[i]);
+        }
+        const auto mul = [](const Vec4 b[4], const Vec4 &r) { // 0x04d8: ACC = b0 r.x + b1 r.y + b2 r.z; + b3 r.w
+            Vec4 o;
+            for (int c = 0; c < 4; ++c)
+            {
+                float acc = b[0].v[c] * r.v[0];
+                acc = acc + b[1].v[c] * r.v[1];
+                acc = acc + b[2].v[c] * r.v[2];
+                o.v[c] = acc + b[3].v[c] * r.v[3];
+            }
+            return o;
+        };
+        const Vec4 view[4] = {loadF(vu, 16), loadF(vu, 17), loadF(vu, 18), loadF(vu, 19)};
+        const Vec4 port[4] = {loadF(vu, 12), loadF(vu, 13), loadF(vu, 14), loadF(vu, 15)};
+        Vec4 clip[4];
+        for (uint32_t i = 0; i < 4; ++i)
+        {
+            clip[i] = mul(view, a[i]);
+            storeF(vu, 24 + i, clip[i]);
+        }
+        for (uint32_t i = 0; i < 4; ++i)
+            storeF(vu, 28 + i, mul(port, clip[i]));
+        // 0x0640: the rotation transposed (ADDx from vf00: 0 + a), camera (32) minus the translation, rotated
+        Vec4 rt[3];
+        for (int r = 0; r < 3; ++r)
+            for (int k = 0; k < 3; ++k)
+                rt[r].v[k] = 0.0f + a[k].v[r];
+        const Vec4 cam = loadF(vu, 32);
+        float d[3];
+        for (int k = 0; k < 3; ++k)
+            d[k] = cam.v[k] - a[3].v[k];
+        Vec4 o = loadF(vu, 33);
+        for (int k = 0; k < 3; ++k)
+        {
+            float acc = rt[0].v[k] * d[0];
+            acc = acc + rt[1].v[k] * d[1];
+            o.v[k] = acc + rt[2].v[k] * d[2];
+        }
+        storeF(vu, 33, o, 0x7u);
+    }
+
+    // after redrawSetup: the program's VU memory writes and the GIF packets it kicks, for the code image 0x02c0 runs
+    // with - its transform / clip test / fog (0x07f0 / 0x0c38 / 0x1048) are a float variant of the world's: positions
+    // and UVs are floats (no ITOF0, no 42/43 fold, no texture matrix), RGBA is always qword 51, fog FTOI4'd into
+    // XYZF.w. false: not reproduced (fog off, backface pass, the clipper) - run the VU1 on the untouched memory.
+    bool redrawKicks(uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &kicks)
+    {
+        kicks.clear();
+        const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48), i52 = loadI(vu, 52);
+        if ((i52.v[1] & 1) || !(i52.v[1] & 2))
+            return false;
+        top &= 0x3FFu;
+        const uint32_t base = top & static_cast<uint32_t>(i48.v[2]);
+        const uint32_t posBase = static_cast<uint32_t>(i47.v[0]) + base, uvBase = static_cast<uint32_t>(i47.v[2]) + base;
+        const uint32_t outBase = static_cast<uint32_t>(i48.v[3]) + top + 1u;
+        const IVec4 header = loadI(vu, posBase - 1u);
+        const uint32_t count = static_cast<uint32_t>(header.v[2]);
+        const uint32_t n = static_cast<uint32_t>(header.v[3]) & 0x7FFFu;
+        if (count == 0u || count > 256u || n > count)
+            return false;
+        const Vec4 def = loadF(vu, 51);
+        const auto xform = [](const Vec4 m[4], const Vec4 &p) { // ACC = r0 x + r1 y + r2 z; + r3 * 1
+            Vec4 r;
+            for (int c = 0; c < 4; ++c)
+            {
+                float acc = m[0].v[c] * p.v[0];
+                acc = acc + m[1].v[c] * p.v[1];
+                acc = acc + m[2].v[c] * p.v[2];
+                r.v[c] = acc + m[3].v[c] * 1.0f;
+            }
+            return r;
+        };
+        const auto uvTimesOne = [](const Vec4 &uv) {
+            Vec4 r;
+            for (int k = 0; k < 3; ++k)
+                r.v[k] = uv.v[k] * 1.0f;
+            r.v[3] = 0.0f;
+            return r;
+        };
+        if ((i52.v[0] & 0xFFFF) == 0xE9)
+        {
+            // clip test 0x0c38 (at least 5 vertices): ST, w | qword 51 | clip position; flags into the position's .w
+            const Vec4 cm[4] = {loadF(vu, 24), loadF(vu, 25), loadF(vu, 26), loadF(vu, 27)};
+            const Vec4 guard = loadF(vu, 65);
+            const auto vuXform = [](const Vec4 m[4], const Vec4 &v) { // xform with the VU's edge cases (vertices past
+                Vec4 r;                                               // the count may hold anything)
+                for (int c = 0; c < 4; ++c)
+                {
+                    float acc = vcsvu::vuMul(m[0].v[c], v.v[0]);
+                    acc = vcsvu::vuMadd(acc, m[1].v[c], v.v[1]);
+                    acc = vcsvu::vuMadd(acc, m[2].v[c], v.v[2]);
+                    r.v[c] = vcsvu::vuMadd(acc, m[3].v[c], 1.0f);
+                }
+                return r;
+            };
+            uint32_t any = 0, all = 0xFFFu;
+            for (uint32_t i = 0; i < std::max(count, 5u); ++i)
+            {
+                const Vec4 p = vuXform(cm, loadF(vu, posBase + i));
+                Vec4 st = uvTimesOne(loadF(vu, uvBase + i));
+                st.v[3] = p.v[3] * 1.0f;
+                Vec4 g;
+                for (int k = 0; k < 4; ++k)
+                    g.v[k] = vcsvu::vuMul(p.v[k], guard.v[k]);
+                const uint32_t f = (clipFlags(g, p.v[3]) << 6) | clipFlags(p, p.v[3]);
+                any |= f;
+                all &= f;
+                storeF(vu, outBase + i * 3u, st);
+                storeF(vu, outBase + i * 3u + 1u, def);
+                storeF(vu, outBase + i * 3u + 2u, p);
+                std::memcpy(vu + ((posBase + i) & (kQwords - 1u)) * 16u + 12u, &f, 4);
+            }
+            if (all != 0u)
+                return true; // culled: only the empty kick of qword 58
+            if (any & 0xFC0u)
+                return false; // the clipper on this code image: not reproduced
+        }
+        // fast path 0x06f0 (transform 0x07f0, fog 0x1048; at least 6 vertices): STQ, qword 51, XYZF2 with the fog
+        const Vec4 m[4] = {loadF(vu, 28), loadF(vu, 29), loadF(vu, 30), loadF(vu, 31)};
+        const Vec4 fogp = loadF(vu, 53);
+        static thread_local uint32_t outputs[256][12];
+        for (uint32_t i = 0; i < std::max(count, 6u); ++i)
+        {
+            const Vec4 p = xform(m, loadF(vu, posBase + i));
+            const float q = 1.0f / p.v[3];
+            const Vec4 st = uvTimesOne(loadF(vu, uvBase + i));
+            const float stq[4] = {st.v[0] * q, st.v[1] * q, st.v[2] * q, p.v[3]};
+            const float acc = fogp.v[3] * p.v[3];
+            const float f = std::max(std::min(acc + 1.0f * fogp.v[2], 255.0f), 0.0f);
+            const int32_t xyzf[4] = {ftoi(p.v[0] * q, 16.0f), ftoi(p.v[1] * q, 16.0f), ftoi(p.v[2] * q, 16.0f), ftoi(f, 16.0f)};
+            const uint32_t qo = outBase + i * 3u;
+            std::memcpy(vu + (qo & (kQwords - 1u)) * 16u, stq, 16);
+            storeF(vu, qo + 1u, def);
+            std::memcpy(vu + ((qo + 2u) & (kQwords - 1u)) * 16u, xyzf, 16);
+            if (i < count)
+            {
+                std::memcpy(outputs[i], stq, 16);
+                std::memcpy(outputs[i] + 4, def.v, 16);
+                std::memcpy(outputs[i] + 8, xyzf, 16);
+            }
+        }
+        const int32_t variant = 698;
+        std::memcpy(vu + 52u * 16u + 8u, &variant, 4);
+        kicks.emplace_back();
+        kickPacket(vu, 49, static_cast<uint32_t>(header.v[3]), outputs, n, kicks.back());
+        return true;
+    }
+
+    // verify: the memory the re-draw reproduces, compared after the VU's run (matrices, 33, output buffer, flags, 52.z)
+    struct RedrawCheck
+    {
+        std::vector<uint8_t> expected, before;
+        bool active = false;
+        uint64_t exact = 0, memBad = 0, kicksBad = 0;
+    } g_redraw;
+
     bool predict(const ps2hle::MscalContext &c);
 
     // the VU rounds toward zero (the runtime's VU1 core runs under FE_TOWARDZERO too)
@@ -845,6 +1055,18 @@ namespace
             return predictLit(c);
         if (c.startPc == 0x30u && isEnvPipeline(c.vuCode, c.vuData, c.codeGeneration))
             return predictEnv(c);
+        if (isRedraw(c))
+        {
+            g_redraw.expected.assign(c.vuData, c.vuData + kQwords * 16u);
+            g_redraw.before = g_redraw.expected;
+            g_pred.vuKicks.clear();
+            g_pred.clipPackets.clear();
+            redrawSetup(g_redraw.expected.data(), c.top & 0x3FFu);
+            g_redraw.active = redrawKicks(g_redraw.expected.data(), c.top, g_pred.clipPackets);
+            if (g_redraw.active)
+                ps2vu1tap::g_kicks = &g_pred.vuKicks;
+            return false;
+        }
         const bool rigid = c.startPc == 0x30u && isRigidPipeline(c.vuCode, c.vuData, c.codeGeneration);
         if (!rigid && (c.startPc != 0x30u || !isWorldPipeline(c.vuCode, c.vuData, c.codeGeneration)))
             return false;
@@ -980,8 +1202,100 @@ namespace
         return false;
     }
 
+    void redrawCompare(const ps2hle::MscalContext &c)
+    {
+        g_redraw.active = false;
+        ps2vu1tap::g_kicks = nullptr;
+        // kicks: non-empty ones exact (STQ.w not compared)
+        std::vector<const std::vector<uint8_t> *> vu;
+        for (const auto &k : g_pred.vuKicks)
+        {
+            uint32_t t0 = 0;
+            std::memcpy(&t0, k.data(), 4);
+            if (!(k.size() == 16u && (t0 & 0x7FFFu) == 0u))
+                vu.push_back(&k);
+        }
+        bool kicksOk = vu.size() == g_pred.clipPackets.size();
+        for (size_t i = 0; kicksOk && i < vu.size(); ++i)
+        {
+            const auto &a = g_pred.clipPackets[i], &b = *vu[i];
+            kicksOk = a.size() == b.size() && std::memcmp(a.data(), b.data(), 16) == 0;
+            for (size_t q = 16; kicksOk && q < a.size(); q += 16)
+                kicksOk = std::memcmp(a.data() + q, b.data() + q, ((q - 16u) / 16u) % 3u == 0u ? 12u : 16u) == 0;
+        }
+        // memory: 0-3, 24-33 except 32 (the stack at 54 and the clipper's buffers 66-130 are not reproduced), the output
+        // buffer and the positions' .w for the vertices drawn, 52.z
+        const uint8_t *e = g_redraw.expected.data(), *g = c.vuData;
+        bool memOk = std::memcmp(e, g, 4u * 16u) == 0 && std::memcmp(e + 24u * 16u, g + 24u * 16u, 8u * 16u) == 0 &&
+                     std::memcmp(e + 33u * 16u, g + 33u * 16u, 12u) == 0 && std::memcmp(e + 52u * 16u + 8u, g + 52u * 16u + 8u, 4u) == 0;
+        const IVec4 i47 = loadI(e, 47), i48 = loadI(e, 48);
+        const uint32_t top = c.top & 0x3FFu;
+        const uint32_t posBase = static_cast<uint32_t>(i47.v[0]) + (top & static_cast<uint32_t>(i48.v[2]));
+        const uint32_t outBase = static_cast<uint32_t>(i48.v[3]) + top + 1u;
+        const uint32_t count = std::min(static_cast<uint32_t>(loadI(e, posBase - 1u).v[2]), 256u);
+        for (uint32_t i = 0; memOk && i < count * 3u; ++i)
+        {
+            const uint32_t q = (outBase + i) & (kQwords - 1u);
+            memOk = std::memcmp(e + q * 16u, g + q * 16u, (i % 3u) == 0u ? 12u : 16u) == 0;
+        }
+        for (uint32_t i = 0; memOk && i < count; ++i)
+        {
+            const uint32_t q = (posBase + i) & (kQwords - 1u);
+            memOk = std::memcmp(e + q * 16u + 12u, g + q * 16u + 12u, 4) == 0;
+        }
+        if (kicksOk && memOk)
+            ++g_redraw.exact;
+        else
+        {
+            (kicksOk ? g_redraw.memBad : g_redraw.kicksBad) += 1;
+            static int dumped = 0;
+            if (dumped < 3 && std::getenv("PS2X_HLE_STATS")) // redraw_fail_N: before / expected / VU memory, kicks
+            {
+                const auto write = [](const std::string &name, const void *data, size_t size) {
+                    if (FILE *f = std::fopen(name.c_str(), "wb"))
+                    {
+                        std::fwrite(data, 1, size, f);
+                        std::fclose(f);
+                    }
+                };
+                const std::string base = "redraw_fail_" + std::to_string(dumped++);
+                write(base + "_before.bin", g_redraw.before.data(), g_redraw.before.size());
+                write(base + "_expected.bin", g_redraw.expected.data(), g_redraw.expected.size());
+                write(base + "_vu.bin", c.vuData, kQwords * 16u);
+                std::vector<uint8_t> k;
+                for (const auto &x : g_pred.clipPackets)
+                    k.insert(k.end(), x.begin(), x.end());
+                write(base + "_mykicks.bin", k.data(), k.size());
+                k.clear();
+                for (const auto *x : vu)
+                    k.insert(k.end(), x->begin(), x->end());
+                write(base + "_vukicks.bin", k.data(), k.size());
+                const uint32_t topWord = c.top;
+                write(base + "_top.bin", &topWord, 4);
+            }
+            if (g_stats.logged < 12)
+            {
+                ++g_stats.logged;
+                std::fprintf(stderr, "[hle-verify] re-draw differs: kicks %s (%zu / VU %zu), memory %s\n", kicksOk ? "ok" : "off",
+                             g_pred.clipPackets.size(), vu.size(), memOk ? "ok" : "off");
+            }
+        }
+        static auto reportAt = std::chrono::steady_clock::now();
+        if (std::chrono::steady_clock::now() - reportAt >= std::chrono::seconds(10))
+        {
+            reportAt = std::chrono::steady_clock::now();
+            std::fprintf(stderr, "[hle-verify] 0x02c0 re-draws: %llu exact, %llu memory off, %llu kicks off\n",
+                         (unsigned long long)g_redraw.exact, (unsigned long long)g_redraw.memBad, (unsigned long long)g_redraw.kicksBad);
+        }
+    }
+
     void after(const ps2hle::MscalContext &c)
     {
+        if (g_redraw.active)
+        {
+            redrawCompare(c);
+            return;
+        }
         clipDumpEnd();
         if (g_pred.decision == Decision::None)
             return;
@@ -1488,6 +1802,35 @@ namespace
         return true;
     }
 
+    // 0x02c0 re-draws natively: the program's VU memory writes, its GIF packets to the GS (PATH1)
+    struct RedrawStats
+    {
+        uint64_t drawn = 0, fallback = 0;
+    } g_nativeRedraw;
+
+    bool drawNativeRedraw(const ps2hle::MscalContext &c)
+    {
+        static thread_local std::vector<uint8_t> saved;
+        static thread_local std::vector<std::vector<uint8_t>> kicks;
+        saved.assign(c.vuData, c.vuData + kQwords * 16u);
+        redrawSetup(c.vuData, c.top & 0x3FFu);
+        if (!redrawKicks(c.vuData, c.top, kicks))
+        {
+            std::memcpy(c.vuData, saved.data(), saved.size()); // the VU1 runs on what it would have seen
+            ++g_nativeRedraw.fallback;
+            return false;
+        }
+        const int rounding = std::fegetround();
+        std::fesetround(g_callerRounding);
+        gsSetCurrentGifPath(1u);
+        for (const auto &k : kicks)
+            ps2hle::gs()->processGIFPacket(k.data(), static_cast<uint32_t>(k.size()));
+        gsSetCurrentGifPath(3u);
+        std::fesetround(rounding);
+        ++g_nativeRedraw.drawn;
+        return true;
+    }
+
     bool beforeNative(const ps2hle::MscalContext &c)
     {
         const int rounding = std::fegetround();
@@ -1496,7 +1839,10 @@ namespace
         static const bool lit =!(std::getenv("PS2X_HLE_LIT") && *std::getenv("PS2X_HLE_LIT") == '0');
         bool handled = false;
         static const bool env = !(std::getenv("PS2X_HLE_ENV") && *std::getenv("PS2X_HLE_ENV") == '0');
-        if (lit && c.startPc == 0x30u && ps2hle::gs() && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
+        static const bool redraw = !(std::getenv("PS2X_HLE_REDRAW") && *std::getenv("PS2X_HLE_REDRAW") == '0');
+        if (redraw && c.startPc == 0x2C0u && ps2hle::gs() && isRedraw(c))
+            handled = drawNativeRedraw(c);
+        else if (lit && c.startPc == 0x30u && ps2hle::gs() && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
             handled = drawNativeLit(c);
         else if (lit && env && c.startPc == 0x30u && ps2hle::gs() && isEnvPipeline(c.vuCode, c.vuData, c.codeGeneration))
             handled = drawNativeEnv(c);
@@ -1507,13 +1853,24 @@ namespace
         std::fesetround(rounding);
         // PS2X_HLE_STATS=1: which stage tables (38-41, entry 52.x) of 0x0030 still run on the VU1, every 10 s
         static const bool stats = std::getenv("PS2X_HLE_STATS") != nullptr;
-        if (stats && !handled && c.startPc == 0x30u)
+        if (stats && !handled && (c.startPc == 0x30u || c.startPc == 0x2C0u))
         {
             static std::map<std::string, uint64_t> unhandled;
             static auto reportAt = std::chrono::steady_clock::now();
-            char key[160];
+            char key[256];
             const IVec4 t38 = loadI(c.vuData, 38), t39 = loadI(c.vuData, 39), t40 = loadI(c.vuData, 40), t41 = loadI(c.vuData, 41);
-            std::snprintf(key, sizeof(key), "entry %x | %x %x %x %x | %x %x %x %x | %x %x %x %x | 52.x %x", t38.v[0] & 0xFFFF,
+            int len = 0;
+            if (c.startPc == 0x2C0u) // setup program: its own table at 34-37 first
+            {
+                len = std::snprintf(key, sizeof(key), "pc 2c0 setup");
+                for (uint32_t q = 34; q <= 37; ++q)
+                {
+                    const IVec4 t = loadI(c.vuData, q);
+                    len += std::snprintf(key + len, sizeof(key) - len, " %x %x %x %x |", t.v[0] & 0xFFFF, t.v[1] & 0xFFFF,
+                                         t.v[2] & 0xFFFF, t.v[3] & 0xFFFF);
+                }
+            }
+            std::snprintf(key + len, sizeof(key) - len, "entry %x | %x %x %x %x | %x %x %x %x | %x %x %x %x | 52.x %x", t38.v[0] & 0xFFFF,
                           t39.v[0] & 0xFFFF, t39.v[1] & 0xFFFF, t39.v[2] & 0xFFFF, t39.v[3] & 0xFFFF, t40.v[0] & 0xFFFF,
                           t40.v[1] & 0xFFFF, t40.v[2] & 0xFFFF, t40.v[3] & 0xFFFF, t41.v[0] & 0xFFFF, t41.v[1] & 0xFFFF,
                           t41.v[2] & 0xFFFF, t41.v[3] & 0xFFFF, loadI(c.vuData, 52).v[0] & 0xFFFF);
@@ -1521,13 +1878,13 @@ namespace
             {
                 static int samples = 0;
                 char name[64];
-                std::snprintf(name, sizeof(name), "stage_%02x_%d_code.bin", t38.v[0] & 0xFFFF, samples);
+                std::snprintf(name, sizeof(name), "stage_%03x_%02x_%d_code.bin", c.startPc, t38.v[0] & 0xFFFF, samples);
                 if (FILE *f = std::fopen(name, "wb"))
                 {
                     std::fwrite(c.vuCode, 1, 16384, f);
                     std::fclose(f);
                 }
-                std::snprintf(name, sizeof(name), "stage_%02x_%d_data.bin", t38.v[0] & 0xFFFF, samples++);
+                std::snprintf(name, sizeof(name), "stage_%03x_%02x_%d_data.bin", c.startPc, t38.v[0] & 0xFFFF, samples++);
                 if (FILE *f = std::fopen(name, "wb"))
                 {
                     std::fwrite(c.vuData, 1, 16384, f);

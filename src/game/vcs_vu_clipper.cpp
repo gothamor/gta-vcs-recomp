@@ -139,7 +139,7 @@ namespace vcsclip
         };
     }
 
-    bool clipWorld(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets)
+    bool clipWorld(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets, bool defaultColour)
     {
         const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48), i52 = loadI(vu, 52);
         if (i52.v[1] & 1)
@@ -187,11 +187,16 @@ namespace vcsclip
                 const float acc = fogp.v[3] * p.v[3];
                 v.pos.v[3] = std::max(std::min(acc + 1.0f * fogp.v[2], 255.0f), 0.0f);
             }
-            const Vec4 col = itof(loadI(vu, colBase + i));
-            for (int k = 0; k < 4; ++k)
+            if (defaultColour)
+                rgbaIn[i] = loadI(vu, 51);
+            else
             {
-                const float r = co.v[k] + cs.v[k] * col.v[k];
-                rgbaIn[i].v[k] = ftoi(std::min(r, cmax.v[k]), 1.0f);
+                const Vec4 col = itof(loadI(vu, colBase + i));
+                for (int k = 0; k < 4; ++k)
+                {
+                    const float r = co.v[k] + cs.v[k] * col.v[k];
+                    rgbaIn[i].v[k] = ftoi(std::min(r, cmax.v[k]), 1.0f);
+                }
             }
             v.col = itof(rgbaIn[i]);
         }

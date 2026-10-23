@@ -103,6 +103,52 @@ namespace vcsvu
         return f;
     }
 
+    // VU float edge cases as the runtime's VU1 core has them (runtime/ps2_vu1_compiled.h, vu1fast): operands with
+    // exponent 255 are the largest finite value (the VU has no Inf / NaN), denormals zero; results clamp the same way,
+    // multiply-adds decided on the exact value near zero / the top. Needed where garbage can reach the arithmetic
+    // (vertices past a packet's count); identical to plain float maths for ordinary values.
+    inline float vuOperand(float value)
+    {
+        uint32_t bits;
+        std::memcpy(&bits, &value, 4);
+        const uint32_t exponent = bits & 0x7F800000u;
+        if (exponent == 0u)
+            bits &= 0x80000000u;
+        else if (exponent == 0x7F800000u)
+            bits = (bits & 0x80000000u) | 0x7F7FFFFFu;
+        std::memcpy(&value, &bits, 4);
+        return value;
+    }
+
+    inline float vuExact(float value, double exact)
+    {
+        const double magnitude = exact < 0.0 ? -exact : exact;
+        const uint32_t sign = std::signbit(exact) ? 0x80000000u : 0u;
+        uint32_t bits;
+        if (magnitude == 0.0 || magnitude < 1.17549435e-38)
+            bits = sign;
+        else if (magnitude > 3.40282347e+38)
+            bits = sign | 0x7F7FFFFFu;
+        else
+            return value;
+        std::memcpy(&value, &bits, 4);
+        return value;
+    }
+
+    inline float vuMul(float a, float b) // MUL / MULA
+    {
+        a = vuOperand(a);
+        b = vuOperand(b);
+        return vuOperand(a * b);
+    }
+
+    inline float vuMadd(float acc, float a, float b) // MADD / MADDA: acc + a * b
+    {
+        a = vuOperand(a);
+        b = vuOperand(b);
+        return vuExact(acc + a * b, static_cast<double>(acc) + static_cast<double>(a) * static_cast<double>(b));
+    }
+
     inline float bitsToFloat(uint32_t b)
     {
         float f;

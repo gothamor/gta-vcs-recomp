@@ -10,6 +10,7 @@ namespace vcsclip
     // vu: VU1 data memory before the program runs; top: TOP. Appends one GIF packet per drawn polygon (tag + n x
     // STQ / RGBA / XYZF2, the fan PRIM from tag 49's upper lane) - not the empty sync kicks of qword 58. Returns
     // false when the packet needs something not reproduced (the backface pass, 52.y bit 0): run the VU1 then.
-    // The caller sets FE_TOWARDZERO.
-    bool clipWorld(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets);
+    // The caller sets FE_TOWARDZERO. defaultColour: no colour stage runs (0x02c0's re-draws): every vertex has the clip
+    // test's colour, qword 51.
+    bool clipWorld(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets, bool defaultColour = false);
 }
