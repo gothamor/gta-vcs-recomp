@@ -24,6 +24,7 @@ namespace rhi
 struct GSHwOptions
 {
     uint32_t scale = 1;
+    bool nativeFrame = false; // [gta-recomp] PS2X_HW_SCALE=0: the picture's targets at the window's resolution
     static GSHwOptions fromEnvironment();
 };
 
@@ -80,5 +81,8 @@ void gsHwSetHudLayer(bool on);
 // [gta-recomp] Widescreen: how much wider than 4:3 the game's 640-wide frame is shown (display aspect / (4/3)); the
 // native post effects widen their buffers by it so blur and warp keep their 4:3 proportions on screen. Any thread.
 void gsHwSetAspectWidening(float widening);
+// [gta-recomp] Native frame (GSHwOptions::nativeFrame): the size the picture's own targets are drawn at - the window's
+// letterboxed area for 3D frames' aspect. 0 = the integer scale. Any thread.
+void gsHwSetFrameSize(uint32_t width, uint32_t height);
 // [gta-recomp] The size the picture is shown at (the window's letterboxed area); 0 = the render targets' size.
 void gsHwSetOutputSize(uint32_t width, uint32_t height);

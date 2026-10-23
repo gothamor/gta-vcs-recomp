@@ -4,14 +4,15 @@
 
 cbuffer Draw : register(b0)
 {
-    float4 targetRtFix;    // target size (PS2 pixels), render-target texel scale, FIX
+    float4 targetRtFix;    // target size (PS2 pixels), render-target texel scale x (y: rtOrigin.w), FIX
     int4 tmeTfxTccFst;
     int4 linearIipFgeAte;
     int4 atstArefAfailRt;  // ATST, AREF, pass (0: alpha-test passing pixels, 1: failing ones), texture is a render target
     int4 texSizeWrap;      // texture w, h, WMS, WMT
     int4 region;           // MINU, MAXU, MINV, MAXV
     float4 rtOrigin;       // xy: texture origin inside the render target (PS2 pixels); z: pixel-centre offset (0.5: the
-                           // GS samples pixel X at X, D3D at X + 0.5 - geometry moves by z to sample where the GS does)
+                           // GS samples pixel X at X, D3D at X + 0.5 - geometry moves by z to sample where the GS does);
+                           // w: render-target texel scale y
     int4 blendCPremul;     // C (0 As, 1 Ad, 2 FIX), premultiply (0 none, 1 rgb *= C, 2 rgb *= 1 + C)
     float4 fogColor;       // rgb 0..255
 };
@@ -140,13 +141,19 @@ int wrapc(int c, int size, int mode, int mn, int mx)
     return r;
 }
 
+// the render target read: its pixels per PS2 pixel (x, y)
+float2 rtScale2()
+{
+    return float2(targetRtFix.z, rtOrigin.w);
+}
+
 float4 fetchTexel(int2 t)
 {
     t.x = wrapc(t.x, texSizeWrap.x, texSizeWrap.z, region.x, region.y);
     t.y = wrapc(t.y, texSizeWrap.y, texSizeWrap.w, region.z, region.w);
     int2 at = t;
     if (atstArefAfailRt.w == 1)
-        at = int2((float2(t) + rtOrigin.xy + 0.5) * targetRtFix.z);
+        at = int2((float2(t) + rtOrigin.xy + 0.5) * rtScale2());
     return tex.Load(int3(at, 0)) * 255.0;
 }
 
@@ -156,20 +163,21 @@ float4 fetchTexel(int2 t)
 // fetches the same texels as fetchTexel.
 float4 fetchRtFull(int2 c)
 {
-    const int n = int(targetRtFix.z);
-    const int2 o = int2(rtOrigin.xy) * n;
-    const int2 t = int2(floor(float2(c - o) / float(n)));
+    const float2 s = rtScale2();
+    const int2 t = int2(floor((float2(c) + 0.5) / s - rtOrigin.xy));
     int2 w;
     w.x = wrapc(t.x, texSizeWrap.x, texSizeWrap.z, region.x, region.y);
     w.y = wrapc(t.y, texSizeWrap.y, texSizeWrap.w, region.z, region.w);
-    const int2 sub = (w == t) ? (c - o - t * n) : ((w > t) ? int2(0, 0) : int2(n - 1, n - 1));
-    const int2 at = o + w * n + clamp(sub, 0, n - 1);
+    // the target pixels of texel w (non-integer scales: the native frame)
+    const int2 lo = int2(ceil((float2(w) + rtOrigin.xy) * s - 0.5));
+    const int2 hi = int2(ceil((float2(w) + rtOrigin.xy + 1.0) * s - 0.5)) - 1;
+    const int2 at = clamp(c, lo, max(lo, hi));
     return tex.Load(int3(at, 0)) * 255.0;
 }
 
 float4 sampleRtFull(float2 uv)
 {
-    const float2 h = (uv + rtOrigin.xy) * targetRtFix.z; // target texels
+    const float2 h = (uv + rtOrigin.xy) * rtScale2(); // target texels
     [branch] if (linearIipFgeAte.x == 0)
         return fetchRtFull(int2(floor(h)));
     const float2 p = h - 0.5;

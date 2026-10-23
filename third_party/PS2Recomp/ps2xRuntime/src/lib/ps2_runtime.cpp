@@ -447,10 +447,11 @@ static bool UploadGpuFrame(present::Picture &owned, present::Picture &shown, PS2
             // [gta-recomp] the size the picture is shown at: the window's letterboxed area (the native HUD layer)
             int windowW = 0, windowH = 0;
             platform::windowSize(windowW, windowH);
-            const float aspect = present::displayAspect(hw->presenter().showing3d());
-            uint32_t outW = 0, outH = 0;
-            if (windowW > 0 && windowH > 0 && aspect > 0.0f)
-            {
+            // the window's letterboxed area at an aspect
+            auto letterbox = [&](float aspect, uint32_t &outW, uint32_t &outH) {
+                outW = outH = 0;
+                if (windowW <= 0 || windowH <= 0 || aspect <= 0.0f)
+                    return;
                 if (static_cast<float>(windowW) / static_cast<float>(windowH) > aspect)
                 {
                     outH = static_cast<uint32_t>(windowH);
@@ -461,8 +462,13 @@ static bool UploadGpuFrame(present::Picture &owned, present::Picture &shown, PS2
                     outW = static_cast<uint32_t>(windowW);
                     outH = static_cast<uint32_t>(std::lround(windowW / aspect));
                 }
-            }
+            };
+            uint32_t outW = 0, outH = 0, frameW = 0, frameH = 0;
+            letterbox(present::displayAspect(hw->presenter().showing3d()), outW, outH);
+            // the native frame keeps the 3D frames' size when a menu shows at 4:3 (no resizing back and forth)
+            letterbox(present::displayAspect(true), frameW, frameH);
             gsHwSetOutputSize(outW, outH);
+            gsHwSetFrameSize(frameW, frameH);
         }
         if (hw->presenter().executeAndGetDisplay(*present::device(), display, w, h))
         {

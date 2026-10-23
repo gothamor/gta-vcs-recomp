@@ -197,7 +197,12 @@ dropped on uploads (lazy render-target patching).
   - [x] **Bloom and trails as native passes** with widescreen-correct proportions (NATIVE_RENDERER.md "Post
         effects"): at 4:3 640x448 the same picture as the emulation (static regions within run-to-run noise), at 16:9
         the glow / warp no longer a third wider than at 4:3. `PS2X_HW_POSTFX=0` = as recorded.
-  - [ ] Motion blur, self-copy, frame copy as native passes - with the native frame (step 4).
+  - [x] Frame copy and motion blur as native passes (texture copy / one full-screen quad); the self-copy over the
+        sky stays a GS draw (depth-tested, read at full resolution).
+- [ ] **Step 4: native frame** (started 2026-10-23; NATIVE_RENDERER.md "Native frame").
+  - [x] Per-target scales; "Internal resolution: Match window" draws the picture's targets at the window's size
+        (1920x1080 at 16:9 1080p), the effect buffers at 1x. Default stays 1x (the original).
+  - [ ] MSAA, anisotropic filtering, depth precision; the radar / reflection map at higher resolution.
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
@@ -246,7 +251,9 @@ dropped on uploads (lazy render-target patching).
 | `VCS_HUD_NATIVE=0` | the HUD drawn into the PS2 frame buffer instead of the native layer at the window's size |
 | `PS2X_HW_PIXEL_CENTRE=0` | draws without the GS pixel-centre offset (softer copies, as before 2026-10-23) |
 | `PS2X_HW_RT_FULL=0` | render targets read once per PS2 texel everywhere (higher internal resolutions lost in the copies) |
-| `PS2X_HW_POSTFX=0/b/t` | bloom and trails drawn as recorded (no native passes) / only bloom native / only trails native |
+| `PS2X_HW_POSTFX=0` or letters `btc` | effects drawn as recorded / only these native: b bloom, t trails, c frame copy + motion blur |
+| `PS2X_HW_SCALE=0` | native frame: the picture's targets at the window's size (menu: Internal resolution > Match window) |
+| `PS2X_HW_FRAME=WxH` | the native frame's size whatever the window (tests) |
 | `PS2X_HW_DUMP_ALLVERTS=1` | the F12 draw log prints every vertex of every draw |
 | `VCS_MENU_NATIVE=0` | menus drawn into the PS2 frame buffer instead of the native layer |
 | `VCS_TRACE_IM2D_DELAY=s`, `VCS_TRACE_IM2D_STACK=1` | start the Im2D trace after s seconds (default 30); print the guest stack's return addresses per call |

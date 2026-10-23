@@ -33,6 +33,13 @@ namespace
     std::atomic<bool> g_hudLayer{false};                // [gta-recomp] gsHwSetHudLayer
     std::atomic<uint32_t> g_outputW{0}, g_outputH{0};   // [gta-recomp] gsHwSetOutputSize
     std::atomic<float> g_aspectWidening{1.0f};          // [gta-recomp] gsHwSetAspectWidening
+    std::atomic<uint32_t> g_frameW{0}, g_frameH{0};     // [gta-recomp] gsHwSetFrameSize
+}
+
+void gsHwSetFrameSize(uint32_t width, uint32_t height)
+{
+    g_frameW.store(width, std::memory_order_relaxed);
+    g_frameH.store(height, std::memory_order_relaxed);
 }
 
 void gsHwSetAspectWidening(float widening) { g_aspectWidening.store(widening, std::memory_order_relaxed); }
@@ -50,7 +57,12 @@ GSHwOptions GSHwOptions::fromEnvironment()
 {
     GSHwOptions o;
     if (const char *s = std::getenv("PS2X_HW_SCALE"))
-        o.scale = std::clamp<uint32_t>(static_cast<uint32_t>(std::atoi(s)), 1u, 8u);
+    {
+        // [gta-recomp] 0: the native frame (the picture's targets at the window's resolution, the rest at 1x)
+        const int v = std::atoi(s);
+        o.nativeFrame = v == 0 && s[0] == '0';
+        o.scale = o.nativeFrame ? 1u : std::clamp<uint32_t>(static_cast<uint32_t>(v), 1u, 8u);
+    }
     return o;
 }
 
@@ -414,6 +426,12 @@ namespace
         }
 
         bool ready() const { return m_ready; }
+
+        // [gta-recomp] Native frame: the picture's targets at w x h (0: the integer scale like every other target)
+        void setFrameSize(uint32_t w, uint32_t h)
+        {
+            m_frameScale = (w >= 64u && h >= 64u && w <= 8192u && h <= 8192u) ? Scale{w / 640.0f, h / 448.0f} : Scale{0.0f, 0.0f};
+        }
         rhi::Device &device() { return m_dev; }
         rhi::Texture *display() const { return m_display.get(); }
         uint32_t displayWidth() const { return m_display ? m_display->desc().width : m_displayW * m_scale; }
@@ -522,17 +540,7 @@ namespace
                     // copies, screen effects), 2 skips untextured full-screen draws, 4 skips everything but native draws
                     static const unsigned skip = std::getenv("PS2X_HW_SKIP") ? std::strtoul(std::getenv("PS2X_HW_SKIP"), nullptr, 0) : 0u;
                     const HwState &ds = f.draws[c.index].s;
-                    hudSceneDraw(ds.fbp);
-                    // a plain copy of another buffer takes its HUD along (VCS draws into one buffer and copies the
-                    // finished frame into the displayed one at the start of the next)
-                    if (ds.tme && ds.texIsRt && !ds.abe && ds.rtFbp != ds.fbp && !m_hud.empty())
-                        if (auto it = m_hud.find(ds.rtFbp); it != m_hud.end() && !it->second.stale)
-                        {
-                            it->second.closed = true; // the copied frame is finished: the next HUD draw starts afresh
-                            HudLayer copy = it->second;
-                            copy.closed = false;
-                            m_hud[ds.fbp] = std::move(copy);
-                        }
+                    hudOnDraw(ds);
                     if (skip && (((skip & 1u) && ds.texIsRt) || (skip & 4u)))
                         break;
                     draw(ds, f.draws[c.index].first, f.draws[c.index].count, nullptr);
@@ -591,7 +599,7 @@ namespace
             uint32_t w = m_displayW * m_scale, h = m_displayH * m_scale;
             // [gta-recomp] native HUD layer: the picture at the output size (its aspect), the HUD drawn over it there
             const HudLayer *layer = nullptr;
-            if (g_hudLayer.load(std::memory_order_relaxed) && w && h)
+            if ((g_hudLayer.load(std::memory_order_relaxed) || m_frameScale.x > 0.0f) && w && h)
             {
                 uint32_t ow = g_outputW.load(std::memory_order_relaxed), oh = g_outputH.load(std::memory_order_relaxed);
                 // PS2X_HW_OUTPUT=WxH (testing): the output size of a full-screen window whatever the window
@@ -642,9 +650,10 @@ namespace
                 // the PS2 frame buffer's alpha is not shown: written as 1
                 const Rt &rt = it->second;
                 const float tw = static_cast<float>(rt.color->desc().width), th = static_cast<float>(rt.color->desc().height);
-                const float x0 = static_cast<float>(f.displayX * m_scale), y0 = static_cast<float>(f.displayY * m_scale);
-                const float sw = static_cast<float>(m_displayW * m_scale), sh = static_cast<float>(m_displayH * m_scale);
-                const bool scaled = w != m_displayW * m_scale || h != m_displayH * m_scale;
+                const Scale rs = rt.scale;
+                const float x0 = f.displayX * rs.x, y0 = f.displayY * rs.y;
+                const float sw = m_displayW * rs.x, sh = m_displayH * rs.y;
+                const bool scaled = std::fabs(w - sw) > 0.5f || std::fabs(h - sh) > 0.5f;
                 blit(*rt.color, {x0 / tw, y0 / th, (x0 + sw) / tw, (y0 + sh) / th}, *m_display, 0, 0, w, h, scaled, true);
                 if (layer)
                     drawHudLayer(*layer, f.displayX, f.displayY);
@@ -698,16 +707,36 @@ namespace
         }
 
     private:
+        // [gta-recomp] target pixels per PS2 pixel: the integer internal scale, or for the picture's own targets in the
+        // native frame the window's size over 640x448 (setFrameSize)
+        struct Scale
+        {
+            float x = 1.0f, y = 1.0f;
+            bool operator==(const Scale &o) const { return x == o.x && y == o.y; }
+            bool operator!=(const Scale &o) const { return !(*this == o); }
+        };
         struct Rt
         {
             std::unique_ptr<rhi::Texture> color;
             uint32_t w = 0, h = 0; // PS2 pixels
+            Scale scale;
         };
         struct Depth
         {
             std::unique_ptr<rhi::Texture> tex;
             uint32_t w = 0, h = 0; // PS2 pixels
+            Scale scale;
         };
+
+        // the picture's targets (640 wide: the drawn frame, the shown copy, the Z buffer) take the native frame's scale
+        Scale scaleFor(uint32_t fbw) const
+        {
+            if (m_frameScale.x > 0.0f && fbw == 10u)
+                return m_frameScale;
+            return {static_cast<float>(m_scale), static_cast<float>(m_scale)};
+        }
+        // a PS2 coordinate (an edge) in target pixels
+        static uint32_t px(float v, float scale) { return static_cast<uint32_t>(std::max(0l, std::lround(v * scale))); }
 
         void dumpTexture(rhi::Texture &t, const std::string &name)
         {
@@ -787,11 +816,11 @@ namespace
             m_dev.draw(4);
         }
 
-        std::unique_ptr<rhi::Texture> makeTarget(uint32_t w, uint32_t h, bool depth)
+        std::unique_ptr<rhi::Texture> makeTarget(uint32_t w, uint32_t h, bool depth, Scale s)
         {
             rhi::TextureDesc d;
-            d.width = w * m_scale;
-            d.height = h * m_scale;
+            d.width = std::max(1u, px(static_cast<float>(w), s.x));
+            d.height = std::max(1u, px(static_cast<float>(h), s.y));
             d.format = depth ? rhi::Format::D32F : rhi::Format::RGBA8;
             d.usage = depth ? rhi::UsageDepth : (rhi::UsageRenderTarget | rhi::UsageSampled);
             d.name = depth ? "gs depth" : "gs target";
@@ -817,36 +846,44 @@ namespace
             return t;
         }
 
-        // grows the target to at least w x h (PS2 pixels), keeping its contents
-        void growRt(Rt &rt, uint32_t w, uint32_t h)
+        // grows the target to at least w x h (PS2 pixels) at scale s, keeping its contents (rescaled when s changed:
+        // the native frame follows the window)
+        void growRt(Rt &rt, uint32_t w, uint32_t h, Scale s)
         {
-            if (rt.color && rt.w >= w && rt.h >= h)
+            if (rt.color && rt.w >= w && rt.h >= h && rt.scale == s)
                 return;
             Rt grown;
             grown.w = std::max(rt.w, w);
             grown.h = std::max(rt.h, h);
-            grown.color = makeTarget(grown.w, grown.h, false);
-            if (rt.color)
-                m_dev.copyTexture(*grown.color, 0, 0, *rt.color, 0, 0, rt.w * m_scale, rt.h * m_scale);
+            grown.scale = s;
+            grown.color = makeTarget(grown.w, grown.h, false, s);
+            if (rt.color && rt.scale == s)
+                m_dev.copyTexture(*grown.color, 0, 0, *rt.color, 0, 0, rt.color->desc().width, rt.color->desc().height);
+            else if (rt.color)
+                blit(*rt.color, {0.0f, 0.0f, 1.0f, 1.0f}, *grown.color, 0, 0, px(static_cast<float>(rt.w), s.x), px(static_cast<float>(rt.h), s.y),
+                     true, false);
             rt = std::move(grown);
         }
 
         Rt &rtFor(uint32_t fbp, uint32_t fbw, uint32_t minH)
         {
             Rt &rt = m_rts[fbp];
-            growRt(rt, std::max<uint32_t>(fbw, 1u) * 64u, std::max<uint32_t>(minH, 512u));
+            growRt(rt, std::max<uint32_t>(fbw, 1u) * 64u, std::max<uint32_t>(minH, 512u), scaleFor(fbw));
             return rt;
         }
 
-        // grows (recreated, cleared to 0) to at least w x h
-        Depth &depthFor(uint32_t zbp, uint32_t w, uint32_t h)
+        // grows (recreated, cleared to 0) to at least w x h at scale s; one depth buffer per scale (the picture's
+        // targets and the effect buffers may share a Z address at different scales)
+        Depth &depthFor(uint32_t zbp, uint32_t w, uint32_t h, Scale s)
         {
-            Depth &d = m_depth[zbp];
-            if (d.tex && d.w >= w && d.h >= h)
+            const bool frame = m_frameScale.x > 0.0f && s == m_frameScale;
+            Depth &d = m_depth[zbp | (frame ? 0x80000000u : 0u)];
+            if (d.tex && d.w >= w && d.h >= h && d.scale == s)
                 return d;
             d.w = std::max(d.w, w);
             d.h = std::max(d.h, h);
-            d.tex = makeTarget(d.w, d.h, true);
+            d.scale = s;
+            d.tex = makeTarget(d.w, d.h, true, s);
             return d;
         }
 
@@ -855,8 +892,11 @@ namespace
             Rt &rt = rtFor(u.fbp, u.fbw, u.y + u.h);
             // uploaded at 1x, then drawn into the target at its scale
             auto tmp = m_dev.createTexture({u.w, u.h, rhi::Format::RGBA8, rhi::UsageSampled, "gs rt upload"}, u.pixels.data(), u.w * 4u);
+            const Scale s = rt.scale;
+            const uint32_t x0 = px(static_cast<float>(u.x), s.x), y0 = px(static_cast<float>(u.y), s.y);
             if (tmp)
-                blit(*tmp, {0.0f, 0.0f, 1.0f, 1.0f}, *rt.color, u.x * m_scale, u.y * m_scale, u.w * m_scale, u.h * m_scale, false, false);
+                blit(*tmp, {0.0f, 0.0f, 1.0f, 1.0f}, *rt.color, x0, y0, px(static_cast<float>(u.x + u.w), s.x) - x0,
+                     px(static_cast<float>(u.y + u.h), s.y) - y0, false, false);
         }
 
         void clear(const ClearCmd &cl)
@@ -864,16 +904,21 @@ namespace
             Rt &rt = rtFor(cl.s.fbp, cl.s.fbw, cl.s.scy1 + 1u);
             const std::array<float, 4> rgba = {(cl.rgba & 0xFF) / 255.0f, ((cl.rgba >> 8) & 0xFF) / 255.0f, ((cl.rgba >> 16) & 0xFF) / 255.0f,
                                                ((cl.rgba >> 24) & 0xFF) / 255.0f};
-            fill(rt.color.get(), nullptr, cl.s.scx0 * m_scale, cl.s.scy0 * m_scale, (cl.s.scx1 - cl.s.scx0 + 1u) * m_scale,
-                 (cl.s.scy1 - cl.s.scy0 + 1u) * m_scale, rgba, 0.0f);
+            const Scale s = rt.scale;
+            const uint32_t x0 = px(cl.s.scx0, s.x), y0 = px(cl.s.scy0, s.y);
+            fill(rt.color.get(), nullptr, x0, y0, px(cl.s.scx1 + 1.0f, s.x) - x0, px(cl.s.scy1 + 1.0f, s.y) - y0, rgba, 0.0f);
         }
 
         void depthFill(const DepthFillCmd &f, bool log)
         {
-            const auto it = m_depth.find(f.zbp);
-            if (it == m_depth.end() || !it->second.tex)
-                return; // created (cleared) on first use
-            fill(nullptr, it->second.tex.get(), 0, f.y0 * m_scale, f.width * m_scale, (f.y1 - f.y0) * m_scale, {0, 0, 0, 0}, f.value);
+            for (auto &[key, d] : m_depth) // created (cleared) on first use
+            {
+                if ((key & 0x7FFFFFFFu) != f.zbp || !d.tex)
+                    continue;
+                const uint32_t y0 = px(static_cast<float>(f.y0), d.scale.y);
+                fill(nullptr, d.tex.get(), 0, y0, px(static_cast<float>(f.width), d.scale.x), px(static_cast<float>(f.y1), d.scale.y) - y0,
+                     {0, 0, 0, 0}, f.value);
+            }
             if (log)
                 std::fprintf(stderr, "[draw] depth fill zbp=%u rows %u..%u width %u value %.6f\n", f.zbp, f.y0, f.y1, f.width, f.value);
         }
@@ -1120,14 +1165,20 @@ namespace
         // buffers widened by the display's widening w: positions in a buffer scale by w, texture coordinates into it
         // become u + (w - 1) * s * x (s: buffer texels per target unit at 4:3), so the bloom's +-1 texel taps and the
         // trails' warp offsets (in texels) cover the same distance on screen as at 4:3 instead of w times more.
-        // PS2X_HW_POSTFX=0: the draws run as recorded; =b / =t: bloom / trails only.
-        static unsigned postNative() // bit 0 bloom, bit 1 trails
+        // PS2X_HW_POSTFX=0: the draws run as recorded; else the letters of those to run natively: b bloom, t trails,
+        // c frame copies / motion blur (default all).
+        static unsigned postNative() // bit 0 bloom, bit 1 trails, bit 2 frame copies
         {
             static const unsigned on = [] {
                 const char *e = std::getenv("PS2X_HW_POSTFX");
                 if (!e || !e[0])
-                    return 3u;
-                return e[0] == 'b' ? 1u : e[0] == 't' ? 2u : e[0] == '0' ? 0u : 3u;
+                    return 7u;
+                if (e[0] == '0')
+                    return 0u;
+                unsigned m = 0;
+                for (const char *p = e; *p; ++p)
+                    m |= *p == 'b' ? 1u : *p == 't' ? 2u : *p == 'c' ? 4u : 0u;
+                return m;
             }();
             return on;
         }
@@ -1224,7 +1275,8 @@ namespace
         void postWriteBack(rhi::Texture *native, uint32_t fbp, uint32_t fbw, uint32_t w, uint32_t h)
         {
             Rt &rt = rtFor(fbp, fbw, h);
-            blit(*native, {0.0f, 0.0f, 1.0f, 1.0f}, *rt.color, 0, 0, w * m_scale, h * m_scale, false, false);
+            blit(*native, {0.0f, 0.0f, 1.0f, 1.0f}, *rt.color, 0, 0, px(static_cast<float>(w), rt.scale.x), px(static_cast<float>(h), rt.scale.y),
+                 false, false);
         }
 
         size_t nativePost(const Frame &f, size_t ci, bool log)
@@ -1233,7 +1285,78 @@ namespace
             if (on & 1u)
                 if (const size_t n = nativeBloom(f, ci, log))
                     return n;
-            return (on & 2u) ? nativeTrails(f, ci, log) : 0u;
+            if (on & 2u)
+                if (const size_t n = nativeTrails(f, ci, log))
+                    return n;
+            return (on & 4u) ? nativeFrameCopy(f, ci, log) : 0u;
+        }
+
+        // Frame copy / motion blur: a full-screen 1:1 read of another 640-wide target, u = x + 0.5 (on the GS an exact
+        // copy), which the game draws as 40 strips. A plain copy (the shown buffer) becomes a texture copy; a blended
+        // one (motion blur: the previous picture at FIX 16, colour 127/128) one full-screen quad with the draw's state.
+        size_t nativeFrameCopy(const Frame &f, size_t ci, bool log)
+        {
+            const DrawCmd *d = drawAt(f, ci);
+            if (!d || d->count < 3u)
+                return 0;
+            const HwState &s = d->s;
+            if (!s.tme || !s.texIsRt || !s.rtFull || !s.fst || s.fbw != 10u || s.rtFbp == s.fbp || s.rtOx || s.rtOy || s.fbmsk ||
+                s.mode != 0u || s.scx0 != 0u || s.scy0 != 0u || s.scx1 < 639u || s.scy1 < 447u)
+                return 0;
+            auto src = m_rts.find(s.rtFbp);
+            if (src == m_rts.end() || !src->second.color)
+                return 0;
+            // the whole screen, texel = position + 0.5
+            const HwVertex *v = f.vertices.data() + d->first;
+            float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+            bool mapped = true;
+            for (uint32_t i = 0; i < d->count && mapped; ++i)
+            {
+                x0 = std::min(x0, v[i].x), x1 = std::max(x1, v[i].x), y0 = std::min(y0, v[i].y), y1 = std::max(y1, v[i].y);
+                mapped = std::fabs(v[i].s - v[i].x - 0.5f) < 0.01f && std::fabs(v[i].t - v[i].y - 0.5f) < 0.01f &&
+                         std::memcmp(&v[i].r, &v[0].r, 4) == 0;
+            }
+            if (!mapped || x0 > 0.0f || y0 > 0.0f || x1 < 640.0f || y1 < 448.0f)
+                return 0;
+            const bool decal = s.tfx == 1u && s.tcc;
+            const bool plain = !s.abe && !s.ate && !s.fge && decal && (!s.zte || (s.ztst == 1u && s.zmsk));
+            Rt &dst = rtFor(s.fbp, s.fbw, s.scy1 + 1u);
+            hudOnDraw(s);
+            if (plain && dst.scale == src->second.scale)
+            {
+                endPass();
+                const uint32_t w = std::min(px(640.0f, dst.scale.x), std::min(dst.color->desc().width, src->second.color->desc().width));
+                const uint32_t h = std::min(px(448.0f, dst.scale.y), std::min(dst.color->desc().height, src->second.color->desc().height));
+                m_dev.copyTexture(*dst.color, 0, 0, *src->second.color, 0, 0, w, h);
+                if (log)
+                    std::fprintf(stderr, "[draw] native frame copy %u -> %u\n", s.rtFbp, s.fbp);
+                return 1;
+            }
+            // one quad over the screen with the draw's own state and colour
+            m_postVerts.clear();
+            const float xs[6] = {0, 640, 0, 640, 640, 0}, ys[6] = {0, 0, 448, 0, 448, 448};
+            for (int i = 0; i < 6; ++i)
+            {
+                HwVertex q = v[0];
+                q.x = xs[i], q.y = ys[i], q.s = xs[i] + 0.5f, q.t = ys[i] + 0.5f, q.q = 1.0f;
+                m_postVerts.push_back(q);
+            }
+            const size_t bytes = m_postVerts.size() * sizeof(HwVertex);
+            if (!m_postVb || m_postVbCapacity < bytes)
+            {
+                m_postVbCapacity = std::max<size_t>(bytes + bytes / 2, 64u << 10);
+                m_postVb = m_dev.createBuffer({m_postVbCapacity, rhi::BufferUsage::Vertex, true, "gs post vertices"});
+            }
+            if (!m_postVb)
+                return 0;
+            m_dev.updateBuffer(*m_postVb, m_postVerts.data(), bytes);
+            LayerTarget t;
+            t.opaque = false;
+            t.vertices = m_postVb.get();
+            draw(s, 0u, 6u, nullptr, &t);
+            if (log)
+                std::fprintf(stderr, "[draw] native frame %s %u -> %u\n", s.abe ? "blend" : "copy (quad)", s.rtFbp, s.fbp);
+            return 1;
         }
 
         // Bloom: downsample the frame into a 256x256 buffer, subtract a threshold, n passes of a 4-tap cross blur
@@ -1320,6 +1443,22 @@ namespace
             return tint ? 3u : 2u;
         }
 
+        // the HUD layers' bookkeeping for a draw into the frame's buffers: a new scene makes the target's layer stale; a
+        // plain copy of another buffer takes its HUD along (VCS draws into one buffer and copies the finished frame into
+        // the displayed one at the start of the next)
+        void hudOnDraw(const HwState &ds)
+        {
+            hudSceneDraw(ds.fbp);
+            if (ds.tme && ds.texIsRt && !ds.abe && ds.rtFbp != ds.fbp && !m_hud.empty())
+                if (auto it = m_hud.find(ds.rtFbp); it != m_hud.end() && !it->second.stale)
+                {
+                    it->second.closed = true; // the copied frame is finished: the next HUD draw starts afresh
+                    HudLayer copy = it->second;
+                    copy.closed = false;
+                    m_hud[ds.fbp] = std::move(copy);
+                }
+        }
+
         void hudSceneDraw(uint32_t fbp)
         {
             if (!m_hud.empty())
@@ -1396,9 +1535,11 @@ namespace
             }
             if (!count || !vertices)
                 return;
-            const bool depthOn = s.zte != 0u;
+            // [gta-recomp] ZTST ALWAYS without Z writes needs no depth buffer (the effect buffers carry the frame's ZBP)
+            const bool depthOn = s.zte != 0u && !(s.ztst == 1u && s.zmsk);
             rhi::Texture *colorTarget = nullptr, *depthTarget = nullptr;
             float targetW = 0.0f, targetH = 0.0f; // PS2 pixels
+            Scale targetScale;
             const LayerTarget *target = layer && layer->color ? layer : nullptr; // a target other than the draw's own
             if (target)
             {
@@ -1414,18 +1555,19 @@ namespace
                 if (depthOn)
                 {
                     // D3D binds a depth buffer only with a colour target of the same size: grow whichever is smaller
-                    depth = &depthFor(s.zbp, rt.w, rt.h);
-                    growRt(rt, depth->w, depth->h);
+                    depth = &depthFor(s.zbp, rt.w, rt.h, rt.scale);
+                    growRt(rt, depth->w, depth->h, rt.scale);
                 }
                 colorTarget = rt.color.get();
                 depthTarget = depth ? depth->tex.get() : nullptr;
                 targetW = static_cast<float>(rt.w);
                 targetH = static_cast<float>(rt.h);
+                targetScale = rt.scale;
             }
 
             // texture: decoded VRAM, another render target, or this target itself (sampled from a copy)
             rhi::Texture *tex = nullptr;
-            float rtScale = 1.0f;
+            Scale rtScale; // the render target read: its pixels per PS2 pixel
             const bool plainTexture = layer && layer->texture; // a native buffer, read like decoded VRAM
             if (s.tme && plainTexture)
                 tex = layer->texture;
@@ -1437,10 +1579,10 @@ namespace
                     if (it != m_rts.end())
                     {
                         tex = it->second.color.get();
+                        rtScale = it->second.scale;
                         if (s.rtFbp == s.fbp)
                             tex = feedbackCopy(*tex);
                     }
-                    rtScale = static_cast<float>(m_scale);
                 }
                 else
                 {
@@ -1454,7 +1596,7 @@ namespace
                 // [gta-recomp] the scissor passes GS pixels scx0..scx1, sampled at their integer positions: moved by the
                 // pixel-centre offset like the geometry, a target pixel passes when its centre does
                 const float o = pixelCentreOffset();
-                const float sx = target ? target->scaleX : static_cast<float>(m_scale), sy = target ? target->scaleY : static_cast<float>(m_scale);
+                const float sx = target ? target->scaleX : targetScale.x, sy = target ? target->scaleY : targetScale.y;
                 const float ox = target ? static_cast<float>(target->originX) : 0.0f, oy = target ? static_cast<float>(target->originY) : 0.0f;
                 const float scw = target ? target->scissorScaleX : 1.0f;
                 const int tw = static_cast<int>(colorTarget->desc().width), th = static_cast<int>(colorTarget->desc().height);
@@ -1469,7 +1611,7 @@ namespace
             DrawConstants c{};
             c.targetRtFix[0] = targetW;
             c.targetRtFix[1] = targetH;
-            c.targetRtFix[2] = rtScale;
+            c.targetRtFix[2] = rtScale.x;
             c.targetRtFix[3] = s.fix;
             c.tmeTfxTccFst[0] = s.tme;
             c.tmeTfxTccFst[1] = s.tfx;
@@ -1494,6 +1636,7 @@ namespace
             c.rtOrigin[0] = s.rtOx;
             c.rtOrigin[1] = s.rtOy;
             c.rtOrigin[2] = pixelCentreOffset();
+            c.rtOrigin[3] = rtScale.y;
             c.fogColor[0] = s.fogR;
             c.fogColor[1] = s.fogG;
             c.fogColor[2] = s.fogB;
@@ -1574,6 +1717,7 @@ namespace
         std::unordered_map<uint32_t, HudLayer> m_hud; // [gta-recomp] native HUD layer per frame buffer
         std::unique_ptr<rhi::Buffer> m_hudVb;
         std::vector<HwVertex> m_hudShifted;
+        Scale m_frameScale{0.0f, 0.0f}; // [gta-recomp] the native frame's scale (x 0: off; setFrameSize)
         std::unique_ptr<rhi::Texture> m_postBloom[2], m_postTrails; // [gta-recomp] native post-effect buffers
         std::unique_ptr<rhi::Buffer> m_postVb;
         size_t m_postVbCapacity = 0;
@@ -1591,7 +1735,7 @@ namespace
     class HwBackend final : public GSHwBackendHandle, public GSHwPresenter
     {
     public:
-        explicit HwBackend(const GSHwOptions &o) : m_scale(o.scale)
+        explicit HwBackend(const GSHwOptions &o) : m_scale(o.scale), m_nativeFrame(o.nativeFrame)
         {
             m_frame = std::make_unique<Frame>();
         }
@@ -2605,6 +2749,21 @@ namespace
             }
             if (!m_rhi->ready())
                 return false;
+            if (m_nativeFrame) // [gta-recomp] the picture's targets follow the window (gsHwSetFrameSize)
+            {
+                // PS2X_HW_FRAME=WxH (testing): a full-screen window's frame size whatever the window
+                static const std::pair<uint32_t, uint32_t> forced = [] {
+                    unsigned fw = 0, fh = 0;
+                    if (const char *e = std::getenv("PS2X_HW_FRAME"))
+                        if (std::sscanf(e, "%ux%u", &fw, &fh) != 2)
+                            fw = fh = 0;
+                    return std::pair<uint32_t, uint32_t>(fw, fh);
+                }();
+                if (forced.first)
+                    m_rhi->setFrameSize(forced.first, forced.second);
+                else
+                    m_rhi->setFrameSize(g_frameW.load(std::memory_order_relaxed), g_frameH.load(std::memory_order_relaxed));
+            }
             std::deque<std::unique_ptr<Frame>> frames;
             {
                 std::lock_guard<std::mutex> lock(m_queueMutex);
@@ -3193,6 +3352,7 @@ namespace
         static constexpr size_t kMaxMeshes = 12000u; // [gta-recomp] native draws' vertex data (~3-10 KB each)
 
         uint32_t m_scale;
+        bool m_nativeFrame = false; // [gta-recomp] GSHwOptions::nativeFrame
         GSCpuBackend m_cpu;
         GSTransferCommand m_transfer{};
         std::unique_ptr<Frame> m_frame;

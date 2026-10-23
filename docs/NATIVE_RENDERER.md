@@ -422,8 +422,32 @@ then makes it hold at higher resolutions:
   beside a pole at 16:9 is narrower by about that). The buffers are written back, squeezed, into the effect buffers
   in VRAM for later readers (the game textures vehicles with the 128x128 corner of FBP 420). REPEAT wrapping is a
   modulo in the shader (the widened buffers are not powers of two; same result for GS sizes).
-- Not done yet: the motion blur, self-copy and frame copy stay GS draws (1:1 copies: already exact and
-  resolution-aware); a native frame (step 4) will move them too.
+- **Frame copy and motion blur** (`nativeFrameCopy`, letter `c` of `PS2X_HW_POSTFX`): the full-screen 1:1 reads of
+  another 640-wide target (u = x + 0.5) that the game draws as 40 strips: a plain copy (the shown buffer) is a
+  texture copy, a blended one (motion blur, colour 127/128 at FIX 16) one full-screen quad with the draw's own state.
+  Same picture as the strips (static regions within run-to-run noise). The self-copy over the sky stays a GS draw
+  (depth-tested; 1:1, so read at full resolution).
+
+### Native frame (milestone 3 step 4, started 2026-10-23)
+
+"Internal resolution: Match window" (`display.scale` 0, `PS2X_HW_SCALE=0`): the picture's own targets - the
+640-wide ones: the drawn frame FBP 140, the shown copy FBP 0, the Z buffer FBP 280 - are drawn at the window's size
+(the letterboxed area at the 3D frames' aspect, `gsHwSetFrameSize`; it stays when a menu shows at 4:3), every other
+target (effect buffers, the radar / reflection map) at 1x. So the frame is not a multiple of 640x448: at 16:9 1080p
+it is 1920x1080, 3 x 2.41 pixels per PS2 pixel.
+- Each target and depth buffer has its own scale (`Rt::scale`, `scaleFor`): creation, growth (rescaled when the
+  window changes), uploads, clears, depth fills, scissor, the display, write-backs; the shader reads a render target
+  with separate x / y scales (`rtScale2`, `fetchRtFull` for fractional scales). A Z buffer is kept per scale (the
+  effect buffers carry the frame's ZBP), and ZTST ALWAYS without Z writes binds none.
+- With the copies native and 1:1 reads at full resolution, nothing brings the picture back to 640x448; the bloom /
+  trails stay at their 1x buffers (their look as on the PS2). The HUD layer is drawn at the same size.
+- `PS2X_HW_FRAME=WxH` forces the frame size (tests in a small window, with `PS2X_HW_OUTPUT` / `PS2X_CAPTURE_SIZE`).
+- Checked: scenes at 16:9 1920x1080 against 1x (static scenes the same: loading 1.24, pause map 0.05 mean difference;
+  3D sharper, effects as before), 1x unchanged by the per-target scales. Game fps, two runs each (GTX 1080 Ti):
+  flyover 25.5 / 27.5 native frame vs 28.2 / 28.2 at 1x, cutscene 28.0 / 30.0 vs 28.4 / 30.0, gameplay at the 30 fps
+  cap (one 1x run dipped to 22.5 - the runs vary more than the difference). Not checked: a window resized while
+  running (the frame targets are then rescaled, `growRt`).
+- Not done yet: MSAA, anisotropic filtering, higher-precision depth (D32F already; the PS2's 24-bit Z values).
 
 ### Stage 8 - Enhancements (M each, optional order) - internal resolution done
 

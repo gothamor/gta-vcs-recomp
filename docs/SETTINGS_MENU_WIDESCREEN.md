@@ -83,7 +83,7 @@ pause map) are shown at 4:3, pillarboxed.
   never reaches the game).
 - Settings (main.cpp `registerSettings`): Display > Aspect ratio (`display.aspect` = 43 / 1610 /
   169, env `VCS_ASPECT`), HUD (`display.hud`, env `VCS_HUD`: 0 keep 4:3 / 2 screen edges / 1 stretch), Internal resolution
-  (`display.scale`, restart, env `PS2X_HW_SCALE`); Graphics > Performance overlay; Controls >
+  (`display.scale`: 1-8 or 0 = Match window, the native frame; restart, env `PS2X_HW_SCALE`); Graphics > Performance overlay; Controls >
   Settings menu key.
 - Widescreen: the Hor+ route from the spike - `vcs_display.cpp` wraps `FUN_001ab9e0`, the presenter
   shows 3D frames at the display aspect (2D-only frames - loading screens, the pause menu - at
@@ -207,7 +207,7 @@ pause map) are shown at 4:3, pillarboxed.
 |---|---|---|---|
 | Display | Aspect ratio | 4:3 (original), 16:9, 16:10, 21:9, Match window | live |
 | Display | HUD | Game layout / Keep 4:3 in the middle (for non-16:9 ratios) | live |
-| Display | Internal resolution | 1x-8x | restart |
+| Display | Internal resolution | 1x (original), 2x-8x, Match window (the native frame) | restart |
 | Display | Window | Windowed / Borderless fullscreen | live |
 | Graphics | Native renderer | On / Off (`PS2X_HLE`) | restart |
 | Graphics | Performance overlay | On / Off (F3) | live |
