@@ -222,3 +222,11 @@ The user's choices on the roadmap's open questions:
 - `--opt none` stays the development setting (no ThinLTO relink); the choice is kept in the CMake cache until changed.
 - Calls between recompiled functions got an inline fast path in the runtime header rather than a recompiler change:
   same effect on every call site, no regenerated code, and `PS2X_FAST_DISPATCH=0` switches it off.
+
+## 2026-10-24 - Independent timing capped at 100 fps for now
+- VCS clamps its time step to at least 0.5 (1/100 s; Vice City used 0.01). With the clamp lifted, the frame-rate
+  audit shows the player running at a fifth of the speed at 1/120 s - code somewhere assumes steps of 0.5 or more.
+  Rather than run the game fast (keeping the clamp above 100 fps) or let it break, independent timing keeps the
+  game's 0.5 floor and caps the frame rate at 100. The cap setting offers 30 / 60 / 100 / display refresh (up to
+  100) / unlimited (up to 100). Finding and fixing what breaks below 0.5 (then 120 / 144) is phase 3 work;
+  `VCS_MIN_STEP` lowers the floor to test it.

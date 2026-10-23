@@ -53,6 +53,7 @@ python tools/build.py --iop-tests           # SPU2 unit tests (reverb, interpola
 python tools/build.py --opt none|lto|pgo    # game optimisation, kept until changed (pgo: ThinLTO + profile, trains if needed)
 python tools/bench.py [OUT]                  # game-thread benchmark: fixed city spots + an AI drive (game / worker ms)
 python tools/clean.py [--apply] [--keep-days 7]   # delete test output in build/ (lists first; builds, saves, baselines kept)
+python tools/framerate_audit.py [--steps 15,30,60,100]   # behaviour per simulated second at forced time steps
 python tools/run.py 60 name                 # run 60 s, log to build/run/name.log (visible window)
 python tools/run.py 60 name --control       # + control channel for tools/gamectl.py
 python tools/scenes.py capture OUT          # reference scenes from an empty card (screenshots + perf)

@@ -252,7 +252,14 @@ dropped on uploads (lazy render-target patching).
       game finishes them, EE clock kept at real time on the VBlank chain. Game clock = wall clock at 30 and 144
       (was 1.5-4% slow from CTimer's per-frame ms truncation, in original timing too). Original timing unchanged
       (static reference scenes 0.00). game-internals.md 4.
-- [ ] Frame-rate independence, phases 2-4 (the user's choice over interpolation, DECISIONS.md 2026-10-23): CTimer on the host
+- [x] Frame-rate independence, phase 2 - audit rig (2026-10-24): `tools/framerate_audit.py` runs fall / run /
+      sprint / jump / car / clock scenarios at forced steps (`VCS_TIMESTEP`), compared per simulated second.
+      Findings: steps below 0.5 break ped movement (independent timing capped at 100 fps, DECISIONS.md); in
+      1/15-1/100 car acceleration and running agree, falling and jumping vary with the rate (+7% fall time,
+      +6-9% jump height from 30 to 60-100). game-internals.md 4 has the numbers and the frame counter worklist.
+- [ ] Frame-rate independence, phases 3-4: fix the ped's vertical movement (fall / jump), the blinking (frame &
+      mask) HUD / radar code, what breaks below step 0.5 (FUN_00337208's max(step, 0.5) is one) to lift the 100 cap;
+      pacing polish (VRR, frame-time variance). (Phase 1 / 2 above; the user's choice over interpolation, DECISIONS.md 2026-10-23): CTimer on the host
       clock, a frame-rate cap setting, a forced-step test rig, then the audit of frame-count assumptions. Replaces
       the "60 fps fixes" item below.
 - [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
@@ -274,6 +281,7 @@ dropped on uploads (lazy render-target patching).
 | `VCS_FPS_LOG=1` | VBlanks and flips per second (was `VCS_FPS=1`; `VCS_FPS` is the frame rate cap) |
 | `VCS_TIMING=0\|1`, `VCS_FPS=30\|60\|120\|144\|-1\|0` | game timing original / frame-rate independent; frame rate cap (-1 display refresh, 0 unlimited) |
 | `VCS_TIMESTEP=N` | independent timing: exactly 1/N s per game frame, unpaced (frame-dependence tests) |
+| `VCS_MIN_STEP=x` | independent timing's step floor (0.5, the game's; lower lifts the 100 fps cap - breaks ped movement) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
 | `VCS_PERF_OVERLAY=0\|1` | the perf overlay setting for one run |
 | `VCS_PROFILE=s` | sampling profiler (guest functions + host symbols) |

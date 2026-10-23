@@ -116,6 +116,35 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   (ra 0x317A50) presents the frame, paces to the cap on the host clock, brings the EE clock up to real time on the
   VBlank chain (`EeScheduler::syncToRealTime`) and sets the VBlank count to 2. Measured: game clock = wall clock
   (x1.001) at 30 and 144; steps 1.65-1.70 at 30, 0.55-0.60 at ~85 fps.
+- **Steps below 0.5 break the game** (frame-rate audit `tools/framerate_audit.py`, 2026-10-24): with the minimum lifted
+  the player runs at 4.7 m/s up to 1/100 s steps, then 1.4 m/s at 1/110, 1.0 at 1/120, 0.5 at 1/240 (per-frame
+  movement shrinks with the step squared); with the game's own 0.5 floor at 1/110 he runs 5.15 m/s (= 4.7 x 0.5 /
+  0.4545, the step just too long). Code was written for steps >= 0.5 (VC's minimum was 0.01; VCS raised it) - not
+  found yet. Independent timing therefore keeps the 0.5 floor and caps at 100 fps (`VCS_MIN_STEP` lowers the floor
+  for experiments).
+- **Audit results in the supported range** (`tools/framerate_audit.py`, steps 1/15 .. 1/100, per simulated second,
+  2026-10-24): game clock exact (1/15 gets 60 ms a frame: the +60 ms cap, below ~17 fps the game slows, as on the
+  PS2); car acceleration the same within 3% (speed at 2 / 3 / 4 s, distance in 4 s); running / sprinting the same
+  from 1/30 up (1/15 runs ~10% faster); **falling and jumping depend on the frame rate**: 15 m of fall takes 0.90 /
+  1.11 / 1.19 / 1.20 s at 1/15 / 30 / 60 / 100, a jump rises 0.73 / 0.81 / 0.86 / 0.88 m - a per-frame factor in
+  the ped's vertical movement, not found yet.
+- **A `max(step, 0.5)` in ped code**: FUN_00337208 (25 KB, ped processing) divides by `max(ms_fTimeStep, 0.5) *
+  0.008` (GRAVITY) at 0x33bb2c - one of the places that assume the 0.5 minimum (found by searching the gravity
+  constant 0x3C03126F near the move speed's z, +0x14C).
+- **Physics read for the audit**: ped -> its vehicle at ped+0x450 (also +0x480 / +0x484; found by scanning the ped for
+  the address of the car it was warped into); CPhysical move speed at +0x144 (units per 1/50 s, x 50 = m/s; found by
+  comparing with the car's measured speed). A new car (`CREATE_CAR`) faces north; its matrix can be poked (right
+  +0x00, forward +0x10, up +0x20, position +0x30).
+- **Frame counter readers** (`m_FrameCounter` 0x4CD124; the generated code has constant addresses folded, so a text
+  search of generated/ee lists them - 52 functions; the time step 0x4CD110 has 93, the ms clock 0x4CD104 198):
+  - work spread over frames, `(entity seed (+0x48 >> 54) + frame) & mask` or `frame & mask` with masks 1-0xFF:
+    FUN_0011c958, 00138b68, 00140b28, 00186aa8, 001effb0, 0020db30, 00203240, 00238bb0, 00243730, 0025bba8,
+    00267928, 00268048, 002c3e48, 0033d5a0, 00378dd8, 00421320 ... - run more often per second at higher rates;
+    harmless where the work itself scales by the step;
+  - blinking, `frame & 8 / 4 / 2` toggles: FUN_0031e3f8, 0031fce8, 00321500 (& 8), 003209d0, 00320f28 (& 4),
+    001419d0, 0033dca0, 003f29d8 (& 2), 002af6e0 (& 8) - flash twice as fast at 60 fps (HUD / radar / blips, to
+    confirm);
+  - timestamps (stored, compared with frame - 1: "seen last frame"): FUN_00383028 .. 003868c0, 003ac9c8 - harmless.
 - **Emulated time and the VBlank chain** (found when independent timing first ran at 5 fps): VBlank events are chained
   in EE cycles (+1/60 s each) and each is also held to its host-clock moment. An EE clock moved past the chain makes
   every following VBlank due at once by cycles, and the EE is held at each until its real-time moment - the game

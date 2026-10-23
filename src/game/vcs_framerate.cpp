@@ -51,7 +51,17 @@ namespace vcs
 
         constexpr uint64_t kBusHz = 147456000ull;     // the tick rate (CTimer: ms = ticks / 147456)
         constexpr double kEeCyclesPerNs = 0.294912;   // EE clock 294.912 MHz
-        constexpr float kMinStep = 0.05f;             // independent timing's floor: 1000 fps
+        // Independent timing's floor for the step: the game's own 0.5 by default. Below it the game breaks (the player
+        // runs at a fifth of the speed at 1/120 s - the audit, game-internals.md 4), so frame rates are capped at
+        // kMaxFps; VCS_MIN_STEP=<x> lowers the floor for experiments (with an unlimited cap and VCS_TIMESTEP).
+        float minStep()
+        {
+            static const float step = [] {
+                const char *v = std::getenv("VCS_MIN_STEP");
+                return v && *v ? static_cast<float>(std::atof(v)) : 0.5f;
+            }();
+            return step;
+        }
 
         std::atomic<int> g_timing{static_cast<int>(Timing::Original)};
         std::atomic<int> g_cap{30};
@@ -64,6 +74,20 @@ namespace vcs
         {
             return static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        }
+
+        constexpr double kMaxFps = 100.0; // steps below the game's 0.5 minimum break it (minStep)
+
+        // the cap in frames per second: display refresh and unlimited included, at most kMaxFps unless the floor is
+        // lowered (then unlimited is unlimited)
+        double effectiveFps()
+        {
+            const int cap = g_cap.load(std::memory_order_relaxed);
+            double fps = cap == kCapRefresh ? platform::displayRefreshHz() : cap == kCapUnlimited ? 0.0 : cap;
+            const double limit = minStep() < 0.5f ? 0.0 : kMaxFps;
+            if (limit > 0.0 && (fps <= 0.0 || fps > limit))
+                fps = limit;
+            return fps;
         }
 
         uint32_t forcedStepFps()
@@ -149,7 +173,7 @@ namespace vcs
                 const float step = t * readF(rdram, kTimeScale) * k;
                 if (step < 0.5f)
                 {
-                    const float lifted = std::max(step, kMinStep);
+                    const float lifted = std::max(step, minStep());
                     writeF(rdram, kTimeStep, lifted);
                     writeF(rdram, kTimeStepNonClipped, lifted);
                 }
@@ -164,8 +188,7 @@ namespace vcs
             ps2PresentGameFrame(); // the frame's display list was kicked just before
 
             static uint64_t deadline = 0;
-            const int cap = g_cap.load(std::memory_order_relaxed);
-            const double fps = cap == kCapRefresh ? platform::displayRefreshHz() : cap;
+            const double fps = effectiveFps();
             if (fps > 0.0 && !forcedStepFps())
             {
                 const uint64_t period = static_cast<uint64_t>(1e9 / fps);
@@ -246,11 +269,7 @@ namespace vcs
 
         void applyPresentRate()
         {
-            const int cap = g_cap.load(std::memory_order_relaxed);
-            double hz = 60.0;
-            if (independent())
-                hz = cap == kCapRefresh || cap == kCapUnlimited ? platform::displayRefreshHz() : std::max(60.0, double(cap));
-            platform::setFrameRate(hz);
+            platform::setFrameRate(independent() ? std::max(60.0, effectiveFps()) : 60.0);
         }
     }
 
