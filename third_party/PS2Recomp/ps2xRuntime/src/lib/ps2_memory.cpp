@@ -1637,7 +1637,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     }
                     if (channelBase == 0x10009000u)
                         ps2perf::add(ps2perf::Counter::DmaTags, static_cast<uint64_t>(tagsProcessed)); // [gta-recomp]
-                    if (std::getenv("PS2X_DMA_HIST") && channelBase == 0x10009000u)
+                    static const bool dmaHist = std::getenv("PS2X_DMA_HIST") != nullptr; // [gta-recomp] once, not per chain
+                    if (dmaHist && channelBase == 0x10009000u)
                     {
                         static int maxTags = 0, chains = 0;
                         static uint64_t sumTags = 0;

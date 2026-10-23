@@ -2038,8 +2038,13 @@ bool VU1Interpreter::ensureDecodedCodeCache(const uint8_t *vuCode, uint32_t code
         // VU1 code memory keeps a log of what was written (ps2_vu_code_log): re-decode only those pairs, all of them
         // only when the log no longer reaches back. The game uploads its programs many times a frame; decoding all
         // 2,048 pairs each time was ~10% of the chain worker in a 4-player match.
+        // [gta-recomp] VU0 code memory has no log: compare all its pairs (512 words) with the decoded ones instead of
+        // decoding them all again - VCS swaps its VU0 overlays in many times a frame, mostly with the same bytes.
         uint32_t begin = 0u, end = 0u;
-        if (m_unit == Unit::VU1 && ps2_vu_code_log::writtenSince(memory, m_cachedCodeGeneration, generation, begin, end))
+        if (m_unit == Unit::VU0)
+            end = codeSize;
+        if ((m_unit == Unit::VU1 && ps2_vu_code_log::writtenSince(memory, m_cachedCodeGeneration, generation, begin, end)) ||
+            m_unit == Unit::VU0)
         {
             ps2_host_profile::count(ps2_host_profile::Vu1DecodePartial);
             const uint32_t pairCount = std::min<uint32_t>(codeSize / 8u, kMaxDecodedPairs);

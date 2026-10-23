@@ -1,6 +1,7 @@
 // Based on Blackline Interactive implementation
 #include "runtime/ps2_vu1_tap.h"
 #include "runtime/ps2_memory.h"
+#include "runtime/ps2_vu_code_log.h" // [gta-recomp]
 #include <cstring>
 
 enum VIFCmd : uint8_t
@@ -573,6 +574,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     std::memcpy(m_vu1Code + destAddr, data + pos, copyBytes);
                     ps2xLogMpgUpload(destAddr, instructionCount, data + pos, copyBytes);
                     markVU1CodeModified();
+                    // [gta-recomp] the range, so the decode cache re-decodes only it (ps2_vu_code_log)
+                    ps2_vu_code_log::record(this, getVU1CodeGeneration(), destAddr, destAddr + copyBytes);
                 }
             }
             pos += mpgBytes;

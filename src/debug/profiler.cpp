@@ -101,6 +101,22 @@ namespace vcs
             SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
             SymInitialize(GetCurrentProcess(), nullptr, TRUE);
             std::vector<HANDLE> threads;
+            // is the host function at `host` generated code (FUN_*), not a hook installed with replaceFunction?
+            std::unordered_map<uintptr_t, bool> generatedCache;
+            auto isGenerated = [&generatedCache](uintptr_t host) {
+                auto found = generatedCache.find(host);
+                if (found != generatedCache.end())
+                    return found->second;
+                alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 256];
+                auto *sym = reinterpret_cast<SYMBOL_INFO *>(buffer);
+                sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+                sym->MaxNameLen = 255;
+                DWORD64 displacement = 0;
+                const bool generated = !SymFromAddr(GetCurrentProcess(), host, &displacement, sym) || std::strncmp(sym->Name, "FUN_", 4) == 0 ||
+                                       std::strstr(sym->Name, "::FUN_") != nullptr;
+                generatedCache.emplace(host, generated);
+                return generated;
+            };
             std::unordered_map<uint32_t, uint64_t> hits;    // guest function -> samples
             std::unordered_map<uintptr_t, uint64_t> other;  // non-generated host RIP (page) -> samples
             uint64_t total = 0;
@@ -130,7 +146,10 @@ namespace vcs
                     // Generated functions are at most a few hundred KB of host code each.
                     // (not past the last one: whatever the linker placed after it - e.g. compiled VU1 code - was
                     // counted as that function before)
-                    if (it != map.begin() && it != map.end() && rip - std::prev(it)->host < 0x100000)
+                    // (a replaced function's slot points at a host hook outside the generated code: a sample after it
+                    // is host code, not that guest function - checked by the symbol name below)
+                    if (it != map.begin() && it != map.end() && rip - std::prev(it)->host < 0x100000 &&
+                        isGenerated(std::prev(it)->host))
                         ++hits[std::prev(it)->guest];
                     else
                         ++other[rip];
