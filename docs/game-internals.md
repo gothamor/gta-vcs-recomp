@@ -307,6 +307,12 @@ end, Im2D primitives drawn with the depth test off get the HUD's z (`VCS_HUD_RW=
   (0 - 0) * As + Cd, Z write) of 24 triangles fills the radar box's corners outside the circle with Z 0xFFFFFE; then
   the map as four 128x128 tiles (large quads around the box) at Z 0xFFFFFD with ZTST GEQUAL, scissored to the box:
   they fail in the corners. Then the ring (64x64), the north / blip icons (16x16), all with bilinear filtering.
+- **Menus** (2026-10-23; `VCS_TRACE_IM2D_STACK=1` lists the return addresses on the guest stack at each 2D call):
+  FUN_0021f7d8 is the frontend's draw, called every frame; it returns early unless a menu is up, else calls
+  FUN_00471400, then **FUN_003b53f8 (the menu / pause-menu draw)** (through 0x3b568c / 0x3b56d8 and 0x3cdfbc to the
+  page drawing), then FUN_003e0b10 (a full-screen overlay). In the pause menu no 3D is drawn and CHud::Draw is not
+  called: the frame is the copy of FBP 140 into FBP 0, then 2D only into FBP 140 (backdrop, map, icons, text, the
+  overlay). The map's player arrow blinks.
 - **HUD textures**: the clock and money digits (orange and green, with outlines) and the wanted star are one
   128x64 atlas with 16-texel cells side by side; the ammo count and text use a 256x256 font atlas. All HUD textures
   are bilinear-filtered (TEX1 MMAG / MMIN linear) and drawn smaller than their texels (a clock digit: 15 x 21.5

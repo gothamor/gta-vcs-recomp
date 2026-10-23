@@ -184,7 +184,11 @@ dropped on uploads (lazy render-target patching).
         The layer now covers the PS2's pixels and samples inside each quad's own texels (NATIVE_RENDERER.md "HUD
         layer"). Checked at 1920x1080 (`PS2X_HW_OUTPUT`) outside the barracks; at 640x448 the layer still matches the
         emulated HUD.
-  - [ ] Menus (frontend, pause map) and 2D outside CHud::Draw's frame: still the far-plane squeeze in the frame.
+  - [x] **Menus** in the native layer (pause menu pages; NATIVE_RENDERER.md "HUD layer"): sharper at 1080p, same
+        layout and colours (scenes at 16:9 1080p against `VCS_MENU_NATIVE=0`: static scenes the same but the pause
+        map, which differs by its sharper text). HUD placement default stays "Keep 4:3"; "Screen edges" is the menu
+        choice Display > HUD (user's decision).
+  - [ ] Loading screens and the title menu over the flyover: not looked at yet (loading unchanged).
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
@@ -231,6 +235,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_HUD_RW=0` | no HUD context at the RenderWare level (the 16:9 weapon icon goes back to the screen edge; no native HUD, no anchoring) |
 | `VCS_HUD=0/2/1` | HUD in widescreen: keep 4:3 in the middle / screen edges / stretch (the menu's Display > HUD) |
 | `VCS_HUD_NATIVE=0` | the HUD drawn into the PS2 frame buffer instead of the native layer at the window's size |
+| `VCS_MENU_NATIVE=0` | menus drawn into the PS2 frame buffer instead of the native layer |
+| `VCS_TRACE_IM2D_DELAY=s`, `VCS_TRACE_IM2D_STACK=1` | start the Im2D trace after s seconds (default 30); print the guest stack's return addresses per call |
 | `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier did not find (positions) |
 | `PS2X_HW_OUTPUT=WxH` | the renderer's output size whatever the window (full-screen sizes in test runs; with `PS2X_CAPTURE_SIZE`) |
 | `PS2X_HW_DUMP_TEX=<key hex>` | write that decoded texture (colour + alpha PPM, keys from the F12 draw log) - analysis only, never commit |

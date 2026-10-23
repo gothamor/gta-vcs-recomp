@@ -476,11 +476,11 @@ namespace
                         logDraw(f, d);
                     }
                     HudLayer &layer = m_hud[d.s.fbp];
-                    if (layer.stale)
+                    if (layer.stale || layer.closed)
                     {
                         layer.vertices.clear();
                         layer.draws.clear();
-                        layer.stale = false;
+                        layer.stale = layer.closed = false;
                     }
                     appendHudDraw(layer, f, d);
                     break;
@@ -502,7 +502,9 @@ namespace
                     if (ds.tme && ds.texIsRt && !ds.abe && ds.rtFbp != ds.fbp && !m_hud.empty())
                         if (auto it = m_hud.find(ds.rtFbp); it != m_hud.end() && !it->second.stale)
                         {
+                            it->second.closed = true; // the copied frame is finished: the next HUD draw starts afresh
                             HudLayer copy = it->second;
+                            copy.closed = false;
                             m_hud[ds.fbp] = std::move(copy);
                         }
                     if (skip && (((skip & 1u) && ds.texIsRt) || (skip & 4u)))
@@ -924,7 +926,8 @@ namespace
         {
             std::vector<HwVertex> vertices;
             std::vector<DrawCmd> draws;
-            bool stale = false;
+            bool stale = false;  // the buffer has new drawing: this HUD is gone
+            bool closed = false; // copied out as a finished frame: still shown from the copy, the next HUD replaces it
         };
         struct LayerTarget // where draw() puts a HUD layer draw
         {
@@ -1443,7 +1446,9 @@ namespace
             const float squeeze = g_hudSqueeze.load(std::memory_order_relaxed);
             const GSHwAnchorFn classify = g_hudClassifier.load(std::memory_order_relaxed);
             bool hud = false; // a HUD primitive for the native layer
-            if ((squeeze < 0.9999f || classify) && s.fbw == 10u && m_showing3d.load(std::memory_order_relaxed))
+            // the classifier also names menus in frames without 3D (the pause menu); the squeeze is for 3D frames only
+            const bool wide = squeeze < 0.9999f && m_showing3d.load(std::memory_order_relaxed);
+            if ((wide || classify) && s.fbw == 10u)
             {
                 uint8_t anchor = GSHwAnchorNone;
                 if (classify)
@@ -1458,9 +1463,9 @@ namespace
                     anchor = classify(xy, count);
                     hud = anchor != GSHwAnchorNone && g_hudLayer.load(std::memory_order_relaxed);
                 }
-                if (anchor == GSHwAnchorNone && far && !s.texIsRt && !(x0 <= 1.0f && x1 >= 639.0f))
+                if (anchor == GSHwAnchorNone && far && !s.texIsRt && !(x0 <= 1.0f && x1 >= 639.0f) && wide)
                     anchor = GSHwAnchorCentre;
-                if (anchor != GSHwAnchorNone && anchor != GSHwAnchorStretch && squeeze < 0.9999f)
+                if (anchor != GSHwAnchorNone && anchor != GSHwAnchorStretch && wide)
                 {
                     // x' = pivot + (x - pivot) * squeeze: the pivot stays where it is (an edge or the middle)
                     const float pivot = anchor == GSHwAnchorLeft ? 0.0f : anchor == GSHwAnchorRight ? 640.0f : 320.0f;

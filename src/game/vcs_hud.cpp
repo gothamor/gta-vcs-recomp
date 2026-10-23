@@ -50,14 +50,18 @@ namespace vcs
         PS2Runtime::RecompiledFunction g_origRender = nullptr, g_origRenderIndexed = nullptr, g_origHudDraw = nullptr,
                                        g_origRenderStateSet = nullptr;
         bool g_inHud = false;    // game thread
+        bool g_inMenu = false;   // the frontend's draw (FUN_003b53f8) to the frame kick; game thread
+        constexpr uint32_t kMenuDraw = 0x003B53F8u; // the frontend / pause menu's draw, called from FUN_0021f7d8
+        PS2Runtime::RecompiledFunction g_origMenuDraw = nullptr;
         bool g_zTest = true;     // RenderWare's ZTESTENABLE as the game last set it (off: the GS's ZTST ALWAYS)
 
         // one window for all trace lines: from 30 s after the hooks went in, VCS_TRACE_IM2D lines in total
         auto g_traceStart = std::chrono::steady_clock::now();
         int g_traceLeft = 0;
+        int g_traceDelay = 30; // VCS_TRACE_IM2D_DELAY=<s>
         bool traceNow()
         {
-            if (g_traceLeft <= 0 || std::chrono::steady_clock::now() - g_traceStart < std::chrono::seconds(30))
+            if (g_traceLeft <= 0 || std::chrono::steady_clock::now() - g_traceStart < std::chrono::seconds(g_traceDelay))
                 return false;
             --g_traceLeft;
             return true;
@@ -72,6 +76,27 @@ namespace vcs
                          GPR_U32(ctx, 6), g_inHud ? " hud" : "", indexed ? "" : "\n");
             if (indexed)
                 std::fprintf(stderr, " indices %u\n", GPR_U32(ctx, 8));
+            // VCS_TRACE_IM2D_STACK=1: the return addresses on the guest stack (words in the code range right after a
+            // JAL / JALR) - who called the 2D routine
+            static const bool stack = std::getenv("VCS_TRACE_IM2D_STACK") != nullptr;
+            if (stack)
+            {
+                const uint32_t sp = GPR_U32(ctx, 29) & 0x01FFFFFFu;
+                std::fprintf(stderr, "[im2d]   stack:");
+                for (uint32_t off = 0; off < 0x400u && sp + off + 4u <= 0x02000000u; off += 4u)
+                {
+                    uint32_t w;
+                    std::memcpy(&w, rdram + sp + off, 4);
+                    if (w < 0x00100008u || w >= 0x00480000u || (w & 3u))
+                        continue;
+                    uint32_t call;
+                    std::memcpy(&call, rdram + w - 8u, 4);
+                    const bool jal = (call >> 26) == 0x03u, jalr = (call >> 26) == 0u && (call & 0x3Fu) == 0x09u;
+                    if (jal || jalr)
+                        std::fprintf(stderr, " +%x:%08x", off, w);
+                }
+                std::fprintf(stderr, "\n");
+            }
             for (uint32_t q = 0; q < 4u; ++q)
             {
                 uint32_t w[4];
@@ -105,6 +130,7 @@ namespace vcs
         {
             float x0, y0, x1, y1;        // bounding box, 640x448 pixels
             uint32_t firstKey, keyCount; // into g_primKeys
+            bool menu = false;           // drawn by the frontend (stays in the middle)
         };
         std::atomic<bool> g_anchoring{false};            // HUD primitives are captured and classified (updateClassifier)
         std::atomic<bool> g_edges{false};                // anchored to the screen edges (else all to the middle)
@@ -118,13 +144,13 @@ namespace vcs
 
         void capture(uint8_t *rdram, R5900Context *ctx)
         {
-            if (!g_inHud || !g_anchoring.load(std::memory_order_relaxed) || g_prims.size() >= 8192u)
+            if (!(g_inHud || g_inMenu) || !g_anchoring.load(std::memory_order_relaxed) || g_prims.size() >= 8192u)
                 return;
             const uint32_t verts = GPR_U32(ctx, 5) & 0x01FFFFFFu;
             const uint32_t n = GPR_U32(ctx, 6);
             if (n == 0u || n > 1024u || verts + n * 16u > 0x02000000u)
                 return;
-            Prim p{1e9f, 1e9f, -1e9f, -1e9f, static_cast<uint32_t>(g_primKeys.size()), n};
+            Prim p{1e9f, 1e9f, -1e9f, -1e9f, static_cast<uint32_t>(g_primKeys.size()), n, g_inMenu};
             for (uint32_t i = 0; i < n; ++i)
             {
                 int16_t xy[2];
@@ -154,17 +180,19 @@ namespace vcs
                 return i;
             };
             auto full = [](const Prim &p) { return p.x0 <= 1.0f && p.x1 >= 639.0f; };
+            // menus are laid out as a whole: never grouped with the HUD, never moved to an edge
+            auto apart = [&](const Prim &p) { return full(p) || p.menu; };
             constexpr float gapX = 12.0f, gapY = 3.0f;
             std::sort(order.begin(), order.end(), [](uint32_t a, uint32_t b) { return g_prims[a].x0 < g_prims[b].x0; });
             for (uint32_t oi = 0; oi < n; ++oi)
             {
                 const Prim &a = g_prims[order[oi]];
-                if (full(a))
+                if (apart(a))
                     continue;
                 for (uint32_t oj = oi + 1; oj < n && g_prims[order[oj]].x0 <= a.x1 + gapX; ++oj)
                 {
                     const Prim &b = g_prims[order[oj]];
-                    if (full(b) || b.y0 > a.y1 + gapY || a.y0 > b.y1 + gapY)
+                    if (apart(b) || b.y0 > a.y1 + gapY || a.y0 > b.y1 + gapY)
                         continue;
                     parent[find(order[oj])] = find(order[oi]);
                 }
@@ -183,7 +211,7 @@ namespace vcs
                 const Prim &b = boxes[find(i)];
                 const float centre = (b.x0 + b.x1) * 0.5f;
                 const uint8_t anchor = full(p)                                      ? GSHwAnchorStretch
-                                       : !edges                                      ? GSHwAnchorCentre
+                                       : !edges || p.menu                            ? GSHwAnchorCentre
                                        : centre < 280.0f && b.x0 < 160.0f            ? GSHwAnchorLeft
                                        : centre > 360.0f && b.x1 > 480.0f            ? GSHwAnchorRight
                                                                                      : GSHwAnchorCentre;
@@ -282,6 +310,14 @@ namespace vcs
             g_inHud = true;
             g_origHudDraw(rdram, ctx, runtime);
         }
+
+        void menuDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (traceNow())
+                std::fprintf(stderr, "[im2d] --- menu (%08x)\n", kMenuDraw);
+            g_inMenu = true;
+            g_origMenuDraw(rdram, ctx, runtime);
+        }
     }
 
     void onFrameKick()
@@ -289,6 +325,7 @@ namespace vcs
         if (traceNow())
             std::fprintf(stderr, "[im2d] --- frame kick\n");
         g_inHud = false;
+        g_inMenu = false;
         if (g_anchoring.load(std::memory_order_relaxed))
             resolveAnchors(); // the display list goes to the GS from here on
     }
@@ -312,6 +349,8 @@ namespace vcs
         {
             g_traceLeft = std::atoi(traceEnv);
             g_traceStart = std::chrono::steady_clock::now();
+            if (const char *delay = std::getenv("VCS_TRACE_IM2D_DELAY"))
+                g_traceDelay = std::atoi(delay);
         }
         g_origRender = runtime.lookupFunction(kIm2DRender);
         g_origRenderIndexed = runtime.lookupFunction(kIm2DRenderIndexed);
@@ -325,6 +364,10 @@ namespace vcs
         if (on)
         {
             runtime.replaceFunction(kHudDraw, &hudDraw);
+            const char *menus = std::getenv("VCS_MENU_NATIVE"); // 0: menus drawn into the frame buffer as before
+            g_origMenuDraw = runtime.lookupFunction(kMenuDraw);
+            if (g_origMenuDraw && !(menus && menus[0] == '0'))
+                runtime.replaceFunction(kMenuDraw, &menuDraw);
             const char *native = std::getenv("VCS_HUD_NATIVE");
             g_layer = !(native && native[0] == '0');
             g_hooked = true;

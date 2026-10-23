@@ -362,10 +362,14 @@ The HUD, text and radar are drawn over the shown picture at the window's size in
   kick), groups them into elements and anchors each one (game-internals.md 6f). The renderer asks it about every 2D
   primitive into a 640-wide target while 3D is shown (`gsHwSetHudClassifier`, by vertex positions); a named one is
   squeezed towards its anchor (widescreen) and recorded as a `HudDraw`, not a `Draw`.
+- **Menus** go the same way: from the menu draw (FUN_003b53f8) to the frame kick, the 2D primitives are named too,
+  always anchored in the middle (never to the screen edges), also in frames without 3D (the pause menu; the
+  squeeze stays for 3D frames). `VCS_MENU_NATIVE=0` = menus into the frame buffer.
 - **Which frame.** The executor keeps a layer per frame buffer: HUD draws go to their buffer's layer; any other
   drawing into the buffer (the next frame's scene) makes it stale, and the next HUD draw starts it afresh. A plain
   copy of a buffer takes its layer along: VCS copies its finished frame (FBP 140) into the displayed buffer (FBP 0)
-  at the start of the next frame.
+  at the start of the next frame. The copy also closes the source's layer (the next HUD draw replaces it): the pause
+  menu draws nothing else into FBP 140, so its layer grew by a frame's menu every frame before.
 - **Drawing.** `composeDisplay` makes the picture at the output size (`gsHwSetOutputSize`: the window's letterboxed
   area, set by the runtime each host frame), blits the displayed buffer into it (bilinear, as the presenter scaled it
   before) and draws the displayed buffer's layer on top with the same draw shaders, textures and blend modes: target
