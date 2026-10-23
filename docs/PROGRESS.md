@@ -257,6 +257,10 @@ dropped on uploads (lazy render-target patching).
       Findings: steps below 0.5 break ped movement (independent timing capped at 100 fps, DECISIONS.md); in
       1/15-1/100 car acceleration and running agree, falling and jumping vary with the rate (+7% fall time,
       +6-9% jump height from 30 to 60-100). game-internals.md 4 has the numbers and the frame counter worklist.
+- [x] Measured on the PGO + ThinLTO build (2026-10-24), independent timing: game clock = wall clock (x1.001) at
+      caps 60 and 100; cap 100 runs 91 fps outside the barracks, `tools/bench.py --fps 100 VCS_TIMING=1`: city
+      spots 80-100 fps, AI drive 68 fps (game 13.7 ms, worker 14.0 ms). Original timing unchanged (static
+      reference scenes 0.00).
 - [ ] Frame-rate independence, phases 3-4. Done: falling / jumping explained (Euler integration error, <= 6%, not a
       bug - game-internals.md 4); real-time pacing checked (game clock = wall clock at caps 60 / 100 / refresh,
       presents at the cap). HUD / radar flashing at the original rate above 30 fps (2D pass on a 30 Hz frame counter). Left: the four
