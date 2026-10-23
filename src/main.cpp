@@ -19,6 +19,7 @@
 #include "debug/watchdog.h"
 #include "disc/iso_image.h"
 #include "game/vcs_display.h"
+#include "game/vcs_framerate.h"
 #include "game/vcs_hud.h"
 #include "platform/platform.h"
 #include "render/presenter.h"
@@ -204,6 +205,19 @@ namespace
         s.apply = Apply::Restart;
         s.env = "PS2X_HW_SCALE";
         s.onChange = [](int v) { setEnv("PS2X_HW_SCALE", std::to_string(v)); }; // read when the renderer starts
+        settings::add(s);
+
+        s = {};
+        s.key = "display.fps";
+        s.page = "Display";
+        s.label = "Frame rate";
+        s.help = "60 runs the game's update twice as often (smoother; the game was made for 30). Needs a fast CPU: "
+                 "a frame that takes longer than 1/60 s falls back to 30.";
+        s.type = Type::Choice;
+        s.choices = {{"30 (original)", 30}, {"60", 60}};
+        s.defaultValue = 30;
+        s.env = "VCS_FPS";
+        s.onChange = [](int v) { vcs::setFrameRate60(v == 60); };
         settings::add(s);
 
         s = {};

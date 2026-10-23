@@ -208,6 +208,7 @@ pause map) are shown at 4:3, pillarboxed.
 | Display | Aspect ratio | 4:3 (original), 16:9, 16:10, 21:9, Match window | live |
 | Display | HUD | Game layout / Keep 4:3 in the middle (for non-16:9 ratios) | live |
 | Display | Internal resolution | 1x (original), 2x-8x, Match window (the native frame) | restart |
+| Display | Frame rate | 30 (original), 60 (needs a fast CPU) | live |
 | Display | Anti-aliasing (MSAA) | Off (original), 2x, 4x, 8x | restart |
 | Display | Texture filtering | Bilinear (original), Anisotropic 2x-16x | restart |
 | Display | Window | Windowed / Borderless fullscreen | live |

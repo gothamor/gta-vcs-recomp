@@ -72,7 +72,28 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
 - The game updates and draws at 30 fps on the 60 Hz VBlank: in a frame dump the 3D is in every
   other VBlank's GS frame; the in-between VBlanks carry no draws (found when `PS2X_HW_DUMP` kept
   landing on empty frames, 2026-10-22; the dump now waits for a frame with draws).
-- Main loop, frame limiter and the CTimer time step: **not mapped yet** (milestone 4).
+- **Main loop** (2026-10-23, from the guest-stack return addresses of the 2D work and the callers in the generated
+  code): `entry` (0x1dd6a0) -> FUN_0021c928 -> FUN_0021c5e8 (start-up: init calls, then the loop) -> per frame
+  FUN_0021ed88: CTimer / game updates (FUN_002f4858 / FUN_002f4960 / FUN_0021e720 ...), FUN_0021e950 (render: 3D,
+  then the 2D pass FUN_0021f348, the frontend FUN_0021f7d8), then the frame's end.
+- **VBlank**: FUN_00370480 creates a semaphore (id at 0x488E9C) and installs **FUN_00370300** as the INTC handler for
+  VBlank start (cause 2) and end (3), through FUN_002f46f8 (AddIntcHandler + EnableIntc with a use count). On
+  VBlank start it sets a flag (0x6F4268 = 1), counts VBlanks (0x488EA0) and calls up to 8 callbacks registered with
+  FUN_003703f0(fn, arg) (table 0x6F4248, args 0x7490B0); on VBlank end it clears the flag. FUN_003703a8 returns the
+  count, **FUN_003703b8 = WaitVBlank** (spins on the flag, clears it).
+- **Frame limiter**: the graphics object at 0x520F90 counts VBlanks at +0x4 (callback FUN_00317aa8 ->
+  FUN_00317ac8: +1, registered by FUN_00317788). At the frame's end **FUN_003179a0** (from FUN_0018f450) waits for
+  the previous frame's work, kicks the next display list (FUN_00272268), then `do { WaitVBlank(); } while (vblanks
+  < 2);` (0x317a48..0x317a58) and resets the count: **30 fps**, two VBlanks a frame.
+- **CTimer**: FUN_002f4858 = Initialise (registers a VBlank callback 0x2f4840; time scale 0x4CD168 = 1.0),
+  **FUN_002f4960 = Update**: a 64-bit bus-clock tick count (FUN_00451C00; previous at 0x488298) gives the frame's
+  ticks; `ms = ticks / 147456` added to the time in milliseconds (0x488280); **time step (0x4CD174) = ticks * time
+  scale * 50 / 147456000** (1.0 = 1/50 s; 0x34B60B61 = 3.3908e-7). So the step follows the measured frame time.
+- **60 fps** (`src/game/vcs_framerate.cpp`): the VBlank-counting callback adds 2 instead of 1, so the limiter lets a
+  frame through after one VBlank. Measured outside the barracks (2026-10-23, i7-7700K): 31-37 fps - a gameplay
+  frame costs ~27 ms on the game thread (game code 19-24 ms, render submission ~8 ms), more than 1/60 s; the
+  emulated VBlank keeps real-time pace only while the game thread keeps up (events need both the EE cycle and the
+  host deadline). A steady 60 needs ~40% less game-thread time per frame (milestone 7).
 
 ## 5. Camera, projection and widescreen
 

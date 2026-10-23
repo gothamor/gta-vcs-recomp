@@ -208,6 +208,15 @@ dropped on uploads (lazy render-target patching).
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
 
+
+## Milestone 4 - frame rate (started 2026-10-23)
+
+- [x] Main loop, VBlank handler, frame limiter and CTimer mapped (game-internals.md 4).
+- [x] 60 fps switch (Display > Frame rate, `VCS_FPS=60`; off by default): the limiter lets a frame through after one
+      VBlank. On the i7-7700K it reaches 31-37 fps in gameplay: the game thread needs ~27 ms a frame (milestone 7
+      first for a steady 60).
+- [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
+      the switch; frame pacing.
 ## Phase 5 - stability
 - [ ] Vic falls through the world in some places (reported by the user 2026-10-22, after the
       native renderer; not yet known whether it is new). Collision needs a look: whether the
@@ -256,6 +265,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_SCALE=0` | native frame: the picture's targets at the window's size (menu: Internal resolution > Match window) |
 | `PS2X_HW_MSAA=2/4/8` | MSAA for the picture's targets (menu: Anti-aliasing) |
 | `PS2X_HW_ANISO=2..16`, `PS2X_HW_ANISO_LOG=1` | anisotropic filtering of the game's textures (menu: Texture filtering); count the draws per sampling path |
+| `VCS_FPS=60` | 60 fps: the game's limiter waits one VBlank a frame instead of two (menu: Frame rate) |
 | `PS2X_HW_FRAME=WxH` | the native frame's size whatever the window (tests) |
 | `PS2X_HW_DUMP_ALLVERTS=1` | the F12 draw log prints every vertex of every draw |
 | `VCS_MENU_NATIVE=0` | menus drawn into the PS2 frame buffer instead of the native layer |
