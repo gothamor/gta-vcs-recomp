@@ -153,6 +153,11 @@ dropped on uploads (lazy render-target patching).
       means over the reference scenes (C++ / VU1 / GPU clipping): flyover render 14.6 / 17.7 / 14.1 ms, cutscene
       11.8 / 14.5 / 11.3, gameplay 5.9 / 7.6 / 5.6; flyover frame 34.3 ms (30 fps cap) vs 36.2 on the VU1. GON_C3's
       poolside ground right natively.
+- [x] **Environment-map pass** (stage table 0x13, vehicles): reproduced and checked against the VU's kicks (27,243
+      packets exact); native by default (`PS2X_HLE_ENV=0` = VU1). Flyover render 14.7 -> 14.0 ms (same-session A/B);
+      pictures identical. game-internals.md 6d.
+- [x] Survey reports native and VU1 work apart; what remains on the VU1 is listed in game-internals.md 6d (~1 ms
+      per frame): 0x02c0 (re-draws / particles), some prelit packets, clipped lit packets.
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
@@ -194,6 +199,8 @@ dropped on uploads (lazy render-target patching).
 | F3 / F4, `PS2X_PERF_LOG=f.csv` | perf overlay / CSV recording (see CONTROLS.md); `python tools/perf_report.py f.csv` |
 | `PS2X_HLE_CLIPPED=1` | draw world packets that cross the clip planes with GPU clipping (wrong in places, game-internals.md 6h) |
 | `PS2X_HLE_CLIPPER=0` | clipped world packets on the VU1 instead of the C++ clipper |
+| `PS2X_HLE_ENV=0` | the environment-map pass (stage table 0x13) on the VU1 |
+| `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
 | `PS2X_CLIP_DUMP=dir[,n]` | with `PS2X_HLE_VERIFY=1`: write n clipped packets (VU memory + the VU's kicks) for offline checks |
 | `PS2X_HW_LAZY_UPLOADS=0`, `PS2X_HW_UPSTATS=1` | write texture uploads immediately / upload stats |
 | `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate a slow PC) |

@@ -173,7 +173,7 @@ programs). Stage tables (instruction indices):
 | 0x19 | 0x0da, 0x4e0 (0x9c), 0x2b6 | prelit world: V3-16 pos @1, V2-8 uv @0x48, V4-5 colour @0x8f (+ V4-32 matrix @0x2c x3 in some) |
 | 0x19 + 0x4ff | 0x0da, 0x4ff (0x9c), 0x2b6 | rigid lit models (vehicles, props): int8 normals V3-8 at `[47].y` |
 | 0x16 | 0x5a5 (0xa8), 0x0da, 0x4ff (0x9c), 0x2b6 | lit, skinned models (peds): V3-16 pos, V2-8 uv @0x55, V3-8 normal @0x2b, V4-32 weights @0x7f |
-| 0x13 | 0x0da, 0x4ff (0x9c), 0x2b6, 0x5b1 (0xa8), 0x2b2 | lit models, second pass (env map?) - still on the VU1 |
+| 0x13 | 0x0da, 0x4ff (0x9c), 0x2b6, 0x5b1 (0xa8), 0x2b2 | rigid lit models with an **environment map** (vehicles): native since 2026-10-23 |
 
 Code at 0x2700.. (instr 0x4e0..) is swapped by per-pass MPG uploads, so programs are keyed by the
 code at the start PC *and* 0x2700-0x2fff.
@@ -200,6 +200,24 @@ low bits are bone indices, bones 4 qwords each from 0xa9, result written back ov
 normal slots); 0x27f8 (stage 0x4ff) 4 directional lights + ambient, scaled by `[51]` * 1/510, RGB
 only. All reproduced bit-exact in `src/game/vcs_hle_world.cpp` (`PS2X_HLE_VERIFY=1`), except the
 STQ.w lane and its fog in the lit pass, which the runtime's VU1 core leaves inconsistent.
+
+**Environment map (stage table 0x13, 2026-10-23).** The rigid lit pass (0x0da, 0x4ff with 0x9c, kick 0x2b6 = tag 49)
+followed by **0x5b1** (vi01 = 41.y = 0xa8) and kick **0x2b2** (tag 50). 0x5b1 first XGKICKs the GIF packet at vi01
+(seen: one A+D write of TEXFLUSH), then for every vertex (at least 6): ST = (rows vi01+5..7, x / y lanes times
+I = 1/256) . normal + 0.5, times the vertex's Q from the output, written over the output's S and T. Kick 0x2b2 sends
+the same output (colours, XYZF2, Q unchanged) again with tag 50: PRIM 0x25c - strip, Gouraud, textured, blended,
+no fog, **context 2** (the environment texture set by the game's own GS packets). The kick tag's x lane is the
+packet header's .w via ILW + MFIR - sign-extended (0xffff80nn). Reproduced (`envKicks` in vcs_hle_world.cpp) and
+checked against the VU's three kicks: 27,243 packets over the reference scenes, all exact; native drawing: pass 1
+as a rigid lit model on the GPU, the TEXFLUSH and the second pass as the VU's kicks (PATH1). Clipped table-0x13
+packets stay on the VU1.
+
+**What still runs on the VU1** (survey with native drawing, `PS2X_HLE_SURVEY=1` now reports native and VU1 calls
+apart; `PS2X_HLE_STATS=1` lists the 0x0030 stage tables left): after the environment pass, the setup program
+0x02c0 (re-draws resident geometry with a new matrix through the dispatcher - entry 0x1c: 0x0da + kick, 52.x =
+0x0de - and particle stages 0x4ff-0x513; ~19 ms/s VU1 over three code variants, ~165k verts/s), a few prelit world
+packets (table 0x19; ~9k calls per 10 s, cause not yet looked at), 0x0030 code 19635180 (V4-32 x72 layouts, ~2 ms/s)
+and the clipped lit packets. Together ~1 ms per game frame.
 
 ### 6e. GS usage (VCS_GS_STATS, title / intro)
 

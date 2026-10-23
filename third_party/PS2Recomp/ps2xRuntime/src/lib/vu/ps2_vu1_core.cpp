@@ -1194,6 +1194,7 @@ void VU1Interpreter::finishXgkick()
 
 uint64_t g_vu1XgkickCount = 0; // [gta-recomp] PS2X_TRACE_VU1 (ps2_runtime.cpp)
 std::vector<std::vector<uint8_t>> *ps2vu1tap::g_kicks = nullptr;
+bool ps2vu1tap::g_mscalNative = false;
 
 void VU1Interpreter::startXgkick(uint32_t qwordAddress)
 {

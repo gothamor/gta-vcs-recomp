@@ -1,4 +1,5 @@
 // [gta-recomp] See runtime/ps2_hle_survey.h.
+#include "runtime/ps2_vu1_tap.h"
 #include "runtime/ps2_hle_survey.h"
 
 #include <algorithm>
@@ -37,6 +38,7 @@ namespace ps2hle
         {
             uint32_t pc = 0, codeHash = 0;
             uint64_t calls = 0, inPacket = 0, verts = 0, ns = 0;
+            uint64_t nativeCalls = 0, nativeVerts = 0, nativeNs = 0; // [gta-recomp] handled by a game hook, the VU1 skipped
             std::unordered_set<uint32_t> targets;
             std::unordered_map<uint64_t, LayoutStats> layouts;
         };
@@ -96,9 +98,12 @@ namespace ps2hle
             {
                 std::snprintf(line, sizeof(line),
                               "  pc 0x%04x code %08x: %8.0f calls/s (%3.0f%% in packets, %zu packets), %7.1fk verts/s (%4.1f%%), "
-                              "VU1 %6.2f ms/s, %zu layouts\n",
+                              "VU1 %6.2f ms/s, %zu layouts; native %3.0f%% of calls (%.2f ms/s), on the VU1 %.0f calls/s %.1fk verts/s %.2f ms/s\n",
                               p->pc, p->codeHash, p->calls / secs, p->calls ? 100.0 * p->inPacket / p->calls : 0.0, p->targets.size(),
-                              p->verts / secs / 1000.0, allVerts ? 100.0 * p->verts / allVerts : 0.0, p->ns / secs / 1e6, p->layouts.size());
+                              p->verts / secs / 1000.0, allVerts ? 100.0 * p->verts / allVerts : 0.0, p->ns / secs / 1e6, p->layouts.size(),
+                              p->calls ? 100.0 * p->nativeCalls / p->calls : 0.0, p->nativeNs / secs / 1e6,
+                              (p->calls - p->nativeCalls) / secs, (p->verts - p->nativeVerts) / secs / 1000.0,
+                              (p->ns - p->nativeNs) / secs / 1e6);
                 out += line;
                 std::vector<std::pair<uint64_t, LayoutStats *>> layouts;
                 for (auto &[k, l] : p->layouts)
@@ -203,6 +208,12 @@ namespace ps2hle
         const uint64_t verts = g_gsVerticesRecorded - g_verts0;
         g_current->ns += ns;
         g_current->verts += verts;
+        if (ps2vu1tap::g_mscalNative)
+        {
+            ++g_current->nativeCalls;
+            g_current->nativeVerts += verts;
+            g_current->nativeNs += ns;
+        }
         g_currentLayout->ns += ns;
         g_currentLayout->verts += verts;
         if (g_dumpAfter)

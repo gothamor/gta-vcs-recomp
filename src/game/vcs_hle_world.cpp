@@ -416,6 +416,7 @@ namespace
         bool litLanes = false;      // lit packets: STQ.w and fog not compared
         uint64_t vertsBefore = 0;
         bool clipChecked = false;   // prelit clipper packets: the C++ clipper's GIF packets, compared with the VU's kicks
+        bool envKicks = false;      // ... or a table-0x13 packet's three kicks (envKicks)
         std::vector<std::vector<uint8_t>> clipPackets, vuKicks;
     } g_pred;
 
@@ -426,6 +427,7 @@ namespace
         uint64_t field[3] = {}; // mismatching STQ / RGBA / XYZF qwords
         uint32_t logged = 0;
         uint64_t clipExact = 0, clipBad = 0, clipUnsupported = 0, clipPacketsOk = 0, clipPacketsBad = 0;
+        uint64_t envExact = 0, envBad = 0; // stage table 0x13 packets: the three kicks
     } g_stats;
 
     auto g_reportAt = std::chrono::steady_clock::now();
@@ -436,14 +438,14 @@ namespace
         std::fprintf(stderr,
                      "[hle-verify] world packets %llu: culled %llu (%llu ok / %llu drew), clipper %llu, fast %llu "
                      "(%llu exact, %llu within 1, %llu off; verts %llu exact / %llu off; off qwords ST %llu RGBA %llu XYZF %llu); "
-                     "C++ clipper %llu exact / %llu off / %llu not reproduced (GIF packets %llu ok / %llu off)\n",
+                     "C++ clipper %llu exact / %llu off / %llu not reproduced (GIF packets %llu ok / %llu off); env pass %llu exact / %llu off\n",
                      (unsigned long long)s.packets, (unsigned long long)s.culled, (unsigned long long)s.culledOk,
                      (unsigned long long)s.culledBad, (unsigned long long)s.clipper, (unsigned long long)s.fast,
                      (unsigned long long)s.fastExact, (unsigned long long)s.fastClose, (unsigned long long)s.fastBad,
                      (unsigned long long)s.vertsExact, (unsigned long long)s.vertsBad, (unsigned long long)s.field[0],
                      (unsigned long long)s.field[1], (unsigned long long)s.field[2], (unsigned long long)s.clipExact,
                      (unsigned long long)s.clipBad, (unsigned long long)s.clipUnsupported, (unsigned long long)s.clipPacketsOk,
-                     (unsigned long long)s.clipPacketsBad);
+                     (unsigned long long)s.clipPacketsBad, (unsigned long long)s.envExact, (unsigned long long)s.envBad);
     }
 
     // PS2X_CLIP_DUMP=<dir>[,<n>]: the first n (default 300) world packets the VU sends through its clipper, as
@@ -468,6 +470,7 @@ namespace
         g_pred.vuKicks.clear();
         g_pred.clipPackets.clear();
         g_pred.clipChecked = false;
+        g_pred.envKicks = false;
         if (kind == 0u)
         {
             g_pred.clipChecked = true;
@@ -543,17 +546,220 @@ namespace
         {
             const auto &a = mine[i], &b = *vu[i];
             bool same = a.size() == b.size() && std::memcmp(a.data(), b.data(), 16) == 0;
-            for (size_t q = 16; same && q < a.size(); q += 16)
+            size_t q = 16;
+            for (; same && q < a.size(); q += 16)
                 same = std::memcmp(a.data() + q, b.data() + q, ((q - 16u) / 16u) % 3u == 0u ? 12u : 16u) == 0;
+            if (!same && g_stats.logged < 12)
+            {
+                ++g_stats.logged;
+                const size_t at = a.size() == b.size() ? (std::memcmp(a.data(), b.data(), 16) == 0 ? q - 16u : 0u) : 0u;
+                uint32_t wa[4] = {}, wb[4] = {};
+                if (at + 16u <= a.size())
+                    std::memcpy(wa, a.data() + at, 16);
+                if (at + 16u <= b.size())
+                    std::memcpy(wb, b.data() + at, 16);
+                std::fprintf(stderr, "[hle-verify] kick %zu (%zu / %zu bytes) qword %zu: mine %08x %08x %08x %08x vu %08x %08x %08x %08x\n", i,
+                             a.size(), b.size(), at / 16u, wa[0], wa[1], wa[2], wa[3], wb[0], wb[1], wb[2], wb[3]);
+            }
             (same ? g_stats.clipPacketsOk : g_stats.clipPacketsBad) += 1;
             exact = exact && same;
         }
-        (exact ? g_stats.clipExact : g_stats.clipBad) += 1;
+        if (g_pred.envKicks)
+            (exact ? g_stats.envExact : g_stats.envBad) += 1;
+        else
+            (exact ? g_stats.clipExact : g_stats.clipBad) += 1;
         if (!exact && g_stats.logged < 12)
         {
             ++g_stats.logged;
             std::fprintf(stderr, "[hle-verify] clipper packet differs: %zu GIF packets, VU %zu\n", mine.size(), vu.size());
         }
+    }
+
+    // The fast path's per-vertex output (STQ float bits, RGBA, XYZF2): transform 0x07f0 (matrix 28-31), fog 0x1048,
+    // colour = prelit stage 0x2700 (vi01 = 0x9c) or, for rigid lit models, the lighting stage 0x27f8.
+    void fastOutputs(const uint8_t *vu, uint32_t posBase, uint32_t uvBase, uint32_t colBase, uint32_t nrmBase, bool rigid,
+                     uint32_t count, uint32_t (*out)[12])
+    {
+        Vec4 m[4];
+        foldMatrix(vu, 28, m);
+        const float inv255 = bitsToFloat(0x3B808081u);
+        Vec4 uvm[3] = {loadF(vu, 44), loadF(vu, 45), loadF(vu, 46)};
+        for (auto &r : uvm)
+            for (int k = 0; k < 3; ++k)
+                r.v[k] *= inv255;
+        const bool fog = (loadI(vu, 52).v[1] & 2) != 0;
+        const Vec4 fogp = loadF(vu, 53);
+        const Vec4 cs = loadF(vu, 0x9C), co = loadF(vu, 0x9D), cmax = loadF(vu, 0x9E);
+        LitLights lights;
+        if (rigid)
+            lights = rigidLights(vu);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const Vec4 p = transform(m, itof(loadI(vu, posBase + i)));
+            const Vec4 uv = itof(loadI(vu, uvBase + i));
+            float st[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                float acc = uvm[0].v[k] * uv.v[0];
+                acc = acc + uvm[1].v[k] * uv.v[1];
+                st[k] = acc + uvm[2].v[k] * uv.v[2];
+            }
+            const float q = 1.0f / p.v[3];
+            uint32_t *e = out[i];
+            float stq[4] = {st[0] * q, st[1] * q, st[2] * q, p.v[3]};
+            std::memcpy(e, stq, 16);
+            if (rigid)
+            {
+                const Vec4 n = itof(loadI(vu, nrmBase + i));
+                int32_t rgb[3];
+                litColour(lights, n.v, rgb);
+                e[4] = static_cast<uint32_t>(rgb[0]);
+                e[5] = static_cast<uint32_t>(rgb[1]);
+                e[6] = static_cast<uint32_t>(rgb[2]);
+                e[7] = static_cast<uint32_t>(lights.alpha);
+            }
+            else
+            {
+                const Vec4 col = itof(loadI(vu, colBase + i));
+                for (int k = 0; k < 4; ++k)
+                {
+                    const float r = co.v[k] + cs.v[k] * col.v[k];
+                    e[4 + k] = static_cast<uint32_t>(ftoi(std::min(r, cmax.v[k]), 1.0f));
+                }
+            }
+            for (int k = 0; k < 3; ++k)
+                e[8 + k] = static_cast<uint32_t>(ftoi(p.v[k] * q, 16.0f));
+            float f = 0.0f;
+            if (fog)
+                f = std::max(std::min(fogp.v[3] * p.v[3] + 1.0f * fogp.v[2], 255.0f), 0.0f);
+            e[11] = static_cast<uint32_t>(ftoi(f, 16.0f));
+        }
+    }
+
+    // ---- stage table 0x13: rigid lit models + environment map --------------------------------------------------------
+    // 0x0da transform, 0x4ff lighting (0x9c), kick 0x2b6 (tag 49), then 0x5b1 (vi01 = 41.y, 0xa8): XGKICK the GIF packet
+    // at vi01 (a TEXFLUSH), ST = (rows vi01+5..7 . xy / 256) * normal + 0.5, times the vertex's Q, over the output's ST;
+    // kick 0x2b2 sends the same output again with tag 50 (context 2, the environment texture). game-internals.md 6d.
+    bool envCodeResident(const uint8_t *code, uint64_t generation)
+    {
+        static uint64_t checkedGeneration = ~0ull;
+        static bool resident = false;
+        if (generation == checkedGeneration)
+            return resident;
+        static const uint32_t ranges[][2] = {{0x1590, 0x15B0}, {0x2D88, 0x2F70}};
+        uint64_t h = 0xCBF29CE484222325ull;
+        for (const auto &r : ranges)
+            h = fnv(code, r[0], r[1], h);
+        checkedGeneration = generation;
+        resident = h == 0xA6FF2E08D4CC67F3ull && rigidCodeResident(code, generation);
+        static int logged = 0;
+        if (h != 0xA6FF2E08D4CC67F3ull && logged++ < 4)
+            std::fprintf(stderr, "[hle] env pass code hash %016llx (not the reproduced one): table 0x13 runs on the VU1\n",
+                         (unsigned long long)h);
+        return resident;
+    }
+
+    bool isEnvPipeline(const uint8_t *code, const uint8_t *vu, uint64_t generation)
+    {
+        const IVec4 t38 = loadI(vu, 38), t39 = loadI(vu, 39), t40 = loadI(vu, 40), t41 = loadI(vu, 41), t52 = loadI(vu, 52);
+        if ((t38.v[0] & 0xFFFF) != 0x13 || (t39.v[2] & 0xFFFF) != 0xDA || (t40.v[0] & 0xFFFF) != 0x4FF ||
+            (t40.v[1] & 0xFFFF) != 0x9C || (t40.v[2] & 0xFFFF) != 0x2B6 || (t41.v[0] & 0xFFFF) != 0x5B1 ||
+            (t41.v[2] & 0xFFFF) != 0x2B2)
+            return false;
+        const uint32_t entry = t52.v[0] & 0xFFFF;
+        if (entry != 0xE9 && entry != 0xDE)
+            return false;
+        return envCodeResident(code, generation);
+    }
+
+    // the GIF packet at qword q (tags until EOP); empty when it does not fit
+    void gifPacketAt(const uint8_t *vu, uint32_t q, std::vector<uint8_t> &out)
+    {
+        out.clear();
+        for (uint32_t guard = 0; guard < 64u; ++guard)
+        {
+            uint64_t tag;
+            std::memcpy(&tag, vu + (q & (kQwords - 1u)) * 16u, 8);
+            const uint32_t nloop = tag & 0x7FFFu, flg = (tag >> 58) & 3u, nreg = ((tag >> 60) & 15u) ? ((tag >> 60) & 15u) : 16u;
+            const uint32_t qwords = 1u + (flg == 0u ? nloop * nreg : flg == 1u ? (nloop * nreg + 1u) / 2u : nloop);
+            if (out.size() / 16u + qwords > 256u)
+            {
+                out.clear();
+                return;
+            }
+            for (uint32_t i = 0; i < qwords; ++i)
+                out.insert(out.end(), vu + ((q + i) & (kQwords - 1u)) * 16u, vu + ((q + i) & (kQwords - 1u)) * 16u + 16u);
+            q += qwords;
+            if ((tag >> 15) & 1u)
+                return;
+        }
+        out.clear();
+    }
+
+    // the kick of 0x15d0 for tag qword `tagQ`: tag (x = the header's .w) + n x (STQ, RGBA, XYZF2) from `outputs`
+    void kickPacket(const uint8_t *vu, uint32_t tagQ, uint32_t headerW, const uint32_t (*outputs)[12], uint32_t n,
+                    std::vector<uint8_t> &out)
+    {
+        const IVec4 t = loadI(vu, tagQ);
+        // ILW.w + MFIR.x: the header's low 16 bits, sign-extended
+        const uint32_t x = static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(headerW & 0xFFFFu)));
+        const uint32_t tag[4] = {x, static_cast<uint32_t>(t.v[1]), static_cast<uint32_t>(t.v[2]), static_cast<uint32_t>(t.v[3])};
+        out.resize(16u + n * 48u);
+        std::memcpy(out.data(), tag, 16);
+        for (uint32_t i = 0; i < n; ++i)
+            std::memcpy(out.data() + 16u + i * 48u, outputs[i], 48);
+    }
+
+    // 0x5b1's ST over the fast path's outputs (in place)
+    void envST(const uint8_t *vu, uint32_t param, uint32_t nrmBase, uint32_t count, uint32_t (*outputs)[12])
+    {
+        const float scale = bitsToFloat(0x3B800000u); // I = 1/256 on the rows' x / y
+        Vec4 m[3] = {loadF(vu, param + 5u), loadF(vu, param + 6u), loadF(vu, param + 7u)};
+        for (auto &r : m)
+        {
+            r.v[0] = r.v[0] * scale;
+            r.v[1] = r.v[1] * scale;
+        }
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const Vec4 n = itof(loadI(vu, nrmBase + i));
+            float q, st[2];
+            std::memcpy(&q, &outputs[i][2], 4);
+            for (int k = 0; k < 2; ++k)
+            {
+                float acc = m[0].v[k] * n.v[0];
+                acc = acc + m[1].v[k] * n.v[1];
+                const float e = acc + m[2].v[k] * n.v[2];
+                st[k] = (0.5f + e) * q;
+            }
+            std::memcpy(&outputs[i][0], st, 8);
+        }
+    }
+
+    // the three kicks of a fast-path table-0x13 packet: pass 1 (tag 49), the packet at 41.y, pass 2 (tag 50)
+    bool envKicks(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &kicks)
+    {
+        const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48);
+        top &= 0x3FFu;
+        const uint32_t base = top & static_cast<uint32_t>(i48.v[2]);
+        const uint32_t posBase = static_cast<uint32_t>(i47.v[0]) + base, nrmBase = static_cast<uint32_t>(i47.v[1]) + base,
+                       uvBase = static_cast<uint32_t>(i47.v[2]) + base;
+        const IVec4 header = loadI(vu, posBase - 1u);
+        const uint32_t count = static_cast<uint32_t>(header.v[2]);
+        const uint32_t n = static_cast<uint32_t>(header.v[3]) & 0x7FFFu;
+        if (count == 0u || count > 256u || n > count)
+            return false;
+        static thread_local uint32_t outputs[256][12];
+        fastOutputs(vu, posBase, uvBase, 0, nrmBase, true, count, outputs);
+        const uint32_t param = static_cast<uint32_t>(loadI(vu, 41).v[1]) & 0x3FFu;
+        kicks.resize(3);
+        kickPacket(vu, 49, static_cast<uint32_t>(header.v[3]), outputs, n, kicks[0]);
+        gifPacketAt(vu, param, kicks[1]);
+        if (kicks[1].empty())
+            return false;
+        envST(vu, param, nrmBase, count, outputs);
+        kickPacket(vu, 50, static_cast<uint32_t>(header.v[3]), outputs, n, kicks[2]);
+        return true;
     }
 
     bool predict(const ps2hle::MscalContext &c);
@@ -570,12 +776,75 @@ namespace
 
     bool predictLit(const ps2hle::MscalContext &c);
 
+    // the clip test's decision for a packet (0x0c38 with matrix 24-27 when 52.x = 0x0e9): any / all of the flags
+    void clipTest(const uint8_t *vu, uint32_t posBase, uint32_t count, uint32_t &any, uint32_t &all)
+    {
+        any = 0;
+        all = 0;
+        if ((loadI(vu, 52).v[0] & 0xFFFF) != 0xE9)
+            return;
+        Vec4 cm[4];
+        foldMatrix(vu, 24, cm);
+        const Vec4 guard = loadF(vu, 65);
+        all = 0xFFFu;
+        for (uint32_t i = 0; i < std::max(count, 6u); ++i)
+        {
+            const Vec4 p = transform(cm, itof(loadI(vu, posBase + i)));
+            Vec4 g;
+            for (int k = 0; k < 4; ++k)
+                g.v[k] = p.v[k] * guard.v[k];
+            const uint32_t f = (clipFlags(g, p.v[3]) << 6) | clipFlags(p, p.v[3]);
+            any |= f;
+            all &= f;
+        }
+    }
+
+    uint32_t packetPosBase(const uint8_t *vu, uint32_t top)
+    {
+        const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48);
+        return static_cast<uint32_t>(i47.v[0]) + ((top & 0x3FFu) & static_cast<uint32_t>(i48.v[2]));
+    }
+
+    // table 0x13: culled / clipped decided as the VU does; fast packets: the three kicks compared with the VU's
+    bool predictEnv(const ps2hle::MscalContext &c)
+    {
+        const uint8_t *vu = c.vuData;
+        const uint32_t posBase = packetPosBase(vu, c.top);
+        const uint32_t count = static_cast<uint32_t>(loadI(vu, posBase - 1u).v[2]);
+        if (count == 0u || count > 256u)
+            return false;
+        ++g_stats.packets;
+        uint32_t any, all;
+        clipTest(vu, posBase, count, any, all);
+        g_pred.vertsBefore = ps2hle::g_gsVerticesRecorded;
+        if (all != 0u)
+        {
+            g_pred.decision = Decision::Culled;
+            ++g_stats.culled;
+            return false;
+        }
+        if (any & 0xFC0u)
+        {
+            ++g_stats.clipper; // not compared (the VU's clipper on the lit pass)
+            return false;
+        }
+        g_pred.vuKicks.clear();
+        g_pred.clipPackets.clear();
+        g_pred.clipChecked = envKicks(vu, c.top, g_pred.clipPackets);
+        g_pred.envKicks = true;
+        if (g_pred.clipChecked)
+            ps2vu1tap::g_kicks = &g_pred.vuKicks;
+        return false;
+    }
+
     bool predict(const ps2hle::MscalContext &c)
     {
         g_pred.decision = Decision::None;
         g_pred.litLanes = false;
         if (c.startPc == 0x30u && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
             return predictLit(c);
+        if (c.startPc == 0x30u && isEnvPipeline(c.vuCode, c.vuData, c.codeGeneration))
+            return predictEnv(c);
         const bool rigid = c.startPc == 0x30u && isRigidPipeline(c.vuCode, c.vuData, c.codeGeneration);
         if (!rigid && (c.startPc != 0x30u || !isWorldPipeline(c.vuCode, c.vuData, c.codeGeneration)))
             return false;
@@ -626,64 +895,7 @@ namespace
         }
 
         // fast path: transform (0x07f0), fog (0x1048), colour (stage 0x2700 with vi01 = 0x9c)
-        Vec4 m[4];
-        foldMatrix(vu, 28, m);
-        const float inv255 = []() { float f; const uint32_t b = 0x3B808081u; std::memcpy(&f, &b, 4); return f; }();
-        Vec4 uvm[3] = {loadF(vu, 44), loadF(vu, 45), loadF(vu, 46)};
-        for (auto &r : uvm)
-            for (int k = 0; k < 3; ++k)
-                r.v[k] *= inv255;
-        const bool fog = (loadI(vu, 52).v[1] & 2) != 0;
-        const Vec4 fogp = loadF(vu, 53);
-        const Vec4 cs = loadF(vu, 0x9C), co = loadF(vu, 0x9D), cmax = loadF(vu, 0x9E);
-        for (uint32_t i = 0; i < count; ++i)
-        {
-            const Vec4 p = transform(m, itof(loadI(vu, posBase + i)));
-            const Vec4 uv = itof(loadI(vu, uvBase + i));
-            float st[3];
-            for (int k = 0; k < 3; ++k)
-            {
-                float acc = uvm[0].v[k] * uv.v[0];
-                acc = acc + uvm[1].v[k] * uv.v[1];
-                st[k] = acc + uvm[2].v[k] * uv.v[2];
-            }
-            const float q = 1.0f / p.v[3];
-            uint32_t *e = g_pred.expected[i];
-            float stq[4] = {st[0] * q, st[1] * q, st[2] * q, p.v[3]};
-            std::memcpy(e, stq, 16);
-            if (rigid)
-            {
-                static const LitLights *L = nullptr;
-                static LitLights lights;
-                if (i == 0)
-                {
-                    lights = rigidLights(vu);
-                    L = &lights;
-                }
-                const Vec4 n = itof(loadI(vu, static_cast<uint32_t>(i47.v[1]) + (top & mask) + i));
-                int32_t rgb[3];
-                litColour(*L, n.v, rgb);
-                e[4] = static_cast<uint32_t>(rgb[0]);
-                e[5] = static_cast<uint32_t>(rgb[1]);
-                e[6] = static_cast<uint32_t>(rgb[2]);
-                e[7] = static_cast<uint32_t>(L->alpha);
-            }
-            else
-            {
-                const Vec4 col = itof(loadI(vu, colBase + i));
-                for (int k = 0; k < 4; ++k)
-                {
-                    const float r = co.v[k] + cs.v[k] * col.v[k];
-                    e[4 + k] = static_cast<uint32_t>(ftoi(std::min(r, cmax.v[k]), 1.0f));
-                }
-            }
-            for (int k = 0; k < 3; ++k)
-                e[8 + k] = static_cast<uint32_t>(ftoi(p.v[k] * q, 16.0f));
-            float f = 0.0f;
-            if (fog)
-                f = std::max(std::min(fogp.v[3] * p.v[3] + 1.0f * fogp.v[2], 255.0f), 0.0f);
-            e[11] = static_cast<uint32_t>(ftoi(f, 16.0f));
-        }
+        fastOutputs(vu, posBase, uvBase, colBase, static_cast<uint32_t>(i47.v[1]) + (top & mask), rigid, count, g_pred.expected);
         g_pred.decision = Decision::Fast;
         g_pred.outBase = outBase;
         g_pred.count = count;
@@ -1237,6 +1449,45 @@ namespace
         return true;
     }
 
+    // table 0x13: pass 1 natively as a rigid lit model, the TEXFLUSH packet and the environment pass as the VU's kicks
+    // (PATH1); packets that need the VU's clipper run on the VU1
+    struct EnvStats
+    {
+        uint64_t packets = 0, culled = 0, drawn = 0, fallback = 0;
+    } g_nativeEnv;
+
+    bool drawNativeEnv(const ps2hle::MscalContext &c)
+    {
+        uint8_t *vu = c.vuData;
+        const uint32_t posBase = packetPosBase(vu, c.top);
+        const uint32_t count = static_cast<uint32_t>(loadI(vu, posBase - 1u).v[2]);
+        if (count == 0u || count > 256u)
+            return false;
+        ++g_nativeEnv.packets;
+        uint32_t any, all;
+        clipTest(vu, posBase, count, any, all);
+        if (all != 0u)
+        {
+            ++g_nativeEnv.culled;
+            return true;
+        }
+        static thread_local std::vector<std::vector<uint8_t>> kicks;
+        if ((any & 0xFC0u) != 0u || !envKicks(vu, c.top, kicks) || !drawNativeRigid(c))
+        {
+            ++g_nativeEnv.fallback;
+            return false;
+        }
+        const int rounding = std::fegetround();
+        std::fesetround(g_callerRounding);
+        gsSetCurrentGifPath(1u);
+        for (size_t i = 1; i < kicks.size(); ++i)
+            ps2hle::gs()->processGIFPacket(kicks[i].data(), static_cast<uint32_t>(kicks[i].size()));
+        gsSetCurrentGifPath(3u);
+        std::fesetround(rounding);
+        ++g_nativeEnv.drawn;
+        return true;
+    }
+
     bool beforeNative(const ps2hle::MscalContext &c)
     {
         const int rounding = std::fegetround();
@@ -1244,13 +1495,52 @@ namespace
         std::fesetround(FE_TOWARDZERO);
         static const bool lit =!(std::getenv("PS2X_HLE_LIT") && *std::getenv("PS2X_HLE_LIT") == '0');
         bool handled = false;
+        static const bool env = !(std::getenv("PS2X_HLE_ENV") && *std::getenv("PS2X_HLE_ENV") == '0');
         if (lit && c.startPc == 0x30u && ps2hle::gs() && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
             handled = drawNativeLit(c);
+        else if (lit && env && c.startPc == 0x30u && ps2hle::gs() && isEnvPipeline(c.vuCode, c.vuData, c.codeGeneration))
+            handled = drawNativeEnv(c);
         else if (lit && c.startPc == 0x30u && ps2hle::gs() && isRigidPipeline(c.vuCode, c.vuData, c.codeGeneration))
             handled = drawNativeRigid(c);
         else
             handled = drawNative(c);
         std::fesetround(rounding);
+        // PS2X_HLE_STATS=1: which stage tables (38-41, entry 52.x) of 0x0030 still run on the VU1, every 10 s
+        static const bool stats = std::getenv("PS2X_HLE_STATS") != nullptr;
+        if (stats && !handled && c.startPc == 0x30u)
+        {
+            static std::map<std::string, uint64_t> unhandled;
+            static auto reportAt = std::chrono::steady_clock::now();
+            char key[160];
+            const IVec4 t38 = loadI(c.vuData, 38), t39 = loadI(c.vuData, 39), t40 = loadI(c.vuData, 40), t41 = loadI(c.vuData, 41);
+            std::snprintf(key, sizeof(key), "entry %x | %x %x %x %x | %x %x %x %x | %x %x %x %x | 52.x %x", t38.v[0] & 0xFFFF,
+                          t39.v[0] & 0xFFFF, t39.v[1] & 0xFFFF, t39.v[2] & 0xFFFF, t39.v[3] & 0xFFFF, t40.v[0] & 0xFFFF,
+                          t40.v[1] & 0xFFFF, t40.v[2] & 0xFFFF, t40.v[3] & 0xFFFF, t41.v[0] & 0xFFFF, t41.v[1] & 0xFFFF,
+                          t41.v[2] & 0xFFFF, t41.v[3] & 0xFFFF, loadI(c.vuData, 52).v[0] & 0xFFFF);
+            if (++unhandled[key] == 200u) // a sample of each (after the start-up frames): stage_<entry>_<n>_code / _data.bin
+            {
+                static int samples = 0;
+                char name[64];
+                std::snprintf(name, sizeof(name), "stage_%02x_%d_code.bin", t38.v[0] & 0xFFFF, samples);
+                if (FILE *f = std::fopen(name, "wb"))
+                {
+                    std::fwrite(c.vuCode, 1, 16384, f);
+                    std::fclose(f);
+                }
+                std::snprintf(name, sizeof(name), "stage_%02x_%d_data.bin", t38.v[0] & 0xFFFF, samples++);
+                if (FILE *f = std::fopen(name, "wb"))
+                {
+                    std::fwrite(c.vuData, 1, 16384, f);
+                    std::fclose(f);
+                }
+            }
+            if (std::chrono::steady_clock::now() - reportAt >= std::chrono::seconds(10))
+            {
+                reportAt = std::chrono::steady_clock::now();
+                for (const auto &[k, n] : unhandled)
+                    std::fprintf(stderr, "[hle] on the VU1: %8llu x %s\n", (unsigned long long)n, k.c_str());
+            }
+        }
         return handled;
     }
 

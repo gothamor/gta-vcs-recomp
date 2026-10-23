@@ -1,4 +1,5 @@
 // Based on Blackline Interactive implementation
+#include "runtime/ps2_vu1_tap.h"
 #include "runtime/ps2_memory.h"
 #include <cstring>
 
@@ -505,7 +506,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             if (!handled && hleAfter)
                 hleAfter(hle);
             if (survey)
+            {
+                ps2vu1tap::g_mscalNative = handled; // [gta-recomp] runtime/ps2_vu1_tap.h
                 ps2hle::afterMscal(m_vu1Data);
+            }
             continue;
         }
         else if (opcode == VIF_MSCNT)

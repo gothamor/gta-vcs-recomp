@@ -10,3 +10,10 @@ namespace ps2vu1tap
 {
     extern std::vector<std::vector<uint8_t>> *g_kicks;
 }
+
+namespace ps2vu1tap
+{
+    // The MSCAL that just ended was handled by a game hook (the VU1 did not run): set by the VIF1 interpreter before
+    // ps2hle::afterMscal, read by the survey to report native and VU1 work apart.
+    extern bool g_mscalNative;
+}
