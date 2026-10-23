@@ -221,6 +221,35 @@ namespace
         settings::add(s);
     }
 
+    // The window opens where it was last closed (monitor, position, size, maximized): window.* in vcs.ini, written
+    // by the platform layer's callback whenever the window settles somewhere new. Deleting those lines resets it.
+    void restoreWindowPlacement()
+    {
+        platform::WindowPlacement p;
+        p.display = settings::state("window.display");
+        p.displayX = std::atoi(settings::state("window.display_x").c_str());
+        p.displayY = std::atoi(settings::state("window.display_y").c_str());
+        p.x = std::atoi(settings::state("window.x").c_str());
+        p.y = std::atoi(settings::state("window.y").c_str());
+        p.width = std::atoi(settings::state("window.width").c_str());
+        p.height = std::atoi(settings::state("window.height").c_str());
+        p.maximized = settings::state("window.maximized") == "1";
+        if (!p.display.empty() && p.width > 0 && p.height > 0)
+            platform::setStartPlacement(p);
+        platform::onPlacementChanged([](const platform::WindowPlacement &now) {
+            settings::setState({
+                {"window.display", now.display},
+                {"window.display_x", std::to_string(now.displayX)},
+                {"window.display_y", std::to_string(now.displayY)},
+                {"window.x", std::to_string(now.x)},
+                {"window.y", std::to_string(now.y)},
+                {"window.width", std::to_string(now.width)},
+                {"window.height", std::to_string(now.height)},
+                {"window.maximized", now.maximized ? "1" : "0"},
+            });
+        });
+    }
+
     fs::path firstIsoIn(const fs::path &dir)
     {
         std::error_code ec;
@@ -281,6 +310,7 @@ int main(int argc, char *argv[])
         registerSettings();
         settings::load(exeDirectory() / "vcs.ini");
         settings::applyAll();
+        restoreWindowPlacement();
         const fs::path isoPath = locateIso(argc, argv);
         if (isoPath.empty())
         {

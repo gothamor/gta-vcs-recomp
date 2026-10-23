@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -20,6 +21,8 @@ namespace settings
         std::mutex g_mutex; // g_values (read from other threads)
         std::filesystem::path g_ini;
         std::unordered_set<std::string> g_overridden; // by their environment variable, at load()
+        std::unordered_map<std::string, std::string> g_loaded; // every key = value of vcs.ini at load()
+        std::map<std::string, std::string> g_state;            // setState() values, written by save()
 
         bool valid(const Spec &s, int v)
         {
@@ -72,6 +75,11 @@ namespace settings
                     line = key + "=" + std::to_string(it->second);
                     written[key] = true;
                 }
+                else if (auto st = g_state.find(key); st != g_state.end())
+                {
+                    line = key + "=" + st->second;
+                    written[key] = true;
+                }
             }
             for (const Spec &s : g_specs)
             {
@@ -79,6 +87,9 @@ namespace settings
                 if (!written[s.key] && !g_overridden.count(s.key) && v != s.defaultValue)
                     lines.push_back(s.key + "=" + std::to_string(v));
             }
+            for (const auto &[key, text] : g_state)
+                if (!written[key])
+                    lines.push_back(key + "=" + text);
             std::filesystem::path tmp = g_ini;
             tmp += ".tmp";
             {
@@ -192,6 +203,26 @@ namespace settings
         }
         std::lock_guard<std::mutex> lock(g_mutex);
         g_startValues = g_values;
+        g_loaded = std::move(found);
+    }
+
+    std::string state(const std::string &key)
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (auto it = g_state.find(key); it != g_state.end())
+            return it->second;
+        auto it = g_loaded.find(key);
+        return it != g_loaded.end() ? it->second : std::string();
+    }
+
+    void setState(const std::vector<std::pair<std::string, std::string>> &values)
+    {
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            for (const auto &[key, text] : values)
+                g_state[key] = text;
+        }
+        save();
     }
 
     void applyAll()

@@ -62,6 +62,16 @@ pause map) are shown at 4:3, pillarboxed.
   non-default values appended), environment overrides per setting (read at load, shown greyed out,
   never written back), an `alias` for older keys (`scale=` -> `display.scale`) and a `read` hook
   for settings a hotkey also changes (F3 overlay). No separate ini module: it is ~60 lines.
+- Saved state that is not a setting: `settings::state` / `setState` keep text values in vcs.ini
+  without a menu entry. The window placement uses it (2026-10-23): `window.display` (monitor name),
+  `window.display_x/_y` (that monitor's desktop origin, to tell two of one model apart),
+  `window.x/y/width/height` (the restored client area relative to the monitor) and
+  `window.maximized`. The platform layer creates the window hidden, places it (kept inside the
+  monitor's usable area, frame on screen; the default place when the monitor is gone), then shows
+  it; it reports a new placement 0.5 s after the last move / resize and at shutdown, so a killed
+  process (tools/run.py) keeps it too. Hidden windows (`PS2X_HIDDEN`) are neither placed nor saved.
+  Checked on the dev machine's two mixed-DPI monitors: moved, maximized, restored, each reopened at
+  the same rectangles (Win32 GetWindowPlacement before / after).
 - `src/ui/settings_menu.{h,cpp}`: the menu, drawn in the runtime's debug-UI callback. Tabs per
   page (LB / RB or Q / E switch), a two-column table per page, the selected row's help line,
   "applies after a restart" under changed Restart settings. F2 (`controls.menu_key`) or pressing

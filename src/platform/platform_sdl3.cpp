@@ -35,6 +35,17 @@ namespace platform
         AudioFill g_audioFill = nullptr;
         std::vector<int16_t> g_audioScratch;
 
+        // window placement (setStartPlacement / onPlacementChanged); main thread
+        WindowPlacement g_startPlacement;
+        bool g_hasStartPlacement = false;
+        PlacementChanged g_placementChanged = nullptr;
+        bool g_trackPlacement = false;   // a visible window
+        SDL_Rect g_normalRect{};         // the last restored (not maximized / minimized) client area, screen coordinates
+        bool g_maximized = false;
+        uint64_t g_placementDirtyNs = 0; // time of the last move / resize not reported yet
+        WindowPlacement g_reported;      // what the callback last saw (or what the window opened with)
+        constexpr uint64_t kPlacementSettleNs = 500000000ull;
+
         struct ScanKey
         {
             SDL_Scancode scancode;
@@ -105,6 +116,108 @@ namespace platform
             }
         }
 
+        // The monitor `p` was on: the one with its name and desktop origin, else its name, else its origin (renamed by a
+        // driver); 0 when it is gone.
+        SDL_DisplayID findDisplay(const WindowPlacement &p)
+        {
+            int count = 0;
+            SDL_DisplayID *ids = SDL_GetDisplays(&count);
+            SDL_DisplayID best = 0;
+            int bestScore = 0;
+            for (int i = 0; ids && i < count; ++i)
+            {
+                const char *name = SDL_GetDisplayName(ids[i]);
+                SDL_Rect b{};
+                SDL_GetDisplayBounds(ids[i], &b);
+                const int score = (!p.display.empty() && name && p.display == name ? 2 : 0) +
+                                  (b.x == p.displayX && b.y == p.displayY ? 1 : 0);
+                if (score > bestScore)
+                {
+                    best = ids[i];
+                    bestScore = score;
+                }
+            }
+            SDL_free(ids);
+            return best;
+        }
+
+        // Puts the new (still hidden) window at the start placement, inside its monitor's usable area (the taskbar left
+        // out) with the frame on screen, so a changed resolution cannot strand it. False when the monitor is gone.
+        bool placeWindow(const WindowPlacement &p)
+        {
+            const SDL_DisplayID display = findDisplay(p);
+            SDL_Rect bounds{}, usable{};
+            if (!display || !SDL_GetDisplayBounds(display, &bounds) || !SDL_GetDisplayUsableBounds(display, &usable))
+                return false;
+            int top = 0, left = 0, bottom = 0, right = 0;
+            SDL_GetWindowBordersSize(g_window, &top, &left, &bottom, &right);
+            const int w = std::clamp(p.width, 160, std::max(160, usable.w - left - right));
+            const int h = std::clamp(p.height, 120, std::max(120, usable.h - top - bottom));
+            const int x = std::clamp(bounds.x + p.x, usable.x + left, std::max(usable.x + left, usable.x + usable.w - right - w));
+            const int y = std::clamp(bounds.y + p.y, usable.y + top, std::max(usable.y + top, usable.y + usable.h - bottom - h));
+            SDL_SetWindowSize(g_window, w, h);
+            SDL_SetWindowPosition(g_window, x, y);
+            if (p.maximized)
+                SDL_MaximizeWindow(g_window); // on the monitor of the restored area; applied when shown
+            g_normalRect = {x, y, w, h};
+            g_maximized = p.maximized;
+            return true;
+        }
+
+        bool currentPlacement(WindowPlacement &p)
+        {
+            if (g_normalRect.w <= 0 || g_normalRect.h <= 0)
+                return false;
+            const SDL_DisplayID display = SDL_GetDisplayForRect(&g_normalRect);
+            SDL_Rect b{};
+            if (!display || !SDL_GetDisplayBounds(display, &b))
+                return false;
+            const char *name = SDL_GetDisplayName(display);
+            p.display = name ? name : "";
+            p.displayX = b.x;
+            p.displayY = b.y;
+            p.x = g_normalRect.x - b.x;
+            p.y = g_normalRect.y - b.y;
+            p.width = g_normalRect.w;
+            p.height = g_normalRect.h;
+            p.maximized = g_maximized;
+            return true;
+        }
+
+        bool samePlacement(const WindowPlacement &a, const WindowPlacement &b)
+        {
+            return a.display == b.display && a.displayX == b.displayX && a.displayY == b.displayY && a.x == b.x &&
+                   a.y == b.y && a.width == b.width && a.height == b.height && a.maximized == b.maximized;
+        }
+
+        // A move / resize / maximize / restore: remember the restored area (a maximized or minimized window keeps the
+        // one it had before).
+        void notePlacement()
+        {
+            if (!g_trackPlacement)
+                return;
+            const SDL_WindowFlags flags = SDL_GetWindowFlags(g_window);
+            if (flags & SDL_WINDOW_MINIMIZED)
+                return;
+            g_maximized = (flags & SDL_WINDOW_MAXIMIZED) != 0;
+            if (!g_maximized && !(flags & SDL_WINDOW_FULLSCREEN))
+            {
+                SDL_GetWindowPosition(g_window, &g_normalRect.x, &g_normalRect.y);
+                SDL_GetWindowSize(g_window, &g_normalRect.w, &g_normalRect.h);
+            }
+            g_placementDirtyNs = SDL_GetTicksNS();
+        }
+
+        void reportPlacement()
+        {
+            g_placementDirtyNs = 0;
+            WindowPlacement p;
+            if (!g_placementChanged || !currentPlacement(p) || samePlacement(p, g_reported))
+                return;
+            g_reported = p;
+            g_placementChanged(p);
+        }
+
         void SDLCALL audioCallback(void *, SDL_AudioStream *stream, int additional, int)
         {
             const uint32_t frames = static_cast<uint32_t>(additional) / 4u;
@@ -153,6 +266,14 @@ namespace platform
         }
     }
 
+    void setStartPlacement(const WindowPlacement &placement)
+    {
+        g_startPlacement = placement;
+        g_hasStartPlacement = true;
+    }
+
+    void onPlacementChanged(PlacementChanged callback) { g_placementChanged = callback; }
+
     bool init(const WindowDesc &desc)
     {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
@@ -163,14 +284,26 @@ namespace platform
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
             std::fprintf(stderr, "[platform] no audio: %s\n", SDL_GetError());
 
-        SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
-        if (desc.hidden)
-            flags |= SDL_WINDOW_HIDDEN;
-        g_window = SDL_CreateWindow(desc.title, desc.width, desc.height, flags);
+        // created hidden, placed, then shown: no flash at the default place
+        g_window = SDL_CreateWindow(desc.title, desc.width, desc.height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
         if (!g_window)
         {
             std::fprintf(stderr, "[platform] SDL_CreateWindow: %s\n", SDL_GetError());
             return false;
+        }
+        if (!desc.hidden)
+        {
+            g_trackPlacement = true;
+            const bool placed = g_hasStartPlacement && placeWindow(g_startPlacement);
+            if (g_hasStartPlacement && !placed)
+                std::fprintf(stderr, "[platform] monitor '%s' not found: window at the default place\n",
+                             g_startPlacement.display.c_str());
+            SDL_ShowWindow(g_window);
+            SDL_SyncWindow(g_window);
+            if (!placed)
+                notePlacement();
+            currentPlacement(g_reported);
+            g_placementDirtyNs = 0;
         }
 
         IMGUI_CHECKVERSION();
@@ -187,6 +320,9 @@ namespace platform
     {
         if (!g_window)
             return;
+        if (g_placementDirtyNs)
+            reportPlacement();
+        g_trackPlacement = false;
         audioClose();
         if (g_imgui)
         {
@@ -230,6 +366,12 @@ namespace platform
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
                 g_quit = true;
                 break;
+            case SDL_EVENT_WINDOW_MOVED:
+            case SDL_EVENT_WINDOW_RESIZED:
+            case SDL_EVENT_WINDOW_MAXIMIZED:
+            case SDL_EVENT_WINDOW_RESTORED:
+                notePlacement();
+                break;
             case SDL_EVENT_GAMEPAD_ADDED:
                 openGamepad(e.gdevice.which);
                 break;
@@ -251,6 +393,9 @@ namespace platform
                 break;
             }
         }
+        // reported once it has settled (a drag sends a stream of moves), so a killed process still keeps it
+        if (g_placementDirtyNs && SDL_GetTicksNS() - g_placementDirtyNs >= kPlacementSettleNs)
+            reportPlacement();
 
         int count = 0;
         const bool *state = SDL_GetKeyboardState(&count);

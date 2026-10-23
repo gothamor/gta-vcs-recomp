@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace platform
 {
@@ -103,6 +104,25 @@ namespace platform
         int height = 448;
         bool hidden = false; // not on the desktop or taskbar (scripted test runs)
     };
+
+    // Where the window was on the desktop, to open it there again (main.cpp keeps it in vcs.ini as window.*).
+    // x / y / width / height: the restored (not maximized) client area, in screen coordinates relative to the
+    // top-left of the monitor it is on. The monitor is found again by name, and by its desktop origin between two of
+    // the same model; when it is gone the window opens at the default place.
+    struct WindowPlacement
+    {
+        std::string display;            // monitor name
+        int displayX = 0, displayY = 0; // that monitor's desktop origin
+        int x = 0, y = 0, width = 0, height = 0;
+        bool maximized = false;
+    };
+    using PlacementChanged = void (*)(const WindowPlacement &placement);
+
+    // Before init: open the window at `placement` instead of centred on the primary monitor at the default size.
+    void setStartPlacement(const WindowPlacement &placement);
+    // Called on the main thread once the window has settled after a move / resize / maximize, and at shutdown. Not
+    // used for hidden windows (they are neither placed nor remembered).
+    void onPlacementChanged(PlacementChanged callback);
 
     // Main thread. Creates the window (no graphics API attached: the renderer makes its swapchain on
     // nativeWindow()) and the Dear ImGui context with its input backend; the ImGui renderer belongs to the RHI.

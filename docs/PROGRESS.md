@@ -202,6 +202,7 @@ above), bloom buffers dropped on uploads (lazy render-target patching).
 | **F2** (or gamepad Back + Start) | settings menu (docs/SETTINGS_MENU_WIDESCREEN.md); its values live in vcs.ini next to vcs.exe |
 | `display.aspect=43\|1610\|169` in vcs.ini, `VCS_ASPECT=...` for one run | aspect ratio (Hor+ widescreen) |
 | `display.hud=0\|1` | widescreen HUD: keep 4:3 in the middle / stretch |
+| `window.*` in vcs.ini | where the window was last (monitor, position, size, maximized); written by the game, delete the lines to reset (docs/SETTINGS_MENU_WIDESCREEN.md) |
 | `python tools/rig.py start --save DIR`, `python tools/rig.py <command>` | automation rig: start from a card copy; peek / poke / findvec / dump / scm / scripts / player / pause |
 | `python tools/tour.py [OUT] [--step 250] [--every K]` | world tour over the map (classes, map.png, screenshots, perf) |
 | `python tools/missions.py [OUT] [--only 45,46]`, `python tools/drive.py [OUT]` | mission smoke test; drive loop |

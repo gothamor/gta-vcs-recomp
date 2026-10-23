@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace settings
@@ -63,4 +64,9 @@ namespace settings
     void load(const std::filesystem::path &ini);
     void applyAll();
     void refresh(); // takes the live values of settings with `read` (the menu calls it when it opens)
+
+    // Saved state that is not a setting (no menu entry, no validation): text values in vcs.ini, e.g. the window
+    // placement (window.*). Main thread, after load().
+    std::string state(const std::string &key); // "" when absent
+    void setState(const std::vector<std::pair<std::string, std::string>> &values); // one rewrite of vcs.ini
 }
