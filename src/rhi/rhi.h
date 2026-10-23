@@ -36,6 +36,8 @@ namespace rhi
         Format format = Format::RGBA8;
         uint32_t usage = UsageSampled;
         const char *name = nullptr; // debug name
+        uint32_t samples = 1;       // > 1: multisampled render target / depth (not sampled: resolveTexture first)
+        uint32_t mipLevels = 1;     // 0: the full chain, made from level 0 by generateMips (sampled + render target)
     };
 
     class Texture
@@ -90,6 +92,7 @@ namespace rhi
         Filter filter = Filter::Nearest;
         Wrap wrapU = Wrap::Clamp;
         Wrap wrapV = Wrap::Clamp;
+        uint32_t anisotropy = 0; // > 1: anisotropic filtering with up to that many samples (Linear)
     };
 
     class Sampler
@@ -244,6 +247,10 @@ namespace rhi
                                  uint32_t rowPitch = 0) = 0;
         virtual void copyTexture(Texture &dst, uint32_t dstX, uint32_t dstY, Texture &src, uint32_t srcX, uint32_t srcY,
                                  uint32_t width, uint32_t height) = 0;
+        // a multisampled texture averaged into a single-sampled one of the same size and format
+        virtual void resolveTexture(Texture &dst, Texture &src) = 0;
+        // the mip chain of a texture made with mipLevels 0, from level 0
+        virtual void generateMips(Texture &texture) = 0;
 
         virtual std::unique_ptr<Buffer> createBuffer(const BufferDesc &desc, const void *data = nullptr) = 0;
         virtual void updateBuffer(Buffer &buffer, const void *data, size_t size) = 0; // from offset 0, the rest discarded

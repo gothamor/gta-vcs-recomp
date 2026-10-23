@@ -207,6 +207,34 @@ namespace
         settings::add(s);
 
         s = {};
+        s.key = "display.msaa";
+        s.page = "Display";
+        s.label = "Anti-aliasing (MSAA)";
+        s.help = "Smooths the edges of the 3D picture. Off is the original. Costs GPU time.";
+        s.type = Type::Choice;
+        s.choices = {{"Off (original)", 1}, {"2x", 2}, {"4x", 4}, {"8x", 8}};
+        s.defaultValue = 1;
+        s.apply = Apply::Restart;
+        s.env = "PS2X_HW_MSAA";
+        s.onChange = [](int v) { setEnv("PS2X_HW_MSAA", std::to_string(v)); };
+        settings::add(s);
+
+        s = {};
+        s.key = "display.aniso";
+        s.page = "Display";
+        s.label = "Texture filtering";
+        s.help = "Anisotropic filtering keeps textures sharp at a slant (roads, walls into the distance). Off is the "
+                 "original bilinear filtering.";
+        s.type = Type::Choice;
+        s.choices = {{"Bilinear (original)", 0}, {"Anisotropic 2x", 2}, {"Anisotropic 4x", 4}, {"Anisotropic 8x", 8},
+                     {"Anisotropic 16x", 16}};
+        s.defaultValue = 0;
+        s.apply = Apply::Restart;
+        s.env = "PS2X_HW_ANISO";
+        s.onChange = [](int v) { setEnv("PS2X_HW_ANISO", std::to_string(v)); };
+        settings::add(s);
+
+        s = {};
         s.key = "graphics.perf_overlay";
         s.page = "Graphics";
         s.label = "Performance overlay";

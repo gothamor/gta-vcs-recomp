@@ -202,7 +202,8 @@ dropped on uploads (lazy render-target patching).
 - [ ] **Step 4: native frame** (started 2026-10-23; NATIVE_RENDERER.md "Native frame").
   - [x] Per-target scales; "Internal resolution: Match window" draws the picture's targets at the window's size
         (1920x1080 at 16:9 1080p), the effect buffers at 1x. Default stays 1x (the original).
-  - [ ] MSAA, anisotropic filtering, depth precision; the radar / reflection map at higher resolution.
+  - [x] MSAA (2x-8x) and anisotropic filtering (2x-16x) as options, off by default (NATIVE_RENDERER.md "Native frame").
+  - [ ] The radar / reflection map at higher resolution.
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
@@ -253,6 +254,8 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_RT_FULL=0` | render targets read once per PS2 texel everywhere (higher internal resolutions lost in the copies) |
 | `PS2X_HW_POSTFX=0` or letters `btc` | effects drawn as recorded / only these native: b bloom, t trails, c frame copy + motion blur |
 | `PS2X_HW_SCALE=0` | native frame: the picture's targets at the window's size (menu: Internal resolution > Match window) |
+| `PS2X_HW_MSAA=2/4/8` | MSAA for the picture's targets (menu: Anti-aliasing) |
+| `PS2X_HW_ANISO=2..16`, `PS2X_HW_ANISO_LOG=1` | anisotropic filtering of the game's textures (menu: Texture filtering); count the draws per sampling path |
 | `PS2X_HW_FRAME=WxH` | the native frame's size whatever the window (tests) |
 | `PS2X_HW_DUMP_ALLVERTS=1` | the F12 draw log prints every vertex of every draw |
 | `VCS_MENU_NATIVE=0` | menus drawn into the PS2 frame buffer instead of the native layer |

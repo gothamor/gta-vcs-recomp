@@ -131,6 +131,7 @@ VSOut vs_lit(LitIn i)
 }
 
 Texture2D<float4> tex : register(t0);
+SamplerState hwSampler : register(s0); // anisotropic filtering (linearIipFgeAte.x == 2)
 
 int wrapc(int c, int size, int mode, int mn, int mx)
 {
@@ -194,6 +195,11 @@ float4 sampleTex(float2 uv)
     [branch] if (atstArefAfailRt.w == 2)
     {
         r = sampleRtFull(uv);
+    }
+    else if (linearIipFgeAte.x == 2)
+    {
+        // a game texture with plain wrapping, sampled by the hardware (trilinear, anisotropic); the option
+        r = tex.Sample(hwSampler, uv / float2(texSizeWrap.xy)) * 255.0;
     }
     else if (linearIipFgeAte.x == 0)
     {

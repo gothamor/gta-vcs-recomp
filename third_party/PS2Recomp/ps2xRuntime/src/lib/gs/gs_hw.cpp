@@ -63,6 +63,13 @@ GSHwOptions GSHwOptions::fromEnvironment()
         o.nativeFrame = v == 0 && s[0] == '0';
         o.scale = o.nativeFrame ? 1u : std::clamp<uint32_t>(static_cast<uint32_t>(v), 1u, 8u);
     }
+    if (const char *s = std::getenv("PS2X_HW_MSAA")) // [gta-recomp] 2, 4, 8
+    {
+        const int v = std::atoi(s);
+        o.msaa = v >= 8 ? 8u : v >= 4 ? 4u : v >= 2 ? 2u : 1u;
+    }
+    if (const char *s = std::getenv("PS2X_HW_ANISO")) // [gta-recomp] 2..16
+        o.anisotropy = static_cast<uint32_t>(std::clamp(std::atoi(s), 0, 16));
     return o;
 }
 
@@ -400,7 +407,8 @@ namespace
     class RhiExecutor
     {
     public:
-        RhiExecutor(rhi::Device &device, uint32_t scale) : m_dev(device), m_scale(scale)
+        RhiExecutor(rhi::Device &device, uint32_t scale, uint32_t msaa, uint32_t anisotropy)
+            : m_dev(device), m_scale(scale), m_msaa(msaa), m_anisotropy(anisotropy > 1u ? anisotropy : 0u)
         {
             const render::GsShaders &sh = render::gsShaders();
             m_drawCb = m_dev.createBuffer({sizeof(DrawConstants), rhi::BufferUsage::Constant, true, "gs draw constants"});
@@ -408,6 +416,11 @@ namespace
             m_worldCb = m_dev.createBuffer({128u * sizeof(float), rhi::BufferUsage::Constant, true, "gs native draw constants"});
             m_point = m_dev.createSampler({rhi::Filter::Nearest, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
             m_linear = m_dev.createSampler({rhi::Filter::Linear, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
+            if (m_anisotropy) // [gta-recomp] per wrap mode (U, V: repeat / clamp)
+                for (int u = 0; u < 2; ++u)
+                    for (int v = 0; v < 2; ++v)
+                        m_anisoSampler[u][v] = m_dev.createSampler({rhi::Filter::Linear, u ? rhi::Wrap::Repeat : rhi::Wrap::Clamp,
+                                                                    v ? rhi::Wrap::Repeat : rhi::Wrap::Clamp, m_anisotropy});
             rhi::PipelineDesc q;
             q.vertex = sh.quadVS;
             q.topology = rhi::Topology::TriangleStrip;
@@ -479,6 +492,7 @@ namespace
                     d.height = t.h;
                     d.usage = rhi::UsageSampled;
                     d.name = "gs texture";
+                    d.mipLevels = m_anisotropy ? 0u : 1u; // [gta-recomp] anisotropic filtering samples a mip chain
                     m_textures[t.key] = m_dev.createTexture(d, t.pixels.data(), t.w * 4u);
                     // [gta-recomp] PS2X_HW_DUMP_TEX=<key hex>: write that decoded texture (hw_tex_<key>.ppm, alpha dropped)
                     static const uint64_t dumpTex = std::getenv("PS2X_HW_DUMP_TEX") ? std::strtoull(std::getenv("PS2X_HW_DUMP_TEX"), nullptr, 16) : 0u;
@@ -562,7 +576,7 @@ namespace
                         {
                             endPass();
                             static int step = 0;
-                            dumpTexture(*it->second.color, "step" + std::to_string(step++) + "_fbp" + std::to_string(ds.fbp));
+                            dumpTexture(readable(it->second), "step" + std::to_string(step++) + "_fbp" + std::to_string(ds.fbp));
                         }
                     }
                     break;
@@ -648,13 +662,14 @@ namespace
             if (f.displayFromRt && it != m_rts.end())
             {
                 // the PS2 frame buffer's alpha is not shown: written as 1
-                const Rt &rt = it->second;
-                const float tw = static_cast<float>(rt.color->desc().width), th = static_cast<float>(rt.color->desc().height);
+                Rt &rt = it->second;
+                rhi::Texture &shown = readable(rt);
+                const float tw = static_cast<float>(shown.desc().width), th = static_cast<float>(shown.desc().height);
                 const Scale rs = rt.scale;
                 const float x0 = f.displayX * rs.x, y0 = f.displayY * rs.y;
                 const float sw = m_displayW * rs.x, sh = m_displayH * rs.y;
                 const bool scaled = std::fabs(w - sw) > 0.5f || std::fabs(h - sh) > 0.5f;
-                blit(*rt.color, {x0 / tw, y0 / th, (x0 + sw) / tw, (y0 + sh) / th}, *m_display, 0, 0, w, h, scaled, true);
+                blit(shown, {x0 / tw, y0 / th, (x0 + sw) / tw, (y0 + sh) / th}, *m_display, 0, 0, w, h, scaled, true);
                 if (layer)
                     drawHudLayer(*layer, f.displayX, f.displayY);
             }
@@ -692,8 +707,8 @@ namespace
         {
             endPass();
             std::vector<uint8_t> px;
-            for (const auto &[fbp, rt] : m_rts)
-                dumpTexture(*rt.color, "rt_" + std::to_string(fbp));
+            for (auto &[fbp, rt] : m_rts)
+                dumpTexture(readable(rt), "rt_" + std::to_string(fbp));
             if (m_display)
                 dumpTexture(*m_display, "display");
         }
@@ -720,6 +735,9 @@ namespace
             std::unique_ptr<rhi::Texture> color;
             uint32_t w = 0, h = 0; // PS2 pixels
             Scale scale;
+            uint32_t samples = 1;                    // [gta-recomp] MSAA (GSHwOptions::msaa)
+            std::unique_ptr<rhi::Texture> resolved;  // multisampled: what reads see (readable)
+            bool dirty = false;                      // multisampled: drawn since the last resolve
         };
         struct Depth
         {
@@ -735,6 +753,32 @@ namespace
                 return m_frameScale;
             return {static_cast<float>(m_scale), static_cast<float>(m_scale)};
         }
+        // [gta-recomp] MSAA (GSHwOptions::msaa): the picture's targets and their depth buffers are multisampled; reads
+        // of such a target (render-target textures, copies, the display) see a resolved copy, made when it was drawn to
+        // since the last read
+        uint32_t samplesFor(uint32_t fbw) const { return fbw == 10u ? m_msaa : 1u; }
+
+        rhi::Texture &readable(Rt &rt)
+        {
+            if (rt.samples <= 1u)
+                return *rt.color;
+            const rhi::TextureDesc &cd = rt.color->desc();
+            if (!rt.resolved || rt.resolved->desc().width != cd.width || rt.resolved->desc().height != cd.height)
+            {
+                endPass();
+                rt.resolved = m_dev.createTexture({cd.width, cd.height, rhi::Format::RGBA8, rhi::UsageSampled | rhi::UsageRenderTarget,
+                                                   "gs target resolved"});
+                rt.dirty = true;
+            }
+            if (rt.dirty)
+            {
+                endPass();
+                m_dev.resolveTexture(*rt.resolved, *rt.color);
+                rt.dirty = false;
+            }
+            return *rt.resolved;
+        }
+
         // a PS2 coordinate (an edge) in target pixels
         static uint32_t px(float v, float scale) { return static_cast<uint32_t>(std::max(0l, std::lround(v * scale))); }
 
@@ -816,9 +860,10 @@ namespace
             m_dev.draw(4);
         }
 
-        std::unique_ptr<rhi::Texture> makeTarget(uint32_t w, uint32_t h, bool depth, Scale s)
+        std::unique_ptr<rhi::Texture> makeTarget(uint32_t w, uint32_t h, bool depth, Scale s, uint32_t samples = 1)
         {
             rhi::TextureDesc d;
+            d.samples = samples;
             d.width = std::max(1u, px(static_cast<float>(w), s.x));
             d.height = std::max(1u, px(static_cast<float>(h), s.y));
             d.format = depth ? rhi::Format::D32F : rhi::Format::RGBA8;
@@ -848,48 +893,56 @@ namespace
 
         // grows the target to at least w x h (PS2 pixels) at scale s, keeping its contents (rescaled when s changed:
         // the native frame follows the window)
-        void growRt(Rt &rt, uint32_t w, uint32_t h, Scale s)
+        void growRt(Rt &rt, uint32_t w, uint32_t h, Scale s, uint32_t samples)
         {
-            if (rt.color && rt.w >= w && rt.h >= h && rt.scale == s)
+            if (rt.color && rt.w >= w && rt.h >= h && rt.scale == s && rt.samples == samples)
                 return;
             Rt grown;
             grown.w = std::max(rt.w, w);
             grown.h = std::max(rt.h, h);
             grown.scale = s;
-            grown.color = makeTarget(grown.w, grown.h, false, s);
-            if (rt.color && rt.scale == s)
+            grown.samples = samples;
+            grown.color = makeTarget(grown.w, grown.h, false, s, samples);
+            grown.dirty = true;
+            if (rt.color && rt.scale == s && rt.samples == 1u && samples == 1u)
                 m_dev.copyTexture(*grown.color, 0, 0, *rt.color, 0, 0, rt.color->desc().width, rt.color->desc().height);
             else if (rt.color)
-                blit(*rt.color, {0.0f, 0.0f, 1.0f, 1.0f}, *grown.color, 0, 0, px(static_cast<float>(rt.w), s.x), px(static_cast<float>(rt.h), s.y),
-                     true, false);
+            {
+                const uint32_t ow = rt.color->desc().width, oh = rt.color->desc().height;
+                rhi::Texture &old = readable(rt);
+                const bool same = rt.scale == s;
+                blit(old, {0.0f, 0.0f, 1.0f, 1.0f}, *grown.color, 0, 0, same ? ow : px(static_cast<float>(rt.w), s.x),
+                     same ? oh : px(static_cast<float>(rt.h), s.y), !same, false);
+            }
             rt = std::move(grown);
         }
 
         Rt &rtFor(uint32_t fbp, uint32_t fbw, uint32_t minH)
         {
             Rt &rt = m_rts[fbp];
-            growRt(rt, std::max<uint32_t>(fbw, 1u) * 64u, std::max<uint32_t>(minH, 512u), scaleFor(fbw));
+            growRt(rt, std::max<uint32_t>(fbw, 1u) * 64u, std::max<uint32_t>(minH, 512u), scaleFor(fbw), samplesFor(fbw));
             return rt;
         }
 
         // grows (recreated, cleared to 0) to at least w x h at scale s; one depth buffer per scale (the picture's
         // targets and the effect buffers may share a Z address at different scales)
-        Depth &depthFor(uint32_t zbp, uint32_t w, uint32_t h, Scale s)
+        Depth &depthFor(uint32_t zbp, uint32_t w, uint32_t h, Scale s, uint32_t samples)
         {
             const bool frame = m_frameScale.x > 0.0f && s == m_frameScale;
-            Depth &d = m_depth[zbp | (frame ? 0x80000000u : 0u)];
+            Depth &d = m_depth[zbp | (frame ? 0x80000000u : 0u) | (samples > 1u ? 0x40000000u : 0u)];
             if (d.tex && d.w >= w && d.h >= h && d.scale == s)
                 return d;
             d.w = std::max(d.w, w);
             d.h = std::max(d.h, h);
             d.scale = s;
-            d.tex = makeTarget(d.w, d.h, true, s);
+            d.tex = makeTarget(d.w, d.h, true, s, samples);
             return d;
         }
 
         void rtUpload(const RtUpload &u)
         {
             Rt &rt = rtFor(u.fbp, u.fbw, u.y + u.h);
+            rt.dirty = true;
             // uploaded at 1x, then drawn into the target at its scale
             auto tmp = m_dev.createTexture({u.w, u.h, rhi::Format::RGBA8, rhi::UsageSampled, "gs rt upload"}, u.pixels.data(), u.w * 4u);
             const Scale s = rt.scale;
@@ -902,6 +955,7 @@ namespace
         void clear(const ClearCmd &cl)
         {
             Rt &rt = rtFor(cl.s.fbp, cl.s.fbw, cl.s.scy1 + 1u);
+            rt.dirty = true;
             const std::array<float, 4> rgba = {(cl.rgba & 0xFF) / 255.0f, ((cl.rgba >> 8) & 0xFF) / 255.0f, ((cl.rgba >> 16) & 0xFF) / 255.0f,
                                                ((cl.rgba >> 24) & 0xFF) / 255.0f};
             const Scale s = rt.scale;
@@ -913,7 +967,7 @@ namespace
         {
             for (auto &[key, d] : m_depth) // created (cleared) on first use
             {
-                if ((key & 0x7FFFFFFFu) != f.zbp || !d.tex)
+                if ((key & 0x3FFFFFFFu) != f.zbp || !d.tex)
                     continue;
                 const uint32_t y0 = px(static_cast<float>(f.y0), d.scale.y);
                 fill(nullptr, d.tex.get(), 0, y0, px(static_cast<float>(f.width), d.scale.x), px(static_cast<float>(f.y1), d.scale.y) - y0,
@@ -1275,6 +1329,7 @@ namespace
         void postWriteBack(rhi::Texture *native, uint32_t fbp, uint32_t fbw, uint32_t w, uint32_t h)
         {
             Rt &rt = rtFor(fbp, fbw, h);
+            rt.dirty = true;
             blit(*native, {0.0f, 0.0f, 1.0f, 1.0f}, *rt.color, 0, 0, px(static_cast<float>(w), rt.scale.x), px(static_cast<float>(h), rt.scale.y),
                  false, false);
         }
@@ -1322,12 +1377,14 @@ namespace
             const bool plain = !s.abe && !s.ate && !s.fge && decal && (!s.zte || (s.ztst == 1u && s.zmsk));
             Rt &dst = rtFor(s.fbp, s.fbw, s.scy1 + 1u);
             hudOnDraw(s);
-            if (plain && dst.scale == src->second.scale)
+            if (plain && dst.scale == src->second.scale && dst.samples == 1u) // a multisampled copy is drawn (below)
             {
+                rhi::Texture &from = readable(src->second);
                 endPass();
-                const uint32_t w = std::min(px(640.0f, dst.scale.x), std::min(dst.color->desc().width, src->second.color->desc().width));
-                const uint32_t h = std::min(px(448.0f, dst.scale.y), std::min(dst.color->desc().height, src->second.color->desc().height));
-                m_dev.copyTexture(*dst.color, 0, 0, *src->second.color, 0, 0, w, h);
+                const uint32_t w = std::min(px(640.0f, dst.scale.x), std::min(dst.color->desc().width, from.desc().width));
+                const uint32_t h = std::min(px(448.0f, dst.scale.y), std::min(dst.color->desc().height, from.desc().height));
+                m_dev.copyTexture(*dst.color, 0, 0, from, 0, 0, w, h);
+                dst.dirty = true;
                 if (log)
                     std::fprintf(stderr, "[draw] native frame copy %u -> %u\n", s.rtFbp, s.fbp);
                 return 1;
@@ -1555,9 +1612,10 @@ namespace
                 if (depthOn)
                 {
                     // D3D binds a depth buffer only with a colour target of the same size: grow whichever is smaller
-                    depth = &depthFor(s.zbp, rt.w, rt.h, rt.scale);
-                    growRt(rt, depth->w, depth->h, rt.scale);
+                    depth = &depthFor(s.zbp, rt.w, rt.h, rt.scale, rt.samples);
+                    growRt(rt, depth->w, depth->h, rt.scale, rt.samples);
                 }
+                rt.dirty = true;
                 colorTarget = rt.color.get();
                 depthTarget = depth ? depth->tex.get() : nullptr;
                 targetW = static_cast<float>(rt.w);
@@ -1578,9 +1636,9 @@ namespace
                     auto it = m_rts.find(s.rtFbp);
                     if (it != m_rts.end())
                     {
-                        tex = it->second.color.get();
+                        tex = &readable(it->second); // multisampled: a resolved copy, not the bound target
                         rtScale = it->second.scale;
-                        if (s.rtFbp == s.fbp)
+                        if (s.rtFbp == s.fbp && it->second.samples <= 1u)
                             tex = feedbackCopy(*tex);
                     }
                 }
@@ -1618,6 +1676,26 @@ namespace
             c.tmeTfxTccFst[2] = s.tcc;
             c.tmeTfxTccFst[3] = s.fst;
             c.linearIipFgeAte[0] = s.linear;
+            // [gta-recomp] anisotropic filtering (GSHwOptions::anisotropy): a bilinear-filtered game texture with plain
+            // repeat / clamp wrapping is sampled by the hardware - trilinear over a mip chain, anisotropic - instead of
+            // the GS's own bilinear; region wraps, render targets and nearest filtering keep the exact GS path
+            rhi::Sampler *hwSampler = nullptr;
+            if (m_anisotropy && s.tme && s.linear && !s.texIsRt && !plainTexture && tex && s.wms <= 1u && s.wmt <= 1u &&
+                tex->desc().mipLevels != 1u)
+            {
+                hwSampler = m_anisoSampler[s.wms == 0u ? 1 : 0][s.wmt == 0u ? 1 : 0].get();
+                if (hwSampler)
+                    c.linearIipFgeAte[0] = 2;
+            }
+            static const bool afLog = std::getenv("PS2X_HW_ANISO_LOG") != nullptr; // which textured draws take it
+            if (afLog && s.tme && !s.texIsRt)
+            {
+                static uint64_t n[4] = {}, total = 0;
+                ++n[hwSampler ? 0 : !s.linear ? 1 : (s.wms > 1u || s.wmt > 1u) ? 2 : 3];
+                if (++total % 20000u == 0u)
+                    std::fprintf(stderr, "[gs-hw] aniso: hw %llu, nearest %llu, region wrap %llu, other %llu\n", (unsigned long long)n[0],
+                                 (unsigned long long)n[1], (unsigned long long)n[2], (unsigned long long)n[3]);
+            }
             c.linearIipFgeAte[1] = s.iip;
             c.linearIipFgeAte[2] = s.fge;
             c.linearIipFgeAte[3] = s.ate;
@@ -1668,7 +1746,7 @@ namespace
                 m_dev.setConstants(0, *m_drawCb);
                 if (native)
                     m_dev.setConstants(1, *m_worldCb);
-                m_dev.setTexture(0, tex, nullptr);
+                m_dev.setTexture(0, tex, hwSampler);
                 m_dev.draw(count, first);
             };
             if (s.ate && s.atst != 1u && s.afail != 0u)
@@ -1708,6 +1786,8 @@ namespace
         size_t m_nativeVbCapacity = 0;
         size_t m_vbCapacity = 0;
         std::unique_ptr<rhi::Sampler> m_point, m_linear;
+        uint32_t m_msaa = 1, m_anisotropy = 0;           // [gta-recomp] GSHwOptions
+        std::unique_ptr<rhi::Sampler> m_anisoSampler[2][2]; // [gta-recomp] [U repeat][V repeat]
         std::unique_ptr<rhi::Pipeline> m_blit, m_fillColor, m_fillDepth;
         std::unordered_map<uint32_t, std::unique_ptr<rhi::Pipeline>> m_drawPipelines;
         std::unordered_map<uint32_t, Rt> m_rts;
@@ -1735,7 +1815,8 @@ namespace
     class HwBackend final : public GSHwBackendHandle, public GSHwPresenter
     {
     public:
-        explicit HwBackend(const GSHwOptions &o) : m_scale(o.scale), m_nativeFrame(o.nativeFrame)
+        explicit HwBackend(const GSHwOptions &o)
+            : m_scale(o.scale), m_nativeFrame(o.nativeFrame), m_msaa(o.msaa), m_anisotropy(o.anisotropy)
         {
             m_frame = std::make_unique<Frame>();
         }
@@ -2743,7 +2824,7 @@ namespace
         {
             if (!m_rhi)
             {
-                m_rhi = std::make_unique<RhiExecutor>(device, m_scale);
+                m_rhi = std::make_unique<RhiExecutor>(device, m_scale, m_msaa, m_anisotropy);
                 std::fprintf(stderr, m_rhi->ready() ? "[gs-hw] renderer ready (%s), scale %ux\n" : "[gs-hw] renderer failed (%s)\n",
                              device.adapterName().c_str(), m_scale);
             }
@@ -3353,6 +3434,7 @@ namespace
 
         uint32_t m_scale;
         bool m_nativeFrame = false; // [gta-recomp] GSHwOptions::nativeFrame
+        uint32_t m_msaa = 1, m_anisotropy = 0; // [gta-recomp] GSHwOptions
         GSCpuBackend m_cpu;
         GSTransferCommand m_transfer{};
         std::unique_ptr<Frame> m_frame;

@@ -277,10 +277,12 @@ namespace rhi
                 D3D11_TEXTURE2D_DESC td{};
                 td.Width = std::max(1u, desc.width);
                 td.Height = std::max(1u, desc.height);
-                td.MipLevels = 1;
+                const bool msaa = desc.samples > 1u;
+                const bool mips = desc.mipLevels != 1u && !msaa;
+                td.MipLevels = mips ? desc.mipLevels : 1u; // 0: the full chain
                 td.ArraySize = 1;
                 td.Format = resourceFormat(desc.format);
-                td.SampleDesc.Count = 1;
+                td.SampleDesc.Count = msaa ? desc.samples : 1u;
                 t->dynamic = (desc.usage & UsageDynamic) && !(desc.usage & (UsageRenderTarget | UsageDepth));
                 td.Usage = t->dynamic ? D3D11_USAGE_DYNAMIC : D3D11_USAGE_DEFAULT;
                 td.CPUAccessFlags = t->dynamic ? D3D11_CPU_ACCESS_WRITE : 0u;
@@ -290,8 +292,14 @@ namespace rhi
                     td.BindFlags |= D3D11_BIND_RENDER_TARGET;
                 if (desc.usage & UsageDepth)
                     td.BindFlags |= D3D11_BIND_DEPTH_STENCIL;
+                if (mips)
+                {
+                    // generateMips needs a render target and shader view; level 0 is uploaded after creation
+                    td.BindFlags |= D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+                    td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
+                }
                 D3D11_SUBRESOURCE_DATA init{data, rowPitch ? rowPitch : td.Width * bytesPerPixel(desc.format), 0};
-                if (FAILED(m_device->CreateTexture2D(&td, data ? &init : nullptr, &t->texture)))
+                if (FAILED(m_device->CreateTexture2D(&td, (data && !mips) ? &init : nullptr, &t->texture)))
                 {
                     std::fprintf(stderr, "[rhi] CreateTexture2D %ux%u failed\n", td.Width, td.Height);
                     return nullptr;
@@ -301,18 +309,28 @@ namespace rhi
                 {
                     D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
                     sv.Format = shaderViewFormat(desc.format);
-                    sv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                    sv.Texture2D.MipLevels = 1;
+                    sv.ViewDimension = msaa ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
+                    sv.Texture2D.MipLevels = mips ? static_cast<UINT>(-1) : 1u;
                     m_device->CreateShaderResourceView(t->texture.Get(), &sv, &t->srv);
                 }
-                if (desc.usage & UsageRenderTarget)
-                    m_device->CreateRenderTargetView(t->texture.Get(), nullptr, &t->rtv);
+                if ((desc.usage & UsageRenderTarget) || mips)
+                {
+                    D3D11_RENDER_TARGET_VIEW_DESC rv{};
+                    rv.Format = resourceFormat(desc.format);
+                    rv.ViewDimension = msaa ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
+                    m_device->CreateRenderTargetView(t->texture.Get(), &rv, &t->rtv);
+                }
                 if (desc.usage & UsageDepth)
                 {
                     D3D11_DEPTH_STENCIL_VIEW_DESC dv{};
                     dv.Format = DXGI_FORMAT_D32_FLOAT;
-                    dv.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+                    dv.ViewDimension = msaa ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D;
                     m_device->CreateDepthStencilView(t->texture.Get(), &dv, &t->dsv);
+                }
+                if (mips && data)
+                {
+                    m_context->UpdateSubresource(t->texture.Get(), 0, nullptr, data, init.SysMemPitch, 0);
+                    m_context->GenerateMips(t->srv.Get());
                 }
                 return t;
             }
@@ -376,6 +394,18 @@ namespace rhi
                                                  static_cast<D3DTexture &>(src).texture.Get(), 0, &box);
             }
 
+            void resolveTexture(Texture &dst, Texture &src) override
+            {
+                m_context->ResolveSubresource(static_cast<D3DTexture &>(dst).texture.Get(), 0, static_cast<D3DTexture &>(src).texture.Get(),
+                                              0, resourceFormat(src.desc().format));
+            }
+
+            void generateMips(Texture &texture) override
+            {
+                if (auto &t = static_cast<D3DTexture &>(texture); t.srv)
+                    m_context->GenerateMips(t.srv.Get());
+            }
+
             std::unique_ptr<Buffer> createBuffer(const BufferDesc &desc, const void *data) override
             {
                 auto b = std::make_unique<D3DBuffer>(desc);
@@ -416,6 +446,11 @@ namespace rhi
                 auto s = std::make_unique<D3DSampler>();
                 D3D11_SAMPLER_DESC sd{};
                 sd.Filter = desc.filter == Filter::Linear ? D3D11_FILTER_MIN_MAG_MIP_LINEAR : D3D11_FILTER_MIN_MAG_MIP_POINT;
+                if (desc.filter == Filter::Linear && desc.anisotropy > 1u)
+                {
+                    sd.Filter = D3D11_FILTER_ANISOTROPIC;
+                    sd.MaxAnisotropy = std::min(desc.anisotropy, 16u);
+                }
                 sd.AddressU = desc.wrapU == Wrap::Repeat ? D3D11_TEXTURE_ADDRESS_WRAP : D3D11_TEXTURE_ADDRESS_CLAMP;
                 sd.AddressV = desc.wrapV == Wrap::Repeat ? D3D11_TEXTURE_ADDRESS_WRAP : D3D11_TEXTURE_ADDRESS_CLAMP;
                 sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;

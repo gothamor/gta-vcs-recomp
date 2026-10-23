@@ -447,7 +447,22 @@ it is 1920x1080, 3 x 2.41 pixels per PS2 pixel.
   flyover 25.5 / 27.5 native frame vs 28.2 / 28.2 at 1x, cutscene 28.0 / 30.0 vs 28.4 / 30.0, gameplay at the 30 fps
   cap (one 1x run dipped to 22.5 - the runs vary more than the difference). Not checked: a window resized while
   running (the frame targets are then rescaled, `growRt`).
-- Not done yet: MSAA, anisotropic filtering, higher-precision depth (D32F already; the PS2's 24-bit Z values).
+- **MSAA** (Display > Anti-aliasing, `display.msaa` / `PS2X_HW_MSAA` = 2 / 4 / 8, restart; off by default): the
+  picture's targets (640 wide) and their depth buffers are multisampled; every read of such a target - render-target
+  textures (effects, copies, the self-copy), the display, growth, dumps - sees a single-sampled copy resolved when the
+  target was drawn to since the last read (`readable`, `Rt::dirty`); a multisampled frame copy is drawn instead of
+  copied. Effect buffers stay single-sampled. Depth buffers are kept per scale and sample count.
+- **Anisotropic filtering** (Display > Texture filtering, `display.aniso` / `PS2X_HW_ANISO` = 2-16, restart; off =
+  the original bilinear): the game's textures get a mip chain, and bilinear-filtered draws with plain repeat / clamp
+  wrapping (about 90% of textured draws outside the barracks) are sampled by the hardware - trilinear, anisotropic -
+  instead of the GS's own bilinear (`linearIipFgeAte.x == 2`, `hwSampler`); region wraps, render targets and nearest
+  filtering keep the exact GS path. `PS2X_HW_ANISO_LOG=1` counts which path textured draws take.
+- RHI: texture sample counts and mip levels, `resolveTexture`, `generateMips`, sampler anisotropy (D3D11).
+- Checked at 16:9 1080p native frame: MSAA 4x smooths the polygon edges (poles, roofs), AF 16x keeps the paving and
+  ground decals sharp into the distance; reference scenes all run, static scenes unchanged (loading 0.55, pause map
+  0.13); game fps unchanged (flyover 27.2, cutscene 30, gameplay 30 with both on).
+- Not done yet: higher-precision depth (D32F already holds the PS2's 24-bit Z exactly); the radar / reflection map at
+  higher resolution.
 
 ### Stage 8 - Enhancements (M each, optional order) - internal resolution done
 

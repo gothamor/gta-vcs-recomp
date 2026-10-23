@@ -25,6 +25,8 @@ struct GSHwOptions
 {
     uint32_t scale = 1;
     bool nativeFrame = false; // [gta-recomp] PS2X_HW_SCALE=0: the picture's targets at the window's resolution
+    uint32_t msaa = 1;        // [gta-recomp] PS2X_HW_MSAA: samples for the picture's targets (1 = off)
+    uint32_t anisotropy = 0;  // [gta-recomp] PS2X_HW_ANISO: anisotropic filtering of the game's textures (0 = off)
     static GSHwOptions fromEnvironment();
 };
 
