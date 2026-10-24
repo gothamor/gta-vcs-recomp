@@ -6,6 +6,7 @@
 // Once a binding is settled it can move to overrides.toml.
 #include "game_overrides.h"
 #include "debug/rig.h"
+#include "debug/rsl_shadow.h"
 #include "debug/rsl_trace.h"
 #include "game/vcs_display.h"
 #include "game/vcs_framerate.h"
@@ -638,6 +639,7 @@ namespace
         vcs::rig::onGameFrame(rdram, ctx, runtime); // automation rig jobs (debug/rig.h)
         vcs::onFrameKick();                         // the HUD context ends (game/vcs_hud.h)
         vcs::rsltrace::onFrameKick(rdram);          // VCS_TRACE_RSL (debug/rsl_trace.h)
+        vcs::rslshadow::onFrameKick(rdram);         // VCS_RSL_SHADOW (debug/rsl_shadow.h)
         FUN_002723e8_0x2723e8(rdram, ctx, runtime);
     }
 
@@ -713,6 +715,7 @@ namespace
         }
         installCallCounters(runtime);
         vcs::rsltrace::install(runtime);
+        vcs::rslshadow::install(runtime);
         if (std::getenv("VCS_TEST_SAVE") || std::getenv("VCS_DUMP_RAM"))
         {
             g_origPadRead = runtime.lookupFunction(0x00449488u); // scePadRead: polled every frame

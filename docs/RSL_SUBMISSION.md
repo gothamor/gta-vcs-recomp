@@ -68,7 +68,21 @@ Planned (kept for reference):
 - Deliverable: game-internals.md section "6i. RSL submission" (functions, structures, state and texture flow) and
   the numbers.
 
-### Phase 1 - shadow draw list
+### Phase 1 - shadow draw list - 1a (coverage) done 2026-10-24
+
+**1a, coverage** (`VCS_RSL_SHADOW=1`, game-internals.md 6i): the RSL draw functions account for every 3D draw in
+the chain - model instances (`FUN_002F7D58` / `FUN_002F80A0`), world geometry (`FUN_002F7EB0`) and immediate geometry
+(`FUN_002F8250`) each wrote exactly their own CALL / REF, all matched (driving: 495 / 79 / 19.5 a frame); what lies
+outside them is frame and material state (the camera's packet, the sectors' cached setup blocks). So hooking these
+functions is enough to see every 3D draw: phase 2 does not need to find draws anywhere else.
+
+**1b, state** (next): the shadow record also carries what the draw will draw with - from the flush's sources
+(game-internals.md 6i: the object at `*0x4882A4` and its packet, the dirty bits at `0x4882A0`, VU 49-53 from
+`0x742AE0`, the viewport, the texture / GS register queue) - and the render worker checks it against the native draw
+the packet path produced (the MSCAL's VU memory: matrices 24-31, tags, colour, fog), per draw, tied by the chain
+offset of the draw's own tag. Done when every native draw of a frame has a shadow record with the same constants.
+
+Planned (kept for reference):
 
 - The hooks build a native draw list from the RSL calls (mesh id + content key, matrices, lights / tint, material,
   render state) **alongside** the packet path, which still draws.

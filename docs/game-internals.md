@@ -660,6 +660,24 @@ plus `memmove` 3.8% (the runtime flattening the ~4.7 MB chain when it is kicked)
 ~3 ms of a ~19 ms frame**, goes into building and handing over packets. The rest is spread thin (no other function
 above 2.3%).
 
+**Coverage of the draw functions** (docs/RSL_SUBMISSION.md phase 1a, `VCS_RSL_SHADOW=1`, `src/debug/rsl_shadow.cpp`):
+before-hooks record every call of the draw functions with its argument and the cursor at entry; as the runtime copies
+the frame's chain (`runtime/ps2_chain_observer.h`) each packet-buffer tag is placed in the record whose range holds
+it. Every draw wrote exactly its own tag - a model instance a CALL to its packet, a world draw a REF to its geometry
+(address and qwc): city spot (1325, -325) 394 model / 42-47 world draws a frame, driving 495 / 79 plus 19.5 immediate
+(`FUN_002F8250`) - **all matched**. The only VU1-bound tags outside a draw's range (7 a frame standing, 14 driving)
+are state: at the frame's start `FUN_002F53D8` and `FUN_002F9FA0` CALL the camera object's packet (`0x16E7B90`,
+object at `*0x4882DC` + 0x10), the sector draw `FUN_002409C8` CALLs its cached setup blocks, one CALL follows a
+`FUN_001CEF18` upload. The blocks allocated from the top of the half (+0x1C) hold only RET tags (the ends of CALLed
+per-frame blocks). All 32 functions that store the cursor (a scan of the code following register copies) are hooked.
+
+**What a draw carries in state** (`FUN_002F8710`, the flush every draw runs first; dirty bits in `0x4882A0`):
+bit 0 CALL the current object's packet (object `*0x4882A4` + 0x10) and its plug-ins' callbacks (object + 0x114 list,
++0x48); bit 1 CALL `*0x4882A8`; bit 2 three qwords from `FUN_001CFAE0(object + 0x134, ...)`; bits 0 / 4 with 0x200 /
+0x400 MSCAL 0x4A / 0x75 (the setup programs 0x0250 / 0x03A8, 6d); bit 0x2000 CALLs from the table at `0x742AB0`;
+bit 8 UNPACK 5 qwords to VU 49-53 (the GIF tags, colour, flags, fog) from `0x742AE0`; bit 0x1000 UNPACK the viewport
+(VU 12-15) from `0x520920`, MSCAL 0x8F (setup 0x0478), the guard band (VU 65) from `0x520AC0`.
+
 ## 7. Textures: `.XTX`
 
 Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):

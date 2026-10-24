@@ -18,6 +18,7 @@
 #include <vector>
 #include <memory>
 #include "runtime/ps2_render_worker.h" // [gta-recomp]
+#include "runtime/ps2_chain_observer.h" // [gta-recomp]
 
 namespace
 {
@@ -91,6 +92,8 @@ namespace
         ++c.tags;
         c.qwords += qwc;
     }
+
+    std::atomic<ps2chain::TagObserver> g_chainObserver{nullptr}; // [gta-recomp] runtime/ps2_chain_observer.h
 
     // [gta-recomp] VIF1 FIFO data went to the render worker since its GIF arbiter last drained (game thread)
     bool g_renderWorkerNeedsDrain = false;
@@ -322,6 +325,11 @@ namespace
         return nreg == 0u ? 16u : nreg;
     }
 
+}
+
+void ps2chain::setTagObserver(TagObserver observer) // [gta-recomp]
+{
+    g_chainObserver.store(observer, std::memory_order_relaxed);
 }
 
 // Helpers for GS VRAM addressing (PSMCT32 path).
@@ -1745,8 +1753,14 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                                 }
                             }
                         }
-                        if (chainCensus() && channelBase == 0x10009000u) // [gta-recomp] PS2X_CHAIN_CENSUS
-                            censusTag(currentTagAddr, id, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u, tagsProcessed == 1);
+                        if (channelBase == 0x10009000u) // [gta-recomp] PS2X_CHAIN_CENSUS, chain observer
+                        {
+                            if (chainCensus())
+                                censusTag(currentTagAddr, id, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u, tagsProcessed == 1);
+                            if (const ps2chain::TagObserver observer = g_chainObserver.load(std::memory_order_relaxed))
+                                observer(currentTagAddr, id, addr, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u,
+                                         loadScalar<uint64_t>(tp, 8, 16, "dma tag hi", currentTagAddr), tagsProcessed == 1);
+                        }
                         if (irq && tieEnabled)
                             endChain = true;
                         if (endChain)
