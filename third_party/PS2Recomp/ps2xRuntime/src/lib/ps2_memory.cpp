@@ -398,10 +398,11 @@ void ps2chain::notifyProcessing(const void *key, bool begin) // [gta-recomp]
             o(key, begin);
 }
 
-void ps2chain::notifyMark(PS2Memory &memory, uint32_t imm) // [gta-recomp]
+uint32_t ps2chain::notifyMark(PS2Memory &memory, uint32_t imm, const uint8_t *next, uint32_t avail) // [gta-recomp]
 {
     if (const MarkHandler h = g_markHandler.load(std::memory_order_relaxed))
-        h(memory, imm);
+        return h(memory, imm, next, avail);
+    return 0u;
 }
 
 // Helpers for GS VRAM addressing (PSMCT32 path).
@@ -1631,6 +1632,20 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     std::vector<ps2hle::ChainSegment> segments;
                     size_t openSegments[2] = {};
                     int openDepth = 0;
+                    // [gta-recomp] chain observer: a marked CALL waiting for its RET - where the MARK qword's length word is,
+                    // where the packet's bytes start, the ASR depth the RET returns to
+                    struct OpenMark
+                    {
+                        bool open = false;
+                        size_t lengthAt = 0, begin = 0;
+                        uint32_t depth = 0;
+                    } openMark;
+                    auto appendMark = [&](uint32_t imm, uint32_t units)
+                    {
+                        const uint32_t mark[4] = {0x07000000u | (imm & 0xFFFFu), units & 0x00FFFFFFu, 0u, 0u}; // MARK imm, NOP (length) x 3
+                        const auto *bytes = reinterpret_cast<const uint8_t *>(mark);
+                        chainBuf.insert(chainBuf.end(), bytes, bytes + sizeof(mark));
+                    };
 
                     while (tagsProcessed < kMaxChainTags)
                     {
@@ -1680,6 +1695,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         uint32_t dataAddr = 0;
                         bool hasPayload = (tagQwc > 0);
                         bool endChain = false;
+                        bool callPushed = false, retPopped = false; // [gta-recomp] chain observer
 
                         switch (id)
                         {
@@ -1709,11 +1725,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                                 {
                                     asr0 = retAddr;
                                     asp = 1u;
+                                    callPushed = true;
                                 }
                                 else if (asp == 1u)
                                 {
                                     asr1 = retAddr;
                                     asp = 2u;
+                                    callPushed = true;
                                 }
                             }
                             tagAddr = addr;
@@ -1724,11 +1742,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                             {
                                 tagAddr = asr1;
                                 asp = 1u;
+                                retPopped = true;
                             }
                             else if (asp == 1u)
                             {
                                 tagAddr = asr0;
                                 asp = 0u;
+                                retPopped = true;
                             }
                             else
                             {
@@ -1748,21 +1768,31 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         if (transferTagData)
                             appendVifTagData(currentTagAddr);
 
-                        // [gta-recomp] chain observers (runtime/ps2_chain_observer.h); one may replace a REF's payload with a
-                        // MARK whose handler does its work
+                        // [gta-recomp] chain observers (runtime/ps2_chain_observer.h); one may mark a REF's payload or a
+                        // CALL's packet with a MARK whose handler does its work (not inside a marked packet)
                         uint32_t replace = 0u;
                         if (channelBase == 0x10009000u && ps2chain::tagObserved())
                             replace = ps2chain::notifyTag(currentTagAddr, id, addr, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u,
                                                           loadScalar<uint64_t>(tp, 8, 16, "dma tag hi", currentTagAddr), flatOffset,
                                                           tagsProcessed == 1);
-                        if (replace && id == 3u && transferTagData)
-                        {
-                            const uint32_t mark[4] = {0x07000000u | (replace & 0xFFFFu), 0u, 0u, 0u}; // MARK imm, NOP x 3
-                            const auto *bytes = reinterpret_cast<const uint8_t *>(mark);
-                            chainBuf.insert(chainBuf.end(), bytes, bytes + sizeof(mark));
-                        }
-                        else if (hasPayload)
+                        if (!transferTagData || openMark.open)
+                            replace = 0u;
+                        if (replace && id == 3u && hasPayload)
+                            appendMark(replace, static_cast<uint32_t>(tagQwc) * 2u);
+                        if (hasPayload)
                             appendData(dataAddr, tagQwc);
+                        if (replace && id == 5u && callPushed)
+                        {
+                            appendMark(replace, 0u); // the length when its RET comes
+                            openMark = {true, chainBuf.size() - 12u, chainBuf.size(), asp - 1u};
+                        }
+                        else if (id == 6u && retPopped && openMark.open && openMark.depth == asp)
+                        {
+                            openMark.open = false;
+                            const uint32_t units = static_cast<uint32_t>((chainBuf.size() - openMark.begin) / 8u);
+                            if (units <= 0x00FFFFFFu)
+                                std::memcpy(chainBuf.data() + openMark.lengthAt, &units, sizeof(units));
+                        }
                         if (trackSegments)
                         {
                             if (id == 5u && openDepth < 2)

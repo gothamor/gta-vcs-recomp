@@ -225,6 +225,14 @@ dropped on uploads (lazy render-target patching).
       MSCALs, meshes) - no copy, VIF parsing, unpacking, hashing or vertex conversion of world geometry. Verify: 174,301
       replays against the packet path, 0 differ. Timing within noise (world geometry is ~5% of VIF1's payload).
       `VCS_RSL_WORLD=0` = packet path.
+- [x] **Model instances from the RSL draw calls** (2026-10-24, RSL_SUBMISSION.md phase 2): the CALLed packets of
+      `FUN_002F7D58` / `FUN_002F80A0` (and every other CALL in the packet buffer) recorded once - the whole CALL ... RET
+      stream, DIRECT GS data, STCYCL, all draw programs - and replayed at a MARK the chain walker puts before them. The
+      marked bytes now stay in the chain's copy and are skipped (world blocks too: the old REF replacement read guest
+      memory when the worker processed the chain, possibly after streaming replaced it). Replays write only the fields
+      an UNPACK wrote (found by the verify: V3 / write-protected w lanes). Verify: 1,217,887 blocks over a bench run,
+      0 differ. Render worker (one bench run each): Fort Baxter 5.5 -> 4.2 ms, busy city spot 10.8 -> 9.2, drive
+      15.8 -> 13.4. Scenes ok, tour classes unchanged. `VCS_RSL_MODELS=0` = packet path.
 - [x] **Packed draws** (2026-10-24, NATIVE_RENDERER.md "Draw sources"): the C++ reproductions' strips / fans recorded
       without the GS front end (`GS::submitPackedKick`), verified exact against the per-vertex recording (14M packets).
       Render worker at the busiest bench spot 14.5 -> 11.7 ms, AI drive 21.2 -> 18.2 ms (one bench run each).
@@ -448,7 +456,7 @@ dropped on uploads (lazy render-target patching).
 | `VCS_TRACE_IM2D=n`, `VCS_TRACE_IM2D_MARKERS=1..5` | log n Im2D calls (caller, primitive, vertices) / the 2D pass's calls, from 30 s on |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
 | `VCS_TRACE_RSL=1` | which functions build the frame's packets: calls and bytes per frame per function, every 5 s (`[rsl]`; game-internals.md 6i) |
-| `VCS_RSL_WORLD=0`, `VCS_RSL_WORLD_VERIFY=1`, `VCS_RSL_WORLD_LOG=1` | world blocks through the packet path instead of the RSL world draw (record / replay); check every replay against the packet path; counts every 10 s (`[rsl-world]`) |
+| `VCS_RSL_WORLD=0`, `VCS_RSL_MODELS=0`, `VCS_RSL_WORLD_VERIFY=1`, `VCS_RSL_WORLD_LOG=1` | world blocks / model (and other CALLed) packets through the packet path instead of record / replay at the RSL draw; check every replay of either against the packet path; counts per kind every 10 s (`[rsl-world]`) |
 | `VCS_RSL_SHADOW=1` | RSL shadow draw list: each draw call checked against its tag in the frame's chain, 3D tags outside draws listed, each draw program's VU state checked against the draw's RSL state (`[rsl-shadow]`, `state (1b)`; not with `VCS_TRACE_RSL`) |
 | `VCS_RSL_SHADOW_DUMP=n`, `VCS_RSL_SHADOW_FIND=1` | with `VCS_RSL_SHADOW`: n samples of draw state + VU memory (`rsl_shadow_NNN.bin`); where in guest RAM mismatching VU rows are |
 | `PS2X_CHAIN_CENSUS=1` | the VIF1 chain by tag location / id / data source: tags and quadwords per chain, every 5 s (`[chain]`) |

@@ -708,6 +708,26 @@ own state. The "render context" (`*0x4882A4`) is not a per-instance object: a fe
 world program reads is VU-resident state from the draw's flush (6d table 0x19). Sizes seen: 208-2,340 qwords, packets
 of up to 70 vertices. Phase 2 draws these from recordings (docs/RSL_SUBMISSION.md).
 
+**A model packet** (the CALL of `FUN_002F7D58` / `FUN_002F80A0`; decompiled with `tools/eedecomp.py`, packets listed
+from a RAM dump and checked by the phase 2 recorder, 2026-10-24):
+- Both functions run the state flush, write the queued GS registers (`0x729510`, count `0x488308`) as a
+  `CNT` + `DIRECTHL`, then `CALL a0` with qwc 0 and VIFcodes 0 (`a0 << 32 | 0x50000000`). `FUN_002F80A0` first CALLs
+  the packet at `*0x48830C` when bit 31 of the dirty word `0x4882A0` is set (and clears it) - a state packet shared
+  by the draws after it.
+- The CALLed packet is a sub-chain, not one block: up to ~64 tags (`CNT` with inline data, `REF`s into the model
+  heap - e.g. 6-qword constant blocks shared between packets - and a closing `RET`); single-packet models are one
+  `RET` with its payload. VIFcodes seen: FLUSHE, UNPACK V4-32 (constants: matrices, the depth range of 6i's VU table
+  rows 14-15), DIRECTHL (GS registers), STMASK / STROW, UNPACK V3-16 / V2-8 / V4-5 / V3-8, STCYCL, MSCAL 0x0030
+  (most), 0x0478 (setup) and 0x02C0 (re-draw).
+- **Fields an UNPACK leaves alone**: an unmasked V3 / V2 UNPACK writes only x y z (x y) - w keeps what VU memory held
+  (the runtime's VIF interpreter; not checked against hardware) - and masked UNPACKs leave write-protected
+  fields (mask 3). Skinned packets rely on it: two recordings of the same packet bytes differed only in such a w
+  (`0x802A` / `0x801A`), left by the packet drawn before.
+- **Other CALLs** in the packet buffer: packets at `0x1FDA020`-`0x1FDA120` (320-1,088 bytes) are rebuilt every frame or
+  every other frame; a few state packets in the `0x16EExxx`-`0x16EFxxx` render-context blocks (6i above) use VIF BASE.
+- Volume at city spot (-700, -500), per 10 s: 248k `FUN_002F7D58` CALLs, 106k `FUN_002F80A0` CALLs, 89k other CALLs,
+  61k world REFs; ~1.29M draw program MSCALs among them.
+
 ## 7. Textures: `.XTX`
 
 Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):

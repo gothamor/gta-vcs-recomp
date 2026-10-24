@@ -641,7 +641,7 @@ namespace
         vcs::onFrameKick();                         // the HUD context ends (game/vcs_hud.h)
         vcs::rsltrace::onFrameKick(rdram);          // VCS_TRACE_RSL (debug/rsl_trace.h)
         vcs::rslshadow::onFrameKick(rdram);         // VCS_RSL_SHADOW (debug/rsl_shadow.h)
-        vcs::rslworld::onFrameKick();               // world draws from RSL calls (game/vcs_rsl_world.h)
+        vcs::rslworld::onFrameKick();               // world / model draws from RSL calls (game/vcs_rsl_world.h)
         FUN_002723e8_0x2723e8(rdram, ctx, runtime);
     }
 

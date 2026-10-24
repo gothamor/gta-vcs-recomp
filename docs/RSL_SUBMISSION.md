@@ -93,31 +93,65 @@ packet sets stays until something overwrites it). World sectors first, as planne
 
 `src/game/vcs_rsl_world.cpp`. A world block (the REF of `FUN_002F7EB0`) is all the same shape (game-internals.md 6i):
 per packet a header, positions, UVs and colours UNPACKed relative to TOP, then MSCAL 0x30 - no constants.
-- **Where the draw goes in**: the RSL world draw call is recorded by a before-hook; as the frame's chain is copied its
-  REF's payload is replaced by a VIF MARK (runtime chain observer). At the MARK - in stream order on the thread that
-  processes the chain, after the draw's state flush and GS register writes - the block is drawn.
-- **How**: the first time a block is seen it runs through the VIF interpreter from guest memory (exactly the packet
-  path) while a recorder notes each UNPACK's result (the VU qwords as written, relative to TOPS), each MSCAL and the
-  native handler's mesh (content key + converted vertices). Later frames replay: the recorded qwords are copied into VU
-  memory and each MSCAL runs through the runtime's own MSCAL (`PS2Memory::vu1Mscal`: TOP / DBF, the HLE hooks, the
-  VU1 fallback), the native world handler taking the recorded mesh - no VIF parsing, unpacking, mesh hashing or vertex
-  conversion, and the block is not copied into the chain. A recording is used while the block's bytes hash the same
-  (streaming replaces cells) and the VIF mode / cycle match; one that would depend on state from before the block
-  (a masked UNPACK before the block's STMASK, MODE != 0, other cycles, other VIFcodes) is never replayed.
+- **Where the draw goes in**: the RSL world draw call is recorded by a before-hook; as the frame's chain is copied a
+  VIF MARK qword is put before its REF's payload (runtime chain observer; the qword's second word, a NOP, holds the
+  payload's length). At the MARK - in stream order on the thread that processes the chain, after the draw's state
+  flush and GS register writes - the block is drawn and the handler skips its bytes.
+- **How**: the first time a block is seen it runs through the VIF interpreter (exactly the packet path) while a
+  recorder notes each UNPACK's result (the VU qwords as written, relative to TOPS, and which fields it wrote), each
+  MSCAL and the native handler's mesh (content key + converted vertices). Later frames replay: the recorded fields are
+  copied into VU memory and each MSCAL runs through the runtime's own MSCAL (`PS2Memory::vu1Mscal`: TOP / DBF, the HLE
+  hooks, the VU1 fallback), the native world handler taking the recorded mesh - no VIF parsing, unpacking, mesh
+  hashing or vertex conversion. A recording is used while the block's bytes hash the same (streaming replaces cells)
+  and the VIF mode / cycle match; one that would depend on state from before the block (a masked UNPACK before the
+  block's STMASK / STROW, a COL field, MODE != 0, other cycles, other VIFcodes) is never replayed.
+- **The bytes are the chain's copy**: the first version replaced the REF's payload by the MARK and read the block from
+  guest memory when the MARK ran. The render worker processes a chain while the game builds the next frame, so a cell
+  streamed out in between would have been read as whatever replaced it; the payload now stays in the copy (what guest
+  memory held at the kick) and is only skipped. Copying it costs little next to processing it.
 - **Checked** (`VCS_RSL_WORLD_VERIFY=1`: each hit drawn by the packet path and recorded again, compared op by op -
-  UNPACK addresses / data, MSCALs, meshes, the mask / row left): city spot 86k hits, a bench run (city spots and the
-  drive, cells streaming in) 174,301 hits - **0 differ**; every block recordable. Reference scenes: static scenes
-  identical, moving ones within timing noise; tour subset classes unchanged (15 ok, 2 relocated, 1 falling - the known
-  spot).
+  UNPACK addresses / fields / data, MSCALs, meshes, DIRECT data, the mask / row / cycle the block sets): city spot 86k
+  hits, a bench run (city spots and the drive, cells streaming in) 174,301 hits - **0 differ**; every block
+  recordable. Reference scenes: static scenes identical, moving ones within timing noise; tour subset classes
+  unchanged (15 ok, 2 relocated, 1 falling - the known spot).
 - **Measured** (one bench run each): within run-to-run noise (busy city spot worker 10.2 -> 9.6 ms; the drive took
   another route). Expected: world geometry is ~5% of the VIF1 payload (phase 0) - the work it removes is small; the
   value is the path itself, which the model categories build on.
 - Not combined with `VCS_RSL_SHADOW` (its MSCAL-to-draw mapping uses stream offsets, which replayed MSCALs do not
   set).
 
-Next: model instances (`FUN_002F7D58` / `FUN_002F80A0`) - their CALLed packets carry their own state (matrices, depth
-range) and nested tags, so the same record / replay needs the packet's whole stream (CALL ... RET) rather than one
-REF.
+### Phase 2 - model instances: done 2026-10-24 (on by default, `VCS_RSL_MODELS=0` = packet path)
+
+The same record / replay for the CALLed packets of `FUN_002F7D58` and `FUN_002F80A0` (rigid and skinned models,
+vehicles, props - game-internals.md 6i "A model packet"):
+- **Where**: both functions end by writing `CALL packet` (qwc 0); before-hooks note the packet. As the chain is copied
+  the runtime walker puts the MARK qword after the CALL tag (and its own payload), copies the CALLed packet's tags and
+  data as before, and writes the packet's length into the MARK qword when the matching RET returns (a CALL whose RET
+  the chain never reaches keeps length 0: the packet path runs on). One recording covers the whole CALL ... RET
+  stream, nested REFs included. Every other CALL in the packet buffer is marked too ("other call": FUN_002F80A0's
+  state packet, per-frame packets) - a recording is exact whoever wrote the packet.
+- **What a model packet adds** to what the world needed: DIRECT / DIRECTHL GS data (recorded and resent to PATH2
+  through the interpreter's own `submitVif1DirectData`), STCYCL (the cycle each UNPACK saw is checked, the last one
+  restored), the other draw programs' MSCALs (0x0478 setup, 0x02C0 re-draw; meshes only for 0x0030), and UNPACKs that
+  write only some fields - V3 / V2 formats unmasked leave w as VU memory held, write-protected mask fields too. The
+  first verify run found these (a skinned packet's w differed between two recordings of the same bytes:
+  `0x802A` / `0x801A`); a replay now writes only the fields the UNPACK wrote, and restores only the mask / row / cycle
+  the block itself set.
+- **Packets the game rebuilds**: one whose bytes changed on three hits running is processed by the packet path for
+  the next 63 hits without hashing or recording, then recorded once more to see whether it settled; one not
+  replayable (a few state packets use BASE) for the next 255. Packets that alternate between rebuilt and unchanged
+  frames are still recorded: the replays on the unchanged frames are worth more than the recordings cost.
+- **Checked** (`VCS_RSL_WORLD_VERIFY=1`, which covers both): city spot (-700, -500) ~310k blocks per 10 s, a bench run
+  1,217,887 blocks - **0 differ**. Reference scenes all ok (same flyover perf sample as the capture before this
+  change); tour subset classes unchanged (15 ok, 2 relocated, 1 falling).
+- **Measured** (one bench run each, `VCS_RSL_MODELS=0` vs on): render worker Fort Baxter 5.5 -> 4.2 ms, busy city
+  spot (1325, -325) 10.8 -> 9.2 ms, the drive 15.8 -> 13.4 ms; game thread unchanged (the packets are still built).
+  At the city spot per 10 s: 248k model, 106k model-b, 61k world blocks all replayed, ~1.29M draw packets replayed;
+  other calls 89k (35k replayed, 36k recorded, 10k not replayable, 7k changing).
+
+Next: the game thread still builds every packet (phase 0: ~17% of it). With draws replayed from recordings keyed by
+packet, the hooks can move from "mark the packet" to "replay the packet" without the chain: the draw call's state
+flush and its recording are what the native side needs (phase 2's planned form, below).
 
 Planned (kept for reference):
 

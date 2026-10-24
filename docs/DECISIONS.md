@@ -272,3 +272,17 @@ decoder of our own:
 - **On by default** after the verify run (0 of 174,301 replays differ) and the picture / tour checks; `VCS_RSL_WORLD=0`
   keeps the packet path. The timing gain is within noise (world geometry is small); the path is the point - model
   instances come next on the same mechanism.
+
+## 2026-10-24 - RSL model draws: the same record / replay; marked bytes stay in the chain's copy
+
+Model instances (`FUN_002F7D58` / `FUN_002F80A0`) use the world's mechanism, with two changes that apply to both:
+- **The marked bytes are copied and skipped, not replaced** (revises "cheaper than copying it" above): the render
+  worker processes a chain while the game builds the next frame, so reading a block from guest memory at the MARK
+  could see a cell or model streamed out after the kick. The copy is what the guest held at the kick; copying costs
+  little next to processing. It also gives a CALLed packet - a sub-chain of tags - as one flat stream without a second
+  chain walker of our own.
+- **Every CALL in the packet buffer is marked**, not only the ones the hooked draw calls wrote: a recording is the
+  interpreter's own result for those bytes, so it is exact whoever built the packet; the hooks only label the
+  counts. Packets rebuilt every frame drop to the packet path by themselves (bytes changed three hits running).
+- On by default after the verify run (1,217,887 blocks, 0 differ), scenes and tour; worker -1.3 to -2.4 ms in the
+  bench. `VCS_RSL_MODELS=0` keeps the packet path for models.

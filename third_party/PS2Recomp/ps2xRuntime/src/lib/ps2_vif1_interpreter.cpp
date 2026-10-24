@@ -513,7 +513,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         {
             vif1_regs.mark = imm;
             vif1_regs.stat |= (1u << 6); // MRK
-            ps2chain::notifyMark(*this, imm); // [gta-recomp] a replaced REF's work (runtime/ps2_chain_observer.h)
+            // [gta-recomp] a marked REF's / CALL's work (runtime/ps2_chain_observer.h)
+            pos += std::min<uint32_t>(ps2chain::notifyMark(*this, imm, data + pos, sizeBytes - pos), sizeBytes - pos);
             continue;
         }
         else if (opcode == VIF_FLUSHE || opcode == VIF_FLUSH || opcode == VIF_FLUSHA)
@@ -610,6 +611,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 qwCount = availableQw;
 
             const bool directHl = (opcode == VIF_DIRECTHL);
+            if (ps2chain::VifRecorder *recorder = ps2chain::vifRecorder()) // [gta-recomp] runtime/ps2_chain_observer.h
+                recorder->direct(data + pos, qwCount, directHl, !truncated);
             if (qwCount > 0)
                 submitVif1DirectData(data + pos, qwCount, directHl);
 
@@ -983,8 +986,25 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                                  static_cast<unsigned long long>(differing), 10);
             }
             if (ps2chain::VifRecorder *recorder = ps2chain::vifRecorder()) // [gta-recomp] runtime/ps2_chain_observer.h
+            {
+                // the fields a CL = WL = 1 write sets (mask row 0): the format's, then the mask's choice
+                const uint32_t formatLanes = (components == 1 || (vl == 3u && vn == 3u)) ? 0xFu : ((1u << (components > 4 ? 4 : components)) - 1u);
+                uint32_t lanes = formatLanes;
+                bool fromCol = false;
+                if (maskEnable)
+                {
+                    lanes = 0u;
+                    for (uint32_t field = 0u; field < 4u; ++field)
+                    {
+                        const uint32_t spec = (vif1_regs.mask >> (field * 2u)) & 0x3u;
+                        if ((spec == 0u && (formatLanes >> field) & 1u) || spec == 1u || spec == 2u)
+                            lanes |= 1u << field;
+                        fromCol |= spec == 2u;
+                    }
+                }
                 recorder->unpack(vuAddr, writeVectorCount, (imm & 0x8000u) != 0u, vif1_regs.tops & 0x3FFu, vif1_regs.cycle,
-                                 maskEnable, vif1_regs.mode, m_vu1Data);
+                                 maskEnable, vif1_regs.mode, lanes, fromCol, m_vu1Data);
+            }
             pos += totalBytes;
 
             if (pos > sizeBytes)
