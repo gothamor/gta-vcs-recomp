@@ -220,6 +220,10 @@ dropped on uploads (lazy render-target patching).
       80,557). Two more 0x02c0 code images accepted (they differ only in code the shine never runs). VU1 programs a
       frame: cutscene 195 -> 4, gameplay 86 -> 4, tour subset mean 104.6 -> 3.4 (worker 8.76 -> 8.05 ms); no VU1
       draws anywhere in the tour subset or the 12 missions. `PS2X_HLE_SETUP=0` = VU1.
+- [x] **Packed draws** (2026-10-24, NATIVE_RENDERER.md "Draw sources"): the C++ reproductions' strips / fans recorded
+      without the GS front end (`GS::submitPackedKick`), verified exact against the per-vertex recording (14M packets).
+      Render worker at the busiest bench spot 14.5 -> 11.7 ms, AI drive 21.2 -> 18.2 ms (one bench run each).
+      `PS2X_HLE_PACKED=0` = front end.
 - [ ] Left on the VU1: 3-4 programs a frame of a second low code image (the per-frame Z clear: 0x0000 / 0x0200 with
       20 kicks, 0x0250, 0x0400) and clipped environment-pass packets (table 0x13, ~63 in two minutes).
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
@@ -428,6 +432,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_HUD_LOG=1` | the renderer's HUD layers (per frame buffer, stale or not) and the output size, every 2 s |
 | `VCS_TRACE_IM2D=n`, `VCS_TRACE_IM2D_MARKERS=1..5` | log n Im2D calls (caller, primitive, vertices) / the 2D pass's calls, from 30 s on |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
+| `PS2X_HLE_PACKED=0`, `PS2X_HW_PACKED_VERIFY=1` | the C++ reproductions' strips / fans through the GS front end; check the packed recording against it per packet |
 | `PS2X_HLE_SETUP=0` | VU1 setup programs (matrices, slot routines, block copy) on the VU1 instead of natively |
 | `PS2X_HLE_DUMP_IMAGES=1` | write the code and data of the first 0x02c0 shine packet of each code image (`shine_<hash>_*.bin`) |
 | `PS2X_HW_DRAW_SOURCES=1`, rig `gsdraws [reset]` | draws still made from GS primitives by kind and source, per frame (logged every 5 s / on request); totals always in the perf line (`gs_draws` ...) |

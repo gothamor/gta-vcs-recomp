@@ -31,7 +31,8 @@ namespace ps2perf
         constexpr const char *kPhaseNames[kPhases] = {"game", "render", "iop", "wait"};
         constexpr const char *kCounterNames[kCounters] = {"draws", "verts", "tex_uploads", "dma_tags", "vu1_programs",
                                                           "gs_draws", "gs_verts", "gs_vu1", "gs_hle", "gs_path2", "gs_path3",
-                                                          "native_draws", "hud_draws", "post_draws"};
+                                                          "native_draws", "hud_draws", "post_draws", "packed_draws",
+                                                          "packed_verts"};
         constexpr size_t kFirstSourceCounter = static_cast<size_t>(Counter::GsDraws); // [gta-recomp] summaryLine
 
         uint64_t nowNs()
@@ -357,8 +358,9 @@ namespace ps2perf
             { // [gta-recomp] draw sources
                 const auto *c = now.counters;
                 const auto n = [](Counter k) { return static_cast<size_t>(k); };
-                addLine(fmt("NATIVE %4.0f draws  %3.0f hud  %2.0f post   GS PATH %4.0f (vu1 %.0f hle %.0f p2 %.0f p3 %.0f)",
-                            c[n(Counter::NativeDraws)], c[n(Counter::HudDraws)], c[n(Counter::PostDraws)], c[n(Counter::GsDraws)],
+                addLine(fmt("NATIVE %4.0f draws %3.0f packed %3.0f hud %2.0f post  GS PATH %4.0f (vu1 %.0f hle %.0f p2 %.0f p3 %.0f)",
+                            c[n(Counter::NativeDraws)], c[n(Counter::PackedDraws)], c[n(Counter::HudDraws)], c[n(Counter::PostDraws)],
+                            c[n(Counter::GsDraws)],
                             c[n(Counter::GsVu1)], c[n(Counter::GsHle)], c[n(Counter::GsPath2)], c[n(Counter::GsPath3)]),
                         white);
             }

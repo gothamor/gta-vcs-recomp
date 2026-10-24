@@ -44,6 +44,8 @@ namespace ps2perf
         NativeDraws,
         HudDraws,
         PostDraws,
+        PackedDraws,    // draws recorded from whole packets of the C++ VU1 reproductions (GS::submitPackedKick)
+        PackedVertices, // ... and their vertices
         Count
     };
 

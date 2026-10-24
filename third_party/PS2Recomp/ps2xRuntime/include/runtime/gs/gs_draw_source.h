@@ -14,6 +14,10 @@ void gsSetPath1Producer(uint32_t vu1StartPc, bool native);
 // path (1..3) | native << 2 | program start PC << 16 (path 1 only)
 uint32_t gsCurrentDrawSource();
 
+// set on draws recorded from a whole packet without the GS front end (GS::submitPackedKick)
+constexpr uint32_t kGsDrawSourcePacked = 8u;
+
 inline uint32_t gsDrawSourcePath(uint32_t source) { return source & 3u; }
+inline bool gsDrawSourcePacked(uint32_t source) { return (source & kGsDrawSourcePacked) != 0u; }
 inline bool gsDrawSourceNative(uint32_t source) { return (source & 4u) != 0u; }
 inline uint32_t gsDrawSourceProgram(uint32_t source) { return source >> 16; }

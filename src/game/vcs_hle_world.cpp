@@ -128,6 +128,17 @@ namespace
         return h;
     }
 
+    // A GIF packet of a C++ reproduction to the GS (PATH1): strips / fans recorded at once (GS::submitPackedKick), the
+    // rest - register writes such as TEX0 / TEXFLUSH - through the GS front end. PS2X_HLE_PACKED=0: everything through
+    // the front end.
+    void sendKick(const std::vector<uint8_t> &k)
+    {
+        static const bool packed = !(std::getenv("PS2X_HLE_PACKED") && *std::getenv("PS2X_HLE_PACKED") == '0');
+        const uint32_t size = static_cast<uint32_t>(k.size());
+        if (!packed || !ps2hle::gs()->submitPackedKick(k.data(), size))
+            ps2hle::gs()->processGIFPacket(k.data(), size);
+    }
+
     // the code of every routine the reference reproduces (prelit world variant at 0x2700); hashed again only after
     // VU1 code memory changed
     bool worldCodeResident(const uint8_t *code, uint64_t generation)
@@ -1821,7 +1832,7 @@ namespace
             gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
             gsSetCurrentGifPath(1u);
             for (const auto &p : packets)
-                ps2hle::gs()->processGIFPacket(p.data(), static_cast<uint32_t>(p.size()));
+                sendKick(p);
             gsSetCurrentGifPath(3u);
             std::fesetround(rounding);
             const int32_t variant = 711; // 52.z, as the VU leaves it after its clipper
@@ -2128,7 +2139,7 @@ namespace
         gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
         gsSetCurrentGifPath(1u);
         for (size_t i = 1; i < kicks.size(); ++i)
-            ps2hle::gs()->processGIFPacket(kicks[i].data(), static_cast<uint32_t>(kicks[i].size()));
+            sendKick(kicks[i]);
         gsSetCurrentGifPath(3u);
         std::fesetround(rounding);
         ++g_nativeEnv.drawn;
@@ -2159,7 +2170,7 @@ namespace
         gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
         gsSetCurrentGifPath(1u);
         for (const auto &k : kicks)
-            ps2hle::gs()->processGIFPacket(k.data(), static_cast<uint32_t>(k.size()));
+            sendKick(k);
         gsSetCurrentGifPath(3u);
         std::fesetround(rounding);
         ++g_nativeRedraw.drawn;
@@ -2184,7 +2195,7 @@ namespace
         gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
         gsSetCurrentGifPath(1u);
         for (const auto &k : kicks)
-            ps2hle::gs()->processGIFPacket(k.data(), static_cast<uint32_t>(k.size()));
+            sendKick(k);
         gsSetCurrentGifPath(3u);
         std::fesetround(rounding);
         ++g_nativeRedraw.drawn;

@@ -531,6 +531,22 @@ First survey (2026-10-24: reference scenes, the tour subset, 12 missions 6-94), 
   220,848 vertices a frame instead of 122,823, gameplay 98,124 instead of 50,768 (worker 23.1 -> 15.2 ms); blended
   VU1 draws were doubled in the reference pictures. The native path (default) was unaffected (scenes identical).
 
+**Packed draws (2026-10-24).** The C++ reproductions' strips and fans (clipper polygons, env pass, 0x02c0 re-draws
+and shines) no longer go through the GS front end: `GS::submitPackedKick` takes a single-tag PACKED ST / RGBAQ /
+XYZF2 packet, decodes its vertices as `writeRegisterPacked` does and hands them to the HW backend at once
+(`SubmitPacked` -> `recordPacked`), which records them with the same per-primitive code as `Submit`
+(`recordPrimitive`: flat colour, render-target sampling, widescreen squeeze, merging) - not asked: the HUD
+classifier (3D packets are never HUD); depth-buffer / target bookkeeping once per packet. Register packets (TEX0,
+TEXFLUSH) still take the front end; the GS registers and vertex queue are left as the per-vertex path leaves them.
+`PS2X_HLE_PACKED=0` = all through the front end.
+- Checked with `PS2X_HW_PACKED_VERIFY=1` (each packet also recorded one `Submit` per triangle into a scratch frame,
+  every vertex and its draw state compared): a city spot 4,180,000 packets, the reference scenes 5,300,000, PHI_A1
+  4,580,000 - all exact (2 split into a different number of draw calls with the same vertices).
+- The counter shows them as `packed_draws` / `packed_verts`, not GS-path draws: at (1325, -325) GS-path draws went
+  from ~224 to ~15 a frame (what is left: PATH2 and register packets).
+- `tools/bench.py`, one run each (same build, `PS2X_HLE_PACKED=0` vs default), render worker ms: city (1325, -325)
+  14.5 -> 11.7, AI drive 21.2 -> 18.2 (41.3 -> 44.9 fps); the light spots (~2-3 ms) unchanged within noise.
+
 ### Stage 8 - Enhancements (M each, optional order) - internal resolution done
 
 - Internal resolution: native draws render into the same scaled render targets as the GS path, so

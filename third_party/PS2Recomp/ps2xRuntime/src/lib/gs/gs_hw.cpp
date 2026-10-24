@@ -217,6 +217,12 @@ namespace
 
         void gsDraw(const Frame &f, const DrawCmd &d)
         {
+            if (gsDrawSourcePacked(d.source)) // recorded from whole packets, not through the GS front end
+            {
+                ++m_frame.packed;
+                m_frame.packedVertices += d.count;
+                return;
+            }
             ++m_frame.gs;
             m_frame.gsVertices += d.count;
             const uint32_t path = gsDrawSourcePath(d.source);
@@ -266,6 +272,8 @@ namespace
             ps2perf::add(C::NativeDraws, m_frame.native);
             ps2perf::add(C::HudDraws, m_frame.hud);
             ps2perf::add(C::PostDraws, m_frame.post);
+            ps2perf::add(C::PackedDraws, m_frame.packed);
+            ps2perf::add(C::PackedVertices, m_frame.packedVertices);
             m_frame = {};
             ++m_frames;
             if (m_log)
@@ -340,6 +348,7 @@ namespace
         struct Counts
         {
             uint64_t gs = 0, gsVertices = 0, vu1 = 0, hle = 0, path2 = 0, path3 = 0, native = 0, hud = 0, post = 0;
+            uint64_t packed = 0, packedVertices = 0;
         };
         Counts m_frame;
         uint64_t m_frames = 0;
@@ -2000,27 +2009,7 @@ namespace
             const float zs = (ctx.zbuf.psm == GS_PSM_Z32) ? (1.0f / 4294967296.0f)
                            : (ctx.zbuf.psm == GS_PSM_Z16 || ctx.zbuf.psm == GS_PSM_Z16S) ? (1.0f / 65536.0f)
                                                                                          : (1.0f / 16777216.0f);
-            auto mk = [&](const GSVertex &v) {
-                HwVertex h{};
-                h.x = v.x - ofx;
-                h.y = v.y - ofy;
-                h.z = std::min(static_cast<float>(v.z * zs), 1.0f);
-                if (batch.state.prim.fst)
-                {
-                    h.s = v.u / 16.0f;
-                    h.t = v.v / 16.0f;
-                    h.q = 1.0f;
-                }
-                else
-                {
-                    h.s = v.s;
-                    h.t = v.t;
-                    h.q = v.q;
-                }
-                h.r = v.r; h.g = v.g; h.b = v.b; h.a = v.a;
-                h.fog = v.fog / 255.0f;
-                return h;
-            };
+            auto mk = [&](const GSVertex &v) { return hwVertex(batch.state, v, ofx, ofy, zs); };
             HwVertex out[6];
             uint32_t n = 0;
             if (type == GS_PRIM_SPRITE && batch.vertexCount >= 2)
@@ -2058,6 +2047,171 @@ namespace
             }
             if (!n)
                 return;
+            recordPrimitive(s, out, n, &batch, ofx, ofy, gsCurrentDrawSource(), true);
+        }
+
+        static float depthScale(const GSContext &ctx)
+        {
+            return (ctx.zbuf.psm == GS_PSM_Z32) ? (1.0f / 4294967296.0f)
+                 : (ctx.zbuf.psm == GS_PSM_Z16 || ctx.zbuf.psm == GS_PSM_Z16S) ? (1.0f / 65536.0f)
+                                                                               : (1.0f / 16777216.0f);
+        }
+
+        static HwVertex hwVertex(const GSDrawState &state, const GSVertex &v, float ofx, float ofy, float zs)
+        {
+            HwVertex h{};
+            h.x = v.x - ofx;
+            h.y = v.y - ofy;
+            h.z = std::min(static_cast<float>(v.z * zs), 1.0f);
+            if (state.prim.fst)
+            {
+                h.s = v.u / 16.0f;
+                h.t = v.v / 16.0f;
+                h.q = 1.0f;
+            }
+            else
+            {
+                h.s = v.s;
+                h.t = v.t;
+                h.q = v.q;
+            }
+            h.r = v.r; h.g = v.g; h.b = v.b; h.a = v.a;
+            h.fog = v.fog / 255.0f;
+            return h;
+        }
+
+        // [gta-recomp] A strip / fan / triangle list at once (GS::submitPackedKick, the C++ reproductions' packets): the
+        // primitives Submit would get one vertex kick at a time, recorded by the same code (recordPrimitive) - same
+        // vertices, state and merging. Not asked: the HUD classifier (3D packets are never HUD), and the depth buffer /
+        // target bookkeeping runs once for the packet. Draws that could be depth fills go the per-vertex way.
+        bool SubmitPacked(const GSDrawState &state, const GSVertex *vertices, const uint8_t *kick, uint32_t count) override
+        {
+            static const bool verify = std::getenv("PS2X_HW_PACKED_VERIFY") != nullptr;
+            const bool handled = recordPacked(state, vertices, kick, count);
+            if (verify && handled) // after the real recording: texture uploads stay in the real frame
+                verifyPacked(state, vertices, kick, count);
+            return handled;
+        }
+
+        // PS2X_HW_PACKED_VERIFY=1: the packet recorded both ways into scratch frames - packed, and one Submit per
+        // primitive as the GS front end would - and every vertex with its draw state compared (the source tag aside)
+        struct PackedCheck
+        {
+            uint64_t packets = 0, exact = 0, bad = 0, split = 0;
+        } m_packedCheck;
+
+        void verifyPacked(const GSDrawState &state, const GSVertex *vertices, const uint8_t *kick, uint32_t count)
+        {
+            std::unique_ptr<Frame> real = std::move(m_frame);
+            m_frame = std::make_unique<Frame>();
+            const bool handled = recordPacked(state, vertices, kick, count);
+            std::unique_ptr<Frame> packed = std::move(m_frame);
+            m_frame = std::make_unique<Frame>();
+            const uint8_t type = state.prim.type;
+            for (uint32_t i = 2; handled && i < count; ++i)
+            {
+                if ((type == GS_PRIM_TRIANGLE && i % 3u != 2u) || !kick[i])
+                    continue;
+                GSPrimitiveBatch batch{};
+                batch.state = state;
+                batch.vertexCount = 3;
+                batch.vertices[0] = vertices[type == GS_PRIM_TRIFAN ? 0u : i - 2u];
+                batch.vertices[1] = vertices[i - 1u];
+                batch.vertices[2] = vertices[i];
+                Submit(batch);
+            }
+            const std::unique_ptr<Frame> perVertex = std::move(m_frame);
+            m_frame = std::move(real);
+            if (!handled)
+                return;
+            const Frame &a = *packed, &b = *perVertex;
+            const auto expand = [](const Frame &f) {
+                std::vector<std::pair<HwState, HwVertex>> out;
+                for (const Cmd &c : f.cmds)
+                    if (c.type == CmdType::Draw || c.type == CmdType::HudDraw)
+                    {
+                        const DrawCmd &d = f.draws[c.index];
+                        for (uint32_t k = 0; k < d.count; ++k)
+                            out.push_back({d.s, f.vertices[d.first + k]});
+                    }
+                return out;
+            };
+            const auto drawCmds = [](const Frame &f) {
+                return std::count_if(f.cmds.begin(), f.cmds.end(), [](const Cmd &c) { return c.type == CmdType::Draw || c.type == CmdType::HudDraw; });
+            };
+            const auto ea = expand(a), eb = expand(b);
+            bool same = ea.size() == eb.size();
+            for (size_t k = 0; same && k < ea.size(); ++k)
+                same = std::memcmp(&ea[k].first, &eb[k].first, sizeof(HwState)) == 0 &&
+                       std::memcmp(&ea[k].second, &eb[k].second, sizeof(HwVertex)) == 0;
+            ++m_packedCheck.packets;
+            (same ? m_packedCheck.exact : m_packedCheck.bad) += 1;
+            if (same && drawCmds(a) != drawCmds(b)) // the same vertices and states, split into more draw calls
+                ++m_packedCheck.split;
+            if (!same && m_packedCheck.bad <= 8)
+                std::fprintf(stderr, "[gs-hw] packed draw differs: %zu / %zu vertices, %zu / %zu draw commands (prim %u, %u vertices)\n",
+                             ea.size(), eb.size(), static_cast<size_t>(drawCmds(a)), static_cast<size_t>(drawCmds(b)), type, count);
+            if (m_packedCheck.packets % 20000u == 0u)
+                std::fprintf(stderr, "[gs-hw] packed draws checked: %llu packets, %llu exact (%llu split differently), %llu differ\n",
+                             (unsigned long long)m_packedCheck.packets, (unsigned long long)m_packedCheck.exact,
+                             (unsigned long long)m_packedCheck.split, (unsigned long long)m_packedCheck.bad);
+        }
+
+        bool recordPacked(const GSDrawState &state, const GSVertex *vertices, const uint8_t *kick, uint32_t count)
+        {
+            const uint8_t type = state.prim.type;
+            if (type != GS_PRIM_TRIANGLE && type != GS_PRIM_TRISTRIP && type != GS_PRIM_TRIFAN)
+                return false;
+            GSPrimitiveBatch batch{};
+            batch.state = state;
+            HwState s{};
+            if (!buildState(batch, s))
+                return true; // ZTST NEVER: Submit draws nothing either
+            if (!s.tme && !s.abe && s.fbmsk == 0u && depthBufferAt(s.fbp))
+                return false;
+            s.mode = 0;
+            const auto &ctx = state.context;
+            const float ofx = ctx.xyoffset.ofx / 16.0f, ofy = ctx.xyoffset.ofy / 16.0f, zs = depthScale(ctx);
+            thread_local std::vector<HwVertex> hv;
+            hv.resize(count);
+            for (uint32_t i = 0; i < count; ++i)
+                hv[i] = hwVertex(state, vertices[i], ofx, ofy, zs);
+            const uint32_t source = gsCurrentDrawSource() | kGsDrawSourcePacked;
+            bool any = false;
+            for (uint32_t i = 2; i < count; ++i)
+            {
+                if (type == GS_PRIM_TRIANGLE && i % 3u != 2u)
+                    continue;
+                if (!kick[i])
+                    continue;
+                const uint32_t a = type == GS_PRIM_TRIFAN ? 0u : i - 2u;
+                HwVertex out[3] = {hv[a], hv[i - 1u], hv[i]};
+                any = true;
+                recordPrimitive(s, out, 3u, nullptr, ofx, ofy, source, false);
+            }
+            if (any)
+            {
+                if (s.zte && s.ztst != 1u && s.zbp != s.fbp)
+                    noteDepthBuffer(s);
+                noteTarget(s.fbp, s.fbw, s.fpsm, hv.data(), count, s.scy1);
+            }
+            return true;
+        }
+
+        void noteDepthBuffer(const HwState &s) // a depth buffer in real use (tested against)
+        {
+            DepthInfo &di = m_depthBufs[s.zbp];
+            di.zpsm = s.zpsm;
+            di.fbw = s.fbw;
+            di.height = std::max<uint32_t>(di.height, std::min<uint32_t>(s.scy1 + 1u, 1024u));
+        }
+
+        // One primitive's vertices (out, n) into the frame: flat colour, render-target sampling, the widescreen HUD
+        // squeeze / native HUD layer (batch: the GS vertices for the HUD classifier; nullptr = not asked), then merged
+        // into the current draw. bookkeeping: depth buffer and target size here (SubmitPacked does them per packet).
+        void recordPrimitive(HwState s, HwVertex *out, uint32_t n, const GSPrimitiveBatch *batch, float ofx, float ofy,
+                             uint32_t source, bool bookkeeping)
+        {
             if (!s.iip) // [gta-recomp] flat: the GS colours with the last vertex; give every vertex that colour
                 for (uint32_t i = 0; i + 1 < n; ++i)
                 {
@@ -2095,14 +2249,14 @@ namespace
             if ((wide || classify) && s.fbw == 10u)
             {
                 uint8_t anchor = GSHwAnchorNone;
-                if (classify)
+                if (classify && batch)
                 {
                     float xy[2 * 8];
-                    const uint32_t count = std::min<uint32_t>(batch.vertexCount, 8u);
+                    const uint32_t count = std::min<uint32_t>(batch->vertexCount, 8u);
                     for (uint32_t i = 0; i < count; ++i)
                     {
-                        xy[2 * i] = batch.vertices[i].x - ofx;
-                        xy[2 * i + 1] = batch.vertices[i].y - ofy;
+                        xy[2 * i] = batch->vertices[i].x - ofx;
+                        xy[2 * i + 1] = batch->vertices[i].y - ofy;
                     }
                     anchor = classify(xy, count);
                     hud = anchor != GSHwAnchorNone && g_hudLayer.load(std::memory_order_relaxed);
@@ -2127,19 +2281,16 @@ namespace
                     }
                 }
             }
-            if (s.zte && s.ztst != 1u && s.zbp != s.fbp) // a depth buffer in real use (tested against)
+            if (bookkeeping)
             {
-                DepthInfo &di = m_depthBufs[s.zbp];
-                di.zpsm = s.zpsm;
-                di.fbw = s.fbw;
-                di.height = std::max<uint32_t>(di.height, std::min<uint32_t>(s.scy1 + 1u, 1024u));
+                if (s.zte && s.ztst != 1u && s.zbp != s.fbp)
+                    noteDepthBuffer(s);
+                if (batch && depthFill(*batch, s, out, n))
+                    return;
+                noteTarget(s.fbp, s.fbw, s.fpsm, out, n, s.scy1);
             }
-            if (depthFill(batch, s, out, n))
-                return;
-            noteTarget(s.fbp, s.fbw, s.fpsm, out, n, s.scy1);
             Frame &f = *m_frame;
             const CmdType cmdType = hud ? CmdType::HudDraw : CmdType::Draw;
-            const uint32_t source = gsCurrentDrawSource(); // [gta-recomp] DrawSources
             if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != cmdType || f.draws.back().source != source ||
                 std::memcmp(&f.draws.back().s, &s, sizeof(HwState)) != 0)
             {

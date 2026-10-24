@@ -849,6 +849,98 @@ bool GS::processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes)
     return true;
 }
 
+bool GS::submitPackedKick(const uint8_t *data, uint32_t sizeBytes) // [gta-recomp]
+{
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (!data || sizeBytes < 16u || !m_backend || m_gpu)
+        return false;
+    const uint64_t tagLo = loadLE64(data), tagHi = loadLE64(data + 8);
+    const uint32_t nloop = static_cast<uint32_t>(tagLo & 0x7FFFu);
+    const uint8_t flg = static_cast<uint8_t>((tagLo >> 58) & 0x3u);
+    const uint32_t nreg = static_cast<uint32_t>((tagLo >> 60) & 0xFu);
+    const bool pre = ((tagLo >> 46) & 1u) != 0u;
+    const uint64_t prim = (tagLo >> 47) & 0x7FFu;
+    const uint32_t type = static_cast<uint32_t>(prim & 7u);
+    // ST (2), RGBAQ (1), XYZF2 (4); one tag filling the packet
+    if (flg != GIF_FMT_PACKED || !pre || nreg != 3u || (tagHi & 0xFFFu) != 0x412u || sizeBytes != 16u + nloop * 48u ||
+        (type != GS_PRIM_TRIANGLE && type != GS_PRIM_TRISTRIP && type != GS_PRIM_TRIFAN))
+        return false;
+    thread_local std::vector<GSVertex> vertices;
+    thread_local std::vector<uint8_t> kicks;
+    vertices.resize(nloop);
+    kicks.resize(nloop);
+    // as writeRegisterPacked does it, Q from 1.0 at the tag
+    float s = m_curS, t = m_curT, q = 1.0f;
+    uint8_t r = m_curR, g = m_curG, b = m_curB, a = m_curA;
+    for (uint32_t i = 0; i < nloop; ++i)
+    {
+        const uint8_t *p = data + 16u + i * 48u;
+        const uint64_t stLo = loadLE64(p), stHi = loadLE64(p + 8), cLo = loadLE64(p + 16), cHi = loadLE64(p + 24);
+        const uint64_t xLo = loadLE64(p + 32), xHi = loadLE64(p + 40);
+        const uint32_t sBits = static_cast<uint32_t>(stLo), tBits = static_cast<uint32_t>(stLo >> 32), qBits = static_cast<uint32_t>(stHi);
+        std::memcpy(&s, &sBits, 4);
+        std::memcpy(&t, &tBits, 4);
+        std::memcpy(&q, &qBits, 4);
+        if (q == 0.0f)
+            q = 1.0f;
+        r = static_cast<uint8_t>(cLo & 0xFF);
+        g = static_cast<uint8_t>((cLo >> 32) & 0xFF);
+        b = static_cast<uint8_t>(cHi & 0xFF);
+        a = static_cast<uint8_t>((cHi >> 32) & 0xFF);
+        GSVertex &v = vertices[i];
+        v = GSVertex{};
+        v.x = static_cast<float>(static_cast<uint16_t>(xLo & 0xFFFF)) / 16.0f;
+        v.y = static_cast<float>(static_cast<uint16_t>((xLo >> 32) & 0xFFFF)) / 16.0f;
+        v.z = static_cast<float>(static_cast<uint32_t>((xHi >> 4) & 0xFFFFFF));
+        v.r = r;
+        v.g = g;
+        v.b = b;
+        v.a = a;
+        v.q = q;
+        v.s = s;
+        v.t = t;
+        v.u = m_curU;
+        v.v = m_curV;
+        v.fog = static_cast<uint8_t>((xHi >> 36) & 0xFF);
+        kicks[i] = ((xHi >> 47) & 1u) ? 0u : 1u;
+    }
+    writeRegisterUnlocked(GS_REG_PRIM, prim);
+    const GSPrimitiveBatch batch = buildDrawBatch(0);
+    if (!m_backend->SubmitPacked(batch.state, vertices.data(), kicks.data(), nloop))
+        return false; // processGIFPacket writes PRIM again
+    updatePreferredDisplaySourceForDraw(batch);
+    // the registers and the vertex queue as nloop vertex kicks leave them
+    m_curQ = nloop ? q : 1.0f;
+    if (nloop)
+    {
+        m_curS = s;
+        m_curT = t;
+        m_curR = r;
+        m_curG = g;
+        m_curB = b;
+        m_curA = a;
+    }
+    m_vtxIndex += static_cast<int>(nloop);
+    if (type == GS_PRIM_TRIANGLE)
+    {
+        m_vtxCount = static_cast<int>(nloop % 3u);
+        for (int i = 0; i < m_vtxCount; ++i)
+            m_vtxQueue[i] = vertices[nloop - static_cast<uint32_t>(m_vtxCount) + static_cast<uint32_t>(i)];
+    }
+    else
+    {
+        m_vtxCount = static_cast<int>(std::min<uint32_t>(nloop, 2u));
+        if (nloop == 1u)
+            m_vtxQueue[0] = vertices[0];
+        else if (nloop >= 2u)
+        {
+            m_vtxQueue[0] = type == GS_PRIM_TRIFAN ? vertices[0] : vertices[nloop - 2u];
+            m_vtxQueue[1] = vertices[nloop - 1u];
+        }
+    }
+    return true;
+}
+
 void GS::uploadImageNative(uint64_t bitbltbuf,
                            uint64_t trxpos,
                            uint64_t trxreg,

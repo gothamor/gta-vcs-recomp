@@ -118,6 +118,11 @@ public:
 
     void processGIFPacket(const uint8_t *data, uint32_t sizeBytes);
     bool processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes);
+    // [gta-recomp] One GIF packet of the shape the C++ reproductions of VU1 programs send (a single PACKED tag with PRE,
+    // NREG 3 = ST RGBAQ XYZF2, a triangle / strip / fan) drawn at once through GSRasterBackend::SubmitPacked instead of
+    // register by register; the GS registers end as processGIFPacket leaves them. false: not that shape, or the backend
+    // declined - send it with processGIFPacket.
+    bool submitPackedKick(const uint8_t *data, uint32_t sizeBytes);
     void uploadImageNative(uint64_t bitbltbuf,
                            uint64_t trxpos,
                            uint64_t trxreg,

@@ -39,6 +39,18 @@ public:
         return false;
     }
 
+    // [gta-recomp] count vertices of one triangle / strip / fan with the state they are drawn with (GS::submitPackedKick):
+    // the primitives Submit would get one vertex kick at a time; kick[i] = 0 for a vertex with ADC (no primitive ends
+    // there). false: not handled (the caller takes the per-vertex path).
+    virtual bool SubmitPacked(const GSDrawState &state, const GSVertex *vertices, const uint8_t *kick, uint32_t count)
+    {
+        (void)state;
+        (void)vertices;
+        (void)kick;
+        (void)count;
+        return false;
+    }
+
     virtual void Initialize(uint8_t *vram, uint32_t vramSize) = 0;
     virtual void Reset() = 0;
 
