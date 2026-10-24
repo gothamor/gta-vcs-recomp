@@ -302,6 +302,12 @@ dropped on uploads (lazy render-target patching).
       156 key-ons on the IOP, 676 before the fix, 126 after; 0 / 91 / 0 voices re-triggered in back-to-back frames.
       The recordings now carry each call's reply and the replay compares them (43,138 calls: 21 differ, all a load or
       stop finishing sooner natively) - the check that would have caught it.
+      Checked 2026-10-24 after the user missed handbrake screech and some door sounds: on scripted handbrake turns
+      and exits / entries the game asks for the same sounds natively as on the emulated IOP (skid hiss 239, squeal 97,
+      door open 217 / shut 216: 8 door sounds in both, at matching moments), the replay matches the IOP's replies, and
+      through the strongest skid the native output equals the reference within ~1% loudness per quarter second.
+      Same at the original 30 fps timing. Not reproduced as a native-driver difference; open until the user compares
+      by ear with `VCS_NATIVE_SOUND=0`. (The scripted turns ran partly on sand, where GTA plays no screech.)
       Mapping tools: `tools/irxdis.py --map / --decompile`
       (headless Ghidra), `tools/mipsdis.py` (MIPS I, standard library).
 - [x] Step 3 (2026-10-24): no emulated IOP in the normal run - no IRX module loaded or run, no IOP time emulated

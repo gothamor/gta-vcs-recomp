@@ -68,6 +68,7 @@ def replay(out):
     env.update({"VCS_SOUND_REPLAY": os.path.join(out, "rpc.bin"), "VCS_SOUND_REPLAY_OUT": os.path.join(out, "native.wav"),
                 "PS2X_SPU2_TRACE": os.path.join(out, "nat"), "PS2X_GS": "hw",
                 "VCS_DATA_DIR": os.path.join(ROOT, "build", "soundcheck", "data_replay")})
+    tc.test_window(env)
     os.makedirs(env["VCS_DATA_DIR"], exist_ok=True)
     r = subprocess.run([tc.VCS_EXE, tc.find_iso()], env=env, cwd=out, capture_output=True, text=True, timeout=600)
     lines = [l for l in (r.stdout + r.stderr).splitlines() if "[sound]" in l]

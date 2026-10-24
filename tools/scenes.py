@@ -68,8 +68,7 @@ def launch(out, hidden, extra_env=None):
         env.setdefault(key, value)
     env["PS2X_CONTROL"] = "1"
     env["VCS_DATA_DIR"] = data
-    if hidden:
-        env["PS2X_HIDDEN"] = "1"
+    tc.test_window(env, visible=not hidden and os.environ.get("VCS_TEST_VISIBLE") == "1")
     env.update(extra_env or {})
     log = open(os.path.join(out, "run.log"), "w", encoding="utf-8")
     proc = subprocess.Popen([tc.VCS_EXE, iso], cwd=out, stdout=log, stderr=subprocess.STDOUT, env=env)

@@ -55,7 +55,7 @@ python tools/build.py --opt none|lto|pgo    # game optimisation, kept until chan
 python tools/bench.py [OUT]                  # game-thread benchmark: fixed city spots + an AI drive (game / worker ms)
 python tools/clean.py [--apply] [--keep-days 7]   # delete test output in build/ (lists first; builds, saves, baselines kept)
 python tools/framerate_audit.py [--steps 15,30,60,100]   # behaviour per simulated second at forced time steps
-python tools/run.py 60 name                 # run 60 s, log to build/run/name.log (visible window)
+python tools/run.py 60 name                 # run 60 s hidden, log to build/run/name.log (--visible: window)
 python tools/run.py 60 name --control       # + control channel for tools/gamectl.py
 python tools/scenes.py capture OUT          # reference scenes from an empty card (screenshots + perf)
 python tools/scenes.py compare REF NEW      # picture / perf diff of two captures
@@ -74,7 +74,9 @@ The rig (`src/debug/rig.cpp`, `tools/rig.py`) drives the game through its own sc
 from the Sanny Builder Library, checked against the handler table - game-internals.md 11). `build/rig/saves/` holds
 card copies to start from (never the user's live card).
 
-- Test runs are **visible** (the user is fine with the window showing). Use `--hidden` only when asked.
+- Test runs are **hidden** (the user's choice, 2026-10-24): no window, physical input ignored, sound on (the user
+  mutes the game in Windows); all launches go through `toolchain.test_window`. `--visible` / `VCS_TEST_VISIBLE=1`
+  shows the window when asked.
 - `VCS_DATA_DIR=<dir>` gives a run its own memory card / cache. **Never run tests against the user's
   card** (`%LOCALAPPDATA%/VCSRecomp/mc0`) when they could write to it; copy it with
   `robocopy /E /COPY:DAT /DCOPY:T` (keeps creation times, which the card order depends on).

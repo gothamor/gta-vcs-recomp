@@ -71,6 +71,18 @@ def find_iso(given=None):
     fail("no disc image: pass your Vice City Stories (USA) .iso, set VCS_ISO, or put the .iso in the repository root")
 
 
+def test_window(env, visible=False):
+    """Test runs are hidden by default (the user's choice, 2026-10-24): no window on the desktop, physical input
+    ignored, driven through the control channel (tools/gamectl.py). Sound stays on (PS2X_AUDIO=1; the user mutes the
+    game in Windows). visible=True or VCS_TEST_VISIBLE=1 shows the window."""
+    if visible or os.environ.get("VCS_TEST_VISIBLE") == "1":
+        env.pop("PS2X_HIDDEN", None)
+        return env
+    env["PS2X_HIDDEN"] = "1"
+    env.setdefault("PS2X_AUDIO", "1")
+    return env
+
+
 def tail(path, lines=20):
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
