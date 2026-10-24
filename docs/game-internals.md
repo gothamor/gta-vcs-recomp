@@ -678,6 +678,29 @@ bit 0 CALL the current object's packet (object `*0x4882A4` + 0x10) and its plug-
 bit 8 UNPACK 5 qwords to VU 49-53 (the GIF tags, colour, flags, fog) from `0x742AE0`; bit 0x1000 UNPACK the viewport
 (VU 12-15) from `0x520920`, MSCAL 0x8F (setup 0x0478), the guard band (VU 65) from `0x520AC0`.
 
+**Where a draw program's VU state comes from** (phase 1b, `VCS_RSL_SHADOW=1`: each MSCAL of 0x0030 / 0x02C0 is tied to
+the draw whose stream started it by its offset in the copied chain, and the VU memory it starts with is compared with
+the draw's RSL state snapshotted at the draw call; the map below found from `VCS_RSL_SHADOW_DUMP` samples):
+
+| VU qwords | what | RSL source | same as the RSL source |
+|---|---|---|---|
+| 0-3 | object matrix | `0x520860` | 85-97%; the rest whole matrices the chain itself uploads (object packets, cell data) |
+| 4-11 | camera matrices | `0x5208A0`, `0x5208E0` | 100% |
+| 12-15 | viewport | `0x520920` | 63-98%; the rest a depth range (rows 14-15) some model packets upload, which stays for the draws after them |
+| 32 | camera position | `0x520990` | 100% |
+| 34-37 | setup slot table | render context (`*0x4882A4`) + 0x60 | 100% |
+| 49-51, 53 | GIF tags, colour, fog | `0x742AE0` | 100% |
+| 52.y | flags | `0x742AE0` + 0x34 | 100% (52.x / .z are written per packet / by the programs) |
+| 59-64 | clip planes | `0x5209A0` | 100% |
+| 65 | guard band | `0x520AC0` | 100% |
+| 16-31 | view, clip and window matrices | computed by the setup programs (6d) from the rows above | - |
+
+Every differing value is accounted for (bench run: city spots and the drive, 0.000% unexplained): uploaded by the
+draw's own stream (its state flush, setters, its packet), carried over from an earlier draw (VU memory persists), or a
+whole block uploaded earlier in the chain. World draws match the RSL state completely; model draws add their packets'
+own state. The "render context" (`*0x4882A4`) is not a per-instance object: a few values recur (`0x16EEEC0`,
+`0x16EF040`, `0x16EF1C0`); the per-instance matrix is the block at `0x520860`.
+
 ## 7. Textures: `.XTX`
 
 Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):

@@ -3,6 +3,7 @@
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_vu_code_log.h" // [gta-recomp]
 #include "runtime/ps2_render_worker.h" // [gta-recomp]
+#include "runtime/ps2_chain_observer.h" // [gta-recomp]
 #include <cstring>
 
 enum VIFCmd : uint8_t
@@ -491,6 +492,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
             vif1_regs.stat ^= (1u << 7); // toggle DBF
 
+            ps2chain::setStreamOffset(pos - 4u); // [gta-recomp] the MSCAL's place in the stream (runtime/ps2_chain_observer.h)
             const ps2hle::MscalBefore hleBefore = ps2hle::mscalBefore(); // [gta-recomp] game HLE / checkers
             const ps2hle::MscalAfter hleAfter = ps2hle::mscalAfter();
             const ps2hle::ChainSegment *segment = survey ? segmentAt(pos - 4u) : nullptr;

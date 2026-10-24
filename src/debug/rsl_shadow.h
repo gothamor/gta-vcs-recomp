@@ -19,4 +19,9 @@ namespace vcs::rslshadow
 
     // Game thread, at the frame kick (before the frame's chain goes out): the frame's draw list is complete.
     void onFrameKick(const uint8_t *rdram);
+
+    // 1b, on the thread processing the chain (the MSCAL hook, before the program): the VU memory a draw program of
+    // 0x0030 / 0x02C0 starts with, checked against the RSL state of the draw whose stream started it - the draw is
+    // found by the MSCAL's offset in the copied chain (runtime/ps2_chain_observer.h).
+    void onMscal(uint32_t startPc, const uint8_t *vu);
 }

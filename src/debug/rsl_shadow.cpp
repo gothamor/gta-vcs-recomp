@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -48,10 +50,22 @@ namespace vcs::rslshadow
             {0x002F9388, Boundary}, {0x002F9AA0, Boundary}, {0x002F9CE8, Boundary}, {0x002F9FA0, Boundary},
             {0x002FB690, Boundary}, {0x002FB3C0, Boundary}, {0x0032CD60, Boundary}, {0x0032D480, Boundary},
             {0x0032D7C8, Boundary}, {0x0032D880, Boundary}, {0x0040C430, Boundary}, {0x0040F6C8, Boundary},
+            {0x002F7388, Boundary}, // runs the state flush without a draw (1b: the resident viewport)
         };
         constexpr int kCount = static_cast<int>(sizeof(kFns) / sizeof(kFns[0]));
 
         PS2Runtime::RecompiledFunction g_originals[kCount] = {};
+
+        // a draw's state at entry, from the sources its state flush uploads (game-internals.md 6i)
+        struct State
+        {
+            uint32_t object = 0, dirty = 0; // *0x4882A4 (the current object), *0x4882A0 (dirty bits)
+            uint8_t vu49[5 * 16] = {};      // 0x742AE0: VU 49-53 (GIF tags, colour, flags, fog)
+            uint8_t viewport[4 * 16] = {};  // 0x520920: VU 12-15
+            uint8_t guard[16] = {};         // 0x520AC0: VU 65
+            uint8_t objectBytes[0x200] = {}; // the object's first 0x200 bytes (VCS_RSL_SHADOW_DUMP: finding its matrix)
+            uint8_t blocks[0x340] = {};      // 0x520860..0x520BA0: the matrix blocks (VCS_RSL_SHADOW_DUMP)
+        };
 
         struct Record
         {
@@ -59,10 +73,63 @@ namespace vcs::rslshadow
             uint32_t a0, a1; // arguments
             uint32_t start;  // cursor at entry
             bool matched = false;
+            State state;     // draws only
         };
         std::vector<Record> g_current, g_kicked; // this frame's / the frame whose chain is being copied
+        uint8_t g_residentViewport[4 * 16] = {}; // the viewport the state flush last uploaded (VU 12-15)
+        const uint8_t *g_rdram = nullptr;         // VCS_RSL_SHADOW_FIND
         uint32_t g_kickedEnd = 0;                // the main stream's end (the cursor at the kick)
         std::vector<size_t> g_draws;             // indices of g_kicked's draws, by start
+
+        // A copied chain's map from stream offsets to draws, for the thread that processes it (1b): an entry per
+        // packet-buffer tag, in chain order - its flat offset and the draw it is the own tag of (else -1). What a
+        // draw's CALL / REF brings in runs until the next packet-buffer tag.
+        struct ChainTable
+        {
+            std::vector<std::pair<uint32_t, int>> entries;
+            std::vector<Record> records; // the frame's records (copied: the game thread goes on)
+        };
+        ChainTable g_building;
+        std::mutex g_tablesMutex;
+        std::map<const void *, std::shared_ptr<ChainTable>> g_tables; // queued chains, by buffer
+        thread_local std::shared_ptr<ChainTable> t_processing;      // the chain the calling thread processes
+        thread_local const uint8_t *t_stream = nullptr;             // ... and its bytes (the key is the buffer)
+
+        // The draw state checked in 1b: VU qwords and where RSL keeps them (game-internals.md 6i; found from
+        // VCS_RSL_SHADOW_DUMP samples). Offsets into State::blocks (0x520860..) unless noted.
+        struct Group
+        {
+            const char *name;
+            uint32_t vu, qwords;
+            int source; // >= 0: offset into blocks; -1 the resident viewport, -2 render context + 0x60, -3 0x742AE0 (+ 16 * k)
+            uint32_t sourceOffset;
+        };
+        constexpr Group kGroups[] = {
+            {"object matrix 0-3", 0, 4, 0x000, 0},
+            {"camera 4-11", 4, 8, 0x040, 0},
+            {"viewport 12-15", 12, 4, -1, 0},
+            {"camera position 32", 32, 1, 0x130, 0},
+            {"slot table 34-37", 34, 4, -2, 0},
+            {"tags 49-50", 49, 2, -3, 0},
+            {"colour 51", 51, 1, -3, 0x20},
+            {"fog 53", 53, 1, -3, 0x40},
+            {"clip planes 59-64", 59, 6, 0x140, 0},
+            {"guard 65", 65, 1, 0x260, 0},
+        };
+        constexpr int kGroupCount = static_cast<int>(sizeof(kGroups) / sizeof(kGroups[0]));
+
+        // per report window, 1b (the processing thread)
+        struct StateStats
+        {
+            uint64_t mscals = 0, inDraws = 0;
+            uint64_t same[kGroupCount] = {}, flagsSame = 0; // flags: VU 52.y
+            // not the same as the RSL state: uploaded by the draw's own stream / carried over from the draw before /
+            // uploaded earlier in the chain / unexplained
+            uint64_t stream[kGroupCount] = {}, carried[kGroupCount] = {}, earlier[kGroupCount] = {}, unexplained[kGroupCount] = {};
+            uint64_t byKind[KindCount] = {}, allSameByKind[KindCount] = {}, allExplainedByKind[KindCount] = {};
+        };
+        std::mutex g_stateMutex;
+        StateStats g_stateStats;
 
         // per report window
         struct Stats
@@ -88,7 +155,30 @@ namespace vcs::rslshadow
         void hook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             // before the original only (DECISIONS.md "Rule for hooks on recompiled functions")
-            g_current.push_back({I, getRegU32(ctx, 4), getRegU32(ctx, 5), cursor(rdram)});
+            g_rdram = rdram;
+            Record &r = g_current.emplace_back(Record{I, getRegU32(ctx, 4), getRegU32(ctx, 5), cursor(rdram)});
+            const auto at = [&](uint32_t a) { return rdram + (a & kRamMask); };
+            // the viewport in VU memory is the one the state flush last uploaded (dirty bit 0x1000), not necessarily
+            // the current global: the flush runs in the draws, FUN_002F9FA0 and FUN_002F7388
+            const uint32_t address = kFns[I].address;
+            if (kFns[I].kind != Boundary || address == 0x002F9FA0u || address == 0x002F7388u)
+            {
+                uint32_t dirty;
+                std::memcpy(&dirty, at(0x4882A0u), 4);
+                if (dirty & 0x1000u)
+                    std::memcpy(g_residentViewport, at(0x520920u), sizeof(g_residentViewport));
+            }
+            if (kFns[I].kind != Boundary)
+            {
+                std::memcpy(&r.state.object, at(0x4882A4u), 4);
+                std::memcpy(&r.state.dirty, at(0x4882A0u), 4);
+                std::memcpy(r.state.vu49, at(0x742AE0u), sizeof(r.state.vu49));
+                std::memcpy(r.state.viewport, g_residentViewport, sizeof(r.state.viewport));
+                std::memcpy(r.state.guard, at(0x520AC0u), sizeof(r.state.guard));
+                if (r.state.object && (r.state.object & kRamMask) + sizeof(r.state.objectBytes) <= kRamMask)
+                    std::memcpy(r.state.objectBytes, at(r.state.object), sizeof(r.state.objectBytes));
+                std::memcpy(r.state.blocks, at(0x520860u), sizeof(r.state.blocks));
+            }
             g_originals[I](rdram, ctx, runtime);
         }
 
@@ -125,11 +215,27 @@ namespace vcs::rslshadow
             return false;
         }
 
-        void observe(uint32_t tagAddr, uint32_t id, uint32_t tagTarget, uint32_t dataAddr, uint32_t qwc, uint64_t vifCodes, bool chainStart)
+        void observe(uint32_t tagAddr, uint32_t id, uint32_t tagTarget, uint32_t dataAddr, uint32_t qwc, uint64_t vifCodes,
+                     uint32_t flatOffset, bool chainStart)
         {
-            (void)chainStart;
+            if (chainStart)
+                g_building = ChainTable{};
             if (g_kicked.empty() || !in(tagAddr, kPktLo, kPktHi))
                 return;
+            if (g_building.records.empty())
+                g_building.records = g_kicked;
+            int ownOf = -1; // the draw this tag is the own tag of (1b: its stream region)
+            struct Push // every main-stream packet-buffer tag starts a region
+            {
+                int &own;
+                uint32_t flat;
+                bool main;
+                ~Push()
+                {
+                    if (main)
+                        g_building.entries.push_back({flat, own});
+                }
+            } push{ownOf, flatOffset, (tagAddr & kRamMask) < g_kickedEnd || (tagAddr & kRamMask) >= g_kickedEnd + 0xE6670u};
             tagAddr &= kRamMask;
             if (tagAddr >= g_kickedEnd && tagAddr < g_kickedEnd + 0xE6670u)
             {
@@ -161,6 +267,8 @@ namespace vcs::rslshadow
                 else if (!d.matched && k == World && id == 3u && (dataAddr & kRamMask) == (d.a0 & kRamMask) &&
                          qwc == (d.a1 & 0xFFFFu))
                     d.matched = own = true;
+                if (own)
+                    ownOf = static_cast<int>(*(it - 1));
             }
             if (call3d || ref3d)
             {
@@ -182,6 +290,38 @@ namespace vcs::rslshadow
                                      r >= 0 ? g_kicked[r].start : 0u, r >= 0 ? tagAddr - g_kicked[r].start : 0u, g_kickedEnd);
                 }
             }
+        }
+
+        // the copied chain went into the queue: its table goes with it (the game thread)
+        void queued(const void *key, uint32_t sizeBytes)
+        {
+            (void)sizeBytes;
+            if (g_building.entries.empty())
+                return;
+            auto table = std::make_shared<ChainTable>(std::move(g_building));
+            g_building = ChainTable{};
+            std::lock_guard<std::mutex> lock(g_tablesMutex);
+            g_tables[key] = std::move(table);
+            if (g_tables.size() > 8u) // chains whose processing was never seen (should not happen)
+                g_tables.erase(g_tables.begin());
+        }
+
+        // the thread processing a chain takes its table
+        void processing(const void *key, bool begin)
+        {
+            if (!begin)
+            {
+                t_processing.reset();
+                t_stream = nullptr;
+                return;
+            }
+            std::lock_guard<std::mutex> lock(g_tablesMutex);
+            const auto it = g_tables.find(key);
+            if (it == g_tables.end())
+                return;
+            t_processing = std::move(it->second);
+            t_stream = static_cast<const uint8_t *>(key);
+            g_tables.erase(it);
         }
 
         // the frame whose chain was copied since the last kick
@@ -233,6 +373,161 @@ namespace vcs::rslshadow
             for (const auto &[fn, text] : byFn)
                 std::fprintf(stderr, "[rsl-shadow]   tags written in %s:%s\n", fnName(fn), text.c_str());
             s = Stats{};
+            StateStats t;
+            {
+                std::lock_guard<std::mutex> lock(g_stateMutex);
+                t = g_stateStats;
+                g_stateStats = StateStats{};
+            }
+            if (t.inDraws)
+            {
+                const double d = static_cast<double>(t.inDraws);
+                std::fprintf(stderr, "[rsl-shadow] state (1b): %llu draw-program MSCALs, %llu inside a draw's stream; VU as the draw's RSL state:",
+                             static_cast<unsigned long long>(t.mscals), static_cast<unsigned long long>(t.inDraws));
+                for (int g = 0; g < kGroupCount; ++g)
+                    std::fprintf(stderr, " %s %.2f%%,", kGroups[g].name, 100.0 * t.same[g] / d);
+                std::fprintf(stderr, " flags 52.y %.2f%%\n", 100.0 * t.flagsSame / d);
+                for (int g = 0; g < kGroupCount; ++g)
+                    if (t.stream[g] || t.carried[g] || t.earlier[g] || t.unexplained[g])
+                        std::fprintf(stderr,
+                                     "[rsl-shadow]   %s differs: from the draw's own stream %.2f%%, carried from the draw before %.2f%%, "
+                                     "uploaded earlier in the chain %.2f%%, unexplained %.3f%%\n",
+                                     kGroups[g].name, 100.0 * t.stream[g] / d, 100.0 * t.carried[g] / d, 100.0 * t.earlier[g] / d,
+                                     100.0 * t.unexplained[g] / d);
+                for (int k = Model; k < KindCount; ++k)
+                    if (t.byKind[k])
+                        std::fprintf(stderr, "[rsl-shadow]   %s draws: %llu MSCALs, all groups the RSL state %.2f%%, all explained %.3f%%\n",
+                                     kKindNames[k], static_cast<unsigned long long>(t.byKind[k]), 100.0 * t.allSameByKind[k] / t.byKind[k],
+                                     100.0 * t.allExplainedByKind[k] / t.byKind[k]);
+            }
+        }
+    }
+
+    void onMscal(uint32_t startPc, const uint8_t *vu)
+    {
+        const ChainTable *table = t_processing.get();
+        if (!table || (startPc != 0x30u && startPc != 0x2C0u))
+            return;
+        const uint32_t at = ps2chain::streamOffset();
+        const auto it = std::upper_bound(table->entries.begin(), table->entries.end(), at,
+                                         [](uint32_t a, const std::pair<uint32_t, int> &e) { return a < e.first; });
+        const int draw = it == table->entries.begin() ? -1 : (it - 1)->second;
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        StateStats &t = g_stateStats;
+        ++t.mscals;
+        if (draw < 0)
+            return;
+        ++t.inDraws;
+        const Record &r = table->records[static_cast<size_t>(draw)];
+        const State &s = r.state;
+        // the draw's own stream so far: its state (everything after the previous draw's region: the flush, setters'
+        // uploads), its CALL / REF and what that brought in, up to this MSCAL
+        auto first = it - 1;
+        while (first != table->entries.begin() && (first - 1)->second < 0)
+            --first;
+        const uint32_t regionStart = first->first;
+        const uint8_t *stream = t_stream ? t_stream + regionStart : nullptr;
+        const size_t streamBytes = stream && at > regionStart ? at - regionStart : 0u;
+        // a block of bytes (the differing rows of a group, together) in the draw's own stream / anywhere in the chain
+        // before this MSCAL
+        const auto inStream = [&](const uint8_t *rows, size_t bytes) {
+            for (size_t o = 0; o + bytes <= streamBytes; o += 4u)
+                if (std::memcmp(stream + o, rows, bytes) == 0)
+                    return true;
+            return false;
+        };
+        const auto inChainBefore = [&](const uint8_t *rows, size_t bytes) {
+            for (size_t o = 0; t_stream && o + bytes <= at; o += 4u)
+                if (std::memcmp(t_stream + o, rows, bytes) == 0)
+                    return true;
+            return false;
+        };
+        thread_local uint8_t lastVu[1024 * 16]; // the VU memory the previous draw program started with
+        thread_local bool haveLast = false;
+        bool allSame = true, viewportSame = true, allExplained = true;
+        for (int g = 0; g < kGroupCount; ++g)
+        {
+            const Group &G = kGroups[g];
+            const uint8_t *expected = G.source >= 0 ? s.blocks + G.source
+                                    : G.source == -1 ? s.viewport
+                                    : G.source == -2 ? s.objectBytes + 0x60
+                                                     : s.vu49 + G.sourceOffset;
+            const bool same = std::memcmp(vu + G.vu * 16u, expected, G.qwords * 16u) == 0;
+            t.same[g] += same ? 1u : 0u;
+            allSame = allSame && same;
+            if (G.source == -1)
+                viewportSame = same;
+            if (!same)
+            {
+                // each differing row: uploaded by the draw's own stream (its packet's state), carried over from the
+                // draw before (VU memory persists), uploaded earlier in this chain, or unexplained
+                // the differing rows as one block (first .. last differing row): sources upload them together
+                uint32_t lo = G.qwords, hi = 0;
+                for (uint32_t q = 0; q < G.qwords; ++q)
+                    if (std::memcmp(vu + (G.vu + q) * 16u, expected + q * 16u, 16) != 0)
+                    {
+                        lo = std::min(lo, q);
+                        hi = q + 1u;
+                    }
+                const uint8_t *rows = vu + (G.vu + lo) * 16u;
+                const size_t bytes = (hi - lo) * 16u;
+                int worst; // 0 own stream, 1 carried, 2 earlier in the chain, 3 unexplained
+                if (inStream(rows, bytes))
+                    worst = 0;
+                else if (haveLast && std::memcmp(rows, lastVu + (G.vu + lo) * 16u, bytes) == 0)
+                    worst = 1;
+                else
+                    worst = inChainBefore(rows, bytes) ? 2 : 3;
+                (worst == 0 ? t.stream : worst == 1 ? t.carried : worst == 2 ? t.earlier : t.unexplained)[g] += 1u;
+                allExplained = allExplained && worst < 3;
+            }
+        }
+        std::memcpy(lastVu, vu, sizeof(lastVu));
+        haveLast = true;
+        t.allExplainedByKind[kFns[r.fn].kind] += allExplained ? 1u : 0u;
+        t.flagsSame += std::memcmp(vu + 52u * 16u + 4u, s.vu49 + 0x34, 4) == 0 ? 1u : 0u;
+        // VCS_RSL_SHADOW_FIND=1: where in guest RAM the VU's viewport z row (14) and object matrix (0) of the first
+        // mismatching draws are (finding their source)
+        static const bool find = std::getenv("VCS_RSL_SHADOW_FIND") != nullptr;
+        static int found = 0;
+        if (find && g_rdram && found < 16 && (!viewportSame || std::memcmp(vu, s.blocks, 64) != 0))
+        {
+            ++found;
+            for (const uint32_t q : {14u, 15u, 0u, 3u})
+            {
+                std::fprintf(stderr, "[rsl-shadow] draw %06x a0 %08x dirty %05x: VU %u found at", kFns[r.fn].address, r.a0, s.dirty, q);
+                int hits = 0;
+                for (uint32_t a = 0; a + 16u <= 0x2000000u && hits < 6; a += 16u)
+                    if (std::memcmp(g_rdram + a, vu + q * 16u, 16) == 0)
+                    {
+                        std::fprintf(stderr, " %08x", a);
+                        ++hits;
+                    }
+                std::fprintf(stderr, "%s\n", hits ? "" : " (nowhere)");
+            }
+        }
+        ++t.byKind[kFns[r.fn].kind];
+        t.allSameByKind[kFns[r.fn].kind] += allSame ? 1u : 0u;
+        // VCS_RSL_SHADOW_DUMP=<n>: the first n draws' state and VU memory at their program (analysis: build/run)
+        static const int dumpMax = std::getenv("VCS_RSL_SHADOW_DUMP") ? std::atoi(std::getenv("VCS_RSL_SHADOW_DUMP")) : 0;
+        static int dumped = 0, dumpedDiff = 0;
+        static uint64_t seen = 0;
+        ++seen;
+        // spread over the run after the start-up, and as many viewport mismatches
+        const bool take = seen > 200000u && (viewportSame ? (seen % 997u == 0u && dumped - dumpedDiff < dumpMax / 2) : dumpedDiff < dumpMax / 2);
+        if (dumped < dumpMax && take)
+        {
+            char name[64];
+            dumpedDiff += viewportSame ? 0 : 1;
+            std::snprintf(name, sizeof(name), "rsl_shadow_%03d.bin", dumped++);
+            if (FILE *f = std::fopen(name, "wb"))
+            {
+                const uint32_t head[4] = {kFns[r.fn].address, r.a0, r.a1, startPc};
+                std::fwrite(head, 1, sizeof(head), f);
+                std::fwrite(&s, 1, sizeof(s), f);
+                std::fwrite(vu, 1, 16384, f);
+                std::fclose(f);
+            }
         }
     }
 
@@ -247,6 +542,7 @@ namespace vcs::rslshadow
                 runtime.replaceFunction(kFns[i].address, hookFor(i, std::make_integer_sequence<int, kCount>{}));
         }
         ps2chain::setTagObserver(&observe);
+        ps2chain::setChainObservers(&queued, &processing);
     }
 
     void onFrameKick(const uint8_t *rdram)

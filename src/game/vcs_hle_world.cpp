@@ -14,6 +14,7 @@
 #include "vcs_vu_math.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_draw_source.h"
+#include "debug/rsl_shadow.h"
 
 #include <algorithm>
 #include <chrono>
@@ -2728,6 +2729,7 @@ namespace
 
     bool beforeNative(const ps2hle::MscalContext &c)
     {
+        vcs::rslshadow::onMscal(c.startPc, c.vuData); // VCS_RSL_SHADOW 1b (debug/rsl_shadow.h): nothing unless on
         const int rounding = std::fegetround();
         g_callerRounding = rounding;
         std::fesetround(FE_TOWARDZERO);

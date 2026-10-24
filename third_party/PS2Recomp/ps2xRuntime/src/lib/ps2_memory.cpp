@@ -327,9 +327,37 @@ namespace
 
 }
 
+namespace // [gta-recomp] runtime/ps2_chain_observer.h
+{
+    std::atomic<ps2chain::QueuedObserver> g_chainQueued{nullptr};
+    std::atomic<ps2chain::ProcessingObserver> g_chainProcessing{nullptr};
+    thread_local uint32_t t_streamOffset = 0;
+}
+
 void ps2chain::setTagObserver(TagObserver observer) // [gta-recomp]
 {
     g_chainObserver.store(observer, std::memory_order_relaxed);
+}
+
+void ps2chain::setChainObservers(QueuedObserver queued, ProcessingObserver processing) // [gta-recomp]
+{
+    g_chainQueued.store(queued, std::memory_order_relaxed);
+    g_chainProcessing.store(processing, std::memory_order_relaxed);
+}
+
+uint32_t ps2chain::streamOffset() { return t_streamOffset; }            // [gta-recomp]
+void ps2chain::setStreamOffset(uint32_t offset) { t_streamOffset = offset; } // [gta-recomp]
+
+void ps2chain::notifyQueued(const void *key, uint32_t sizeBytes) // [gta-recomp]
+{
+    if (const QueuedObserver o = g_chainQueued.load(std::memory_order_relaxed))
+        o(key, sizeBytes);
+}
+
+void ps2chain::notifyProcessing(const void *key, bool begin) // [gta-recomp]
+{
+    if (const ProcessingObserver o = g_chainProcessing.load(std::memory_order_relaxed))
+        o(key, begin);
 }
 
 // Helpers for GS VRAM addressing (PSMCT32 path).
@@ -1563,6 +1591,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     while (tagsProcessed < kMaxChainTags)
                     {
                         const uint32_t currentTagAddr = tagAddr;
+                        const uint32_t flatOffset = static_cast<uint32_t>(chainBuf.size()); // [gta-recomp] chain observer
                         const bool tagInSPR = isScratchpad(tagAddr);
                         uint32_t physTag = 0;
                         try
@@ -1759,7 +1788,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                                 censusTag(currentTagAddr, id, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u, tagsProcessed == 1);
                             if (const ps2chain::TagObserver observer = g_chainObserver.load(std::memory_order_relaxed))
                                 observer(currentTagAddr, id, addr, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u,
-                                         loadScalar<uint64_t>(tp, 8, 16, "dma tag hi", currentTagAddr), tagsProcessed == 1);
+                                         loadScalar<uint64_t>(tp, 8, 16, "dma tag hi", currentTagAddr), flatOffset, tagsProcessed == 1);
                         }
                         if (irq && tieEnabled)
                             endChain = true;
@@ -1820,6 +1849,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         }
                         else if (channelBase == 0x10009000u)
                         {
+                            ps2chain::notifyQueued(pt.chainData.data(), static_cast<uint32_t>(pt.chainData.size())); // [gta-recomp]
                             m_pendingVif1Transfers.push_back(std::move(pt));
                         }
                         else if (channelBase == 0x10008000u)
@@ -2156,7 +2186,9 @@ void PS2Memory::processPendingTransfers()
         if (!p.chainData.empty())
         {
             m_vif1Segments = p.segments.empty() ? nullptr : &p.segments;
+            ps2chain::notifyProcessing(p.chainData.data(), true); // [gta-recomp]
             processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
+            ps2chain::notifyProcessing(p.chainData.data(), false);
             m_vif1Segments = nullptr;
             if (ps2hle::surveyEnabled())
                 ps2hle::onChainEnd();
@@ -2226,7 +2258,11 @@ void PS2Memory::processPendingTransfers()
                 for (size_t i = 0; i < batch->vif1.size(); ++i)
                 {
                     m_vif1Segments = batch->vif1Segments[i].empty() ? nullptr : &batch->vif1Segments[i];
+                    if (batch->vif1Chain[i])
+                        ps2chain::notifyProcessing(batch->vif1[i].data(), true); // [gta-recomp]
                     processVIF1Data(batch->vif1[i].data(), static_cast<uint32_t>(batch->vif1[i].size()));
+                    if (batch->vif1Chain[i])
+                        ps2chain::notifyProcessing(batch->vif1[i].data(), false);
                     m_vif1Segments = nullptr;
                     if (batch->vif1Chain[i] && ps2hle::surveyEnabled())
                         ps2hle::onChainEnd();

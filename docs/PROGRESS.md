@@ -443,7 +443,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_TRACE_IM2D=n`, `VCS_TRACE_IM2D_MARKERS=1..5` | log n Im2D calls (caller, primitive, vertices) / the 2D pass's calls, from 30 s on |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
 | `VCS_TRACE_RSL=1` | which functions build the frame's packets: calls and bytes per frame per function, every 5 s (`[rsl]`; game-internals.md 6i) |
-| `VCS_RSL_SHADOW=1` | RSL shadow draw list: each draw call checked against its tag in the frame's chain, 3D tags outside draws listed (`[rsl-shadow]`; not with `VCS_TRACE_RSL`) |
+| `VCS_RSL_SHADOW=1` | RSL shadow draw list: each draw call checked against its tag in the frame's chain, 3D tags outside draws listed, each draw program's VU state checked against the draw's RSL state (`[rsl-shadow]`, `state (1b)`; not with `VCS_TRACE_RSL`) |
+| `VCS_RSL_SHADOW_DUMP=n`, `VCS_RSL_SHADOW_FIND=1` | with `VCS_RSL_SHADOW`: n samples of draw state + VU memory (`rsl_shadow_NNN.bin`); where in guest RAM mismatching VU rows are |
 | `PS2X_CHAIN_CENSUS=1` | the VIF1 chain by tag location / id / data source: tags and quadwords per chain, every 5 s (`[chain]`) |
 | `VCS_PROFILE_GUEST_FILE=<path>` | with `VCS_PROFILE`: every guest function's samples per report window, appended (for sums by subsystem) |
 | `PS2X_HLE_PACKED=0`, `PS2X_HW_PACKED_VERIFY=1` | the C++ reproductions' strips / fans through the GS front end; check the packed recording against it per packet |

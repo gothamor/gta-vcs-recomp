@@ -76,11 +76,18 @@ the chain - model instances (`FUN_002F7D58` / `FUN_002F80A0`), world geometry (`
 outside them is frame and material state (the camera's packet, the sectors' cached setup blocks). So hooking these
 functions is enough to see every 3D draw: phase 2 does not need to find draws anywhere else.
 
-**1b, state** (next): the shadow record also carries what the draw will draw with - from the flush's sources
-(game-internals.md 6i: the object at `*0x4882A4` and its packet, the dirty bits at `0x4882A0`, VU 49-53 from
-`0x742AE0`, the viewport, the texture / GS register queue) - and the render worker checks it against the native draw
-the packet path produced (the MSCAL's VU memory: matrices 24-31, tags, colour, fog), per draw, tied by the chain
-offset of the draw's own tag. Done when every native draw of a frame has a shadow record with the same constants.
+**1b, state** (done 2026-10-24): the shadow record carries the draw's RSL state (render context, dirty bits, the
+matrix blocks `0x520860..`, VU 49-53 from `0x742AE0`, the viewport, guard); every MSCAL of a draw program is tied to
+its draw by its offset in the copied chain (runtime chain observer: flat offsets, the chain's buffer as key, the
+MSCAL's stream offset - works with the render worker) and its starting VU memory is checked group by group
+(game-internals.md 6i, the table there). Result over a bench run (city spots and the drive): every MSCAL inside a draw's
+stream; camera, camera position, slot table, tags, colour, fog, flags, clip planes and guard 100% the RSL state; the
+object matrix and the viewport differ for model draws whose packets upload their own (a static object's matrix, a
+depth range that then stays for the draws after it); **0.000% unexplained**.
+
+What this means for phase 2: a world draw can be made from the RSL state alone; a model draw needs the RSL state plus
+the state its packet uploads (decoded once per packet, the packets are static) and the VU-resident semantics (a value a
+packet sets stays until something overwrites it). World sectors first, as planned.
 
 Planned (kept for reference):
 
