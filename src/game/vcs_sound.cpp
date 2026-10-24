@@ -29,6 +29,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -334,7 +335,7 @@ namespace vcs
             uint32_t voicePlaying(uint32_t voice) // 0x4138: envelope above zero
             {
                 uint32_t core, index;
-                return voiceOf(voice, core, index) && m_sd.getParam(index | core << 1 | 0x500) != 0 ? 1u : 0u;
+                return voiceOf(voice, core, index) && m_sd.getParam(core | index << 1 | 0x500) != 0 ? 1u : 0u;
             }
 
             const uint32_t *sound(int32_t id) const
@@ -1364,10 +1365,13 @@ namespace vcs
                            });
             std::vector<uint8_t> ram(0x400000);
             uint64_t now = 0, time = 0;
-            uint32_t h[4], calls = 0;
+            uint32_t h[4], calls = 0, expected = 0;
+            std::map<uint32_t, std::pair<uint32_t, uint32_t>> differ; // command group -> (calls, replies that differ)
+            std::map<uint32_t, std::string> examples;
             while (std::fread(&time, 8, 1, in) == 1 && std::fread(h, 4, 4, in) == 4)
             {
-                if (h[2] > 0x100000u || (h[2] && std::fread(ram.data() + 0x100000, 1, h[2], in) != h[2]))
+                if (h[2] > 0x100000u || (h[2] && std::fread(ram.data() + 0x100000, 1, h[2], in) != h[2]) ||
+                    std::fread(&expected, 4, 1, in) != 1)
                     break;
                 if (time > now)
                     engine.clock(time - now);
@@ -1381,8 +1385,31 @@ namespace vcs
                 {
                     engine.call(ram.data(), request);
                     ++calls;
+                    if (request.receive.size >= 4)
+                    {
+                        uint32_t reply;
+                        std::memcpy(&reply, ram.data() + 0x200000, 4);
+                        const uint32_t group = (request.sid & 0xF) << 24 | (request.function & 0xFFFF00);
+                        auto &d = differ[group];
+                        ++d.first;
+                        if (reply != expected)
+                        {
+                            if (!d.second++)
+                            {
+                                char text[96];
+                                std::snprintf(text, sizeof(text), "fn 0x%x at sample %llu: 0x%x, the IOP 0x%x", request.function,
+                                              static_cast<unsigned long long>(time / 8u / Spu2::kCyclesPerSample), reply, expected);
+                                examples[group] = text;
+                            }
+                        }
+                    }
                 }
             }
+            for (const auto &[group, d] : differ)
+                if (d.second)
+                    std::fprintf(stderr, "[sound] replay: replies differ: server %x commands 0x%05x: %u of %u (first: %s)\n",
+                                 0x65686570 | (group >> 24), group & 0xFFFFFF, d.second, d.first, examples[group].c_str());
+            std::fprintf(stderr, "[sound] replay: %u replies compared\n", [&] { uint32_t n = 0; for (auto &e : differ) n += e.second.first; return n; }());
             engine.clock(294912000ull); // one more second
             header(out, s_frames);
             std::fclose(out);

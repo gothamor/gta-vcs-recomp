@@ -297,6 +297,11 @@ dropped on uploads (lazy render-target patching).
       behind the IOP clock). Found on the way: the radio started at volume 0 for 0.45 s after a station change (the
       preload must take its DMA time - game-internals.md 9a). The loop at a stream's end (no capture reaches one):
       a synthetic call sequence opening FLASH.VB 3 s before its end with looping on plays 13 s on without a gap.
+      Fixed 2026-10-24 (the user heard it): bike engines restarting every frame, cars playing rev samples while
+      slowing - the native "is voice v playing" (`0xA0A00`) read another voice's envelope. Same bike / car ride:
+      156 key-ons on the IOP, 676 before the fix, 126 after; 0 / 91 / 0 voices re-triggered in back-to-back frames.
+      The recordings now carry each call's reply and the replay compares them (43,138 calls: 21 differ, all a load or
+      stop finishing sooner natively) - the check that would have caught it.
       Mapping tools: `tools/irxdis.py --map / --decompile`
       (headless Ghidra), `tools/mipsdis.py` (MIPS I, standard library).
 - [x] Step 3 (2026-10-24): no emulated IOP in the normal run - no IRX module loaded or run, no IOP time emulated

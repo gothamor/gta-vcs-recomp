@@ -10,7 +10,8 @@
 for cutscene audio) with VCS_NATIVE_SOUND=0, recording every call to CDSTREAM's sound servers with its IOP time
 (PS2X_RPC_RECORD), the emulated SPU2's register writes (PS2X_SPU2_TRACE) and the audio output (PS2X_AUDIO_DUMP).
 `replay` runs vcs.exe in VCS_SOUND_REPLAY mode: the recorded calls go to the native driver at the same IOP times,
-without the game, writing its own trace and audio. `compare` reports how many register writes match per second,
+without the game, writing its own trace and audio and listing every command whose reply differs from the IOP's (the
+game acts on them: "is this voice still playing" decides whether an engine sound is restarted). `compare` reports how many register writes match per second,
 the first differences, and how close the two audio outputs are.
 """
 import argparse
@@ -70,7 +71,7 @@ def replay(out):
     os.makedirs(env["VCS_DATA_DIR"], exist_ok=True)
     r = subprocess.run([tc.VCS_EXE, tc.find_iso()], env=env, cwd=out, capture_output=True, text=True, timeout=600)
     lines = [l for l in (r.stdout + r.stderr).splitlines() if "[sound]" in l]
-    print("\n".join(lines[-5:]))
+    print("\n".join(l for l in lines if "replay" in l))  # calls replayed; any replies that differ from the IOP's
     if r.returncode != 0:
         raise SystemExit("replay failed (%d)" % r.returncode)
 

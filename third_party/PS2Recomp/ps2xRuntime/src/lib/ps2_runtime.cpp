@@ -882,24 +882,32 @@ bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
 
 ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx, ps2x::iop::RpcRequest request)
 {
-    if (ps2_iop_native::recording()) // [gta-recomp] PS2X_RPC_RECORD
+    const bool recording = ps2_iop_native::recording(); // [gta-recomp] PS2X_RPC_RECORD: the call, then its reply
+    if (recording)
         ps2_iop_native::record(rdram, request,
                                ps2_iop_native::emulatedIop() ? m_iopSubsystem->debugSnapshot().emulatorCycles * 8u
                                                              : ps2_iop_native::eeCycles());
-    ps2x::iop::RpcResult native;            // [gta-recomp] a native server wins over the emulated IOP's
-    if (ps2_iop_native::dispatch(rdram, request, native))
-        return native;
-    if (!ps2_iop_native::emulatedIop())
+    const auto handle = [&]() -> ps2x::iop::RpcResult
     {
-        static int reported = 0;
-        if (reported++ < 16)
-            std::fprintf(stderr, "[iop-native] no native server for sid 0x%x (fn 0x%x) with the emulated IOP off\n",
-                         request.sid, request.function);
-        return {};
-    }
-    auto scope = m_iopHost->enterCall(ctx, rdram);
-    request.callToken = scope.token();
-    return m_iopSubsystem->handleRpc(request);
+        ps2x::iop::RpcResult native; // [gta-recomp] a native server wins over the emulated IOP's
+        if (ps2_iop_native::dispatch(rdram, request, native))
+            return native;
+        if (!ps2_iop_native::emulatedIop())
+        {
+            static int reported = 0;
+            if (reported++ < 16)
+                std::fprintf(stderr, "[iop-native] no native server for sid 0x%x (fn 0x%x) with the emulated IOP off\n",
+                             request.sid, request.function);
+            return {};
+        }
+        auto scope = m_iopHost->enterCall(ctx, rdram);
+        request.callToken = scope.token();
+        return m_iopSubsystem->handleRpc(request);
+    };
+    const ps2x::iop::RpcResult result = handle();
+    if (recording)
+        ps2_iop_native::recordReply(rdram, request);
+    return result;
 }
 
 void PS2Runtime::notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransfer &transfer)

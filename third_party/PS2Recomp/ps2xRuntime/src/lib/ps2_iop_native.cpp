@@ -86,42 +86,76 @@ namespace ps2_iop_native
         return on;
     }
 
+    namespace
+    {
+        struct Recorder
+        {
+            std::mutex mutex;
+            std::FILE *file = nullptr;
+            std::vector<uint32_t> sids;
+
+            Recorder()
+            {
+                if (const char *path = std::getenv("PS2X_RPC_RECORD"))
+                    file = std::fopen(path, "wb");
+                const char *v = std::getenv("PS2X_RPC_RECORD_SIDS");
+                for (const char *p = v; p && *p;)
+                {
+                    char *end = nullptr;
+                    const unsigned long sid = std::strtoul(p, &end, 16);
+                    if (end == p)
+                        break;
+                    sids.push_back(static_cast<uint32_t>(sid));
+                    p = *end == ',' ? end + 1 : end;
+                }
+            }
+
+            bool wanted(uint32_t sid) const
+            {
+                return file && (sids.empty() || std::find(sids.begin(), sids.end(), sid) != sids.end());
+            }
+        };
+
+        Recorder &recorder()
+        {
+            static Recorder *r = new Recorder();
+            return *r;
+        }
+
+        const uint8_t *guestBytes(const uint8_t *rdram, uint32_t address, uint32_t size)
+        {
+            address &= 0x1FFFFFFFu;
+            return rdram && address && size && address + size <= 0x2000000u ? rdram + address : nullptr;
+        }
+    }
+
+    // a call: IOP time (u64), sid, function, send size, receive size, the bytes sent; recordReply adds the reply's
+    // first word (u32, 0 without a receive buffer) once the call returned
     void record(const uint8_t *rdram, const ps2x::iop::RpcRequest &request, uint64_t iopTimeEeCycles)
     {
-        static const char *path = std::getenv("PS2X_RPC_RECORD");
-        if (!path)
+        Recorder &r = recorder();
+        if (!r.wanted(request.sid))
             return;
-        static const std::vector<uint32_t> sids = []
-        {
-            std::vector<uint32_t> list;
-            const char *v = std::getenv("PS2X_RPC_RECORD_SIDS");
-            for (const char *p = v; p && *p;)
-            {
-                char *end = nullptr;
-                const unsigned long sid = std::strtoul(p, &end, 16);
-                if (end == p)
-                    break;
-                list.push_back(static_cast<uint32_t>(sid));
-                p = *end == ',' ? end + 1 : end;
-            }
-            return list;
-        }();
-        if (!sids.empty() && std::find(sids.begin(), sids.end(), request.sid) == sids.end())
+        std::lock_guard<std::mutex> lock(r.mutex);
+        const uint8_t *send = guestBytes(rdram, request.send.address, request.send.size);
+        const uint32_t header[4] = {request.sid, request.function, send ? request.send.size : 0u, request.receive.size};
+        std::fwrite(&iopTimeEeCycles, 8, 1, r.file);
+        std::fwrite(header, 4, 4, r.file);
+        if (send)
+            std::fwrite(send, 1, request.send.size, r.file);
+    }
+
+    void recordReply(const uint8_t *rdram, const ps2x::iop::RpcRequest &request)
+    {
+        Recorder &r = recorder();
+        if (!r.wanted(request.sid))
             return;
-        static std::mutex mutex;
-        static std::FILE *file = std::fopen(path, "wb");
-        if (!file)
-            return;
-        std::lock_guard<std::mutex> lock(mutex);
-        const uint64_t time = iopTimeEeCycles;
-        const uint32_t send = request.send.address & 0x1FFFFFFFu;
-        const uint32_t size = (rdram && send && send + request.send.size <= 0x2000000u) ? request.send.size : 0u;
-        const uint32_t header[4] = {request.sid, request.function, size, request.receive.size};
-        std::fwrite(&time, 8, 1, file);
-        std::fwrite(header, 4, 4, file);
-        if (size)
-            std::fwrite(rdram + send, 1, size, file);
-        std::fflush(file); // the game leaves through _Exit
+        std::lock_guard<std::mutex> lock(r.mutex);
+        uint32_t reply = 0;
+        if (const uint8_t *receive = guestBytes(rdram, request.receive.address, 4))
+            std::memcpy(&reply, receive, 4);
+        std::fwrite(&reply, 4, 1, r.file);
+        std::fflush(r.file); // the game leaves through _Exit
     }
 
     void setEmulatedIop(bool enabled) { g_emulatedIop.store(enabled); }

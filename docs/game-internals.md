@@ -643,6 +643,11 @@ below are module offsets (CDSTREAM loads at IOP 0x1D600 on the emulated IOP); "d
   sample rate; `0xA0D00` request bank (arg >> 8 = bank, arg & 0xFF = 0xFF to load); `0xA0F00` effects volume
   (signed byte, 0x7F); `0xB0000` the voice block; `0xB0100` bank status (1 loaded, 2 loading); `0xB0200` / `0xB0300`
   is a special sound ready / load one (arg >> 8 = sound, & 0xFF = slot type).
+- **The game decides by `0xA0A00+v`** whether an effect voice is still sounding (ENVX != 0, ~150 queries a second
+  while driving): an engine loop it believes stopped is keyed on again. A native port that read the wrong voice's
+  envelope (`index | core << 1` for libsd's `core | index << 1`) made the bike's engine restart every frame (a short
+  sample looping fast, sometimes silence at speed) and cars play rev samples while slowing (found 2026-10-24 by the
+  user; 676 key-ons vs the IOP's 156 over the same ride, 91 back-to-back restarts vs 0).
 - **Init** (0x3B10): `sceSdInit(0)`, SPDIF mode 0x800, main volumes 0 then 0x3FFF, a 128 KB IOP buffer, then every
   bank's `\AUDIO\SET<b/10>\SFX<b>_PS.SDT` read into one sound table: **12 bytes per sound** - offset in the bank's
   .RAW, bytes, sample rate - indexed from bank b's first sound (68 constants written by 0x3B10 to data 0x9FC0; last
