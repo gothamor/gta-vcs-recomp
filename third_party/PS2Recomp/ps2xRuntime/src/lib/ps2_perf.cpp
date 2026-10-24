@@ -29,7 +29,10 @@ namespace ps2perf
         constexpr size_t kHistory = 600;     // samples kept for the overlay
         constexpr size_t kGraphSamples = 240; // samples shown in the graph
         constexpr const char *kPhaseNames[kPhases] = {"game", "render", "iop", "wait"};
-        constexpr const char *kCounterNames[kCounters] = {"draws", "verts", "tex_uploads", "dma_tags", "vu1_programs"};
+        constexpr const char *kCounterNames[kCounters] = {"draws", "verts", "tex_uploads", "dma_tags", "vu1_programs",
+                                                          "gs_draws", "gs_verts", "gs_vu1", "gs_hle", "gs_path2", "gs_path3",
+                                                          "native_draws", "hud_draws", "post_draws"};
+        constexpr size_t kFirstSourceCounter = static_cast<size_t>(Counter::GsDraws); // [gta-recomp] summaryLine
 
         uint64_t nowNs()
         {
@@ -322,7 +325,7 @@ namespace ps2perf
             const int pad = fs / 2;
             const int w = std::min(screenWidth() - 16, fs * 36);
             const int graphH = fs * 7;
-            const int lines = 7;
+            const int lines = 8; // [gta-recomp] + draw sources
             const int h = pad * 3 + lines * lh + graphH + lh;
             const int x = 8, y = 8;
             rect(x, y, w, h, rgba(0, 0, 0, 175));
@@ -351,6 +354,14 @@ namespace ps2perf
                     white);
             addLine(fmt("GS  %5.0f draws  %5.1fk verts  %3.0f tex uploads", now.counters[0], now.counters[1] / 1000.0, now.counters[2]), white);
             addLine(fmt("DMA %5.0f tags   VU1 %5.0f programs", now.counters[3], now.counters[4]), white);
+            { // [gta-recomp] draw sources
+                const auto *c = now.counters;
+                const auto n = [](Counter k) { return static_cast<size_t>(k); };
+                addLine(fmt("NATIVE %4.0f draws  %3.0f hud  %2.0f post   GS PATH %4.0f (vu1 %.0f hle %.0f p2 %.0f p3 %.0f)",
+                            c[n(Counter::NativeDraws)], c[n(Counter::HudDraws)], c[n(Counter::PostDraws)], c[n(Counter::GsDraws)],
+                            c[n(Counter::GsVu1)], c[n(Counter::GsHle)], c[n(Counter::GsPath2)], c[n(Counter::GsPath3)]),
+                        white);
+            }
             addLine(fmt("AUDIO %3.0f ms queued   %llu underruns (last %zu frames)", now.audioMs, static_cast<unsigned long long>(win.underruns),
                         samples.size()),
                     now.audioMs < 20.0 ? rgba(245, 100, 90, 255) : white);
@@ -571,7 +582,13 @@ namespace ps2perf
                fmt(" black_frames=%llu dip_frames=%llu probed_frames=%llu", static_cast<unsigned long long>(g_blackFrames.load()),
                    static_cast<unsigned long long>(g_dipFrames.load()),
                    static_cast<unsigned long long>(g_probedFrames.load())) + // [gta-recomp] brightness probe
-               fmt(" worker_ms=%.1f", r.workerMs); // [gta-recomp] render submission worker
+               fmt(" worker_ms=%.1f", r.workerMs) + // [gta-recomp] render submission worker
+               [&] { // [gta-recomp] draw sources
+                   std::string s;
+                   for (size_t c = kFirstSourceCounter; c < kCounters; ++c)
+                       s += fmt(" %s=%.1f", kCounterNames[c], r.counters[c]);
+                   return s;
+               }();
     }
 
     void shutdown()

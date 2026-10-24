@@ -10,6 +10,7 @@
 #include "game_overrides.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/gs/gs_frontend.h"
+#include "runtime/gs/gs_draw_source.h" // [gta-recomp]
 #include "runtime/ee_scheduler.h"
 #include "ThreadNaming.h"
 #include "Kernel/Stubs/Audio.h"
@@ -1097,6 +1098,7 @@ bool PS2Runtime::syncCoreSubsystems()
                                          }
                                      }
                                      const uint64_t kicksBefore = g_vu1XgkickCount;
+                                     gsSetPath1Producer(startPC, false); // [gta-recomp] draw-source counters
                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                    m_gs, &m_memory, startPC, top, itop, 65536);
@@ -1125,6 +1127,7 @@ bool PS2Runtime::syncCoreSubsystems()
                                          cpuContext && (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
                                          cpuContext && (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+                                     gsSetPath1Producer(m_vu1.state().pc, false); // [gta-recomp] draw-source counters
                                      m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                   m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                   m_gs, &m_memory, top, itop, 65536);

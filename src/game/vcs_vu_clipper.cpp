@@ -140,7 +140,7 @@ namespace vcsclip
     }
 
     void clipTriangles(const uint8_t *vu, const ClipVertex *in, const IVec4 *rgbaIn, uint32_t count,
-                       std::vector<std::vector<uint8_t>> &packets);
+                       std::vector<std::vector<uint8_t>> &packets, uint32_t tagQword);
 
     bool clipWorld(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets, bool defaultColour)
     {
@@ -204,23 +204,23 @@ namespace vcsclip
             v.col = itof(rgbaIn[i]);
         }
 
-        clipTriangles(vu, in.data(), rgbaIn.data(), count, packets);
+        clipTriangles(vu, in.data(), rgbaIn.data(), count, packets, 49u);
         return true;
     }
 
     // kick 0x1638 onwards: per triangle of the strip, from the vertices the clip test / fog / colour stages left
     void clipTriangles(const uint8_t *vu, const ClipVertex *in, const IVec4 *rgbaIn, uint32_t count,
-                       std::vector<std::vector<uint8_t>> &packets)
+                       std::vector<std::vector<uint8_t>> &packets, uint32_t tagQword)
     {
         const Vec4 guard = loadF(vu, 65);
         Emitter e;
         for (int r = 0; r < 4; ++r)
             e.m[r] = loadF(vu, 12 + r);
-        const IVec4 t49 = loadI(vu, 49);
-        e.tag[0] = static_cast<uint32_t>(t49.v[0]);
-        e.tag[1] = static_cast<uint32_t>(t49.v[3]);
-        e.tag[2] = static_cast<uint32_t>(t49.v[2]);
-        e.tag[3] = static_cast<uint32_t>(t49.v[3]);
+        const IVec4 t = loadI(vu, tagQword); // vf01, the tag the kick routine loaded (0x1650 / 0x1660 build from it)
+        e.tag[0] = static_cast<uint32_t>(t.v[0]);
+        e.tag[1] = static_cast<uint32_t>(t.v[3]);
+        e.tag[2] = static_cast<uint32_t>(t.v[2]);
+        e.tag[3] = static_cast<uint32_t>(t.v[3]);
         e.bias = bitsToFloat(0x3A83126Fu);
         static const struct
         {
@@ -271,7 +271,7 @@ namespace vcsclip
         }
     }
 
-    bool clipFromOutput(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets)
+    bool clipFromOutput(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets, uint32_t tagQword)
     {
         const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48);
         top &= 0x3FFu;
@@ -293,7 +293,7 @@ namespace vcsclip
             v.pos = loadF(vu, outBase + i * 3u + 2u);
             v.flags = static_cast<uint32_t>(loadI(vu, posBase + i).v[3]);
         }
-        clipTriangles(vu, in.data(), rgbaIn.data(), count, packets);
+        clipTriangles(vu, in.data(), rgbaIn.data(), count, packets, tagQword);
         return true;
     }
 }

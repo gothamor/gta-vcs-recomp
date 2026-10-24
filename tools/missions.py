@@ -80,6 +80,7 @@ def main():
                 # outside the barracks door.
                 g.prime()
                 g.mission(index)
+                g.cmd("gsdraws reset")  # draw sources over the mission's run (tour.parse_gsdraws)
                 t0 = time.time()
                 worst = 0.0
                 pics = []
@@ -96,6 +97,7 @@ def main():
                         pics.append(st)
                     worst = max(worst, tour.perf_fields(g.cmd("perf")).get("frame_ms", 0.0))
                     running = g.player()[2]
+                rec["gsdraws"] = tour.parse_gsdraws(g.cmd("gsdraws reset"))
                 rec["mission_running"] = running
                 rec["worst_frame_ms"] = worst
                 rec["dark_shots"] = sum(1 for p in pics if p[0] < 18 or p[1] > 0.7)
@@ -110,7 +112,7 @@ def main():
             log.write(json.dumps(rec) + "\n")
             log.flush()
             print("%3d %-8s %s %s" % (index, name, rec["result"],
-                                       {k: v for k, v in rec.items() if k not in ("mission", "name", "result")}))
+                                       {k: v for k, v in rec.items() if k not in ("mission", "name", "result", "gsdraws")}))
     return 0
 
 

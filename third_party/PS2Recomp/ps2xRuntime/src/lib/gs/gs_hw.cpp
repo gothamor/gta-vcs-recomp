@@ -3,6 +3,7 @@
 #include "runtime/gs/gs_hw.h"
 #include "runtime/gs/ps2_gs_memory.h" // [gta-recomp] RectBlocks (lazy uploads)
 #include "runtime/gs/gs_cpu_backend.h"
+#include "runtime/gs/gs_draw_source.h" // [gta-recomp] DrawSources
 
 #include "runtime/ps2_control.h" // [gta-recomp] keys: physical or injected
 
@@ -128,6 +129,7 @@ namespace
     {
         HwState s;
         uint32_t first, count;
+        uint32_t source = 0u; // [gta-recomp] gsCurrentDrawSource() when recorded (DrawSources)
     };
 
     struct TexCreate
@@ -198,6 +200,156 @@ namespace
         bool displayFromRt = false;
         uint32_t displayFbp = 0, displayX = 0, displayY = 0, displayW = 0, displayH = 0;
     };
+
+    // [gta-recomp] Draw sources (gsHwDrawSourceReport): per executed frame, what the native renderer drew (native draws,
+    // HUD layer, native post-effect passes) and what was still drawn from GS primitives, by where their GIF packets came
+    // from (runtime/gs/gs_draw_source.h: a VU1 program, a C++ reproduction of one, PATH2, PATH3). Totals go to the perf
+    // counters; the per-kind table is kept once asked for. Main thread (the executor and the control channel).
+    class DrawSources
+    {
+    public:
+        DrawSources()
+        {
+            const char *e = std::getenv("PS2X_HW_DRAW_SOURCES");
+            m_log = e && e[0] && e[0] != '0';
+            m_table = m_log;
+        }
+
+        void gsDraw(const Frame &f, const DrawCmd &d)
+        {
+            ++m_frame.gs;
+            m_frame.gsVertices += d.count;
+            const uint32_t path = gsDrawSourcePath(d.source);
+            ++(path == 1u ? (gsDrawSourceNative(d.source) ? m_frame.hle : m_frame.vu1) : path == 2u ? m_frame.path2 : m_frame.path3);
+            if (!m_table)
+                return;
+            const HwState &s = d.s;
+            float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+            bool far = true;
+            for (uint32_t i = 0; i < d.count; ++i)
+            {
+                const HwVertex &v = f.vertices[d.first + i];
+                x0 = std::min(x0, v.x);
+                x1 = std::max(x1, v.x);
+                y0 = std::min(y0, v.y);
+                y1 = std::max(y1, v.y);
+                far = far && v.z >= 0.99999f;
+            }
+            // covers its whole scissor (screen effects, fades, copies)
+            const bool full = x0 <= s.scx0 + 1.0f && x1 >= s.scx1 && y0 <= s.scy0 + 1.0f && y1 >= s.scy1;
+            const uint64_t key = (uint64_t(gsDrawSourceProgram(d.source)) << 48) | (uint64_t(d.source & 7u) << 45) |
+                                 (uint64_t(s.fbp & 0x1FFu) << 36) | (uint64_t(s.fbw & 0x3Fu) << 30) | (uint64_t(s.tme & 1u) << 29) |
+                                 (uint64_t(s.texIsRt & 1u) << 28) | (uint64_t(s.mode & 3u) << 26) | (uint64_t(s.abe & 1u) << 25) |
+                                 (uint64_t(s.zte & 1u) << 24) | (uint64_t(s.ztst & 3u) << 22) | (uint64_t(s.zmsk & 1u) << 21) |
+                                 (uint64_t(s.fst & 1u) << 20) | (uint64_t(s.fge & 1u) << 19) | (uint64_t(s.ate & 1u) << 18) |
+                                 (uint64_t(full) << 17) | (uint64_t(far) << 16) |
+                                 (uint64_t((s.ba & 3u) | (s.bb & 3u) << 2 | (s.bc & 3u) << 4 | (s.bd & 3u) << 6) << 8);
+            Kind &k = m_kinds[key];
+            ++k.draws;
+            k.vertices += d.count;
+            k.state = s;
+        }
+        void nativeDraw() { ++m_frame.native; }
+        void hudDraw() { ++m_frame.hud; }
+        void postDraws(uint32_t n) { m_frame.post += n; }
+
+        // end of an executed frame
+        void endFrame()
+        {
+            using C = ps2perf::Counter;
+            ps2perf::add(C::GsDraws, m_frame.gs);
+            ps2perf::add(C::GsVertices, m_frame.gsVertices);
+            ps2perf::add(C::GsVu1, m_frame.vu1);
+            ps2perf::add(C::GsHle, m_frame.hle);
+            ps2perf::add(C::GsPath2, m_frame.path2);
+            ps2perf::add(C::GsPath3, m_frame.path3);
+            ps2perf::add(C::NativeDraws, m_frame.native);
+            ps2perf::add(C::HudDraws, m_frame.hud);
+            ps2perf::add(C::PostDraws, m_frame.post);
+            m_frame = {};
+            ++m_frames;
+            if (m_log)
+            {
+                const auto now = std::chrono::steady_clock::now();
+                if (now - m_lastLog >= std::chrono::seconds(5))
+                {
+                    m_lastLog = now;
+                    std::fprintf(stderr, "%s", report(true).c_str());
+                }
+            }
+        }
+
+        std::string report(bool reset)
+        {
+            if (!m_table)
+            {
+                m_table = true;
+                m_frames = 0;
+                m_kinds.clear();
+                return "[gsdraws] collecting from now\n";
+            }
+            std::vector<std::pair<uint64_t, Kind>> kinds(m_kinds.begin(), m_kinds.end());
+            std::sort(kinds.begin(), kinds.end(), [](const auto &a, const auto &b) { return a.second.draws > b.second.draws; });
+            const double n = std::max<double>(1.0, static_cast<double>(m_frames));
+            std::string out;
+            char line[512];
+            double draws = 0.0, vertices = 0.0;
+            for (const auto &[key, k] : kinds)
+            {
+                draws += k.draws;
+                vertices += k.vertices;
+            }
+            std::snprintf(line, sizeof(line), "[gsdraws] %llu frames: %.1f GS-path draws, %.0f vertices per frame, %zu kinds\n",
+                          static_cast<unsigned long long>(m_frames), draws / n, vertices / n, kinds.size());
+            out += line;
+            for (const auto &[key, k] : kinds)
+            {
+                const uint32_t src = static_cast<uint32_t>(key >> 45) & 7u, prog = static_cast<uint32_t>(key >> 48);
+                char from[32];
+                if ((src & 3u) == 1u)
+                    std::snprintf(from, sizeof(from), "%s:0x%04x", (src & 4u) ? "hle" : "vu1", prog);
+                else
+                    std::snprintf(from, sizeof(from), "path%u", src & 3u);
+                const HwState &s = k.state;
+                static const char *const kModes[] = {"tri", "line", "point", "?"};
+                static const char *const kZtst[] = {"never", "always", "gequal", "greater"};
+                std::snprintf(line, sizeof(line),
+                              "[gsdraws] %8.2f draws %9.1f verts  %-11s fb %3u/%-2u %-5s %s%s blend %s(%u%u%u%u) z %s%s%s%s%s%s%s\n",
+                              k.draws / n, k.vertices / n, from, s.fbp, s.fbw, kModes[s.mode & 3u],
+                              s.tme ? (s.texIsRt ? "tex=rt" : "tex") : "flat", s.tme ? (s.fst ? " uv" : " stq") : "",
+                              s.abe ? "on" : "off", s.ba, s.bb, s.bc, s.bd, s.zte ? kZtst[s.ztst & 3u] : "off",
+                              s.zmsk ? " nowrite" : "", s.ate ? " atest" : "", s.fge ? " fog" : "",
+                              (key >> 17) & 1u ? " full" : "", (key >> 16) & 1u ? " far" : "",
+                              s.texIsRt ? (" rt=" + std::to_string(s.rtFbp)).c_str() : "");
+                out += line;
+            }
+            if (reset)
+            {
+                m_frames = 0;
+                m_kinds.clear();
+            }
+            return out;
+        }
+
+    private:
+        struct Kind
+        {
+            uint64_t draws = 0, vertices = 0;
+            HwState state{}; // the latest draw's
+        };
+        struct Counts
+        {
+            uint64_t gs = 0, gsVertices = 0, vu1 = 0, hle = 0, path2 = 0, path3 = 0, native = 0, hud = 0, post = 0;
+        };
+        Counts m_frame;
+        uint64_t m_frames = 0;
+        bool m_log = false, m_table = false;
+        std::unordered_map<uint64_t, Kind> m_kinds;
+        std::chrono::steady_clock::time_point m_lastLog = std::chrono::steady_clock::now();
+    };
+
+    std::mutex g_drawSourcesMutex;
+    DrawSources g_drawSources; // guarded by g_drawSourcesMutex (the executor and gsHwDrawSourceReport)
 
     // [gta-recomp] The GS samples pixel X (coverage, colour, texture coordinates) at its integer position X; D3D at
     // X + 0.5. Draws move by half a pixel so each pixel samples where the GS would: without it a plain bilinear copy
@@ -472,6 +624,8 @@ namespace
                 }
                 m_dev.updateBuffer(*m_nativeVb, f.nativeBytes.data(), f.nativeBytes.size());
             }
+            std::lock_guard<std::mutex> sourcesLock(g_drawSourcesMutex); // [gta-recomp] DrawSources
+            DrawSources &sources = g_drawSources;
             for (size_t ci = 0; ci < f.cmds.size(); ++ci)
             {
                 const Cmd &c = f.cmds[ci];
@@ -479,6 +633,10 @@ namespace
                 if (c.type == CmdType::Draw)
                     if (const size_t taken = nativePost(f, ci, logDraws))
                     {
+                        uint32_t draws = 0;
+                        for (size_t i = ci; i < ci + taken && i < f.cmds.size(); ++i)
+                            draws += f.cmds[i].type == CmdType::Draw ? 1u : 0u;
+                        sources.postDraws(draws);
                         ci += taken - 1;
                         continue;
                     }
@@ -528,6 +686,7 @@ namespace
                 case CmdType::HudDraw:
                 {
                     const DrawCmd &d = f.draws[c.index];
+                    sources.hudDraw();
                     if (logDraws)
                     {
                         std::fprintf(stderr, "[draw] (hud layer)\n");
@@ -557,6 +716,7 @@ namespace
                     hudOnDraw(ds);
                     if (skip && (((skip & 1u) && ds.texIsRt) || (skip & 4u)))
                         break;
+                    sources.gsDraw(f, f.draws[c.index]);
                     draw(ds, f.draws[c.index].first, f.draws[c.index].count, nullptr);
                     // [gta-recomp] PS2X_HW_DUMP_STEPS=1: while draws are logged, write the target after every draw that
                     // covers the whole screen or reads a render target (where a frame goes black, step by step)
@@ -597,11 +757,13 @@ namespace
                         std::fprintf(stderr, "[draw] native kind=%u n=%u mesh=%016llx fbp=%u zbp=%u tme=%u abe=%u fge=%u\n", n.kind, n.drawCount,
                                      (unsigned long long)n.meshKey, n.s.fbp, n.s.zbp, n.s.tme, n.s.abe, n.s.fge);
                     hudSceneDraw(n.s.fbp);
+                    sources.nativeDraw();
                     draw(n.s, 0, n.drawCount, &n);
                     break;
                 }
                 }
             }
+            sources.endFrame();
             endPass();
             m_dev.popMarker();
         }
@@ -1977,11 +2139,12 @@ namespace
             noteTarget(s.fbp, s.fbw, s.fpsm, out, n, s.scy1);
             Frame &f = *m_frame;
             const CmdType cmdType = hud ? CmdType::HudDraw : CmdType::Draw;
-            if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != cmdType ||
+            const uint32_t source = gsCurrentDrawSource(); // [gta-recomp] DrawSources
+            if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != cmdType || f.draws.back().source != source ||
                 std::memcmp(&f.draws.back().s, &s, sizeof(HwState)) != 0)
             {
                 f.cmds.push_back({cmdType, static_cast<uint32_t>(f.draws.size())});
-                f.draws.push_back({s, static_cast<uint32_t>(f.vertices.size()), 0u});
+                f.draws.push_back({s, static_cast<uint32_t>(f.vertices.size()), 0u, source});
             }
             f.vertices.insert(f.vertices.end(), out, out + n);
             f.draws.back().count += n;
@@ -3582,4 +3745,10 @@ namespace
 std::unique_ptr<GSHwBackendHandle> makeHwRasterBackend(const GSHwOptions &options)
 {
     return std::make_unique<HwBackend>(options);
+}
+
+std::string gsHwDrawSourceReport(bool reset) // [gta-recomp]
+{
+    std::lock_guard<std::mutex> lock(g_drawSourcesMutex);
+    return g_drawSources.report(reset);
 }

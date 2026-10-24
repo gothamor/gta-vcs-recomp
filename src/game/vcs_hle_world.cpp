@@ -13,6 +13,7 @@
 #include "vcs_vu_clipper.h"
 #include "vcs_vu_math.h"
 #include "runtime/gs/gs_frontend.h"
+#include "runtime/gs/gs_draw_source.h"
 
 #include <algorithm>
 #include <chrono>
@@ -876,9 +877,13 @@ namespace
     constexpr FloatVariant kRedrawVariant{false, false, 5u, 6u, false, false};
     constexpr FloatVariant kPrelitFloatVariant{true, true, 6u, 7u, true, true};
 
-    bool floatKicks(uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &kicks, const FloatVariant &fv)
+    // culled (optional): set when the clip test culled the packet (0x0748 -> 0x0178: the empty kick, end of program)
+    bool floatKicks(uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &kicks, const FloatVariant &fv,
+                    bool *culled = nullptr)
     {
         kicks.clear();
+        if (culled)
+            *culled = false;
         const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48), i52 = loadI(vu, 52);
         const bool fog = (i52.v[1] & 2) != 0;
         if ((i52.v[1] & 1) || (!fog && !fv.fogOffZero))
@@ -960,7 +965,11 @@ namespace
                 std::memcpy(vu + ((posBase + i) & (kQwords - 1u)) * 16u + 12u, &f, 4);
             }
             if (all != 0u)
+            {
+                if (culled)
+                    *culled = true;
                 return true; // culled: only the empty kick of qword 58
+            }
             if (any & 0xFC0u)
             {
                 // 0x11f8 fog into the position's .w (at least 5 vertices), the colour stage, then the clipper from memory
@@ -1137,10 +1146,17 @@ namespace
         shineRegisterKick(vu, p, p + 2u, 6, kicks);
         if (kicks.back().empty())
             return false;
-        std::vector<std::vector<uint8_t>> pass1;
-        if (!floatKicks(vu, top, pass1, kRedrawVariant) || pass1.size() != 1u)
-            return false; // culled / clipped / unsupported: the VU1
-        kicks.push_back(std::move(pass1[0]));
+        static thread_local std::vector<std::vector<uint8_t>> pass1;
+        bool culled = false;
+        if (!floatKicks(vu, top, pass1, kRedrawVariant, &culled))
+            return false; // unsupported: the VU1
+        if (culled)
+            return true; // 0x0748 -> 0x0178: the empty kick of qword 58 and the program ends; TEX0_1 was sent
+        // the clipper path (52.z = 711, game-internals.md 6h): pass 1 is the clipper's polygons, and the kick 0x2b2 below
+        // jumps through 52.z too - the same clipper again over the output 0x546 / 0x513 rewrote, with tag 50
+        const bool clipped = loadI(vu, 52).v[2] == 711;
+        for (auto &k : pass1)
+            kicks.push_back(std::move(k));
         shineRegisterKick(vu, p, p + 3u, 7, kicks);
         const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48);
         top &= 0x3FFu;
@@ -1190,6 +1206,8 @@ namespace
             std::memcpy(o, st, 8);
         }
         // kick 0x2b2: tag 50 over the output
+        if (clipped)
+            return vcsclip::clipFromOutput(vu, top, kicks, 50u);
         static thread_local uint32_t outputs[256][12];
         for (uint32_t i = 0; i < n; ++i)
             for (uint32_t k = 0; k < 3; ++k)
@@ -1206,6 +1224,7 @@ namespace
         bool active = false;
         uint32_t shineP = 0; // entry 0x0d: also compare P+1 and the env matrix P+5..7 (x / y)
         uint64_t exact = 0, memBad = 0, kicksBad = 0;
+        uint64_t shineClipped = 0, shineCulled = 0; // entry 0x0d packets checked through the clipper / culled
     } g_redraw;
 
     bool predict(const ps2hle::MscalContext &c);
@@ -1302,6 +1321,10 @@ namespace
             shineSetup(g_redraw.expected.data(), shineP);
             g_redraw.active = shineKicks(g_redraw.expected.data(), c.top, shineP, shineQ, g_pred.clipPackets);
             g_redraw.shineP = shineP;
+            if (g_redraw.active && g_pred.clipPackets.size() == 1u)
+                ++g_redraw.shineCulled;
+            else if (g_redraw.active && loadI(g_redraw.expected.data(), 52).v[2] == 711)
+                ++g_redraw.shineClipped;
             if (g_redraw.active)
                 ps2vu1tap::g_kicks = &g_pred.vuKicks;
             return false;
@@ -1544,8 +1567,9 @@ namespace
         if (std::chrono::steady_clock::now() - reportAt >= std::chrono::seconds(10))
         {
             reportAt = std::chrono::steady_clock::now();
-            std::fprintf(stderr, "[hle-verify] 0x02c0 re-draws: %llu exact, %llu memory off, %llu kicks off\n",
-                         (unsigned long long)g_redraw.exact, (unsigned long long)g_redraw.memBad, (unsigned long long)g_redraw.kicksBad);
+            std::fprintf(stderr, "[hle-verify] 0x02c0 re-draws: %llu exact, %llu memory off, %llu kicks off (shine: %llu clipped, %llu culled)\n",
+                         (unsigned long long)g_redraw.exact, (unsigned long long)g_redraw.memBad, (unsigned long long)g_redraw.kicksBad,
+                         (unsigned long long)g_redraw.shineClipped, (unsigned long long)g_redraw.shineCulled);
         }
     }
 
@@ -1747,6 +1771,7 @@ namespace
             }
             const int rounding = std::fegetround();
             std::fesetround(g_callerRounding); // the GS runs in the caller's mode, as for the VU's kicks
+            gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
             gsSetCurrentGifPath(1u);
             for (const auto &p : packets)
                 ps2hle::gs()->processGIFPacket(p.data(), static_cast<uint32_t>(p.size()));
@@ -2053,6 +2078,7 @@ namespace
         }
         const int rounding = std::fegetround();
         std::fesetround(g_callerRounding);
+        gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
         gsSetCurrentGifPath(1u);
         for (size_t i = 1; i < kicks.size(); ++i)
             ps2hle::gs()->processGIFPacket(kicks[i].data(), static_cast<uint32_t>(kicks[i].size()));
@@ -2083,6 +2109,7 @@ namespace
         }
         const int rounding = std::fegetround();
         std::fesetround(g_callerRounding);
+        gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
         gsSetCurrentGifPath(1u);
         for (const auto &k : kicks)
             ps2hle::gs()->processGIFPacket(k.data(), static_cast<uint32_t>(k.size()));
@@ -2107,6 +2134,7 @@ namespace
         }
         const int rounding = std::fegetround();
         std::fesetround(g_callerRounding);
+        gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
         gsSetCurrentGifPath(1u);
         for (const auto &k : kicks)
             ps2hle::gs()->processGIFPacket(k.data(), static_cast<uint32_t>(k.size()));

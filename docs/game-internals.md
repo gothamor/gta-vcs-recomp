@@ -354,6 +354,28 @@ object's rotation rows (ERLENG) into a 3x2 environment matrix (P+5..7, P = 0x9c)
 RGBA = Q.xyz (Q = 0xa4) with alpha = FTOI0(clamp(Q+1.x * w + Q+1.y)); 0x513 kicks P again and writes the
 environment ST ((P+5..7 x / y * 0.5) . normal + 0.5) * Q; pass 2 = tag 50 (context 2). A shine over a texture.
 
+**Shine through the clipper / culled (2026-10-24).** The kick routines load their tag into vf01 and jump through
+52.z: 0x15b0 (stage 0x2b6) loads tag 49, **0x1590 (stage 0x2b2) tag 50**; 52.z is 698 (0x15d0, plain kick) or 711
+(0x1638, the per-triangle clipper, which builds its fan tags from vf01 - 0x1650 / 0x1660). So a shine object that
+crosses the guard band is clipped twice: pass 1 with tag 49, then 0x509 / 0x546 / 0x513 run as usual over the
+clip test's output (ST undivided with w in .w, the clip position + fog) and pass 2 is the same clipper with tag 50.
+A culled packet (all vertices outside one plane) leaves the stage table at once: 0x0748 -> `B 0x0178` = XGKICK of
+qword 58 (the empty tag) and the program's end - only the TEX0_1 kick of 0x4ff was sent. Both reproduced
+(`shineKicks`, `vcsclip::clipFromOutput(..., tagQword)`); PHI_A1 in verify mode: 421,694 0x02c0 packets exact,
+among them 9,629 clipped and 26,518 culled shines.
+
+**Setup programs** (VU1 starts other than 0x0030 / 0x02c0, no primitives; `PS2X_TRACE_VU1=1`, code dumps in
+`build/analysis/vu1setup`; one flyover sample each, so other code images may differ):
+- 0x01e0 (and 0x02c8, a copy): object matrix at TOP -> 0-3, 0x04d8 (vi01..04 = 0, 16, 12, 24: clip = view 16-19 x
+  object into 24-27, window = viewport 12-15 x clip into 28-31), then the slot routines in qwords 34-37 (routine in
+  .x, vi01 = .y: 0xc8 camera into object space, 0x3a nothing, 0x4e0 env matrix), then `B 0x0178` (kick qword 58, end).
+- 0x0250: the slot part of 0x01e0 alone, then the kick. 0x03a8: the slots from the .w lanes, then the kick.
+- 0x0418: the .w slots, then falls into 0x0478 and ends without a kick. 0x0478: 0x04d8 (4, 8, 12, 16), then
+  0x04d8 (0, 16, 12, 24).
+- 0x0200 / 0x0400 start inside those (stale vf01-03) and draw at boot only (the Z clear into FBP 280).
+About 330 runs a frame in the flyover and cutscenes (`PS2X_TRACE_VU1=1`: 0x01e0 30k, 0x03a8 12.6k, 0x0478 9.3k,
+0x0250 5.3k, 0x0418 1.5k per 5 s).
+
 All of these are reproduced in `vcs_hle_world.cpp` (floatKicks / shineKicks) with the VU memory they write, and
 checked against the VU's kicks and memory (174,110 packets over the reference scenes, MAR_A1 / GON_C3 / a drive
 ~50k / 51k / 120k - all exact). With them native, **nothing of the 3D runs on the VU1** in the reference scenes

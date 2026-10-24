@@ -1184,10 +1184,13 @@ void VU1Interpreter::finishXgkick()
         ps2vu1tap::g_kicks->emplace_back(m_xgkick.packet.begin(), m_xgkick.packet.begin() + m_xgkick.totalBytes);
     const int vuRoundingMode = t_vuRoundingMode;
     std::fesetround(t_callerRoundingMode);
+    // [gta-recomp] braces: without them the packet went to the GS a second time after the arbiter had sent it
     if (m_activeMemory)
         m_activeMemory->submitGifPacket(GifPathId::Path1, m_xgkick.packet.data(), m_xgkick.totalBytes);
     else if (m_activeGs)
+    {
         gsSetCurrentGifPath(1u); m_activeGs->processGIFPacket(m_xgkick.packet.data(), m_xgkick.totalBytes); gsSetCurrentGifPath(3u); // PATH1
+    }
     std::fesetround(vuRoundingMode);
     m_xgkick.active = false;
 }
@@ -2304,8 +2307,10 @@ void VU1Interpreter::runVerified(uint8_t *vuCode, uint32_t codeSize,
     {
         if (m_activeMemory)
             m_activeMemory->submitGifPacket(GifPathId::Path1, packet.data(), static_cast<uint32_t>(packet.size()));
-        else if (m_activeGs)
+        else if (m_activeGs) // [gta-recomp] braces (as in progressXgkick)
+        {
             gsSetCurrentGifPath(1u); m_activeGs->processGIFPacket(packet.data(), static_cast<uint32_t>(packet.size())); gsSetCurrentGifPath(3u);
+        }
     }
 
     ++programs;

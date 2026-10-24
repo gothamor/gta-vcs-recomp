@@ -1,4 +1,5 @@
 #include "runtime/gs/gs_frontend.h"
+#include "runtime/gs/gs_draw_source.h" // [gta-recomp]
 #include "runtime/gs/gs_gpu.h"
 #include "runtime/gs/gs_cpu_backend.h"
 #include "ps2_log.h"
@@ -145,6 +146,22 @@ namespace
 void gsSetCurrentGifPath(uint8_t path)
 {
     g_currentGifPath = path;
+}
+
+namespace
+{
+    thread_local uint32_t g_path1Producer = 0u; // [gta-recomp] runtime/gs/gs_draw_source.h
+}
+
+void gsSetPath1Producer(uint32_t vu1StartPc, bool native)
+{
+    g_path1Producer = ((vu1StartPc & 0xFFFFu) << 16) | (native ? 4u : 0u);
+}
+
+uint32_t gsCurrentDrawSource()
+{
+    const uint32_t path = g_currentGifPath & 3u;
+    return path == 1u ? (path | g_path1Producer) : path;
 }
 
 void GS::setGpuRenderer(GSGpuRenderer *gpu, bool gpuOnly)

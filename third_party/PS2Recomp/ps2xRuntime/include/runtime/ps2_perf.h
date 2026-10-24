@@ -31,6 +31,19 @@ namespace ps2perf
         TexUploads,  // textures decoded and uploaded to the GPU
         DmaTags,     // VIF1 DMA chain tags walked
         Vu1Programs, // VU1 microprogram runs
+        // [gta-recomp] draw sources (gs_hw.cpp DrawSources), per executed frame: draws made from GS primitives (the
+        // emulated draw path) and their vertices, those by where the packets came from (a VU1 program, a C++
+        // reproduction of one, PATH2, PATH3), then the native renderer's: native draws, HUD-layer draws, GS draws
+        // replaced by native post-effect passes
+        GsDraws,
+        GsVertices,
+        GsVu1,
+        GsHle,
+        GsPath2,
+        GsPath3,
+        NativeDraws,
+        HudDraws,
+        PostDraws,
         Count
     };
 

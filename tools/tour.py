@@ -63,6 +63,39 @@ def perf_fields(line):
     return out
 
 
+def parse_gsdraws(reply):
+    """The rig's `gsdraws` answer -> {"frames", "draws", "vertices", "kinds": [[draws, vertices, kind], ...]}: the draws
+    still made from GS primitives per frame, by kind (gsHwDrawSourceReport in the renderer)."""
+    out = {"frames": 0, "draws": 0.0, "vertices": 0.0, "kinds": []}
+    for line in reply.split(" ;; "):
+        w = line.split()
+        if len(w) >= 6 and w[1] == "frames:":
+            out["frames"], out["draws"], out["vertices"] = int(w[0]), float(w[2]), float(w[5])
+        elif len(w) >= 5 and w[1] == "draws" and w[3] == "verts":
+            out["kinds"].append([float(w[0]), float(w[2]), " ".join(w[4:])])
+    return out
+
+
+def summarize_gsdraws(recs, top=15):
+    """Lines for a summary: the GS-path draw kinds over all records with a "gsdraws" entry, by mean draws per frame."""
+    recs = [r["gsdraws"] for r in recs if r.get("gsdraws", {}).get("frames")]
+    if not recs:
+        return []
+    kinds = {}
+    for g in recs:
+        for draws, verts, kind in g["kinds"]:
+            k = kinds.setdefault(kind, [0.0, 0.0, 0])
+            k[0] += draws
+            k[1] += verts
+            k[2] += 1
+    n = len(recs)
+    lines = ["GS-path draws per frame: mean %.1f, max %.1f (%d samples); kinds by mean draws per frame (seen in N samples):"
+             % (sum(g["draws"] for g in recs) / n, max(g["draws"] for g in recs), n)]
+    for kind, (draws, verts, seen) in sorted(kinds.items(), key=lambda kv: -kv[1][0])[:top]:
+        lines.append("  %7.2f draws %8.1f verts  [%3d]  %s" % (draws / n, verts / n, seen, kind))
+    return lines
+
+
 def classify(rec, args):
     if rec.get("error"):
         return "error"
@@ -172,6 +205,7 @@ def main():
                         time.sleep(0.5)
                         zs.append(round(g.player()[1][2], 2))
                 rec["z_samples"] = zs
+                g.cmd("gsdraws reset")  # draw sources from here to the perf line
                 ped, pos, _ = g.player()
                 rec["pos"] = [round(v, 2) for v in pos]
                 # three pictures 0.7 s apart: one dark picture is a flicker, three are a dark place
@@ -184,6 +218,7 @@ def main():
                 rec["picture"] = pics[0]
                 rec["pictures"] = pics
                 rec["perf"] = perf_fields(g.cmd("perf"))
+                rec["gsdraws"] = parse_gsdraws(g.cmd("gsdraws reset"))
             except Exception as e:  # crash / hang: record, restart, go on
                 rec["error"] = str(e)[:200]
                 rec.setdefault("pos", [0, 0, 0])
@@ -211,6 +246,8 @@ def main():
             f.write("%-10s %d\n" % (k, v))
         if fts:
             f.write("frame_ms median %.1f, p90 %.1f, max %.1f\n" % (fts[len(fts) // 2], fts[int(len(fts) * 0.9)], fts[-1]))
+        for line in summarize_gsdraws(results):
+            f.write(line + "\n")
     draw_map(results, os.path.join(out, "map.png"), args.step)
     print(open(os.path.join(out, "summary.txt")).read())
     return 0

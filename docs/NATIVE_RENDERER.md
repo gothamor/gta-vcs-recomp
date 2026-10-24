@@ -492,6 +492,43 @@ thread waits rather than get more than one frame ahead (`PS2X_RENDER_THREAD_AHEA
   ~5 ms); driving (AI car from Fort Baxter) 26-29 -> 44-54 fps - game code ~17-20 ms is now the limit, worker ~17 ms
   in parallel; reference scenes' flyover 42.5 -> 59.9 fps.
 
+### Draw sources - what is still drawn through the GS path (milestone 3, 2026-10-24)
+
+The roadmap's "unconverted draws" counter. Every recorded GS-path draw carries where its GIF packet came from
+(`runtime/gs/gs_draw_source.h`: PATH2, PATH3, or PATH1 from a VU1 program / from a C++ reproduction of one - the
+`hle` packets: the clipper, the env pass, 0x02c0, variant C, which compute natively but still hand GIF packets to the
+GS front end). The executor counts per frame:
+- perf line / CSV / overlay: `gs_draws` `gs_verts` (draws still made from GS primitives), `gs_vu1` `gs_hle` `gs_path2`
+  `gs_path3` (the same by source), `native_draws`, `hud_draws` (native HUD layer), `post_draws` (GS draws replaced by
+  the native post passes);
+- by kind (source + VU1 program, target, texture / render target, blend, depth, "full" = covers its scissor, "far" =
+  at the far plane): the rig's `gsdraws [reset]`, `PS2X_HW_DRAW_SOURCES=1` (logged every 5 s). `tools/tour.py` and
+  `tools/missions.py` record it per point / mission and the tour summary lists the kinds.
+
+First survey (2026-10-24: reference scenes, the tour subset, 12 missions 6-94), per game frame:
+
+| | reference gameplay | city (tour subset) | missions |
+|---|---|---|---|
+| GS-path draws | 59 (9.9k verts) | 106 mean, 231 max | 62 mean, 150 max |
+| of them `hle` (C++ reproductions) | 45 | ~88 | ~47 |
+| VU1 | 0 | 9 (clipped 0x02c0 shine) | 4.4 in PHI_A1 |
+| PATH2 | 14 | ~15 | ~15 |
+| PATH3 | 0 | 0 | 0 |
+| native / HUD layer / post | 237 / 18 / 16 | | |
+
+- The VU1 draws were 0x02c0 entry 0x0d (shine) packets that cross the guard band or are culled: reproduced since
+  (game-internals.md 6d), so **no VU1 draws** in the tour subset or the missions. Left on the VU1: clipped
+  environment-pass packets (table 0x13, ~63 in two minutes) and the **setup programs** (0x01e0, 0x0250, 0x03a8,
+  0x0418, 0x0478 ...: matrices and per-batch tables, no primitives) - ~330 runs a frame in the flyover / cutscene.
+- PATH2 (VIF DIRECT, the game's 2D / effect packets): the reflection map built in FBP 420 (a 128x128 sample of FBP
+  140 plus a sun sprite), coronas / light sprites, and the full-screen effect draws not taken by the native post
+  passes (colour-filter quads, the depth-tested self-copy over the sky, fades). Flat full-screen draws are resolution
+  independent; the reflection map stays 1x.
+- Found with it: every VU1 XGKICK had gone to the GS **twice** since the paraLLEl-GS integration (a brace-less
+  `else` in the VU1 core; PS2RECOMP_PATCHES.md). Only the VU1 path was hit: with `PS2X_HLE=0` the cutscene drew
+  220,848 vertices a frame instead of 122,823, gameplay 98,124 instead of 50,768 (worker 23.1 -> 15.2 ms); blended
+  VU1 draws were doubled in the reference pictures. The native path (default) was unaffected (scenes identical).
+
 ### Stage 8 - Enhancements (M each, optional order) - internal resolution done
 
 - Internal resolution: native draws render into the same scaled render targets as the GS path, so

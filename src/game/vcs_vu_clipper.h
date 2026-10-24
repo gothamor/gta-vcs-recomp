@@ -16,6 +16,7 @@ namespace vcsclip
 
     // The clipper (0x1638) alone, from what the clip test, fog (0x11f8) and colour stage left in VU memory - the output
     // buffer (ST + w, RGBA, clip position + fog) and the flags in the positions' .w. For code images whose clip test
-    // or colour stage differ from the prelit world's (the float images, game-internals.md 6d).
-    bool clipFromOutput(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets);
+    // or colour stage differ from the prelit world's (the float images, game-internals.md 6d). tagQword: the GIF tag
+    // the kick routine loaded into vf01 before jumping to the clipper - 49 (0x2b6) or 50 (0x2b2, a second pass).
+    bool clipFromOutput(const uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &packets, uint32_t tagQword = 49);
 }

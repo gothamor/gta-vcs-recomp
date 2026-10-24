@@ -88,3 +88,9 @@ void gsHwSetAspectWidening(float widening);
 void gsHwSetFrameSize(uint32_t width, uint32_t height);
 // [gta-recomp] The size the picture is shown at (the window's letterboxed area); 0 = the render targets' size.
 void gsHwSetOutputSize(uint32_t width, uint32_t height);
+// [gta-recomp] Draw sources (milestone 3's "unconverted draws"): the draws still made from GS primitives, by kind -
+// where their packets came from (runtime/gs/gs_draw_source.h), target, texture, blend, depth, coverage - per frame
+// since the last call, one kind per line, most draws first; `reset` starts a new window. The first call switches the
+// per-kind table on (PS2X_HW_DRAW_SOURCES=1 does from boot and logs it every 5 s). The totals are always in the perf
+// line (gs_draws ...). Main thread.
+std::string gsHwDrawSourceReport(bool reset);

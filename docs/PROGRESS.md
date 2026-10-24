@@ -205,6 +205,17 @@ dropped on uploads (lazy render-target patching).
         (1920x1080 at 16:9 1080p), the effect buffers at 1x. Default stays 1x (the original).
   - [x] MSAA (2x-8x) and anisotropic filtering (2x-16x) as options, off by default (NATIVE_RENDERER.md "Native frame").
   - [ ] The radar / reflection map at higher resolution.
+- [x] **Draw-source counter** (2026-10-24; NATIVE_RENDERER.md "Draw sources"): what each frame still draws through
+      the GS path, by source (VU1 program, C++ reproduction, PATH2, PATH3) - perf line `gs_*`, overlay, the rig's
+      `gsdraws`, tour / missions record it. Survey: no PATH3; PATH2 ~15 draws (reflection map, coronas, effect quads);
+      45-90 draws from the C++ reproductions' GIF packets; VU1 draws only from clipped / culled 0x02c0 shine packets.
+- [x] **Clipped and culled 0x02c0 shine packets natively** (2026-10-24, game-internals.md 6d): the second pass is the
+      clipper again with tag 50. PHI_A1 verify: 421,694 packets exact (9,629 clipped, 26,518 culled shines). VU1 draws
+      0 in the tour subset and 12 missions.
+- [x] **VU1 XGKICKs went to the GS twice** (found with the counter; PS2RECOMP_PATCHES.md): `PS2X_HLE=0` scenes drew
+      ~2x the vertices (cutscene 220,848 -> 122,823). Default path unchanged (scenes 0.00 static).
+- [ ] VU1 setup programs (0x01e0, 0x0250, 0x03a8, 0x0418, 0x0478: ~330 runs a frame, no primitives) and clipped
+      environment-pass packets still run on the VU1.
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
@@ -411,6 +422,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_HUD_LOG=1` | the renderer's HUD layers (per frame buffer, stale or not) and the output size, every 2 s |
 | `VCS_TRACE_IM2D=n`, `VCS_TRACE_IM2D_MARKERS=1..5` | log n Im2D calls (caller, primitive, vertices) / the 2D pass's calls, from 30 s on |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
+| `PS2X_HW_DRAW_SOURCES=1`, rig `gsdraws [reset]` | draws still made from GS primitives by kind and source, per frame (logged every 5 s / on request); totals always in the perf line (`gs_draws` ...) |
 | `PS2X_CLIP_DUMP=dir[,n]` | with `PS2X_HLE_VERIFY=1`: write n clipped packets (VU memory + the VU's kicks) for offline checks |
 | `PS2X_HW_LAZY_UPLOADS=0`, `PS2X_HW_UPSTATS=1` | write texture uploads immediately / upload stats |
 | `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate a slow PC) |

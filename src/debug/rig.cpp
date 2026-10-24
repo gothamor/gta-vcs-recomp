@@ -3,6 +3,7 @@
 
 #include "ps2_runtime.h"
 #include "runtime/ps2_control.h"
+#include "runtime/gs/gs_hw.h" // gsdraws
 
 #include <algorithm>
 #include <atomic>
@@ -404,6 +405,25 @@ namespace vcs::rig
         g_rdram = runtime.memory().getRDRAM();
         registerMemoryCommands();
         registerScriptCommands();
+        // gsdraws [reset] -> ok <the draws still made from GS primitives, by kind, per frame since the last reset>
+        // (gsHwDrawSourceReport; lines joined by " ;; "). The first call starts the table.
+        ps2control::addCommand("gsdraws", [](const std::string &args, ps2control::Reply reply) {
+            std::string r = gsHwDrawSourceReport(words(args) == std::vector<std::string>{"reset"});
+            std::string out;
+            for (size_t at = 0; at < r.size();)
+            {
+                size_t end = r.find('\n', at);
+                if (end == std::string::npos)
+                    end = r.size();
+                std::string line = r.substr(at, end - at);
+                if (line.rfind("[gsdraws] ", 0) == 0)
+                    line.erase(0, 10);
+                if (!line.empty())
+                    out += (out.empty() ? "" : " ;; ") + line;
+                at = end + 1;
+            }
+            reply("ok " + out);
+        });
     }
 
     void onGameFrame(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
