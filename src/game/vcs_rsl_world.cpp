@@ -569,7 +569,7 @@ namespace vcs::rslworld
                 --rec.skip;
                 memory.processVIF1Data(bytes, size);
                 ++(rec.replayable ? stats.changing : stats.notReplayable);
-                return 12u + size;
+                return size; // (onMark adds the MARK qword's 12 bytes: returning them here too swallowed the next tag)
             }
             const uint64_t hash = hashBlock(bytes, size);
             if (d.wouldSkip) // VCS_RSL_SKIP_VERIFY: the skip would have replayed the recording of these bytes?
@@ -668,10 +668,8 @@ namespace vcs::rslworld
         // The fill-in for snapshotKey's Draw: its length as last copied.
         bool skippable(uint64_t snapshotKey, Kind kind, uint32_t addr, uint32_t &units)
         {
-            // VCS_RSL_SKIP_KINDS: a bit per Kind. Default world, model, model-b: skipping "other call" packets (FUN_002F80A0's
-            // shared state packet, the per-frame ones) lost state - the walker and trackOpenBlock disagree about being
-            // inside a marked packet for some of them (docs/FULLY_NATIVE.md step 4, open)
-            static const unsigned kinds = std::getenv("VCS_RSL_SKIP_KINDS") ? unsigned(std::strtoul(std::getenv("VCS_RSL_SKIP_KINDS"), nullptr, 0)) : 0x7u;
+            // VCS_RSL_SKIP_KINDS: a bit per Kind (default all)
+            static const unsigned kinds = std::getenv("VCS_RSL_SKIP_KINDS") ? unsigned(std::strtoul(std::getenv("VCS_RSL_SKIP_KINDS"), nullptr, 0)) : 0xFu;
             if (!g_skip || !((kinds >> kind) & 1u))
                 return false;
             const auto it = g_snapshots.find(snapshotKey);

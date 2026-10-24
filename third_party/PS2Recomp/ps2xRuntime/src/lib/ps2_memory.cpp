@@ -409,6 +409,70 @@ void ps2chain::notifyProcessing(const void *key, bool begin) // [gta-recomp]
             o(key, begin);
 }
 
+namespace
+{
+    // [gta-recomp] Where VIF command boundaries fall in a copied chain (lengths only: the interpreter's rules), so a MARK is
+    // only put where the interpreter will run it - not inside a command's data. VCS has VIF commands whose data runs on
+    // across a DMA tag: a DIRECT ending one tag's payload carries on into the CALLed packet after it (FULLY_NATIVE.md step 4).
+    struct VifBoundaries
+    {
+        uint32_t remain = 0;     // data bytes the current command is still owed
+        uint32_t cycle = 0x0101; // STCYCL, for UNPACK sizes (carried from chain to chain)
+
+        static uint32_t unpackBytes(uint32_t cmd, uint32_t cycle)
+        {
+            const uint32_t opcode = (cmd >> 24) & 0x7Fu, vn = (opcode >> 2) & 3u, vl = opcode & 3u, num = (cmd >> 16) & 0xFFu;
+            const uint32_t components = vn + 1u;
+            const uint32_t bitsPerComponent = vl == 0u ? 32u : vl == 1u ? 16u : vl == 2u ? 8u : (vn == 3u ? 4u : 16u);
+            const uint32_t bitsPerVector = (vl == 3u && vn == 3u) ? 16u : components * bitsPerComponent;
+            const uint32_t bytesPerVector = (bitsPerVector + 7u) / 8u;
+            const uint32_t writes = num == 0u ? 256u : num;
+            uint32_t cl = cycle & 0xFFu, wl = (cycle >> 8) & 0xFFu;
+            cl = cl ? cl : 1u;
+            wl = wl ? wl : 1u;
+            uint32_t sources = writes;
+            if (cl < wl)
+                sources = (writes / wl) * cl + std::min(writes % wl, cl);
+            return (sources * bytesPerVector + 3u) & ~3u;
+        }
+
+        void feed(const uint8_t *p, size_t n)
+        {
+            while (n)
+            {
+                if (remain)
+                {
+                    const size_t k = std::min<size_t>(remain, n);
+                    remain -= static_cast<uint32_t>(k);
+                    p += k;
+                    n -= k;
+                    continue;
+                }
+                if (n < 4u)
+                    return; // (never: tags and payloads are whole words)
+                uint32_t cmd;
+                std::memcpy(&cmd, p, 4);
+                p += 4;
+                n -= 4;
+                const uint32_t opcode = (cmd >> 24) & 0x7Fu, imm = cmd & 0xFFFFu, num = (cmd >> 16) & 0xFFu;
+                if ((opcode & 0x60u) == 0x60u)
+                    remain = unpackBytes(cmd, cycle);
+                else if (opcode == 0x01u)
+                    cycle = imm;
+                else if (opcode == 0x20u)
+                    remain = 4u;
+                else if (opcode == 0x30u || opcode == 0x31u)
+                    remain = 16u;
+                else if (opcode == 0x4Au)
+                    remain = (num ? num : 256u) * 8u;
+                else if (opcode == 0x50u || opcode == 0x51u)
+                    remain = (imm ? imm : 65536u) * 16u;
+            }
+        }
+    };
+    uint32_t g_chainCycle = 0x0101; // VifBoundaries::cycle at the end of the last VIF1 chain
+}
+
 uint32_t ps2chain::notifyMark(PS2Memory &memory, uint32_t imm, const uint8_t *next, uint32_t avail) // [gta-recomp]
 {
     if (const MarkHandler h = g_markHandler.load(std::memory_order_relaxed))
@@ -1657,6 +1721,15 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         size_t lengthAt = 0, begin = 0;
                         uint32_t depth = 0;
                     } openMark;
+                    VifBoundaries vifAt;       // [gta-recomp] command boundaries in what is copied so far
+                    vifAt.cycle = g_chainCycle;
+                    size_t vifParsed = 0;
+                    auto vifSync = [&]() {
+                        vifAt.feed(chainBuf.data() + vifParsed, chainBuf.size() - vifParsed);
+                        vifParsed = chainBuf.size();
+                        return vifAt.remain == 0u;
+                    };
+                    size_t refLengthAt = 0; // a marked REF's length word, zeroed if its payload ends inside a command
                     auto appendMark = [&](uint32_t imm, uint32_t units)
                     {
                         const uint32_t mark[4] = {0x07000000u | (imm & 0xFFFFu), units & 0x00FFFFFFu, 0u, 0u}; // MARK imm, NOP (length) x 3
@@ -1792,7 +1865,19 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                             replace = ps2chain::notifyTag(currentTagAddr, id, addr, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u,
                                                           loadScalar<uint64_t>(tp, 8, 16, "dma tag hi", currentTagAddr), flatOffset,
                                                           tagsProcessed == 1);
-                        if (!transferTagData || openMark.open)
+                        // [gta-recomp] a MARK only where the interpreter runs it: at a VIF command boundary (VifBoundaries)
+                        const bool atBoundary = vifSync();
+                        { // PS2X_CHAIN_LOG_REFUSED=<n>: marks the observer asked for and the walker did not make
+                            static const long logRefused = std::getenv("PS2X_CHAIN_LOG_REFUSED") ? std::atol(std::getenv("PS2X_CHAIN_LOG_REFUSED")) : 0;
+                            static long refusedLogged = 0;
+                            if (replace && (!transferTagData || openMark.open || !atBoundary) && refusedLogged < logRefused)
+                            {
+                                ++refusedLogged;
+                                std::fprintf(stderr, "[chain] refused mark: tag@0x%08x id=%u target=0x%08x asp=%u: %s\n", currentTagAddr, id, addr, asp,
+                                             !transferTagData ? "no TTE" : openMark.open ? "inside a marked packet" : "inside a VIF command");
+                            }
+                        }
+                        if (!transferTagData || openMark.open || !atBoundary)
                             replace = 0u;
                         const bool skip = (replace & ps2chain::kSkipWithMark) != 0u; // [gta-recomp] none of its bytes
                         if (replace && skip && id == 3u && hasPayload)
@@ -1800,10 +1885,20 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         else
                         {
                             if (replace && id == 3u && hasPayload)
+                            {
                                 appendMark(replace, static_cast<uint32_t>(tagQwc) * 2u);
+                                refLengthAt = chainBuf.size() - 12u;
+                            }
                             if (hasPayload)
                                 appendData(dataAddr, tagQwc);
+                            if (replace && id == 3u && hasPayload && !vifSync())
+                            {
+                                const uint32_t none = 0u; // the payload ends inside a command: no length, the packet path
+                                std::memcpy(chainBuf.data() + refLengthAt, &none, sizeof(none));
+                            }
                         }
+                        if (replace && id == 5u && hasPayload && !vifSync())
+                            replace = 0u; // the CALL's own payload ends inside a command
                         if (replace && skip && id == 5u && callPushed)
                         {
                             appendMark(replace, ps2chain::kSkippedLength);
@@ -1819,7 +1914,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         {
                             openMark.open = false;
                             const uint32_t units = static_cast<uint32_t>((chainBuf.size() - openMark.begin) / 8u);
-                            if (units <= 0x00FFFFFFu)
+                            // a packet ending inside a command keeps no length: the packet path (and never a recording)
+                            if (units <= 0x00FFFFFFu && vifSync())
                                 std::memcpy(chainBuf.data() + openMark.lengthAt, &units, sizeof(units));
                         }
                         if (trackSegments)
@@ -1910,6 +2006,11 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     }
                     if (channelBase == 0x10009000u)
                         ps2perf::add(ps2perf::Counter::DmaTags, static_cast<uint64_t>(tagsProcessed)); // [gta-recomp]
+                    if (channelBase == 0x10009000u) // [gta-recomp] the write cycle the next chain starts with
+                    {
+                        vifSync();
+                        g_chainCycle = vifAt.cycle;
+                    }
                     static const bool dmaHist = std::getenv("PS2X_DMA_HIST") != nullptr; // [gta-recomp] once, not per chain
                     if (dmaHist && channelBase == 0x10009000u)
                     {

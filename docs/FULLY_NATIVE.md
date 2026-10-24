@@ -186,11 +186,24 @@ construction (a small chain walker for CALLed packets). Results:
 - A/B, same build, `VCS_RSL_SKIP=0` vs on, two alternating rounds: drive 50.1 / 50.4 -> 54.1 / 53.5 fps, render worker
   9.1 -> 8.5 ms; the game thread unchanged (the copy saved is spent again on the fold and the snapshots' bookkeeping).
   Reference scenes ok, tour unchanged.
-- **Open:** "other call" packets (FUN_002F80A0's shared state packet, the per-frame ones) are not skipped. Skipping them
-  lost state - VU1 programs ran again because stage tables were missing - and about a quarter of the skips decided for
-  them never reached the worker as skip marks: the walker and the observer's open-block tracking disagree about being
-  inside a marked packet for some of them. `VCS_RSL_SKIP_KINDS` (a bit per kind; default world, model, model-b) is the
-  switch for finding it.
+- "Other call" packets (FUN_002F80A0's shared state packet, the per-frame ones) are skipped too (2026-10-25). At first
+  skipping them lost state - VU1 programs ran again because stage tables were missing - and about a quarter of the
+  skips decided for them never reached the worker as skip marks. The walker and the observer's open-block tracking
+  agreed after all (every chain: skips decided == skip marks written); the marks were lost in the worker. The MARK
+  handler's path for a block it records no longer ("changing", `rec.skip`) returned `12 + size` bytes to skip while
+  the caller adds the MARK qword's 12 bytes itself: 12 bytes too many swallowed the next tag's VIFcodes - with them,
+  when it followed directly, the next block's skip MARK. Before other calls were skipped this only cost the next block
+  its recording. Fixed; `VCS_RSL_SKIP_KINDS` (a bit per kind) now defaults to all.
+  - On the way the walker gained a safety net (`VifBoundaries`, ps2_memory.cpp): it follows VIF command lengths through
+    what it copies and puts a MARK only at a command boundary, and gives a block no length when its payload ends inside
+    a command. In VCS it never refuses one (`PS2X_CHAIN_LOG_REFUSED=<n>` logs refusals).
+  - Checked: `VCS_RSL_SKIP_VERIFY=1` 759k decisions driving and 1.30M over the reference scenes, 0 wrong; with every
+    kind skipped no VU1 program runs in gameplay (`vu1_programs` 0). Reference scenes ok, tour unchanged (15 ok, 2
+    relocated, 1 falling as before).
+  - Timing: A/B `VCS_RSL_SKIP=0` vs on (all kinds), two alternating rounds under background load: stand unchanged,
+    drive game thread 19.3 / 18.7 -> 22.7 / 20.6 ms and fps 43.5 / 44.9 -> 40.7 / 44.9 - within this machine's noise,
+    not a measured loss; a profile of the drive puts the walker's work and `skippable` at ~1-2% of the game thread.
+    Measure again on a quiet machine.
 
 Still to do for step 4 as defined: the draw hooks replaying without writing their tags at all (the state flush and GS
 registers then as native items in chain order), which the skip's validity now allows.
