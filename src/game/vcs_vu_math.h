@@ -3,6 +3,7 @@
 // core runs the same way. Same semantics as the helpers in vcs_hle_world.cpp.
 #pragma once
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -123,7 +124,7 @@ namespace vcsvu
     inline float vuExact(float value, double exact)
     {
         const double magnitude = exact < 0.0 ? -exact : exact;
-        const uint32_t sign = std::signbit(exact) ? 0x80000000u : 0u;
+        const uint32_t sign = (std::bit_cast<uint64_t>(exact) >> 63) ? 0x80000000u : 0u; // (std::signbit: a CRT call)
         uint32_t bits;
         if (magnitude == 0.0 || magnitude < 1.17549435e-38)
             bits = sign;

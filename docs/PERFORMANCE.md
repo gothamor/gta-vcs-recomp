@@ -201,6 +201,36 @@ during the call, the context's own VF0 put back after, as the copy left it). `PS
 each against the interpreter, 0 differed. Their share of the game thread 6.75 -> 6.4% (smaller than the copy's size
 suggested).
 
+### 12. Render worker: rounding mode without the CRT; what is left there (2026-10-25)
+
+The native draws switch the SSE rounding mode around every VU1 program (VU maths rounds toward zero, the caller's mode
+is put back for the GIF packets): `std::fegetround` / `std::fesetround` also read and reprogram the x87 unit, unused on
+x64, and were ~3% of the render worker's first stage driving. They are now `sseRounding()` / `setSseRounding()` in
+`src/game/vcs_hle_world.cpp` (MXCSR bits 13-14 only). `vcsvu::vuExact`'s `std::signbit` (a CRT call, `ldsign` in the
+profile, from every matrix set-up) is a bit test. `PS2X_HLE_VERIFY=1` at a city spot: re-draws 147,761 exact, C++
+clipper and env pass exact; the world fast path's 16 packets "within 1" (37 vertices, ST LSBs) are the same on the build
+before (14 / 34 there). Scenes: static pictures identical.
+
+What the first stage does now (`--opt none`, uncapped drive, worker 3.8-4.4 ms a frame against the game thread's
+6-8 ms): idle ~58% of the time; of the rest, about a third is copying - the RSL replay writing recorded unpacks into VU
+memory, `GS::submitNative` / `submitPackedKick` putting draws on the GS stage's ring, VIF DIRECT data to the GIF. Those
+copies are what step 4 of docs/FULLY_NATIVE.md removes (draws replayed without going through VU memory); smaller
+trims there are worth little while the game thread is the slower of the two. The 16 KB save of VU memory before each
+native re-draw (restored if it falls back) is not visible in the profile.
+
+Looked at and left (measured on the drive, uncapped):
+- **The write-watch fold** at each VIF1 kick: 0.15 ms per fold, ~400 of 8,192 pages written per frame. With the watch
+  off (`PS2X_WRITE_WATCH=0`) the standing game thread is ~0.35 ms faster (the fold and the observer's page snapshots),
+  but driving is slower overall: the worker loses the RSL replay's skips (worker 3.9 -> 4.3 ms, 121 -> 113 fps). The
+  skip decisions are taken during the walk, so the fold cannot run beside it.
+- **Copying the VIF1 chain off the game thread** (the kick's walk and copy, 1.0-1.6 ms): the game has no VIF1 DMA wait
+  before rewriting what the chain reads - the flip (`FUN_003706c8`) kicks it through `FUN_002721f8` / `FUN_002723E8`
+  (game-internals.md 6a); the DMA syncs (`FUN_00272480`) are only in other paths. The chain CALLs packets rebuilt every
+  frame and reads RSL's matrix blocks, so a copy running beside the next frame's code would race with it.
+- **Checked memory accesses** (`ps2ReadChecked` / `ps2WriteChecked`, ~0.8% of the game thread): nearly all from the
+  busiest draw function `FUN_002b8ed0` through scratchpad pointers held in registers; the scratchpad path behind the
+  check is already inline (section 4).
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker

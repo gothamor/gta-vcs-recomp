@@ -33,6 +33,25 @@ namespace
 {
     constexpr uint32_t kQwords = 1024u; // VU1 data memory
 
+    // The rounding mode in MXCSR alone (FE_* values): fegetround / fesetround also read and reprogram the x87
+    // unit, unused on x64 - their calls around every native draw were ~3% of the render worker.
+    int sseRounding()
+    {
+        switch ((_mm_getcsr() >> 13) & 3u)
+        {
+        case 0u: return FE_TONEAREST;
+        case 1u: return FE_DOWNWARD;
+        case 2u: return FE_UPWARD;
+        default: return FE_TOWARDZERO;
+        }
+    }
+
+    void setSseRounding(int mode)
+    {
+        const unsigned bits = mode == FE_DOWNWARD ? 1u : mode == FE_UPWARD ? 2u : mode == FE_TOWARDZERO ? 3u : 0u;
+        _mm_setcsr((_mm_getcsr() & ~0x6000u) | (bits << 13));
+    }
+
     struct Vec4
     {
         float v[4];
@@ -1435,10 +1454,10 @@ namespace
     // the VU rounds toward zero (the runtime's VU1 core runs under FE_TOWARDZERO too)
     bool before(const ps2hle::MscalContext &c)
     {
-        const int rounding = std::fegetround();
-        std::fesetround(FE_TOWARDZERO);
+        const int rounding = sseRounding();
+        setSseRounding(FE_TOWARDZERO);
         const bool handled = predict(c);
-        std::fesetround(rounding);
+        setSseRounding(rounding);
         return handled;
     }
 
@@ -1997,14 +2016,14 @@ namespace
                 ++g_native.fallback;
                 return false;
             }
-            const int rounding = std::fegetround();
-            std::fesetround(g_callerRounding); // the GS runs in the caller's mode, as for the VU's kicks
+            const int rounding = sseRounding();
+            setSseRounding(g_callerRounding); // the GS runs in the caller's mode, as for the VU's kicks
             gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
             gsSetCurrentGifPath(1u);
             for (const auto &p : packets)
                 sendKick(p);
             gsSetCurrentGifPath(3u);
-            std::fesetround(rounding);
+            setSseRounding(rounding);
             const int32_t variant = 711; // 52.z, as the VU leaves it after its clipper
             std::memcpy(vu + 52u * 16u + 8u, &variant, 4);
             ++g_native.clippedCpu;
@@ -2328,14 +2347,14 @@ namespace
                 ++g_nativeEnv.fallback;
                 return false;
             }
-            const int rounding = std::fegetround();
-            std::fesetround(g_callerRounding);
+            const int rounding = sseRounding();
+            setSseRounding(g_callerRounding);
             gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
             gsSetCurrentGifPath(1u);
             for (const auto &k : kicks)
                 sendKick(k);
             gsSetCurrentGifPath(3u);
-            std::fesetround(rounding);
+            setSseRounding(rounding);
             ++g_nativeEnv.clipped;
             return true;
         }
@@ -2344,14 +2363,14 @@ namespace
             ++g_nativeEnv.fallback;
             return false;
         }
-        const int rounding = std::fegetround();
-        std::fesetround(g_callerRounding);
+        const int rounding = sseRounding();
+        setSseRounding(g_callerRounding);
         gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
         gsSetCurrentGifPath(1u);
         for (size_t i = 1; i < kicks.size(); ++i)
             sendKick(kicks[i]);
         gsSetCurrentGifPath(3u);
-        std::fesetround(rounding);
+        setSseRounding(rounding);
         ++g_nativeEnv.drawn;
         return true;
     }
@@ -2375,14 +2394,14 @@ namespace
             ++g_nativeRedraw.fallback;
             return false;
         }
-        const int rounding = std::fegetround();
-        std::fesetround(g_callerRounding);
+        const int rounding = sseRounding();
+        setSseRounding(g_callerRounding);
         gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
         gsSetCurrentGifPath(1u);
         for (const auto &k : kicks)
             sendKick(k);
         gsSetCurrentGifPath(3u);
-        std::fesetround(rounding);
+        setSseRounding(rounding);
         ++g_nativeRedraw.drawn;
         return true;
     }
@@ -2400,14 +2419,14 @@ namespace
             ++g_nativeRedraw.fallback;
             return false;
         }
-        const int rounding = std::fegetround();
-        std::fesetround(g_callerRounding);
+        const int rounding = sseRounding();
+        setSseRounding(g_callerRounding);
         gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
         gsSetCurrentGifPath(1u);
         for (const auto &k : kicks)
             sendKick(k);
         gsSetCurrentGifPath(3u);
-        std::fesetround(rounding);
+        setSseRounding(rounding);
         ++g_nativeRedraw.drawn;
         return true;
     }
@@ -2819,9 +2838,9 @@ namespace
     bool beforeNative(const ps2hle::MscalContext &c)
     {
         vcs::rslshadow::onMscal(c.startPc, c.vuData); // VCS_RSL_SHADOW 1b (debug/rsl_shadow.h): nothing unless on
-        const int rounding = std::fegetround();
+        const int rounding = sseRounding();
         g_callerRounding = rounding;
-        std::fesetround(FE_TOWARDZERO);
+        setSseRounding(FE_TOWARDZERO);
         static const bool lit =!(std::getenv("PS2X_HLE_LIT") && *std::getenv("PS2X_HLE_LIT") == '0');
         bool handled = false;
         static const bool env = !(std::getenv("PS2X_HLE_ENV") && *std::getenv("PS2X_HLE_ENV") == '0');
@@ -2839,13 +2858,13 @@ namespace
                 std::memcpy(c.vuData, saved.data(), saved.size()); // the VU1 runs on what it would have seen
             else
             {
-                std::fesetround(rounding);
+                setSseRounding(rounding);
                 gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
                 gsSetCurrentGifPath(1u);
                 for (const auto &k : kicks)
                     sendKick(k); // depth-fill strips and register packets: the GS front end
                 gsSetCurrentGifPath(3u);
-                std::fesetround(FE_TOWARDZERO);
+                setSseRounding(FE_TOWARDZERO);
                 ++g_setup.native;
             }
         }
@@ -2869,7 +2888,7 @@ namespace
             handled = drawNativeRigid(c);
         else
             handled = drawNative(c);
-        std::fesetround(rounding);
+        setSseRounding(rounding);
         // PS2X_HLE_STATS=1: which stage tables (38-41, entry 52.x) of 0x0030 still run on the VU1, every 10 s
         static const bool stats = std::getenv("PS2X_HLE_STATS") != nullptr;
         if (stats && !handled && c.startPc != 0x30u && c.startPc != 0x2C0u) // other programs: why not reproduced

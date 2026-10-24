@@ -227,7 +227,12 @@ the globals each frame:
 ### 6a. Frame structure
 
 - One VIF1 DMA chain per frame, kicked at `0x27245C` (D1_CHCR = 0x145, chain + TTE); TADR alternates
-  between static root lists `0x480D20` / `0x480DE0`. Full frames are 7-14k tags (CALL / RET per
+  between static root lists `0x480D20` / `0x480DE0`. The kick: the flip `FUN_003706c8` -> `FUN_002721f8` (the chain
+  pointer at `0x510438`, cleared after) -> `FUN_002723E8(channel, tadr, chcr regs)`, the DMA library's start (clears
+  the channel's D_STAT bit, writes TADR / QWC, then CHCR). There is no wait for VIF1 to finish before the next frame
+  rewrites what the chain reads: `FUN_00272480(channel, timeout)` (the DMA sync) is called only from `FUN_003177e0`,
+  `FUN_00317930`, `FUN_00317b50`. (2026-10-25, from the recompiled code's disassembly comments: the callers of
+  `func_2723E8` / `func_272480`; Ghidra was not available.) Full frames are 7-14k tags (CALL / RET per
   model) - more than the runtime's original 4096-tag guard.
 - Models are prebuilt packets in the model heap, entered with CALL tags and ended by RET; CALL tags
   are written by the RSL draw functions (6i; `FUN_003298D8`, named here before, builds texture uploads). VU1 microcode sits inside
