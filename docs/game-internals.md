@@ -379,9 +379,21 @@ among them 9,629 clipped and 26,518 culled shines.
   directions P+0..2 into object space: rows 0-2 normalised (ERLENG, MUL.xyz), P+9+i = L0 r.x + L1 r.y + L2 r.z (all
   lanes); **0x57e** (byte 0x2bf0, vi01 = A = 0xa8) the env matrix: A+5+i .xy = rows A+2..4 . normalised row i, stored
   as whole qwords - A+7.z is the last ERLENG, the other z / w lanes are stale registers (the env pass reads x / y).
-- 0x0200 / 0x0400 / another 0x0000 / 0x0250 belong to a second low image (different code before 0x0178): about 2 runs
-  a frame each, 0x0000 and 0x0200 with 20 kicks per run (the Z clear into FBP 280, which the renderer turns into
-  depth fills). Not reproduced.
+- **The Z-clear image** (a second low image, different code before 0x0178; about 2 runs a frame each, reproduced
+  2026-10-24 in `zclearProgram`): **0x0200** kicks two 4-qword GIF packets at qwords 0 and 4 in turn, the strips' x
+  edges stepped by I = 32 (FTOI4 into the x lanes of qwords 2 / 3 of the other buffer), [0].w pairs of kicks (10:
+  20 strips over 640) - the Z clear into FBP 280 that the renderer turns into depth fills; **0x0000** the same with
+  6-qword packets at 0 / 6, x lanes of 2-5 stepped by the floats in 4 / 5 (read once; the floats carry 2^23 so the
+  sum's low bits are the coordinate) - an SQ paired with an ADD of the same register stores the value from before the
+  ADD; **0x0400** XGKICKs the packet at qword 128. Their kicks go to the GS front end (depth fills, register packets).
+- **Slot routines are found by their code**, not their number: the light and env routines are position independent
+  and 0xf8 bytes long, and the lit images put them at 0x2700 or 0x2bf0 - in one image slot 0x4e0 is the env routine
+  (that 0x0250 fell back until slots were named by the hash at their address).
+- Table-0x13 packets through the clipper (reproduced 2026-10-24, `envClipKicks`): the clip test / fog write the output
+  buffer as for the prelit world (ST undivided + clip w, qword 51, clip position + fog), the lighting stage 0x4ff
+  writes RGBA over it, kick 0x2b6 = clipper with tag 49; 0x5b1 kicks the packet at 41.y and writes the env ST (lane z
+  of the output as Q) over x / y; kick 0x2b2 = clipper with tag 50. Reference scenes in verify: 216 exact.
+With these, **no VU1 program runs in a normal frame** (reference scenes, tour subset: `vu1_programs` 0).
 About 330 runs a frame in the flyover and cutscenes before (`PS2X_TRACE_VU1=1`: 0x01e0 30k, 0x03a8 12.6k, 0x0478
 9.3k, 0x0250 5.3k, 0x0418 1.5k per 5 s). **Reproduced (2026-10-24)**, each routine tied to a hash of its code
 (`CodeCheck` in vcs_hle_world.cpp), checked with `PS2X_HLE_VERIFY=1` against the whole VU memory after the VU's run

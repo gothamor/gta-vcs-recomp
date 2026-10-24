@@ -441,6 +441,7 @@ namespace
         uint32_t logged = 0;
         uint64_t clipExact = 0, clipBad = 0, clipUnsupported = 0, clipPacketsOk = 0, clipPacketsBad = 0;
         uint64_t envExact = 0, envBad = 0; // stage table 0x13 packets: the three kicks
+        uint64_t envClipped = 0;           // ... of them through the clipper
     } g_stats;
 
     auto g_reportAt = std::chrono::steady_clock::now();
@@ -451,14 +452,15 @@ namespace
         std::fprintf(stderr,
                      "[hle-verify] world packets %llu: culled %llu (%llu ok / %llu drew), clipper %llu, fast %llu "
                      "(%llu exact, %llu within 1, %llu off; verts %llu exact / %llu off; off qwords ST %llu RGBA %llu XYZF %llu); "
-                     "C++ clipper %llu exact / %llu off / %llu not reproduced (GIF packets %llu ok / %llu off); env pass %llu exact / %llu off\n",
+                     "C++ clipper %llu exact / %llu off / %llu not reproduced (GIF packets %llu ok / %llu off); env pass %llu exact / %llu off (%llu through the clipper)\n",
                      (unsigned long long)s.packets, (unsigned long long)s.culled, (unsigned long long)s.culledOk,
                      (unsigned long long)s.culledBad, (unsigned long long)s.clipper, (unsigned long long)s.fast,
                      (unsigned long long)s.fastExact, (unsigned long long)s.fastClose, (unsigned long long)s.fastBad,
                      (unsigned long long)s.vertsExact, (unsigned long long)s.vertsBad, (unsigned long long)s.field[0],
                      (unsigned long long)s.field[1], (unsigned long long)s.field[2], (unsigned long long)s.clipExact,
                      (unsigned long long)s.clipBad, (unsigned long long)s.clipUnsupported, (unsigned long long)s.clipPacketsOk,
-                     (unsigned long long)s.clipPacketsBad, (unsigned long long)s.envExact, (unsigned long long)s.envBad);
+                     (unsigned long long)s.clipPacketsBad, (unsigned long long)s.envExact, (unsigned long long)s.envBad,
+                     (unsigned long long)s.envClipped);
     }
 
     // PS2X_CLIP_DUMP=<dir>[,<n>]: the first n (default 300) world packets the VU sends through its clipper, as
@@ -773,6 +775,92 @@ namespace
         envST(vu, param, nrmBase, count, outputs);
         kickPacket(vu, 50, static_cast<uint32_t>(header.v[3]), outputs, n, kicks[2]);
         return true;
+    }
+
+    // A table-0x13 packet through the clipper (game-internals.md 6d): the clip test 0x0c38 and fog 0x11f8 write the
+    // output buffer (ST undivided with the clip w, qword 51, the clip position with the fog in .w; flags into the
+    // positions' .w), the lighting stage 0x4ff writes RGBA over it, kick 0x2b6 = the clipper with tag 49; 0x5b1 kicks the
+    // packet at 41.y and writes the env ST (times the output's lane z) over the output; kick 0x2b2 = the clipper again
+    // with tag 50. vu is written as the VU writes it (the clipper's own buffers aside); kicks = the non-empty XGKICKs.
+    bool envClipKicks(uint8_t *vu, uint32_t top, std::vector<std::vector<uint8_t>> &kicks)
+    {
+        kicks.clear();
+        const IVec4 i47 = loadI(vu, 47), i48 = loadI(vu, 48), i52 = loadI(vu, 52);
+        if (i52.v[1] & 1)
+            return false; // the backface pass (0x1440): not reproduced
+        top &= 0x3FFu;
+        const uint32_t base = top & static_cast<uint32_t>(i48.v[2]);
+        const uint32_t posBase = static_cast<uint32_t>(i47.v[0]) + base, nrmBase = static_cast<uint32_t>(i47.v[1]) + base,
+                       uvBase = static_cast<uint32_t>(i47.v[2]) + base;
+        const uint32_t outBase = static_cast<uint32_t>(i48.v[3]) + top + 1u;
+        const uint32_t count = static_cast<uint32_t>(loadI(vu, posBase - 1u).v[2]);
+        if (count < 3u || count > 256u)
+            return false;
+        Vec4 cm[4];
+        foldMatrix(vu, 24, cm);
+        const Vec4 guard = loadF(vu, 65);
+        const float inv255 = bitsToFloat(0x3B808081u);
+        Vec4 uvm[3] = {loadF(vu, 44), loadF(vu, 45), loadF(vu, 46)};
+        for (auto &r : uvm)
+            for (int k = 0; k < 4; ++k)
+                r.v[k] = r.v[k] * inv255;
+        const bool fog = (i52.v[1] & 2) != 0;
+        const Vec4 fogp = loadF(vu, 53);
+        const IVec4 def = loadI(vu, 51);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const Vec4 p = transform(cm, itof(loadI(vu, posBase + i)));
+            const Vec4 uv = itof(loadI(vu, uvBase + i));
+            Vec4 st;
+            for (int k = 0; k < 3; ++k)
+            {
+                float acc = uvm[0].v[k] * uv.v[0];
+                acc = acc + uvm[1].v[k] * uv.v[1];
+                st.v[k] = acc + uvm[2].v[k] * uv.v[2];
+            }
+            st.v[3] = p.v[3];
+            Vec4 g;
+            for (int k = 0; k < 4; ++k)
+                g.v[k] = p.v[k] * guard.v[k];
+            const uint32_t flags = (clipFlags(g, p.v[3]) << 6) | clipFlags(p, p.v[3]);
+            Vec4 pos = p;
+            if (fog)
+            {
+                const float acc = fogp.v[3] * p.v[3];
+                pos.v[3] = std::max(std::min(acc + 1.0f * fogp.v[2], 255.0f), 0.0f);
+            }
+            std::memcpy(vu + ((outBase + i * 3u) & (kQwords - 1u)) * 16u, st.v, 16);
+            std::memcpy(vu + ((outBase + i * 3u + 1u) & (kQwords - 1u)) * 16u, def.v, 16);
+            std::memcpy(vu + ((outBase + i * 3u + 2u) & (kQwords - 1u)) * 16u, pos.v, 16);
+            std::memcpy(vu + ((posBase + i) & (kQwords - 1u)) * 16u + 12u, &flags, 4);
+        }
+        // lighting 0x27f8 (vi01 = 0x9c) over the output's RGBA
+        const LitLights lights = rigidLights(vu);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const Vec4 nv = itof(loadI(vu, nrmBase + i));
+            int32_t rgb[3];
+            litColour(lights, nv.v, rgb);
+            const int32_t rgba[4] = {rgb[0], rgb[1], rgb[2], lights.alpha};
+            std::memcpy(vu + ((outBase + i * 3u + 1u) & (kQwords - 1u)) * 16u, rgba, 16);
+        }
+        const int32_t variant = 711;
+        std::memcpy(vu + 52u * 16u + 8u, &variant, 4);
+        if (!vcsclip::clipFromOutput(vu, top, kicks, 49u))
+            return false;
+        const uint32_t param = static_cast<uint32_t>(loadI(vu, 41).v[1]) & 0x3FFu;
+        kicks.emplace_back();
+        gifPacketAt(vu, param, kicks.back());
+        if (kicks.back().empty())
+            return false;
+        // 0x5b1's env ST over the output (x / y; lane z is the "Q" it multiplies by)
+        static thread_local uint32_t outputs[256][12];
+        for (uint32_t i = 0; i < count; ++i)
+            std::memcpy(outputs[i], vu + ((outBase + i * 3u) & (kQwords - 1u)) * 16u, 16);
+        envST(vu, param, nrmBase, count, outputs);
+        for (uint32_t i = 0; i < count; ++i)
+            std::memcpy(vu + ((outBase + i * 3u) & (kQwords - 1u)) * 16u, outputs[i], 8);
+        return vcsclip::clipFromOutput(vu, top, kicks, 50u);
     }
 
     // ---- program 0x02c0, setup slot 0xc8 + entry 0x1c: instanced re-draws -------------------------------------------
@@ -1335,13 +1423,23 @@ namespace
             ++g_stats.culled;
             return false;
         }
-        if (any & 0xFC0u)
-        {
-            ++g_stats.clipper; // not compared (the VU's clipper on the lit pass)
-            return false;
-        }
         g_pred.vuKicks.clear();
         g_pred.clipPackets.clear();
+        if (any & 0xFC0u)
+        {
+            // through the clipper: reproduced on a copy of the VU memory, the kicks compared like the fast path's
+            ++g_stats.clipper;
+            static thread_local std::vector<uint8_t> copy;
+            copy.assign(vu, vu + kQwords * 16u);
+            g_pred.clipChecked = envClipKicks(copy.data(), c.top, g_pred.clipPackets);
+            g_pred.envKicks = true;
+            if (g_pred.clipChecked)
+            {
+                ++g_stats.envClipped;
+                ps2vu1tap::g_kicks = &g_pred.vuKicks;
+            }
+            return false;
+        }
         g_pred.clipChecked = envKicks(vu, c.top, g_pred.clipPackets);
         g_pred.envKicks = true;
         if (g_pred.clipChecked)
@@ -2110,7 +2208,7 @@ namespace
     // (PATH1); packets that need the VU's clipper run on the VU1
     struct EnvStats
     {
-        uint64_t packets = 0, culled = 0, drawn = 0, fallback = 0;
+        uint64_t packets = 0, culled = 0, drawn = 0, fallback = 0, clipped = 0;
     } g_nativeEnv;
 
     bool drawNativeEnv(const ps2hle::MscalContext &c)
@@ -2129,7 +2227,29 @@ namespace
             return true;
         }
         static thread_local std::vector<std::vector<uint8_t>> kicks;
-        if ((any & 0xFC0u) != 0u || !envKicks(vu, c.top, kicks) || !drawNativeRigid(c))
+        if ((any & 0xFC0u) != 0u)
+        {
+            // through the clipper: both passes as the VU's kicks (envClipKicks), VU memory written as the VU writes it
+            static thread_local std::vector<uint8_t> saved;
+            saved.assign(vu, vu + kQwords * 16u);
+            if (!envClipKicks(vu, c.top, kicks))
+            {
+                std::memcpy(vu, saved.data(), saved.size()); // the VU1 runs on what it would have seen
+                ++g_nativeEnv.fallback;
+                return false;
+            }
+            const int rounding = std::fegetround();
+            std::fesetround(g_callerRounding);
+            gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
+            gsSetCurrentGifPath(1u);
+            for (const auto &k : kicks)
+                sendKick(k);
+            gsSetCurrentGifPath(3u);
+            std::fesetround(rounding);
+            ++g_nativeEnv.clipped;
+            return true;
+        }
+        if (!envKicks(vu, c.top, kicks) || !drawNativeRigid(c))
         {
             ++g_nativeEnv.fallback;
             return false;
@@ -2229,6 +2349,83 @@ namespace
     CodeCheck g_setupProg2b50{0x2B50, 0x2BE8, 0x148C06E22739B651ull}; // block copy (bone matrices)
     CodeCheck g_setupLights{0x2700, 0x27F8, 0xC2C454BBB9E593A8ull};   // slot 0x4e0 of the lit image: lights to object space
     CodeCheck g_setupEnv{0x2BF0, 0x2CE8, 0x5A782EA0596BC8B4ull};      // slot 0x57e of the lit image: env matrix
+    // the Z-clear image (its own low code): two strip loops and a single kick
+    CodeCheck g_zclear0000{0x000, 0x0C0, 0xC77A14DD91DCEC2Aull};
+    CodeCheck g_zclear0200{0x200, 0x298, 0x4538309E6735885Cull};
+    CodeCheck g_zclear0400{0x400, 0x418, 0x78541A926C8AF1B9ull};
+
+    void storeX(uint8_t *vu, uint32_t q, const void *lane) // SQ.x
+    {
+        std::memcpy(vu + (q & (kQwords - 1u)) * 16u, lane, 4);
+    }
+
+    // The Z-clear image's programs (game-internals.md 6d): their XGKICKs into `kicks` (packets read from VU memory at
+    // kick time) and the VU memory they write. false: a packet not readable (memory as it was before is restored by the
+    // caller).
+    bool zclearProgram(uint8_t *vu, uint32_t pc, std::vector<std::vector<uint8_t>> &kicks)
+    {
+        const auto kick = [&](uint32_t q) {
+            kicks.emplace_back();
+            gifPacketAt(vu, q, kicks.back());
+            return !kicks.back().empty();
+        };
+        if (pc == 0x400u) // XGKICK of the packet at 128
+            return kick(128u);
+        uint32_t n = static_cast<uint32_t>(loadI(vu, 0).v[3]) & 0xFFFFu; // ILW.w vi.., 0(vi00): pairs of kicks
+        if (n == 0u || n > 64u)
+            return false;
+        if (pc == 0x200u)
+        {
+            // 0x0200: x of the two strip edges stepped by I = 32 (FTOI4), ping-pong buffers 0 / 4
+            const float i32 = 32.0f;
+            float f2 = vcsvu::vuAdd(0.0f, 0.0f), f3 = vcsvu::vuAdd(0.0f, i32);
+            f2 = vcsvu::vuAdd(f2, i32);
+            f3 = vcsvu::vuAdd(f3, i32);
+            do
+            {
+                int32_t v4 = ftoi(f2, 16.0f);
+                if (!kick(0u))
+                    return false;
+                int32_t v5 = ftoi(f3, 16.0f);
+                storeX(vu, 4u + 2u, &v4);
+                f2 = vcsvu::vuAdd(f2, i32);
+                storeX(vu, 4u + 3u, &v5);
+                f3 = vcsvu::vuAdd(f3, i32);
+                v4 = ftoi(f2, 16.0f);
+                --n;
+                v5 = ftoi(f3, 16.0f);
+                f2 = vcsvu::vuAdd(f2, i32);
+                if (!kick(4u))
+                    return false;
+                f3 = vcsvu::vuAdd(f3, i32);
+                storeX(vu, 0u + 2u, &v4);
+                storeX(vu, 0u + 3u, &v5);
+            } while ((n & 0xFFFFu) != 0u);
+            return true;
+        }
+        // 0x0000: x lanes of qwords 2 / 3 stepped by the floats in 4 / 5 (read once), ping-pong buffers 0 / 6; the SQ
+        // paired with an ADD of the same register stores the value from before the ADD
+        const float s4 = loadF(vu, 4).v[0], s5 = loadF(vu, 5).v[0];
+        float f4 = loadF(vu, 2).v[0], f5 = loadF(vu, 3).v[0];
+        for (;;)
+        {
+            for (const uint32_t b : {0u, 6u})
+            {
+                storeX(vu, b + 2u, &f4);
+                f4 = vcsvu::vuAdd(f4, s4);
+                storeX(vu, b + 3u, &f5);
+                f5 = vcsvu::vuAdd(f5, s5);
+                if (b == 0u)
+                    --n;
+                storeX(vu, b + 4u, &f4);
+                storeX(vu, b + 5u, &f5);
+                if (!kick(b))
+                    return false;
+            }
+            if ((n & 0xFFFFu) == 0u)
+                return true;
+        }
+    }
 
     // ERLENG + MUL.xyz: rows 0-2 of the object matrix with their xyz scaled to length 1 (w as is); rl = the last row's
     // reciprocal length (it stays in P)
@@ -2293,13 +2490,46 @@ namespace
     }
 
     // the four slot routines of qwords 34-37 (routine in lane `lane`, vi01 = .y)
+    // What a slot routine is: 0x3a / 0xc8 are in the low code (g_setupLowCode); the others are named by the hash of the
+    // 0xf8 bytes at their address - the light and env routines are position independent and sit at 0x2700 or 0x2bf0
+    // depending on the image (slot 0x4e0 is the env routine in some).
+    enum class SlotKind : uint8_t
+    {
+        Unknown,
+        Nothing,
+        Camera,
+        Lights,
+        Env,
+    };
+
+    SlotKind slotKind(const uint8_t *code, uint64_t generation, uint32_t r)
+    {
+        if (r == 0x3Au)
+            return SlotKind::Nothing;
+        if (r == 0xC8u)
+            return SlotKind::Camera;
+        if (r < 0x4E0u || r * 8u + 0xF8u > 0x4000u)
+            return SlotKind::Unknown;
+        static thread_local std::map<uint32_t, std::pair<uint64_t, SlotKind>> cache; // by routine: (code generation, kind)
+        auto &e = cache[r];
+        if (e.first != generation + 1u)
+        {
+            const uint64_t h = fnv(code, r * 8u, r * 8u + 0xF8u, 0xCBF29CE484222325ull);
+            e = {generation + 1u, h == g_setupLights.hash ? SlotKind::Lights : h == g_setupEnv.hash ? SlotKind::Env : SlotKind::Unknown};
+        }
+        return e.second;
+    }
+
+    // the slot routines of the program isSetupProgram accepted last (runSetupProgram runs right after it, same thread)
+    thread_local SlotKind t_slotKinds[4];
+
     bool setupSlotsKnown(const ps2hle::MscalContext &c, int lane)
     {
         for (uint32_t q = 34; q <= 37; ++q)
         {
             const uint32_t r = static_cast<uint32_t>(loadI(c.vuData, q).v[lane]) & 0xFFFFu;
-            if (r == 0x4E0u ? !g_setupLights(c.vuCode, c.codeGeneration)
-                            : r == 0x57Eu ? !g_setupEnv(c.vuCode, c.codeGeneration) : (r != 0x3Au && r != 0xC8u))
+            t_slotKinds[q - 34] = slotKind(c.vuCode, c.codeGeneration, r);
+            if (t_slotKinds[q - 34] == SlotKind::Unknown)
                 return false;
         }
         return true;
@@ -2307,22 +2537,39 @@ namespace
 
     void setupSlots(uint8_t *vu, int lane, std::vector<std::pair<uint32_t, uint32_t>> *staleLanes)
     {
+        (void)lane;
         for (uint32_t q = 34; q <= 37; ++q)
         {
-            const IVec4 slot = loadI(vu, q);
-            const uint32_t r = static_cast<uint32_t>(slot.v[lane]) & 0xFFFFu, arg = static_cast<uint32_t>(slot.v[1]) & 0x3FFu;
-            if (r == 0xC8u)
+            const uint32_t arg = static_cast<uint32_t>(loadI(vu, q).v[1]) & 0x3FFu;
+            switch (t_slotKinds[q - 34])
+            {
+            case SlotKind::Camera:
                 setupCamera(vu);
-            else if (r == 0x4E0u)
+                break;
+            case SlotKind::Lights:
                 setupLights(vu, arg);
-            else if (r == 0x57Eu)
+                break;
+            case SlotKind::Env:
                 setupEnv(vu, arg, staleLanes);
+                break;
+            default:
+                break;
+            }
         }
+    }
+
+    bool isZclearProgram(const ps2hle::MscalContext &c)
+    {
+        const uint32_t pc = c.startPc;
+        return (pc == 0x000u && g_zclear0000(c.vuCode, c.codeGeneration)) || (pc == 0x200u && g_zclear0200(c.vuCode, c.codeGeneration)) ||
+               (pc == 0x400u && g_zclear0400(c.vuCode, c.codeGeneration));
     }
 
     bool isSetupProgram(const ps2hle::MscalContext &c)
     {
         const uint32_t pc = c.startPc;
+        if (isZclearProgram(c))
+            return true;
         if (pc == 0x148u)
             return g_setupProg0148(c.vuCode, c.codeGeneration);
         if (pc == 0x2B50u)
@@ -2408,14 +2655,25 @@ namespace
         bool active = false;
         std::vector<uint8_t> expected;
         std::vector<std::pair<uint32_t, uint32_t>> staleLanes; // not compared
+        bool zclear = false;                                   // the Z-clear image: its kicks compared too
+        std::vector<std::vector<uint8_t>> kicks;
     } g_setup;
 
-    // verify: the whole VU memory after the VU's run against the reproduction's, and only empty kicks
+    // verify: the whole VU memory after the VU's run against the reproduction's, and the kicks (only empty ones, or the
+    // Z-clear programs' packets byte for byte)
     void setupPredict(const ps2hle::MscalContext &c)
     {
         g_setup.expected.assign(c.vuData, c.vuData + kQwords * 16u);
         g_setup.staleLanes.clear();
-        runSetupProgram(g_setup.expected.data(), c.startPc, c.top, &g_setup.staleLanes);
+        g_setup.kicks.clear();
+        g_setup.zclear = isZclearProgram(c);
+        if (g_setup.zclear)
+        {
+            if (!zclearProgram(g_setup.expected.data(), c.startPc, g_setup.kicks))
+                return; // not reproduced: not compared
+        }
+        else
+            runSetupProgram(g_setup.expected.data(), c.startPc, c.top, &g_setup.staleLanes);
         g_setup.active = true;
         g_pred.vuKicks.clear();
         ps2vu1tap::g_kicks = &g_pred.vuKicks;
@@ -2428,12 +2686,15 @@ namespace
         g_setup.active = false;
         ps2vu1tap::g_kicks = nullptr;
         bool kicksOk = true;
-        for (const auto &k : g_pred.vuKicks)
-        {
-            uint32_t t0 = 0;
-            std::memcpy(&t0, k.data(), 4);
-            kicksOk = kicksOk && k.size() == 16u && (t0 & 0x7FFFu) == 0u;
-        }
+        if (g_setup.zclear)
+            kicksOk = g_pred.vuKicks == g_setup.kicks;
+        else
+            for (const auto &k : g_pred.vuKicks)
+            {
+                uint32_t t0 = 0;
+                std::memcpy(&t0, k.data(), 4);
+                kicksOk = kicksOk && k.size() == 16u && (t0 & 0x7FFFu) == 0u;
+            }
         for (const auto &[q, lanes] : g_setup.staleLanes) // the VU's stale register lanes count as reproduced
             for (int k = 0; k < 4; ++k)
                 if (lanes & (1u << k))
@@ -2476,7 +2737,28 @@ namespace
         static const bool redraw = !(std::getenv("PS2X_HLE_REDRAW") && *std::getenv("PS2X_HLE_REDRAW") == '0');
         static const bool setup = !(std::getenv("PS2X_HLE_SETUP") && *std::getenv("PS2X_HLE_SETUP") == '0');
         uint32_t shineP = 0, shineQ = 0;
-        if (setup && isSetupProgram(c))
+        if (setup && ps2hle::gs() && isZclearProgram(c))
+        {
+            static thread_local std::vector<uint8_t> saved;
+            static thread_local std::vector<std::vector<uint8_t>> kicks;
+            saved.assign(c.vuData, c.vuData + kQwords * 16u);
+            kicks.clear();
+            handled = zclearProgram(c.vuData, c.startPc, kicks);
+            if (!handled)
+                std::memcpy(c.vuData, saved.data(), saved.size()); // the VU1 runs on what it would have seen
+            else
+            {
+                std::fesetround(rounding);
+                gsSetPath1Producer(c.startPc, true); // draw sources: a C++ reproduction sends these
+                gsSetCurrentGifPath(1u);
+                for (const auto &k : kicks)
+                    sendKick(k); // depth-fill strips and register packets: the GS front end
+                gsSetCurrentGifPath(3u);
+                std::fesetround(FE_TOWARDZERO);
+                ++g_setup.native;
+            }
+        }
+        else if (setup && isSetupProgram(c))
         {
             runSetupProgram(c.vuData, c.startPc, c.top);
             ++g_setup.native;
@@ -2499,6 +2781,26 @@ namespace
         std::fesetround(rounding);
         // PS2X_HLE_STATS=1: which stage tables (38-41, entry 52.x) of 0x0030 still run on the VU1, every 10 s
         static const bool stats = std::getenv("PS2X_HLE_STATS") != nullptr;
+        if (stats && !handled && c.startPc != 0x30u && c.startPc != 0x2C0u) // other programs: why not reproduced
+        {
+            static std::map<std::string, uint64_t> seen;
+            char key[256];
+            std::string slots;
+            for (uint32_t q = 34; q <= 37; ++q)
+            {
+                const IVec4 t = loadI(c.vuData, q);
+                char s[48];
+                std::snprintf(s, sizeof(s), " %x/%x/%x", t.v[0] & 0xFFFF, t.v[1] & 0xFFFF, t.v[3] & 0xFFFF);
+                slots += s;
+            }
+            std::snprintf(key, sizeof(key), "pc %04x low %016llx 2700 %016llx 2bf0 %016llx q58 %x slots%s", c.startPc,
+                          (unsigned long long)fnv(c.vuCode, 0x178, 0x6D0, 0xCBF29CE484222325ull),
+                          (unsigned long long)fnv(c.vuCode, 0x2700, 0x27F8, 0xCBF29CE484222325ull),
+                          (unsigned long long)fnv(c.vuCode, 0x2BF0, 0x2CE8, 0xCBF29CE484222325ull), loadI(c.vuData, 58).v[0] & 0xFFFF,
+                          slots.c_str());
+            if (seen[key]++ == 0u && seen.size() <= 16u)
+                std::fprintf(stderr, "[hle] VU1 program not reproduced: %s\n", key);
+        }
         if (stats && !handled && (c.startPc == 0x30u || c.startPc == 0x2C0u))
         {
             static std::map<std::string, uint64_t> unhandled;

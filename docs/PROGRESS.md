@@ -224,8 +224,11 @@ dropped on uploads (lazy render-target patching).
       without the GS front end (`GS::submitPackedKick`), verified exact against the per-vertex recording (14M packets).
       Render worker at the busiest bench spot 14.5 -> 11.7 ms, AI drive 21.2 -> 18.2 ms (one bench run each).
       `PS2X_HLE_PACKED=0` = front end.
-- [ ] Left on the VU1: 3-4 programs a frame of a second low code image (the per-frame Z clear: 0x0000 / 0x0200 with
-      20 kicks, 0x0250, 0x0400) and clipped environment-pass packets (table 0x13, ~63 in two minutes).
+- [x] **No VU1 in a normal frame** (2026-10-24, game-internals.md 6d): the Z-clear image's programs (0x0000, 0x0200,
+      0x0400), the last 0x0250 (slot routines now named by the hash of their code) and table-0x13 packets through the
+      clipper reproduced; verify exact (PHI_A1 setup programs 160,468; reference scenes env pass 23,913 with 216
+      clipped). `vu1_programs` 0 in the reference scenes and at all 18 tour-subset points. The emulated VU1 stays as
+      the reference (`PS2X_HLE=0`, `PS2X_HLE_SETUP=0`, `PS2X_HLE_VERIFY=1`).
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).

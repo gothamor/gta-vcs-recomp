@@ -520,8 +520,9 @@ First survey (2026-10-24: reference scenes, the tour subset, 12 missions 6-94), 
   two more code images: reproduced / accepted since (game-internals.md 6d), so **no VU1 draws** in the tour subset or
   the missions. The **setup programs** (matrices, per-batch tables, bone copies; ~330 runs a frame in the cutscene)
   are native too: VU1 programs a frame 195 -> 4 (cutscene), 86 -> 4 (gameplay), tour subset mean 104.6 -> 3.4,
-  worker 8.76 -> 8.05 ms. Left on the VU1: 3-4 programs a frame of a second low code image (the per-frame Z clear)
-  and clipped environment-pass packets (table 0x13, ~63 in two minutes).
+  worker 8.76 -> 8.05 ms. The last ones - the per-frame Z clear (a second low code image) and table-0x13 packets
+  through the clipper - followed: **no VU1 program runs in a normal frame** (`vu1_programs` 0 in the reference scenes
+  and the tour subset).
 - PATH2 (VIF DIRECT, the game's 2D / effect packets): the reflection map built in FBP 420 (a 128x128 sample of FBP
   140 plus a sun sprite), coronas / light sprites, and the full-screen effect draws not taken by the native post
   passes (colour-filter quads, the depth-tested self-copy over the sky, fades). Flat full-screen draws are resolution
