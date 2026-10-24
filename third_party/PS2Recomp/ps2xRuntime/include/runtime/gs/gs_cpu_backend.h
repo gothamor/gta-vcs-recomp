@@ -37,10 +37,20 @@ public:
     // RGBA8 (PS2 values, 0x80 = 1.0), width x height = state.textureWidth x textureHeight.
     void DecodeTexture(const GSDrawState &state, std::vector<uint32_t> &out);
     uint64_t ClutHash(const GSTex0Reg &tex0) const;
+    // [gta-recomp] A CLUT load (TEX0.CLD rules as LoadClut) whose source pixels come from a linear rectangle - the data of
+    // the upload that wrote them (rect: rectW x rectH pixels of 2 or 4 bytes from the CLUT buffer's origin) - instead of
+    // VRAM. -1 when a source pixel is outside the rectangle (nothing changed then), 0 when CLD skips the load, 1 loaded.
+    int LoadClutFromRect(const GSTex0Reg &tex0, const GSTexClutReg &texclut, const uint8_t *rect, uint32_t rectW, uint32_t rectH);
+    // [gta-recomp] PS2X_HW_CLUT_VERIFY: the CLUT entries, and a CLUT load from VRAM ignoring CLD
+    const std::array<uint16_t, 512> &ClutEntries() const { return m_clut; }
+    void ReloadClutFromVram(const GSTex0Reg &tex0, const GSTexClutReg &texclut);
 
 private:
     void ResetUnlocked();
     void LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &texclut);
+    bool clutLoadWanted(const GSTex0Reg &tex0); // TEX0.CLD: whether this TEX0 loads the CLUT (updates CBP0 / CBP1)
+    template <bool Write, typename Read>
+    bool loadClutEntries(const GSTex0Reg &tex0, const GSTexClutReg &texclut, Read read);
     uint32_t ReadVramUnlocked(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const;
     uint32_t ReadTextureVramUnlocked(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y);
     void WriteVramUnlocked(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value);

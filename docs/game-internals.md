@@ -662,6 +662,14 @@ write it (the scan: `0x2F0360..0x2FB690`, `0x1CEF18`, `0x266868`, `0x2A92C0`, `0
   headers (nodes of 0x70 bytes from `0x6EE3F0`, pool at `*0x488760`, used / max `0x4CD58C` / `0x4CD588`: a cached
   BITBLTBUF / TRXPOS / TRXREG / TRXDIR packet per destination) and writes two REF tags - the header packet and the
   image - both sent as VIF DIRECT (PATH2).
+- **Texture streaming** (2026-10-24, `FUN_002F62B8` decompiled; `PS2X_HW_UPSTATS=1`): `FUN_002F62B8(slot, psm,
+  log2 w, log2 h, mip count, ..., source address, flags)` uploads a raster into a fixed VRAM slot - base
+  `*(0x742B30 + slot * 8)`, each further mip at the next 64-block boundary - and skips everything only when the slot's
+  key `0x742B50[slot]` (psm, sizes, mips, source) is unchanged. Flag bit 0 per mip: T8 uploaded as CT32 (and T4 as CT16)
+  at half width / height - the RAM data is laid out for that. It then queues TEX0 (with the CLUT) / TEX1 / MIPTBP1 /
+  MIPTBP2 for the draw. The texture's CLUT is uploaded with it, so while driving every bind uploads texture + CLUT
+  (~390k uploads / 5 s, nearly all the same slots again). The header packet ends with the IMAGE GIFtag; the pixels
+  follow in the next DIRECT.
 - **Draws**, each starting with the state flush and the GS-register queue:
   - `FUN_002F7D58(packet)`: a **model instance** - CALL to the model's prebuilt packet in the model heap (444 calls a
     frame while driving); `FUN_002F80A0(packet)` the same shape (a variant);

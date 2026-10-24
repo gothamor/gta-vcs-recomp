@@ -194,6 +194,11 @@ dropped on uploads (lazy render-target patching).
         scene 1.12 against the reference (ok); at 1080p the progress bar and its shadow draw at the output's
         resolution instead of a scaled-up 640x448 frame. `VCS_LOADING_NATIVE=0` = into the frame buffer. There is no
         title menu (game-internals.md 6f: the game boots into the opening sequence; the frontend is the pause menu).
+- [x] **Textures without emulated VRAM in steady state** (2026-10-24, FULLY_NATIVE.md step 3a): CLUT loads take the
+      palette from the queued upload that wrote it, and data-less upload calls no longer force the queue; swizzled VRAM
+      writes while driving ~245k -> ~7 per 5 s, render worker idle 27% -> 41% on the drive (`writeRectFast` was 11% of
+      its samples). Verify: 2.7M CLUT loads the same as from VRAM. Scenes ok, tour classes unchanged (frame p90 19.1 ->
+      15.6 ms). `PS2X_HW_CLUT_FROM_UPLOAD=0` = from VRAM.
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -467,6 +472,7 @@ dropped on uploads (lazy render-target patching).
 | `VCS_LOADING_NATIVE=0` | loading screens drawn into the PS2 frame buffer instead of the native layer |
 | `PS2X_HW_PATH2_PACKED=0` | PATH2 draw packets (Im2D, effect strips) through the GS front end vertex by vertex instead of recorded whole |
 | `PS2X_TRACE_PATH2_TAGS=1` | PATH2 (VIF DIRECT) packets by the shape of their first GIFtag, and the register sequence of A+D packets that draw, every 5 s (`[path2]`) |
+| `PS2X_HW_CLUT_FROM_UPLOAD=0`, `PS2X_HW_CLUT_VERIFY=1` | CLUT loads read emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] clut from upload`) |
 | `VCS_TRACE_IM2D_DELAY=s`, `VCS_TRACE_IM2D_STACK=1` | start the Im2D trace after s seconds (default 30); print the guest stack's return addresses per call |
 | `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier did not find (positions) |
 | `PS2X_HW_OUTPUT=WxH` | the renderer's output size whatever the window (full-screen sizes in test runs; with `PS2X_CAPTURE_SIZE`) |

@@ -21,7 +21,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 |---|---|---|---|
 | 1 | The last GS draws | S-M | done 2026-10-24 (3 render-target reads left for step 3) |
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
-| 3 | Textures and render targets without GS memory | L | planned |
+| 3 | Textures and render targets without GS memory | L | in progress: 3a done 2026-10-24 (3b-3d planned) |
 | 4 | Draw-call replay (3D without building packets) | M-L | planned |
 | 5 | An empty chain | M | planned |
 
@@ -65,6 +65,37 @@ this is also what lets the radar and reflection map draw at the window's resolut
 Revisits DECISIONS.md "Textures from the GS backend's decoded cache".
 
 Done when: a normal frame binds no texture decoded from GS memory; the reference scenes match at 1x.
+
+**What GS memory still does (found 2026-10-24).** Render targets already live on the GPU (`m_rts`: a draw that
+samples one reads the target directly); the emulated GS memory carries the textures. VCS streams them: every bind
+(`FUN_002F62B8`, game-internals.md 6i "Texture streaming") uploads the raster's mips and its CLUT from RAM into a
+fixed VRAM slot. The renderer queues those uploads (lazy uploads), keys its GPU textures by the upload's content and
+decodes a texture from emulated VRAM only on a cache miss - but every bind's CLUT load read the palette back from
+VRAM, which wrote the queued uploads into it (swizzled): ~25% of the render worker's busy time while driving.
+
+Phases:
+- **3a - palettes from the upload, no VRAM in steady state** (done 2026-10-24): CLUT loads read the queued upload's
+  data; uploads without data no longer force the queue. Swizzled VRAM writes while driving ~245k -> ~7 per 5 s; render
+  worker idle 27% -> 41% of the drive. Details below.
+- **3b - the uploads' own cost**: each streamed upload is still hashed and copied into the queue (`UploadImage` ~4.5%
+  of the worker) although nearly all are made obsolete by the next upload to the slot. Hash once, keep a reference
+  instead of a copy where the source outlives the queue, or recognise the slot's re-upload of the same raster at the
+  game's bind (`FUN_002F62B8`'s own "same key" test) before any bytes move.
+- **3c - textures decoded from the upload data**: the cache-miss decode reads the upload's linear data instead of
+  VRAM (T4 / T8 / CT32 / CT16, and the T8-uploaded-as-CT32 case, which needs the GS's swizzle relation between the
+  two formats). Then a normal frame needs no emulated VRAM for textures at all.
+- **3d - identity by raster, not by VRAM address**: textures keyed by the game's raster (source address + format +
+  content) from the bind call, so draws made without packets (steps 4 and 5) can name their texture; render targets
+  named by what they are (frame, bloom buffers, reflection map, radar) rather than by FBP, at the window's resolution
+  where they are not read 1:1 (radar, reflection map).
+
+**3a done 2026-10-24.** `HwBackend::LoadClut` looks for the queued upload that last wrote every 256-byte block the
+CLUT load reads; when one whole upload at the CLUT's base, in its format, covers the pixels, the palette is loaded from
+its linear data (`GSCpuBackend::LoadClutFromRect`: the same CLD rules and CSM1 / CSM2 entry order as the VRAM load)
+and nothing is written. Upload calls without data (the header packet's IMAGE tag, its pixels in the next DIRECT) no
+longer force queued uploads out. Checked with `PS2X_HW_CLUT_VERIFY=1`: 1.5M loads on the drive, 1.2M over the
+reference scenes, all the same as from VRAM. Reference scenes ok; tour classes unchanged, frame time median 11.7 ->
+11.1, p90 19.1 -> 15.6 ms. `PS2X_HW_CLUT_FROM_UPLOAD=0` = from VRAM.
 
 ### 4. Draw-call replay
 

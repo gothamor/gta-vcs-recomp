@@ -22,6 +22,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -2474,6 +2475,11 @@ namespace
                 std::fprintf(stderr, "[gs-hw] clut cld=%u cbp=%u cpsm=%u csm=%u csa=%u psm=%u\n", tex0.cld, tex0.cbp, tex0.cpsm, tex0.csm,
                              tex0.csa, tex0.psm);
             }
+            if (tex0.cld != 0u && loadClutFromQueuedUpload(tex0, texclut))
+            {
+                ++m_texStateVersion;
+                return;
+            }
             if (tex0.cld != 0u)
             {
                 const bool eightBit = tex0.psm == GS_PSM_T8 || tex0.psm == GS_PSM_T8H;
@@ -2482,6 +2488,71 @@ namespace
             }
             m_cpu.LoadClut(tex0, texclut);
             ++m_texStateVersion;
+        }
+
+        // [gta-recomp] docs/FULLY_NATIVE.md step 3: a CLUT load reads its palette from the queued upload that wrote it - the
+        // linear rectangle the game sent - instead of writing that upload (and every queued upload overlapping it) into
+        // CPU VRAM to read it back. VCS uploads each texture's CLUT with the texture on every bind, so this was ~80% of
+        // the swizzled VRAM writes while driving. Used when one queued whole upload at the CLUT's base, in its format,
+        // is the latest writer of every block the load reads and covers the pixels it reads; otherwise VRAM as before.
+        // PS2X_HW_CLUT_FROM_UPLOAD=0: always VRAM. PS2X_HW_CLUT_VERIFY=1: the VRAM load runs as well and the 512 CLUT
+        // entries are compared.
+        bool loadClutFromQueuedUpload(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
+        {
+            static const bool on = [] {
+                const char *e = std::getenv("PS2X_HW_CLUT_FROM_UPLOAD");
+                return !(e && e[0] == '0');
+            }();
+            static const bool verify = std::getenv("PS2X_HW_CLUT_VERIFY") != nullptr;
+            if (!on || m_pendingUploads.empty())
+                return false;
+            const bool eightBit = tex0.psm == GS_PSM_T8 || tex0.psm == GS_PSM_T8H;
+            const bool csm2 = tex0.csm != 0u;
+            const uint32_t bw = csm2 ? std::max<uint32_t>(texclut.cbw, 1u) : 1u;
+            const uint32_t x0 = csm2 ? texclut.cou * 16u : 0u, y0 = csm2 ? texclut.cov : 0u;
+            const uint32_t w = csm2 ? (eightBit ? 256u : 16u) : (eightBit ? 16u : 8u), h = csm2 ? 1u : (eightBit ? 16u : 2u);
+            m_scratchRead.clear();
+            rectBlocks(tex0.cpsm, tex0.cbp, bw, x0, y0, w, h, m_scratchRead, nullptr);
+            const PendingUpload *source = nullptr;
+            for (uint16_t b : m_scratchRead)
+            {
+                const PendingUpload *latest = nullptr;
+                uint64_t latestId = 0;
+                for (uint64_t id : m_blockUploads[b])
+                    if (const PendingUpload *u = pendingById(id); u && (!latest || id > latestId))
+                    {
+                        latest = u;
+                        latestId = id;
+                    }
+                if (!latest || (source && latest != source))
+                    return false; // written before the queue, or by several queued uploads
+                source = latest;
+            }
+            if (!source)
+                return false;
+            const GSTransferCommand &c = source->cmd;
+            if (c.bitbltbuf.dbp != tex0.cbp || c.bitbltbuf.dpsm != tex0.cpsm || c.trxpos.dsax != 0u || c.trxpos.dsay != 0u ||
+                (c.bitbltbuf.dpsm != GS_PSM_CT32 && c.bitbltbuf.dpsm != GS_PSM_CT16))
+                return false;
+            const int loaded = m_cpu.LoadClutFromRect(tex0, texclut, source->data.data(), c.trxreg.rrw, c.trxreg.rrh);
+            if (loaded < 0)
+                return false;
+            ++m_clutFromUpload;
+            if (verify && loaded > 0)
+            {
+                const std::array<uint16_t, 512> fromUpload = m_cpu.ClutEntries();
+                materializeRectKeepTransfer(tex0.cpsm, tex0.cbp, bw, x0, y0, w, h);
+                m_cpu.ReloadClutFromVram(tex0, texclut);
+                const bool same = fromUpload == m_cpu.ClutEntries();
+                ++(same ? m_clutVerifySame : m_clutVerifyDiffer);
+                if (!same && m_clutVerifyDiffer <= 8u)
+                    std::fprintf(stderr, "[gs-hw] clut from upload differs: cbp %u cpsm %u csm %u csa %u psm %u upload %ux%u\n", tex0.cbp,
+                                 tex0.cpsm, tex0.csm, tex0.csa, tex0.psm, c.trxreg.rrw, c.trxreg.rrh);
+                if ((m_clutVerifySame + m_clutVerifyDiffer) % 100000u == 0u)
+                    std::fprintf(stderr, "[gs-hw] clut from upload checked: %llu the same as from VRAM, %llu differ\n",
+                                 (unsigned long long)m_clutVerifySame, (unsigned long long)m_clutVerifyDiffer);
+            }
+            return true;
         }
 
         void BeginTransfer(const GSTransferCommand &command) override
@@ -2542,6 +2613,11 @@ namespace
                     }
                 }
             }
+            // [gta-recomp] No data: VCS's upload header packet ends with the IMAGE tag and the pixels follow in the next DIRECT
+            // (PS2Memory::submitVif1DirectData), so the front end hands over 0 bytes first. Nothing is written - and nothing
+            // queued may be forced out or have its page generations bumped for it (it was ~240k forced writes / 5 s driving).
+            if (sizeBytes == 0u)
+                return;
             // [gta-recomp] Games re-send the same textures every frame. A whole-transfer upload identical to the last
             // one to the same place, with nothing else written to those pages since, changes nothing: skip the
             // swizzled write and keep the page generations (so cached GPU textures stay valid).
@@ -2604,6 +2680,29 @@ namespace
             }
             else
             {
+                { // PS2X_HW_UPSTATS=1: why an upload is written straight away
+                    static const bool stats = std::getenv("PS2X_HW_UPSTATS") != nullptr;
+                    if (stats)
+                    {
+                        static std::map<std::string, uint64_t> why;
+                        static auto lastWhy = std::chrono::steady_clock::now();
+                        char key[96];
+                        std::snprintf(key, sizeof(key), "%s psm %u %ux%u %u bytes%s", !wholeTransfer ? "partial" : "whole", dpsm, t.trxreg.rrw, t.trxreg.rrh, sizeBytes,
+                                      wholeTransfer && overlapsRenderTarget(first, last) ? " over a render target" : "");
+                        ++why[key];
+                        if (std::chrono::steady_clock::now() - lastWhy > std::chrono::seconds(5))
+                        {
+                            lastWhy = std::chrono::steady_clock::now();
+                            std::vector<std::pair<uint64_t, std::string>> top;
+                            for (const auto &[k, n] : why)
+                                top.push_back({n, k});
+                            std::sort(top.rbegin(), top.rend());
+                            for (size_t i = 0; i < top.size() && i < 8u; ++i)
+                                std::fprintf(stderr, "[upload] direct %llu: %s\n", (unsigned long long)top[i].first, top[i].second.c_str());
+                            why.clear();
+                        }
+                    }
+                }
                 if (prepareDirectUpload() && ++m_lazyWhy[2])
                     m_cpu.BeginTransfer(m_transfer); // replaying queued uploads replaced the CPU backend's transfer state
                 m_cpu.UploadImage(data, sizeBytes);
@@ -3026,6 +3125,8 @@ namespace
                          (unsigned long long)m_lazyDeferred, (unsigned long long)m_lazyWritten, (unsigned long long)m_lazyDropped,
                          m_pendingUploads.size(), m_pendingBytes >> 10, (unsigned long long)m_lazyWhy[0], (unsigned long long)m_lazyWhy[1],
                          (unsigned long long)m_lazyWhy[2], (unsigned long long)m_lazyWhy[3]);
+            std::fprintf(stderr, "[upload] clut loads from the queued upload: %llu\n", (unsigned long long)m_clutFromUpload);
+            m_clutFromUpload = 0;
             m_lazyDeferred = m_lazyWritten = m_lazyDropped = 0;
             for (uint64_t &w : m_lazyWhy)
                 w = 0;
@@ -3894,6 +3995,7 @@ namespace
         std::vector<uint8_t> m_scratchTake;
         size_t m_pendingBytes = 0;
         uint64_t m_lazyDeferred = 0, m_lazyWritten = 0, m_lazyDropped = 0;
+        uint64_t m_clutFromUpload = 0, m_clutVerifySame = 0, m_clutVerifyDiffer = 0; // [gta-recomp] loadClutFromQueuedUpload
         uint64_t m_lazyWhy[4]{}; // what forced queued uploads out: clut load, texture decode, direct upload, other
         std::unordered_map<uint32_t, DepthInfo> m_depthBufs; // zbp -> format / width
 

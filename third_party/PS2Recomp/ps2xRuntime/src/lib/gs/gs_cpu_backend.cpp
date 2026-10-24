@@ -555,41 +555,75 @@ void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
     DrawPrimitive(batch);
 }
 
+bool GSCpuBackend::clutLoadWanted(const GSTex0Reg &tex0) // [gta-recomp] split out of LoadClut
+{
+    switch (tex0.cld)
+    {
+    case 1u:
+        return true;
+    case 2u:
+        m_clutCbp[0] = tex0.cbp;
+        return true;
+    case 3u:
+        m_clutCbp[1] = tex0.cbp;
+        return true;
+    case 4u:
+        if (m_clutCbp[0] == tex0.cbp)
+            return false;
+        m_clutCbp[0] = tex0.cbp;
+        return true;
+    case 5u:
+        if (m_clutCbp[1] == tex0.cbp)
+            return false;
+        m_clutCbp[1] = tex0.cbp;
+        return true;
+    default: // 0, 6, 7
+        return false;
+    }
+}
+
 void GSCpuBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_vram || (!isFourBitIndexedPsm(tex0.psm) && !isEightBitIndexedPsm(tex0.psm)))
         return;
+    if (clutLoadWanted(tex0))
+        LoadClutUnlocked(tex0, texclut);
+}
 
-    switch (tex0.cld)
-    {
-    case 0u:
-    case 6u:
-    case 7u:
-        return;
-    case 1u:
-        break;
-    case 2u:
-        m_clutCbp[0] = tex0.cbp;
-        break;
-    case 3u:
-        m_clutCbp[1] = tex0.cbp;
-        break;
-    case 4u:
-        if (m_clutCbp[0] == tex0.cbp)
-            return;
-        m_clutCbp[0] = tex0.cbp;
-        break;
-    case 5u:
-        if (m_clutCbp[1] == tex0.cbp)
-            return;
-        m_clutCbp[1] = tex0.cbp;
-        break;
-    default:
-        return;
-    }
+int GSCpuBackend::LoadClutFromRect(const GSTex0Reg &tex0, const GSTexClutReg &texclut, const uint8_t *rect, uint32_t rectW, uint32_t rectH)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_vram || (!isFourBitIndexedPsm(tex0.psm) && !isEightBitIndexedPsm(tex0.psm)))
+        return 0;
+    const bool sixteenBit = tex0.cpsm == GS_PSM_CT16 || tex0.cpsm == GS_PSM_CT16S;
+    const uint32_t bytes = sixteenBit ? 2u : 4u;
+    auto inside = [&](uint32_t x, uint32_t y) { return x < rectW && y < rectH && x < 64u && y < 32u; }; // one page, any BW
+    // every source pixel first, so a refusal changes nothing (CBP0 / CBP1 included)
+    bool all = true;
+    loadClutEntries<false>(tex0, texclut, [&](uint32_t, uint32_t x, uint32_t y) {
+        all = all && inside(x, y);
+        return 0u;
+    });
+    if (!all)
+        return -1;
+    if (!clutLoadWanted(tex0))
+        return 0;
+    m_texturePageCache.Invalidate();
+    m_clutHashDirty = true;
+    loadClutEntries<true>(tex0, texclut, [&](uint32_t, uint32_t x, uint32_t y) {
+        uint32_t raw = 0;
+        std::memcpy(&raw, rect + (static_cast<size_t>(y) * rectW + x) * bytes, bytes);
+        return raw;
+    });
+    return 1;
+}
 
-    LoadClutUnlocked(tex0, texclut);
+void GSCpuBackend::ReloadClutFromVram(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_vram)
+        LoadClutUnlocked(tex0, texclut);
 }
 
 void GSCpuBackend::LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
@@ -597,11 +631,21 @@ void GSCpuBackend::LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &t
     // [gta-recomp] CLUT loads read VRAM directly on the GS: never through the (stale) texture page cache.
     m_texturePageCache.Invalidate();
     m_clutHashDirty = true;
+    loadClutEntries<true>(tex0, texclut, [&](uint32_t sourceWidth, uint32_t x, uint32_t y) {
+        return ReadTextureVramUnlocked(tex0.cpsm, tex0.cbp, sourceWidth, x, y);
+    });
+}
+
+// [gta-recomp] the entries a CLUT load takes, each from read(buffer width, x, y) - VRAM or an upload's rectangle; Write = false
+// only visits the source pixels
+template <bool Write, typename Read>
+bool GSCpuBackend::loadClutEntries(const GSTex0Reg &tex0, const GSTexClutReg &texclut, Read read)
+{
     const bool fourBit = isFourBitIndexedPsm(tex0.psm);
     const bool sixteenBit = tex0.cpsm == GS_PSM_CT16 || tex0.cpsm == GS_PSM_CT16S;
     const bool thirtyTwoBit = tex0.cpsm == GS_PSM_CT32 || tex0.cpsm == GS_PSM_CT24;
     if (!sixteenBit && !thirtyTwoBit)
-        return;
+        return false;
 
     const uint32_t entryCount = fourBit ? 16u : 256u;
     const uint32_t csaMask = sixteenBit ? 0x1Fu : 0x0Fu;
@@ -629,7 +673,9 @@ void GSCpuBackend::LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &t
             sourceY = static_cast<uint32_t>(texclut.cov);
         }
 
-        const uint32_t raw = ReadTextureVramUnlocked(tex0.cpsm, tex0.cbp, sourceWidth, sourceX, sourceY); 
+        const uint32_t raw = read(sourceWidth, sourceX, sourceY);
+        if constexpr (!Write)
+            continue;
         const uint32_t destination = (loadCsm1Suffix ? entry : destinationBase + entry) & (sixteenBit ? 0x1FFu : 0x0FFu);
         if (sixteenBit)
         {
@@ -641,6 +687,7 @@ void GSCpuBackend::LoadClutUnlocked(const GSTex0Reg &tex0, const GSTexClutReg &t
             m_clut[destination + 256u] = static_cast<uint16_t>(raw >> 16u);
         }
     }
+    return true;
 }
 
 void GSCpuBackend::Flush()
