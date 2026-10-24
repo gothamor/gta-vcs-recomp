@@ -357,6 +357,16 @@ void ps2chain::addChainObservers(QueuedObserver queued, ProcessingObserver proce
 }
 
 void ps2chain::setMarkHandler(MarkHandler handler) { g_markHandler.store(handler, std::memory_order_relaxed); } // [gta-recomp]
+namespace
+{
+    std::atomic<ps2chain::DirectHandler> g_directHandler{nullptr}; // [gta-recomp]
+}
+void ps2chain::setDirectHandler(DirectHandler handler) { g_directHandler.store(handler, std::memory_order_relaxed); } // [gta-recomp]
+void ps2chain::notifyDirect(const uint8_t *data, uint32_t bytes) // [gta-recomp]
+{
+    if (const DirectHandler h = g_directHandler.load(std::memory_order_relaxed))
+        h(data, bytes);
+}
 
 uint32_t ps2chain::streamOffset() { return t_streamOffset; }            // [gta-recomp]
 void ps2chain::setStreamOffset(uint32_t offset) { t_streamOffset = offset; } // [gta-recomp]

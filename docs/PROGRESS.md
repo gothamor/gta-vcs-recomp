@@ -206,6 +206,9 @@ dropped on uploads (lazy render-target patching).
       queued upload's data at each texel's VRAM address (`GSMem::PixelBits`) instead of emulated VRAM; ~4,100 decodes over
       the reference scenes identical to VRAM's. Left in VRAM: the loading screen's art (its upload arrives in pieces).
       `PS2X_HW_DECODE_FROM_UPLOAD=0` = from VRAM.
+- [x] **Textures named by raster, render targets by role** (2026-10-24, FULLY_NATIVE.md step 3d): every texture made
+      over the reference scenes and the drive named by the game's raster (RAM address) through the chain's upload REFs;
+      targets named by the game (`gsHwSetTargetRole`), the reflection map at the window's resolution. Step 3 done.
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -220,7 +223,8 @@ dropped on uploads (lazy render-target patching).
   - [x] Per-target scales; "Internal resolution: Match window" draws the picture's targets at the window's size
         (1920x1080 at 16:9 1080p), the effect buffers at 1x. Default stays 1x (the original).
   - [x] MSAA (2x-8x) and anisotropic filtering (2x-16x) as options, off by default (NATIVE_RENDERER.md "Native frame").
-  - [ ] The radar / reflection map at higher resolution.
+  - [x] The reflection map at the window's resolution with "Match window" (2026-10-24, FULLY_NATIVE.md step 3d); the
+        radar has no target of its own (drawn in the HUD layer, already at the window's resolution).
 - [x] **Draw-source counter** (2026-10-24; NATIVE_RENDERER.md "Draw sources"): what each frame still draws through
       the GS path, by source (VU1 program, C++ reproduction, PATH2, PATH3) - perf line `gs_*`, overlay, the rig's
       `gsdraws`, tour / missions record it. Survey: no PATH3; PATH2 ~15 draws (reflection map, coronas, effect quads);
@@ -479,6 +483,9 @@ dropped on uploads (lazy render-target patching).
 | `VCS_LOADING_NATIVE=0` | loading screens drawn into the PS2 frame buffer instead of the native layer |
 | `PS2X_HW_PATH2_PACKED=0` | PATH2 draw packets (Im2D, effect strips) through the GS front end vertex by vertex instead of recorded whole |
 | `PS2X_TRACE_PATH2_TAGS=1` | PATH2 (VIF DIRECT) packets by the shape of their first GIFtag, and the register sequence of A+D packets that draw, every 5 s (`[path2]`) |
+| `PS2X_HW_RT_LOG=1` | the render targets with their names (gsHwSetTargetRole), sizes and scales, every 5 s |
+| `PS2X_HW_REFLECTION_SCALE=0` | the reflection map stays 1x with "Match window" |
+| `VCS_RSL_RASTERS=0` | textures not named by raster (no upload REFs recorded) |
 | `PS2X_HW_DECODE_FROM_UPLOAD=0`, `PS2X_HW_DECODE_VERIFY=1` | textures decoded from emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] textures from upload`) |
 | `PS2X_HW_CLUT_FROM_UPLOAD=0`, `PS2X_HW_CLUT_VERIFY=1` | CLUT loads read emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] clut from upload`) |
 | `VCS_TRACE_IM2D_DELAY=s`, `VCS_TRACE_IM2D_STACK=1` | start the Im2D trace after s seconds (default 30); print the guest stack's return addresses per call |

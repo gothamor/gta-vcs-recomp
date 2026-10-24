@@ -36,6 +36,49 @@ namespace
     std::atomic<uint32_t> g_outputW{0}, g_outputH{0};   // [gta-recomp] gsHwSetOutputSize
     std::atomic<float> g_aspectWidening{1.0f};          // [gta-recomp] gsHwSetAspectWidening
     std::atomic<uint32_t> g_frameW{0}, g_frameH{0};     // [gta-recomp] gsHwSetFrameSize
+    struct TargetRole                                   // [gta-recomp] gsHwSetTargetRole
+    {
+        uint32_t fbp = 0, fbw = 0;
+        const char *name = "";
+        bool windowScale = false;
+    };
+    TargetRole g_targetRoles[16];
+    std::atomic<uint32_t> g_targetRoleCount{0};
+    const TargetRole *targetRole(uint32_t fbp, uint32_t fbw)
+    {
+        const uint32_t n = g_targetRoleCount.load(std::memory_order_acquire);
+        for (uint32_t i = 0; i < n; ++i)
+            if (g_targetRoles[i].fbp == fbp && (g_targetRoles[i].fbw == fbw || fbw == 0u))
+                return &g_targetRoles[i];
+        return nullptr;
+    }
+}
+
+namespace
+{
+    thread_local uint32_t t_uploadSourceAddress = 0, t_uploadSourceBytes = 0; // [gta-recomp] gsHwSetUploadSource
+    std::unordered_map<uint32_t, uint64_t> g_rasterTextures;                // [gta-recomp] raster address -> texture key
+}
+
+void gsHwSetUploadSource(uint32_t address, uint32_t bytes)
+{
+    t_uploadSourceAddress = address;
+    t_uploadSourceBytes = bytes;
+}
+
+uint64_t gsHwTextureForRaster(uint32_t address)
+{
+    const auto it = g_rasterTextures.find(address);
+    return it != g_rasterTextures.end() ? it->second : 0u;
+}
+
+void gsHwSetTargetRole(uint32_t fbp, uint32_t fbw, const char *name, bool windowScale)
+{
+    const uint32_t n = g_targetRoleCount.load(std::memory_order_relaxed);
+    if (n >= 16u)
+        return;
+    g_targetRoles[n] = {fbp, fbw, name ? name : "", windowScale};
+    g_targetRoleCount.store(n + 1u, std::memory_order_release);
 }
 
 void gsHwSetFrameSize(uint32_t width, uint32_t height)
@@ -811,6 +854,19 @@ namespace
                 auto it = m_hud.find(f.displayFbp);
                 if (f.displayFromRt && it != m_hud.end() && !it->second.stale && !it->second.draws.empty())
                     layer = &it->second;
+                static const bool rtLog = std::getenv("PS2X_HW_RT_LOG") != nullptr; // [gta-recomp] the targets, every 5 s
+                static auto rtLast = std::chrono::steady_clock::now();
+                if (rtLog && std::chrono::steady_clock::now() - rtLast > std::chrono::seconds(5))
+                {
+                    rtLast = std::chrono::steady_clock::now();
+                    for (const auto &[fbp, rt] : m_rts)
+                    {
+                        const TargetRole *role = targetRole(fbp, 0u);
+                        std::fprintf(stderr, "[gs-hw] target fbp %u: %ux%u PS2 pixels, %ux%u texels (scale %.2f x %.2f, %u samples)%s%s\n", fbp,
+                                     rt.w, rt.h, rt.color ? rt.color->desc().width : 0u, rt.color ? rt.color->desc().height : 0u, rt.scale.x,
+                                     rt.scale.y, rt.samples, role ? " - " : "", role ? role->name : "");
+                    }
+                }
                 static const bool log = std::getenv("PS2X_HW_HUD_LOG") != nullptr; // the layers, every 2 s
                 static auto last = std::chrono::steady_clock::now();
                 if (log && std::chrono::steady_clock::now() - last > std::chrono::seconds(2))
@@ -918,11 +974,20 @@ namespace
             Scale scale;
         };
 
-        // the picture's targets (640 wide: the drawn frame, the shown copy, the Z buffer) take the native frame's scale
-        Scale scaleFor(uint32_t fbw) const
+        // the picture's targets (640 wide: the drawn frame, the shown copy, the Z buffer) take the native frame's scale;
+        // [gta-recomp] so do the targets the game names windowScale (gsHwSetTargetRole: the reflection map), unless the GS
+        // bloom draws into the same memory (its look is its 1x buffers)
+        Scale scaleFor(uint32_t fbp, uint32_t fbw) const
         {
             if (m_frameScale.x > 0.0f && fbw == 10u)
                 return m_frameScale;
+            static const bool roles = [] {
+                const char *e = std::getenv("PS2X_HW_REFLECTION_SCALE");
+                return !(e && e[0] == '0');
+            }();
+            if (m_frameScale.x > 0.0f && roles && (postNative() & 1u))
+                if (const TargetRole *r = targetRole(fbp, fbw); r && r->windowScale)
+                    return m_frameScale;
             return {static_cast<float>(m_scale), static_cast<float>(m_scale)};
         }
         // [gta-recomp] MSAA (GSHwOptions::msaa): the picture's targets and their depth buffers are multisampled; reads
@@ -1092,7 +1157,7 @@ namespace
         Rt &rtFor(uint32_t fbp, uint32_t fbw, uint32_t minH)
         {
             Rt &rt = m_rts[fbp];
-            growRt(rt, std::max<uint32_t>(fbw, 1u) * 64u, std::max<uint32_t>(minH, 512u), scaleFor(fbw), samplesFor(fbw));
+            growRt(rt, std::max<uint32_t>(fbw, 1u) * 64u, std::max<uint32_t>(minH, 512u), scaleFor(fbp, fbw), samplesFor(fbw));
             return rt;
         }
 
@@ -2705,6 +2770,9 @@ namespace
             // queued may be forced out or have its page generations bumped for it (it was ~240k forced writes / 5 s driving).
             if (sizeBytes == 0u)
                 return;
+            // [gta-recomp] the raster this upload sends (gsHwSetUploadSource), when its size says it is that one
+            const uint32_t raster = t_uploadSourceBytes == sizeBytes ? t_uploadSourceAddress : 0u;
+            t_uploadSourceBytes = 0u;
             // [gta-recomp] Games re-send the same textures every frame. A whole-transfer upload identical to the last
             // one to the same place, with nothing else written to those pages since, changes nothing: skip the
             // swizzled write and keep the page generations (so cached GPU textures stay valid).
@@ -2763,6 +2831,7 @@ namespace
             if (wholeTransfer && sizeBytes != 0u && lazyUploadsEnabled() &&
                 (dpsm == GS_PSM_T4 || dpsm == GS_PSM_T8 || dpsm == GS_PSM_CT32 || dpsm == GS_PSM_CT16) && !overlapsRenderTarget(first, last))
             {
+                m_uploadRaster = raster;
                 deferUpload(data, sizeBytes);
             }
             else
@@ -2799,6 +2868,7 @@ namespace
             {
                 UploadInfo &info = m_uploadAt[t.bitbltbuf.dbp];
                 info.hash = dataHash;
+                info.raster = raster;
                 info.dbw = t.bitbltbuf.dbw;
                 info.dpsm = t.bitbltbuf.dpsm;
                 info.x = t.trxpos.dsax;
@@ -2935,7 +3005,9 @@ namespace
             uint32_t live = 0;            // blocks not yet completely overwritten by a later upload
             bool done = false;            // written or dropped
             uint32_t takeStamp = 0;       // == m_wantGeneration: chosen by the current materializeBlocks
+            uint32_t raster = 0;          // [gta-recomp] the game's raster it sends (step 3d), 0 unknown
         };
+        uint32_t m_uploadRaster = 0; // [gta-recomp] UploadImage -> deferUpload
 
         static bool lazyUploadsEnabled()
         {
@@ -3032,6 +3104,7 @@ namespace
             }
             PendingUpload pu;
             pu.cmd = t;
+            pu.raster = m_uploadRaster;
             if (!m_uploadBufferPool.empty())
             {
                 pu.data = std::move(m_uploadBufferPool.back());
@@ -3264,6 +3337,9 @@ namespace
             std::fprintf(stderr, "[upload] clut loads from the queued upload: %llu; textures decoded from it: %llu (%llu in another format); from VRAM: %llu\n",
                          (unsigned long long)m_clutFromUpload, (unsigned long long)m_decodeFromUpload, (unsigned long long)m_decodeCrossFormat,
                          (unsigned long long)m_decodeFromVram);
+            std::fprintf(stderr, "[upload] textures made: %llu named by their raster, %llu not (%zu rasters known)\n",
+                         (unsigned long long)m_texNamed, (unsigned long long)m_texUnnamed, g_rasterTextures.size());
+            m_texNamed = m_texUnnamed = 0;
             m_clutFromUpload = m_decodeFromUpload = m_decodeCrossFormat = m_decodeFromVram = 0;
             m_lazyDeferred = m_lazyWritten = m_lazyDropped = 0;
             for (uint64_t &w : m_lazyWhy)
@@ -3758,6 +3834,7 @@ namespace
             // key it by the upload's content instead of the page generations, so a texture that is streamed into a
             // shared VRAM area every frame finds its decoded GPU copy again.
             bool contentKeyed = false;
+            uint32_t raster = 0;
             if (auto up = m_uploadAt.find(t.tbp0); up != m_uploadAt.end())
             {
                 const UploadInfo &u = up->second;
@@ -3768,18 +3845,53 @@ namespace
                     for (uint32_t p = first; p < last && contentKeyed; ++p)
                         contentKeyed = m_pageGen[p] == u.gens[p - u.first];
                     if (contentKeyed)
+                    {
                         key = mix64(mix64(key ^ 0xC0FFEEull, u.hash), u.w | (uint64_t(u.h) << 16));
+                        raster = u.raster;
+                    }
                 }
+                // [gta-recomp] step 3d: named by the raster of the upload at its base when that upload's pages hold the
+                // texture and are untouched since - in any format (VCS sends T4 as CT16 and T8 as CT32, keyed by page
+                // generations above)
+                else if (u.x == 0u && u.y == 0u && first >= u.first && last <= u.first + u.gens.size())
+                {
+                    bool untouched = true;
+                    for (uint32_t p = first; p < last && untouched; ++p)
+                        untouched = m_pageGen[p] == u.gens[p - u.first];
+                    if (untouched)
+                        raster = u.raster;
+                }
+            }
+            if (!raster && !m_pendingUploads.empty()) // [gta-recomp] step 3d: or the queued upload that wrote all its blocks
+            {
+                m_scratchRead.clear();
+                rectBlocks(t.psm, t.tbp0, t.tbw, 0u, 0u, d.textureWidth, d.textureHeight, m_scratchRead, nullptr);
+                if (const PendingUpload *w = soleQueuedWriter(m_scratchRead))
+                    raster = w->raster;
             }
             if (!contentKeyed)
                 for (uint32_t p = first; p < last && p < kPages; ++p)
                     key = mix64(key, m_pageGen[p]);
             s.texKey = key;
+            if (raster) // [gta-recomp] step 3d: the texture by the raster it came from
+                g_rasterTextures[raster] = key;
             auto it = m_texLru.find(key);
             if (it != m_texLru.end())
             {
                 it->second = m_frameIndex;
                 return true;
+            }
+            ++(raster ? m_texNamed : m_texUnnamed);
+            {
+                static const bool stats = std::getenv("PS2X_HW_UPSTATS") != nullptr;
+                static int logged = 0;
+                if (stats && !raster && logged++ < 40)
+                {
+                    const auto up = m_uploadAt.find(t.tbp0);
+                    std::fprintf(stderr, "[upload] texture without a raster: tbp %u tbw %u psm %u %ux%u, %s\n", t.tbp0, t.tbw, t.psm, d.textureWidth,
+                                 d.textureHeight, !contentKeyed ? (up == m_uploadAt.end() ? "no whole upload at its base" : "its upload's pages written since or not covering it")
+                                                                : "its upload's source unknown");
+                }
             }
             static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
             if (debug && m_loggedTextures < 60u)
@@ -4109,8 +4221,10 @@ namespace
         {
             uint64_t hash = 0;
             uint32_t dbw = 0, dpsm = 0, x = 0, y = 0, w = 0, h = 0, first = 0;
+            uint32_t raster = 0; // [gta-recomp] the game's raster it sent (RAM address), 0 unknown
             std::vector<uint32_t> gens;
         };
+        uint64_t m_texNamed = 0, m_texUnnamed = 0; // [gta-recomp] textures made, by whether their raster is known
         std::unordered_map<uint32_t, UploadInfo> m_uploadAt;
         uint64_t m_skippedUploads = 0;
         std::unordered_map<uint64_t, uint64_t> m_texLru;  // key -> last frame used

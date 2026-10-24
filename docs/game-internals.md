@@ -447,10 +447,10 @@ Found from frame dumps (`PS2X_HW_DUMP`, draw lists with depth) during the widesc
 - The colour filter / trails effect is drawn as **strips that sample the frame** itself (textures
   inside render targets, `texIsRt`), plus an alpha-only quad (FBMSK 0xFFFFFF) over x 80..560 at
   z = 0.
-- The radar: an off-screen 128x128 target at FBP 420 (ZBP 0) is drawn and composited; on screen
-  the round outline is a fan at far Z (GEQUAL, Z write on) and the map tiles (128x128 textures, far
-  Z, GEQUAL) are clipped by the **scissor** to the radar's rectangle. Menu labels are scissored
-  too.
+- The radar is drawn straight onto the screen (corrected 2026-10-24 from a frame dump at Fort Baxter: there is no
+  off-screen radar target - the 128x128 at FBP 420 is the reflection map, 6g): the round outline is a fan at far Z
+  (GEQUAL, Z write on) and the map tiles (128x128 T4 textures, far Z, GEQUAL) are clipped by the **scissor** to the
+  radar's rectangle (37,336 - 120,412 at 4:3). Menu labels are scissored too.
 - Pause menus have no depth-tested geometry below the far plane (that is how "3D frame" vs "2D
   frame" is told apart for the widescreen presentation).
 
@@ -482,8 +482,8 @@ end, Im2D primitives drawn with the depth test off get the HUD's z (`VCS_HUD_RW=
 - Just before the HUD, a full-screen draw writes Z = 0 everywhere (FBMSK 0xffffffff: Z only). HUD draws use ZTST
   ALWAYS (most) or GEQUAL with Z writes at z = 1.0 (help text, zone name): later depth-tested HUD draws do not overlap
   earlier ones. Blending is (Cs - Cd) * As + Cd or additive; no draw seen uses the destination alpha.
-- After the colour filter and before the HUD the radar's map is drawn into its own target (FBP 420, 128x128; the radar
-  on screen samples it).
+- (Corrected 2026-10-24: the 128x128 drawn into FBP 420 is the reflection map, not the radar's map - the radar's tiles
+  are drawn onto the screen directly.)
 - Indoors the radar is the ring alone. Help text hides the rest of the HUD while it is up; on leaving the barracks
   the radar flashes for a while (a tutorial).
 - **Radar on screen** (dump outside the barracks door, 16:9): first an untextured, colourless draw (blend
@@ -541,7 +541,8 @@ the next (30 fps). In order:
 3. Alpha-only full-screen quad into 140 (FBMSK 0xFFFFFF), then the **native 3D** (~900-1300 world / lit draws,
    all into FBP 140).
 4. Opaque full-screen **self-copy 140 -> 140** (120 vertices) - a shifted / filtered copy of the scene onto itself.
-5. Radar: 128x128 into FBP 420 from 140, radar tiles into 420; more 3D (particles, peds' second pass) into 140.
+5. The reflection map: a 128x128 sample of 140 into FBP 420 plus sun glow sprites (not the radar - corrected
+   2026-10-24); more 3D (particles, peds' second pass) into 140, the vehicles sampling 420.
 6. Bloom: 256x256 ping-pong between FBP 420 and 452 (4 passes: clear `Cs*FIX` black, add the other at FIX 128 with
    tint 0x13), then added into 140 (`Cs*FIX + Cd`, FIX ~100).
 7. Trails / colour: 512x512 downsample 140 -> FBP 384 (opaque), blended back into 140 at FIX 8 (`(Cs-Cd)*FIX+Cd`,
@@ -669,7 +670,9 @@ write it (the scan: `0x2F0360..0x2FB690`, `0x1CEF18`, `0x266868`, `0x2A92C0`, `0
   at half width / height - the RAM data is laid out for that. It then queues TEX0 (with the CLUT) / TEX1 / MIPTBP1 /
   MIPTBP2 for the draw. The texture's CLUT is uploaded with it, so while driving every bind uploads texture + CLUT
   (~390k uploads / 5 s, nearly all the same slots again). The header packet ends with the IMAGE GIFtag; the pixels
-  follow in the next DIRECT.
+  follow in the next DIRECT: a REF straight to the raster in RAM whose VIFcodes are `NOP; DIRECTHL n` with n = its
+  qwc (how docs/FULLY_NATIVE.md step 3d names textures by raster). T4 textures (the radar tiles among them) are sent
+  as CT16, and their CLUT goes into the same GS page right after (other blocks).
 - **Draws**, each starting with the state flush and the GS-register queue:
   - `FUN_002F7D58(packet)`: a **model instance** - CALL to the model's prebuilt packet in the model heap (444 calls a
     frame while driving); `FUN_002F80A0(packet)` the same shape (a variant);

@@ -11,6 +11,7 @@
 #include "game/vcs_display.h"
 
 #include "ps2_runtime.h"
+#include "runtime/gs/gs_hw.h"
 #include <ps2_recompiled_functions.h>
 
 #include <atomic>
@@ -61,6 +62,15 @@ namespace vcs
         runtime.replaceFunction(0x001AB9E0u, &setViewWindow);
         if (const char *e = std::getenv("VCS_WIDESCREEN"); e && *e) // testing: force the game's own (Vert-) preference
             g_gamePreference.store(*e == '0' ? 0 : 1, std::memory_order_relaxed);
+        // VCS's render targets by what they are (game-internals.md 6g; docs/FULLY_NATIVE.md step 3d). The reflection map
+        // is only ever sampled (vehicles' paint), so it follows "Internal resolution: Match window" like the picture.
+        gsHwSetTargetRole(140u, 10u, "frame", false);
+        gsHwSetTargetRole(0u, 10u, "shown picture (the previous frame)", false);
+        gsHwSetTargetRole(280u, 10u, "Z buffer", false);
+        gsHwSetTargetRole(420u, 2u, "reflection map (128x128 sample of the frame + sun glow)", true);
+        gsHwSetTargetRole(420u, 4u, "bloom", false);
+        gsHwSetTargetRole(452u, 4u, "bloom (second buffer)", false);
+        gsHwSetTargetRole(384u, 8u, "trails", false);
     }
 
     void applyDisplay(uint8_t *rdram)

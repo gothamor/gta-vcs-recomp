@@ -4,6 +4,7 @@
 #include "game/vcs_hle_world.h"
 #include "ps2_runtime.h"
 #include "runtime/ps2_chain_observer.h"
+#include "runtime/gs/gs_hw.h"
 #include "runtime/ps2_hle_survey.h"
 
 #include <algorithm>
@@ -27,7 +28,7 @@ namespace vcs::rslworld
         constexpr uint32_t kModelDraw = 0x002F7D58u;               // FUN_002F7D58(packet): CALL packet
         constexpr uint32_t kModelDrawB = 0x002F80A0u;              // FUN_002F80A0(packet): CALL packet
 
-        bool g_world = false, g_models = false, g_verify = false, g_log = false;
+        bool g_world = false, g_models = false, g_rasters = false, g_verify = false, g_log = false;
         PS2Runtime::RecompiledFunction g_worldOriginal = nullptr, g_modelOriginal = nullptr, g_modelBOriginal = nullptr;
 
         enum Kind : uint8_t
@@ -36,9 +37,10 @@ namespace vcs::rslworld
             Model,     // FUN_002F7D58's CALL
             ModelB,    // FUN_002F80A0's CALL
             OtherCall, // a CALL in the packet buffer no draw call above wrote (FUN_002F80A0's state packet, ...)
+            RasterUpload, // a REF sending a raster's pixels (VIF DIRECT): its address names the texture (step 3d)
             KindCount
         };
-        const char *const kKindNames[KindCount] = {"world", "model", "model-b", "other call"};
+        const char *const kKindNames[KindCount] = {"world", "model", "model-b", "other call", "raster upload"};
 
         struct Draw
         {
@@ -49,14 +51,32 @@ namespace vcs::rslworld
         size_t g_next = 0;                     // the next of g_kicked whose tag the chain should hold
 
         // the copied chain's marked tags, by MARK index, for the thread that processes it
+        struct RasterRef // a texture upload's pixels: where they are in the copied chain, whose they are
+        {
+            uint32_t offset, address, bytes;
+        };
         struct ChainTable
         {
             std::vector<Draw> draws;
+            std::vector<RasterRef> rasters; // by offset
         };
         ChainTable g_building;
         std::mutex g_tablesMutex;
         std::map<const void *, std::shared_ptr<ChainTable>> g_tables;
         thread_local std::shared_ptr<ChainTable> t_table;
+        thread_local const uint8_t *t_chain = nullptr; // the chain being processed (its copy's data)
+
+        // the raster upload whose pixels are at `data` in the chain being processed (step 3d), if one is
+        const RasterRef *rasterAt(const uint8_t *data, uint32_t bytes)
+        {
+            const ChainTable *table = t_table.get();
+            if (!table || table->rasters.empty() || !t_chain || data < t_chain)
+                return nullptr;
+            const uint32_t offset = static_cast<uint32_t>(data - t_chain);
+            const auto it = std::lower_bound(table->rasters.begin(), table->rasters.end(), offset,
+                                             [](const RasterRef &r, uint32_t o) { return r.offset < o; });
+            return it != table->rasters.end() && it->offset == offset && it->bytes == bytes ? &*it : nullptr;
+        }
 
         // ---- recordings (the processing thread) ----------------------------------------------------------------------
         struct Op
@@ -72,6 +92,7 @@ namespace vcs::rslworld
             bool topRelative = false;        // UNPACK
             uint8_t lanes = 0xF;             // UNPACK: the fields it writes (the others keep VU memory)
             bool directHl = false;           // DIRECT
+            uint32_t rasterAddress = 0, rasterBytes = 0; // DIRECT: the raster upload it sends (step 3d), if known
             uint32_t vuAddr = 0, qwords = 0; // UNPACK: VU address (relative to TOPS when topRelative); DIRECT: qwords
             std::vector<uint8_t> data;       // UNPACK: the qwords as written; DIRECT: the GS data
         };
@@ -143,6 +164,11 @@ namespace vcs::rslworld
                 op.directHl = directHl;
                 op.qwords = qwords;
                 op.data.assign(data, data + size_t(qwords) * 16u);
+                if (const RasterRef *r = rasterAt(data, qwords * 16u))
+                {
+                    op.rasterAddress = r->address;
+                    op.rasterBytes = r->bytes;
+                }
             }
 
             void other(uint32_t vifcode) override
@@ -171,7 +197,7 @@ namespace vcs::rslworld
         {
             uint64_t blocks = 0, replayed = 0, recorded = 0, notReplayable = 0, changing = 0;
         } g_stats[KindCount];
-        uint64_t g_packets = 0, g_verifySame = 0, g_verifyDiffer = 0, g_unmarked = 0;
+        uint64_t g_packets = 0, g_verifySame = 0, g_verifyDiffer = 0, g_unmarked = 0, g_rasterMarks = 0;
         std::map<const char *, uint64_t> g_refusals;
         auto g_reportAt = std::chrono::steady_clock::now();
 
@@ -233,7 +259,11 @@ namespace vcs::rslworld
                     ++g_packets;
                 }
                 else if (op.type == Op::Direct)
+                {
+                    if (op.rasterBytes) // the texture keeps its name when its upload comes from a recording
+                        gsHwSetUploadSource(op.rasterAddress, op.rasterBytes);
                     memory.submitVif1DirectData(op.data.data(), op.qwords, op.directHl);
+                }
                 else
                 {
                     const uint32_t at = op.topRelative ? (op.vuAddr + memory.vif1_regs.tops) & 0x3FFu : op.vuAddr;
@@ -331,8 +361,8 @@ namespace vcs::rslworld
                                  (unsigned long long)s.notReplayable, (unsigned long long)s.changing);
                 g_stats[k] = Stats{};
             }
-            std::fprintf(stderr, "[rsl-world] %llu packets replayed, %llu marks without a length; %zu recordings\n",
-                         (unsigned long long)g_packets, (unsigned long long)g_unmarked, g_recordings.size());
+            std::fprintf(stderr, "[rsl-world] %llu packets replayed, %llu marks without a length, %llu raster uploads named; %zu recordings\n",
+                         (unsigned long long)g_packets, (unsigned long long)g_unmarked, (unsigned long long)g_rasterMarks, g_recordings.size());
             if (!g_refusals.empty())
             {
                 std::fprintf(stderr, "[rsl-world] not replayable:");
@@ -343,7 +373,7 @@ namespace vcs::rslworld
             if (g_verify)
                 std::fprintf(stderr, "[rsl-world] verify: %llu recordings the same as the packet path, %llu differ\n",
                              (unsigned long long)g_verifySame, (unsigned long long)g_verifyDiffer);
-            g_packets = g_verifySame = g_verifyDiffer = g_unmarked = 0;
+            g_packets = g_verifySame = g_verifyDiffer = g_unmarked = g_rasterMarks = 0;
             g_refusals.clear();
         }
 
@@ -418,6 +448,16 @@ namespace vcs::rslworld
             return 12u + size;
         }
 
+        // a DIRECT's data on the processing thread: a raster upload's pixels tell the renderer whose they are (step 3d)
+        void onDirect(const uint8_t *data, uint32_t bytes)
+        {
+            if (const RasterRef *r = rasterAt(data, bytes))
+            {
+                gsHwSetUploadSource(r->address, r->bytes);
+                ++g_rasterMarks;
+            }
+        }
+
         // ---- the game thread ----------------------------------------------------------------------------------------
         // before the original only (DECISIONS.md "Rule for hooks on recompiled functions")
         void worldHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -449,21 +489,34 @@ namespace vcs::rslworld
         uint32_t observe(uint32_t tagAddr, uint32_t id, uint32_t tagTarget, uint32_t dataAddr, uint32_t qwc, uint64_t vifCodes,
                          uint32_t flatOffset, bool chainStart)
         {
-            (void)vifCodes;
-            (void)flatOffset;
             if (chainStart)
                 g_building = ChainTable{};
             tagAddr &= kRamMask;
+            // a raster's pixels: a REF whose VIFcodes end in DIRECT / DIRECTHL of its own size (texture uploads,
+            // FUN_003298D8: the header REF before it holds the GS registers and the IMAGE tag) - in the packet buffer or
+            // in a CALLed packet (the world's cached sector setup). Not marked: the MARK would land inside the DIRECT's
+            // data; found by its offset in the copy instead (onDirect, rasterAt).
+            if (id == 3u && g_rasters && qwc)
+            {
+                const uint32_t code = static_cast<uint32_t>(vifCodes >> 32);
+                if (((code >> 24) & 0x7Eu) == 0x50u && (code & 0xFFFFu) == qwc)
+                {
+                    g_building.rasters.push_back({flatOffset + 8u, dataAddr & kRamMask, qwc * 16u});
+                    return 0u;
+                }
+            }
             if ((id != 3u && id != 5u) || tagAddr < kPktLo || tagAddr >= kPktHi)
                 return 0u;
             const Draw *want = g_next < g_kicked.size() ? &g_kicked[g_next] : nullptr;
             if (id == 3u)
             {
                 // a world draw's REF: the one the next draw call wrote
-                if (!g_world || !qwc || !want || want->id != 3u || (dataAddr & kRamMask) != want->addr || qwc != want->qwc)
-                    return 0u;
-                ++g_next;
-                return mark(*want);
+                if (g_world && qwc && want && want->id == 3u && (dataAddr & kRamMask) == want->addr && qwc == want->qwc)
+                {
+                    ++g_next;
+                    return mark(*want);
+                }
+                return 0u;
             }
             if (!g_models)
                 return 0u;
@@ -480,7 +533,7 @@ namespace vcs::rslworld
         void queued(const void *key, uint32_t sizeBytes)
         {
             (void)sizeBytes;
-            if (g_building.draws.empty())
+            if (g_building.draws.empty() && g_building.rasters.empty())
                 return;
             auto table = std::make_shared<ChainTable>(std::move(g_building));
             g_building = ChainTable{};
@@ -495,8 +548,10 @@ namespace vcs::rslworld
             if (!begin)
             {
                 t_table.reset();
+                t_chain = nullptr;
                 return;
             }
+            t_chain = static_cast<const uint8_t *>(key);
             std::lock_guard<std::mutex> lock(g_tablesMutex);
             const auto it = g_tables.find(key);
             if (it == g_tables.end())
@@ -529,18 +584,21 @@ namespace vcs::rslworld
         g_world = !off("VCS_RSL_WORLD") && hook(runtime, kWorldDraw, g_worldOriginal, &worldHook);
         g_models = !off("VCS_RSL_MODELS") && hook(runtime, kModelDraw, g_modelOriginal, &modelHook) &&
                    hook(runtime, kModelDrawB, g_modelBOriginal, &modelBHook);
-        if (!g_world && !g_models)
+        g_rasters = !off("VCS_RSL_RASTERS"); // textures named by raster (docs/FULLY_NATIVE.md step 3d)
+        if (!g_world && !g_models && !g_rasters)
             return;
         g_verify = std::getenv("VCS_RSL_WORLD_VERIFY") != nullptr;
         g_log = g_verify || std::getenv("VCS_RSL_WORLD_LOG") != nullptr;
         ps2chain::addTagObserver(&observe);
         ps2chain::addChainObservers(&queued, &processing);
         ps2chain::setMarkHandler(&onMark);
+        if (g_rasters)
+            ps2chain::setDirectHandler(&onDirect);
     }
 
     void onFrameKick()
     {
-        if (!g_world && !g_models)
+        if (!g_world && !g_models && !g_rasters)
             return;
         g_kicked.swap(g_current);
         g_current.clear();

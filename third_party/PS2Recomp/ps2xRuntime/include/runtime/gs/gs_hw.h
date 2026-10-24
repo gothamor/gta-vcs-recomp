@@ -88,6 +88,18 @@ void gsHwSetAspectWidening(float widening);
 void gsHwSetFrameSize(uint32_t width, uint32_t height);
 // [gta-recomp] The size the picture is shown at (the window's letterboxed area); 0 = the render targets' size.
 void gsHwSetOutputSize(uint32_t width, uint32_t height);
+// [gta-recomp] Render targets named by what they are (docs/FULLY_NATIVE.md step 3d): the game says which buffer (FBP,
+// FBW) is which. windowScale: drawn at the native frame's scale (gsHwSetFrameSize) like the picture's own targets
+// instead of 1x - for a buffer only sampled, never shown or copied 1:1, whose detail grows with it (VCS's reflection
+// map); kept at 1x while the GS bloom (PS2X_HW_POSTFX without b) shares its memory. The names show in PS2X_HW_RT_LOG.
+// Main thread, before rendering; up to 16.
+void gsHwSetTargetRole(uint32_t fbp, uint32_t fbw, const char *name, bool windowScale);
+// [gta-recomp] Texture identity by raster (docs/FULLY_NATIVE.md step 3d): the RAM address of the raster the next upload on
+// this thread sends, and its byte count - taken by the next upload of exactly that many bytes; a texture made from that
+// upload is named by the address (gsHwTextureForRaster). The thread that processes the VIF1 chain.
+void gsHwSetUploadSource(uint32_t address, uint32_t bytes);
+// [gta-recomp] The renderer's texture key of the raster at `address` (the latest made from it), 0 if none. Render thread.
+uint64_t gsHwTextureForRaster(uint32_t address);
 // [gta-recomp] Draw sources (milestone 3's "unconverted draws"): the draws still made from GS primitives, by kind -
 // where their packets came from (runtime/gs/gs_draw_source.h), target, texture, blend, depth, coverage - per frame
 // since the last call, one kind per line, most draws first; `reset` starts a new window. The first call switches the

@@ -36,6 +36,10 @@ namespace ps2chain
     void addTagObserver(TagObserver observer);
     void addChainObservers(QueuedObserver queued, ProcessingObserver processing);
     void setMarkHandler(MarkHandler handler); // nullptr = off
+    // DIRECT / DIRECTHL on the processing thread: its data (a pointer into the stream being processed) before it goes to
+    // PATH2 - where a tag observer saw it come from can be found by its offset in the copied chain
+    using DirectHandler = void (*)(const uint8_t *data, uint32_t bytes);
+    void setDirectHandler(DirectHandler handler); // nullptr = off
 
     uint32_t streamOffset();
     void setStreamOffset(uint32_t offset); // the VIF1 interpreter
@@ -70,4 +74,5 @@ namespace ps2chain
     void notifyQueued(const void *key, uint32_t sizeBytes);
     void notifyProcessing(const void *key, bool begin);
     uint32_t notifyMark(PS2Memory &memory, uint32_t imm, const uint8_t *next, uint32_t avail);
+    void notifyDirect(const uint8_t *data, uint32_t bytes);
 }

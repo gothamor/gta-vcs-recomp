@@ -663,6 +663,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             const bool directHl = (opcode == VIF_DIRECTHL);
             if (ps2chain::VifRecorder *recorder = ps2chain::vifRecorder()) // [gta-recomp] runtime/ps2_chain_observer.h
                 recorder->direct(data + pos, qwCount, directHl, !truncated);
+            ps2chain::notifyDirect(data + pos, qwCount * 16u); // [gta-recomp] runtime/ps2_chain_observer.h
             if (qwCount > 0)
                 submitVif1DirectData(data + pos, qwCount, directHl);
 

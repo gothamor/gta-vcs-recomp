@@ -21,7 +21,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 |---|---|---|---|
 | 1 | The last GS draws | S-M | done 2026-10-24 (3 render-target reads left for step 3) |
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
-| 3 | Textures and render targets without GS memory | L | in progress: 3a-3c done 2026-10-24 (3d planned) |
+| 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | planned |
 | 5 | An empty chain | M | planned |
 
@@ -85,10 +85,10 @@ Phases:
 - **3c - textures decoded from the upload data** (done 2026-10-24): the cache-miss decode reads the upload's data
   instead of VRAM. A normal frame now needs no emulated VRAM for textures; the loading screens' art still goes
   through it. Details below.
-- **3d - identity by raster, not by VRAM address**: textures keyed by the game's raster (source address + format +
-  content) from the bind call, so draws made without packets (steps 4 and 5) can name their texture; render targets
-  named by what they are (frame, bloom buffers, reflection map, radar) rather than by FBP, at the window's resolution
-  where they are not read 1:1 (radar, reflection map).
+- **3d - identity by raster, not by VRAM address** (done 2026-10-24): textures named by the game's raster (its RAM
+  address), so draws made without packets (steps 4 and 5) can name their texture; render targets named by what they
+  are; the reflection map at the window's resolution (the radar already was: it has no target of its own). Details
+  below.
 
 **3a done 2026-10-24.** `HwBackend::LoadClut` looks for the queued upload that last wrote every 256-byte block the
 CLUT load reads; when one whole upload at the CLUT's base, in its format, covers the pixels, the palette is loaded from
@@ -120,6 +120,33 @@ VRAM, and 0-36 uploads a 5 s window written into it. No texture in these runs wa
 sent in, so that case is handled but not yet exercised. Reference scenes ok; tour unchanged (the known fall-through
 point at (-925, 1175) classed "water" this run - the same fall, landing in a water state). `PS2X_HW_DECODE_FROM_UPLOAD=0`
 = from VRAM.
+
+**3d done 2026-10-24.**
+- **Render targets by what they are**: the game names its buffers (`gsHwSetTargetRole(fbp, fbw, name, windowScale)`,
+  `src/game/vcs_display.cpp`): frame 140, shown picture 0, Z buffer 280, reflection map 420 / 128 wide, bloom 420 /
+  452, trails 384. `PS2X_HW_RT_LOG=1` lists the targets with their names, sizes and scales every 5 s. The GPU targets
+  stay keyed by FBP inside the renderer (the game reuses VRAM, and a draw names only its FBP).
+- **The reflection map at the window's resolution**: with "Internal resolution: Match window" it takes the frame's
+  scale (1080p: 384 x 309 texels instead of 128 x 128) - it is only ever sampled (vehicles' paint), never copied 1:1;
+  kept at 1x when the GS bloom shares its memory (`PS2X_HW_POSTFX` without b) and with
+  `PS2X_HW_REFLECTION_SCALE=0`. At 1x nothing changes. The reflection is faint by design (the game blends it in at
+  ~5%), so the picture changes little.
+- **The radar** needed nothing: a frame dump at Fort Baxter shows it drawn straight into the HUD layer from 128x128 T4
+  tile textures under a scissor - at the window's resolution already (game-internals.md 6f corrected: the 128x128 at
+  FBP 420 had been taken for the radar's; it is the reflection map).
+- **Textures by raster**: each upload's pixels are a REF to the raster in RAM (`NOP; DIRECTHL n`, game-internals.md 6i).
+  The RSL chain observer records where each such payload lands in the chain's copy (packet buffer and CALLed packets
+  alike); the VIF interpreter reports each DIRECT's data (`ps2chain::notifyDirect`), and the one at a recorded offset
+  tells the renderer whose pixels follow (`gsHwSetUploadSource`). A queued upload, and the upload info a texture is
+  keyed by, carry that address; recordings of CALLed packets keep it for their replays. A texture made from such an
+  upload is named by the raster (`gsHwTextureForRaster(address)` -> its key) - in any format it was sent in (T4 as
+  CT16, T8 as CT32: then the queued upload that last wrote all its blocks names it). Over the reference scenes 4,112
+  textures made, all named; while driving all named (~725 rasters). Reference scenes ok, tour unchanged.
+  `VCS_RSL_RASTERS=0` = no names. A first attempt put a VIF MARK before the raster REF's payload - it landed inside the
+  DIRECTHL's data and broke the stream; found at once by the RSL counts (replays collapsed), replaced by the offset
+  lookup.
+- Not done here: the GPU targets themselves are still found by FBP when a draw samples one; a draw made without
+  packets will need its target by role (steps 4 / 5).
 
 ### 4. Draw-call replay
 
