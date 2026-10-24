@@ -14,6 +14,7 @@
 #include "game/vcs_sound.h"
 #include "game/vcs_stream.h"
 #include "game/vcs_hud.h"
+#include "game/vcs_rsl_world.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/ps2_perf.h"
@@ -640,6 +641,7 @@ namespace
         vcs::onFrameKick();                         // the HUD context ends (game/vcs_hud.h)
         vcs::rsltrace::onFrameKick(rdram);          // VCS_TRACE_RSL (debug/rsl_trace.h)
         vcs::rslshadow::onFrameKick(rdram);         // VCS_RSL_SHADOW (debug/rsl_shadow.h)
+        vcs::rslworld::onFrameKick();               // world draws from RSL calls (game/vcs_rsl_world.h)
         FUN_002723e8_0x2723e8(rdram, ctx, runtime);
     }
 
@@ -716,6 +718,7 @@ namespace
         installCallCounters(runtime);
         vcs::rsltrace::install(runtime);
         vcs::rslshadow::install(runtime);
+        vcs::rslworld::install(runtime);
         if (std::getenv("VCS_TEST_SAVE") || std::getenv("VCS_DUMP_RAM"))
         {
             g_origPadRead = runtime.lookupFunction(0x00449488u); // scePadRead: polled every frame

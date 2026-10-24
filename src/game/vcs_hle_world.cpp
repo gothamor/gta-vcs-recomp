@@ -15,6 +15,7 @@
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_draw_source.h"
 #include "debug/rsl_shadow.h"
+#include "game/vcs_hle_world.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1839,6 +1840,10 @@ namespace
         std::memcpy(out, r.v, 16);
     }
 
+    // vcs_hle_world.h: the RSL world replay's mesh hint / capture for the next world packet (this thread)
+    thread_local const vcs::hleworld::WorldMesh *t_meshHint = nullptr;
+    thread_local vcs::hleworld::WorldMesh *t_meshCapture = nullptr;
+
     bool drawNative(const ps2hle::MscalContext &c)
     {
         if (c.startPc != 0x30u || !ps2hle::gs())
@@ -1945,26 +1950,44 @@ namespace
         d.vertexStride = 32;
         d.vertexCount = count;
         d.drawCount = nloop;
-        uint64_t key = 0xCBF29CE484222325ull ^ count;
-        key = hashQwords(vu, posBase, count, key);
-        key = hashQwords(vu, uvBase, count, key);
-        key = hashQwords(vu, colBase, count, key);
-        d.meshKey = key;
-        static thread_local std::vector<uint8_t> verts;
-        verts.resize(size_t(count) * 32u);
-        for (uint32_t i = 0; i < count; ++i)
+        const vcs::hleworld::WorldMesh *hint = t_meshHint;
+        t_meshHint = nullptr;
+        if (hint && hint->valid && hint->count == count) // the RSL world replay: the mesh of the recorded block
         {
-            const Vec4 pos = itof(loadI(vu, posBase + i)), uv = itof(loadI(vu, uvBase + i));
-            const IVec4 col = loadI(vu, colBase + i);
-            uint8_t *v = verts.data() + size_t(i) * 32u;
-            std::memcpy(v, pos.v, 12);
-            std::memcpy(v + 12, uv.v, 12);
-            const uint32_t rgba = (uint32_t(col.v[0]) & 0xFF) | ((uint32_t(col.v[1]) & 0xFF) << 8) | ((uint32_t(col.v[2]) & 0xFF) << 16) |
-                                  ((uint32_t(col.v[3]) & 0xFF) << 24);
-            std::memcpy(v + 24, &rgba, 4);
-            std::memset(v + 28, 0, 4);
+            d.meshKey = hint->key;
+            d.vertices = hint->vertices.data();
         }
-        d.vertices = verts.data();
+        else
+        {
+            uint64_t key = 0xCBF29CE484222325ull ^ count;
+            key = hashQwords(vu, posBase, count, key);
+            key = hashQwords(vu, uvBase, count, key);
+            key = hashQwords(vu, colBase, count, key);
+            d.meshKey = key;
+            static thread_local std::vector<uint8_t> verts;
+            verts.resize(size_t(count) * 32u);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const Vec4 pos = itof(loadI(vu, posBase + i)), uv = itof(loadI(vu, uvBase + i));
+                const IVec4 col = loadI(vu, colBase + i);
+                uint8_t *v = verts.data() + size_t(i) * 32u;
+                std::memcpy(v, pos.v, 12);
+                std::memcpy(v + 12, uv.v, 12);
+                const uint32_t rgba = (uint32_t(col.v[0]) & 0xFF) | ((uint32_t(col.v[1]) & 0xFF) << 8) | ((uint32_t(col.v[2]) & 0xFF) << 16) |
+                                      ((uint32_t(col.v[3]) & 0xFF) << 24);
+                std::memcpy(v + 24, &rgba, 4);
+                std::memset(v + 28, 0, 4);
+            }
+            d.vertices = verts.data();
+            if (vcs::hleworld::WorldMesh *capture = t_meshCapture) // recording a block for the RSL world replay
+            {
+                capture->valid = true;
+                capture->key = d.meshKey;
+                capture->count = count;
+                capture->vertices = verts;
+            }
+        }
+        t_meshCapture = nullptr;
 
         // constants (render/shaders/gs_draw.hlsl, cbuffer World), folded as the VU folds them
         Vec4 m[4];
@@ -2864,3 +2887,6 @@ namespace
         }
     } registrar;
 }
+
+void vcs::hleworld::setMeshCapture(WorldMesh *capture) { t_meshCapture = capture; }
+void vcs::hleworld::setMeshHint(const WorldMesh *hint) { t_meshHint = hint; }

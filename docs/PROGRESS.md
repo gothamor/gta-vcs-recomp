@@ -220,6 +220,11 @@ dropped on uploads (lazy render-target patching).
       80,557). Two more 0x02c0 code images accepted (they differ only in code the shine never runs). VU1 programs a
       frame: cutscene 195 -> 4, gameplay 86 -> 4, tour subset mean 104.6 -> 3.4 (worker 8.76 -> 8.05 ms); no VU1
       draws anywhere in the tour subset or the 12 missions. `PS2X_HLE_SETUP=0` = VU1.
+- [x] **World draws from the RSL world draw calls** (2026-10-24, milestone 7 / RSL_SUBMISSION.md phase 2): the world
+      draw's REF replaced by a VIF MARK as the chain is copied, the block drawn there from a recording (UNPACK results,
+      MSCALs, meshes) - no copy, VIF parsing, unpacking, hashing or vertex conversion of world geometry. Verify: 174,301
+      replays against the packet path, 0 differ. Timing within noise (world geometry is ~5% of VIF1's payload).
+      `VCS_RSL_WORLD=0` = packet path.
 - [x] **Packed draws** (2026-10-24, NATIVE_RENDERER.md "Draw sources"): the C++ reproductions' strips / fans recorded
       without the GS front end (`GS::submitPackedKick`), verified exact against the per-vertex recording (14M packets).
       Render worker at the busiest bench spot 14.5 -> 11.7 ms, AI drive 21.2 -> 18.2 ms (one bench run each).
@@ -443,6 +448,7 @@ dropped on uploads (lazy render-target patching).
 | `VCS_TRACE_IM2D=n`, `VCS_TRACE_IM2D_MARKERS=1..5` | log n Im2D calls (caller, primitive, vertices) / the 2D pass's calls, from 30 s on |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
 | `VCS_TRACE_RSL=1` | which functions build the frame's packets: calls and bytes per frame per function, every 5 s (`[rsl]`; game-internals.md 6i) |
+| `VCS_RSL_WORLD=0`, `VCS_RSL_WORLD_VERIFY=1`, `VCS_RSL_WORLD_LOG=1` | world blocks through the packet path instead of the RSL world draw (record / replay); check every replay against the packet path; counts every 10 s (`[rsl-world]`) |
 | `VCS_RSL_SHADOW=1` | RSL shadow draw list: each draw call checked against its tag in the frame's chain, 3D tags outside draws listed, each draw program's VU state checked against the draw's RSL state (`[rsl-shadow]`, `state (1b)`; not with `VCS_TRACE_RSL`) |
 | `VCS_RSL_SHADOW_DUMP=n`, `VCS_RSL_SHADOW_FIND=1` | with `VCS_RSL_SHADOW`: n samples of draw state + VU memory (`rsl_shadow_NNN.bin`); where in guest RAM mismatching VU rows are |
 | `PS2X_CHAIN_CENSUS=1` | the VIF1 chain by tag location / id / data source: tags and quadwords per chain, every 5 s (`[chain]`) |

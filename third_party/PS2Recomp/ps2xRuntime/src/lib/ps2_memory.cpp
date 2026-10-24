@@ -93,7 +93,7 @@ namespace
         c.qwords += qwc;
     }
 
-    std::atomic<ps2chain::TagObserver> g_chainObserver{nullptr}; // [gta-recomp] runtime/ps2_chain_observer.h
+
 
     // [gta-recomp] VIF1 FIFO data went to the render worker since its GIF arbiter last drained (game thread)
     bool g_renderWorkerNeedsDrain = false;
@@ -327,37 +327,81 @@ namespace
 
 }
 
-namespace // [gta-recomp] runtime/ps2_chain_observer.h
+namespace // [gta-recomp] runtime/ps2_chain_observer.h - observers are added before the game runs, never removed
 {
-    std::atomic<ps2chain::QueuedObserver> g_chainQueued{nullptr};
-    std::atomic<ps2chain::ProcessingObserver> g_chainProcessing{nullptr};
+    constexpr int kMaxObservers = 4;
+    std::atomic<ps2chain::TagObserver> g_tagObservers[kMaxObservers] = {};
+    std::atomic<ps2chain::QueuedObserver> g_chainQueued[kMaxObservers] = {};
+    std::atomic<ps2chain::ProcessingObserver> g_chainProcessing[kMaxObservers] = {};
+    std::atomic<ps2chain::MarkHandler> g_markHandler{nullptr};
     thread_local uint32_t t_streamOffset = 0;
+
+    template <typename T>
+    void addTo(std::atomic<T> (&list)[kMaxObservers], T fn)
+    {
+        for (auto &slot : list)
+            if (!slot.load(std::memory_order_relaxed))
+            {
+                slot.store(fn, std::memory_order_relaxed);
+                return;
+            }
+    }
 }
 
-void ps2chain::setTagObserver(TagObserver observer) // [gta-recomp]
+void ps2chain::addTagObserver(TagObserver observer) { addTo(g_tagObservers, observer); } // [gta-recomp]
+
+void ps2chain::addChainObservers(QueuedObserver queued, ProcessingObserver processing) // [gta-recomp]
 {
-    g_chainObserver.store(observer, std::memory_order_relaxed);
+    addTo(g_chainQueued, queued);
+    addTo(g_chainProcessing, processing);
 }
 
-void ps2chain::setChainObservers(QueuedObserver queued, ProcessingObserver processing) // [gta-recomp]
-{
-    g_chainQueued.store(queued, std::memory_order_relaxed);
-    g_chainProcessing.store(processing, std::memory_order_relaxed);
-}
+void ps2chain::setMarkHandler(MarkHandler handler) { g_markHandler.store(handler, std::memory_order_relaxed); } // [gta-recomp]
 
 uint32_t ps2chain::streamOffset() { return t_streamOffset; }            // [gta-recomp]
 void ps2chain::setStreamOffset(uint32_t offset) { t_streamOffset = offset; } // [gta-recomp]
 
+namespace
+{
+    thread_local ps2chain::VifRecorder *t_vifRecorder = nullptr; // [gta-recomp]
+}
+void ps2chain::setVifRecorder(VifRecorder *recorder) { t_vifRecorder = recorder; } // [gta-recomp]
+ps2chain::VifRecorder *ps2chain::vifRecorder() { return t_vifRecorder; }        // [gta-recomp]
+
+bool ps2chain::tagObserved() { return g_tagObservers[0].load(std::memory_order_relaxed) != nullptr; } // [gta-recomp]
+
+uint32_t ps2chain::notifyTag(uint32_t tagAddr, uint32_t id, uint32_t tagTarget, uint32_t dataAddr, uint32_t qwc, uint64_t vifCodes,
+                             uint32_t flatOffset, bool chainStart) // [gta-recomp]
+{
+    uint32_t replace = 0u;
+    for (auto &slot : g_tagObservers)
+        if (const TagObserver o = slot.load(std::memory_order_relaxed))
+        {
+            const uint32_t r = o(tagAddr, id, tagTarget, dataAddr, qwc, vifCodes, flatOffset, chainStart);
+            if (!replace)
+                replace = r;
+        }
+    return replace;
+}
+
 void ps2chain::notifyQueued(const void *key, uint32_t sizeBytes) // [gta-recomp]
 {
-    if (const QueuedObserver o = g_chainQueued.load(std::memory_order_relaxed))
-        o(key, sizeBytes);
+    for (auto &slot : g_chainQueued)
+        if (const QueuedObserver o = slot.load(std::memory_order_relaxed))
+            o(key, sizeBytes);
 }
 
 void ps2chain::notifyProcessing(const void *key, bool begin) // [gta-recomp]
 {
-    if (const ProcessingObserver o = g_chainProcessing.load(std::memory_order_relaxed))
-        o(key, begin);
+    for (auto &slot : g_chainProcessing)
+        if (const ProcessingObserver o = slot.load(std::memory_order_relaxed))
+            o(key, begin);
+}
+
+void ps2chain::notifyMark(PS2Memory &memory, uint32_t imm) // [gta-recomp]
+{
+    if (const MarkHandler h = g_markHandler.load(std::memory_order_relaxed))
+        h(memory, imm);
 }
 
 // Helpers for GS VRAM addressing (PSMCT32 path).
@@ -1704,7 +1748,20 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         if (transferTagData)
                             appendVifTagData(currentTagAddr);
 
-                        if (hasPayload)
+                        // [gta-recomp] chain observers (runtime/ps2_chain_observer.h); one may replace a REF's payload with a
+                        // MARK whose handler does its work
+                        uint32_t replace = 0u;
+                        if (channelBase == 0x10009000u && ps2chain::tagObserved())
+                            replace = ps2chain::notifyTag(currentTagAddr, id, addr, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u,
+                                                          loadScalar<uint64_t>(tp, 8, 16, "dma tag hi", currentTagAddr), flatOffset,
+                                                          tagsProcessed == 1);
+                        if (replace && id == 3u && transferTagData)
+                        {
+                            const uint32_t mark[4] = {0x07000000u | (replace & 0xFFFFu), 0u, 0u, 0u}; // MARK imm, NOP x 3
+                            const auto *bytes = reinterpret_cast<const uint8_t *>(mark);
+                            chainBuf.insert(chainBuf.end(), bytes, bytes + sizeof(mark));
+                        }
+                        else if (hasPayload)
                             appendData(dataAddr, tagQwc);
                         if (trackSegments)
                         {
@@ -1786,9 +1843,6 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         {
                             if (chainCensus())
                                 censusTag(currentTagAddr, id, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u, tagsProcessed == 1);
-                            if (const ps2chain::TagObserver observer = g_chainObserver.load(std::memory_order_relaxed))
-                                observer(currentTagAddr, id, addr, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u,
-                                         loadScalar<uint64_t>(tp, 8, 16, "dma tag hi", currentTagAddr), flatOffset, tagsProcessed == 1);
                         }
                         if (irq && tieEnabled)
                             endChain = true;

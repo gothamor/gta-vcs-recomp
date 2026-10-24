@@ -344,6 +344,10 @@ public:
     void processVIF0Data(const uint8_t *data, uint32_t sizeBytes);
     void processVIF1Data(uint32_t srcPhysAddr, uint32_t sizeBytes);
     void processVIF1Data(const uint8_t *data, uint32_t sizeBytes);
+    // [gta-recomp] VIF1 MSCAL startPc as the interpreter runs it (TOP / DBF, MSCAL hooks, the VU1): for replaying a
+    // recorded VIF stream (runtime/ps2_chain_observer.h)
+    void vu1Mscal(uint32_t startPc) { vu1MscalInternal(startPc, nullptr, false, nullptr, 0u); }
+    void vu1MscalInternal(uint32_t startPc, const ps2hle::ChainSegment *segment, bool survey, const uint8_t *data, uint32_t sizeBytes);
     void processPendingTransfers();
     std::vector<uint32_t> consumeCompletedDmacCauses();
 

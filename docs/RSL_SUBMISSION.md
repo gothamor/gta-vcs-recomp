@@ -89,6 +89,36 @@ What this means for phase 2: a world draw can be made from the RSL state alone; 
 the state its packet uploads (decoded once per packet, the packets are static) and the VU-resident semantics (a value a
 packet sets stays until something overwrites it). World sectors first, as planned.
 
+### Phase 2 - world sectors: done 2026-10-24 (on by default, `VCS_RSL_WORLD=0` = packet path)
+
+`src/game/vcs_rsl_world.cpp`. A world block (the REF of `FUN_002F7EB0`) is all the same shape (game-internals.md 6i):
+per packet a header, positions, UVs and colours UNPACKed relative to TOP, then MSCAL 0x30 - no constants.
+- **Where the draw goes in**: the RSL world draw call is recorded by a before-hook; as the frame's chain is copied its
+  REF's payload is replaced by a VIF MARK (runtime chain observer). At the MARK - in stream order on the thread that
+  processes the chain, after the draw's state flush and GS register writes - the block is drawn.
+- **How**: the first time a block is seen it runs through the VIF interpreter from guest memory (exactly the packet
+  path) while a recorder notes each UNPACK's result (the VU qwords as written, relative to TOPS), each MSCAL and the
+  native handler's mesh (content key + converted vertices). Later frames replay: the recorded qwords are copied into VU
+  memory and each MSCAL runs through the runtime's own MSCAL (`PS2Memory::vu1Mscal`: TOP / DBF, the HLE hooks, the
+  VU1 fallback), the native world handler taking the recorded mesh - no VIF parsing, unpacking, mesh hashing or vertex
+  conversion, and the block is not copied into the chain. A recording is used while the block's bytes hash the same
+  (streaming replaces cells) and the VIF mode / cycle match; one that would depend on state from before the block
+  (a masked UNPACK before the block's STMASK, MODE != 0, other cycles, other VIFcodes) is never replayed.
+- **Checked** (`VCS_RSL_WORLD_VERIFY=1`: each hit drawn by the packet path and recorded again, compared op by op -
+  UNPACK addresses / data, MSCALs, meshes, the mask / row left): city spot 86k hits, a bench run (city spots and the
+  drive, cells streaming in) 174,301 hits - **0 differ**; every block recordable. Reference scenes: static scenes
+  identical, moving ones within timing noise; tour subset classes unchanged (15 ok, 2 relocated, 1 falling - the known
+  spot).
+- **Measured** (one bench run each): within run-to-run noise (busy city spot worker 10.2 -> 9.6 ms; the drive took
+  another route). Expected: world geometry is ~5% of the VIF1 payload (phase 0) - the work it removes is small; the
+  value is the path itself, which the model categories build on.
+- Not combined with `VCS_RSL_SHADOW` (its MSCAL-to-draw mapping uses stream offsets, which replayed MSCALs do not
+  set).
+
+Next: model instances (`FUN_002F7D58` / `FUN_002F80A0`) - their CALLed packets carry their own state (matrices, depth
+range) and nested tags, so the same record / replay needs the packet's whole stream (CALL ... RET) rather than one
+REF.
+
 Planned (kept for reference):
 
 - The hooks build a native draw list from the RSL calls (mesh id + content key, matrices, lights / tint, material,

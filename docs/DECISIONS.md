@@ -255,3 +255,20 @@ The user's choices on the roadmap's open questions:
   recorded with their IOP times and replayed into the native driver; SPU2 writes and audio are compared.
 - With streaming and sound native the emulated IOP is off by default (no modules, no IOP time); `PS2X_IOP=1`,
   `VCS_NATIVE_SOUND=0` or `VCS_NATIVE_STREAM=0` bring it back for checking. The emulated IOP's code stays.
+
+## 2026-10-24 - RSL world draws: record and replay at the VIF level, on by default
+
+Phase 2 of RSL_SUBMISSION.md for world sectors. The world draw's geometry is drawn at a MARK put in place of its REF,
+from a recording of what the VIF did with the block the first time (UNPACK results, MSCALs, meshes) rather than from a
+decoder of our own:
+- **Exact by construction**: the recorded VU qwords are the interpreter's own UNPACK results, the MSCALs run through
+  the interpreter's own MSCAL routine (`PS2Memory::vu1Mscal`) and the native world handler; a recording is refused when
+  its result could depend on state from before the block. A decoder of the UNPACK formats, masks and modes would have
+  been a second implementation to keep in step.
+- **The MARK keeps the order**: the draw happens where its REF was, after its state flush and GS register writes, on
+  whichever thread processes the chain (render worker or not).
+- **Invalidation by content**: a block is hashed each time it is drawn (~5% of the chain's bytes; cheaper than copying
+  it) - streaming replaces cells without telling us, and the hash notices.
+- **On by default** after the verify run (0 of 174,301 replays differ) and the picture / tour checks; `VCS_RSL_WORLD=0`
+  keeps the packet path. The timing gain is within noise (world geometry is small); the path is the point - model
+  instances come next on the same mechanism.

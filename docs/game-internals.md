@@ -701,6 +701,13 @@ whole block uploaded earlier in the chain. World draws match the RSL state compl
 own state. The "render context" (`*0x4882A4`) is not a per-instance object: a few values recur (`0x16EEEC0`,
 `0x16EF040`, `0x16EF1C0`); the per-instance matrix is the block at `0x520860`.
 
+**A world block** (the REF payload of `FUN_002F7EB0`, sector geometry in the streamed cells; listed from a RAM dump,
+2026-10-24) is one shape throughout: per packet `UNPACK V4-32 x1 -> TOP+0` (the header: count, nloop), `STMASK`,
+`STROW`, `UNPACK V3-16 x n -> TOP+1` (positions, masked: w from ROW), `STMASK`, `STROW`, `UNPACK V2-8 usn x n -> TOP+0x48`
+(UVs, masked), `UNPACK V4-5 x n -> TOP+0x8F` (colours), `MSCAL 6` (program 0x0030) - no constants; everything else the
+world program reads is VU-resident state from the draw's flush (6d table 0x19). Sizes seen: 208-2,340 qwords, packets
+of up to 70 vertices. Phase 2 draws these from recordings (docs/RSL_SUBMISSION.md).
+
 ## 7. Textures: `.XTX`
 
 Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):

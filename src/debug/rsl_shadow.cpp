@@ -215,7 +215,7 @@ namespace vcs::rslshadow
             return false;
         }
 
-        void observe(uint32_t tagAddr, uint32_t id, uint32_t tagTarget, uint32_t dataAddr, uint32_t qwc, uint64_t vifCodes,
+        void observeTag(uint32_t tagAddr, uint32_t id, uint32_t tagTarget, uint32_t dataAddr, uint32_t qwc, uint64_t vifCodes,
                      uint32_t flatOffset, bool chainStart)
         {
             if (chainStart)
@@ -290,6 +290,13 @@ namespace vcs::rslshadow
                                      r >= 0 ? g_kicked[r].start : 0u, r >= 0 ? tagAddr - g_kicked[r].start : 0u, g_kickedEnd);
                 }
             }
+        }
+
+        uint32_t observe(uint32_t tagAddr, uint32_t id, uint32_t tagTarget, uint32_t dataAddr, uint32_t qwc, uint64_t vifCodes,
+                         uint32_t flatOffset, bool chainStart)
+        {
+            observeTag(tagAddr, id, tagTarget, dataAddr, qwc, vifCodes, flatOffset, chainStart);
+            return 0u; // never replaces a payload
         }
 
         // the copied chain went into the queue: its table goes with it (the game thread)
@@ -541,8 +548,8 @@ namespace vcs::rslshadow
             if (g_originals[i])
                 runtime.replaceFunction(kFns[i].address, hookFor(i, std::make_integer_sequence<int, kCount>{}));
         }
-        ps2chain::setTagObserver(&observe);
-        ps2chain::setChainObservers(&queued, &processing);
+        ps2chain::addTagObserver(&observe);
+        ps2chain::addChainObservers(&queued, &processing);
     }
 
     void onFrameKick(const uint8_t *rdram)

@@ -367,6 +367,46 @@ void PS2Memory::submitVif1DirectData(const uint8_t *data, uint32_t qwCount, bool
     }
 }
 
+// [gta-recomp] MSCAL: TOP / ITOP from TOPS / ITOPS, the double buffer flipped, then the HLE hooks / the VU1 (shared by the
+// interpreter and PS2Memory::vu1Mscal)
+void PS2Memory::vu1MscalInternal(uint32_t startPC, const ps2hle::ChainSegment *segment, bool survey, const uint8_t *data, uint32_t sizeBytes)
+{
+    const uint32_t runTop = vif1_regs.tops & 0x3FFu;
+    const uint32_t runItop = vif1_regs.itops & 0x3FFu;
+    vif1_regs.top = runTop;
+    vif1_regs.itop = runItop;
+
+    const bool dbf = (vif1_regs.stat & (1u << 7)) != 0u;
+    if (dbf)
+        vif1_regs.tops = vif1_regs.base & 0x3FFu;
+    else
+        vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
+    vif1_regs.stat ^= (1u << 7); // toggle DBF
+
+    const ps2hle::MscalBefore hleBefore = ps2hle::mscalBefore(); // [gta-recomp] game HLE / checkers
+    const ps2hle::MscalAfter hleAfter = ps2hle::mscalAfter();
+    ps2hle::MscalContext hle;
+    hle.startPc = startPC;
+    hle.top = runTop;
+    hle.itop = runItop;
+    hle.vuCode = m_vu1Code;
+    hle.vuData = m_vu1Data;
+    hle.codeGeneration = m_vu1CodeGeneration.load(std::memory_order_relaxed);
+    hle.segment = segment;
+    if (survey)
+        ps2hle::beforeMscal(segment, startPC, m_vu1Code, m_vu1Data, data, sizeBytes);
+    const bool handled = hleBefore && hleBefore(hle);
+    if (!handled && m_vu1MscalCallback)
+        m_vu1MscalCallback(startPC, runTop, runItop);
+    if (!handled && hleAfter)
+        hleAfter(hle);
+    if (survey)
+    {
+        ps2vu1tap::g_mscalNative = handled; // [gta-recomp] runtime/ps2_vu1_tap.h
+        ps2hle::afterMscal(m_vu1Data);
+    }
+}
+
 void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 {
     if (ps2_render_worker::enabled() && !ps2_render_worker::onWorker()) // [gta-recomp] a game-thread path not moved to the worker
@@ -418,6 +458,9 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
         // Track most-recent command for VIFn_CODE emulation.
         vif1_regs.code = cmd;
+        if (ps2chain::VifRecorder *recorder = ps2chain::vifRecorder()) // [gta-recomp] every code but MSCAL / UNPACK (reported there)
+            if (opcode != VIF_MSCAL && (opcode & 0x60u) != 0x60u)
+                recorder->other(cmd);
         vif1_regs.num = num;
         if (irq)
             vif1_regs.stat |= (1u << 11); // INT
@@ -470,6 +513,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         {
             vif1_regs.mark = imm;
             vif1_regs.stat |= (1u << 6); // MRK
+            ps2chain::notifyMark(*this, imm); // [gta-recomp] a replaced REF's work (runtime/ps2_chain_observer.h)
             continue;
         }
         else if (opcode == VIF_FLUSHE || opcode == VIF_FLUSH || opcode == VIF_FLUSHA)
@@ -479,43 +523,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_MSCAL || opcode == VIF_MSCALF)
         {
             uint32_t startPC = (uint32_t)imm * 8u;
-
-            const uint32_t runTop = vif1_regs.tops & 0x3FFu;
-            const uint32_t runItop = vif1_regs.itops & 0x3FFu;
-            vif1_regs.top = runTop;
-            vif1_regs.itop = runItop;
-
-            const bool dbf = (vif1_regs.stat & (1u << 7)) != 0u;
-            if (dbf)
-                vif1_regs.tops = vif1_regs.base & 0x3FFu;
-            else
-                vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
-            vif1_regs.stat ^= (1u << 7); // toggle DBF
-
+            if (ps2chain::VifRecorder *recorder = ps2chain::vifRecorder()) // [gta-recomp] runtime/ps2_chain_observer.h
+                recorder->mscal(startPC);
             ps2chain::setStreamOffset(pos - 4u); // [gta-recomp] the MSCAL's place in the stream (runtime/ps2_chain_observer.h)
-            const ps2hle::MscalBefore hleBefore = ps2hle::mscalBefore(); // [gta-recomp] game HLE / checkers
-            const ps2hle::MscalAfter hleAfter = ps2hle::mscalAfter();
-            const ps2hle::ChainSegment *segment = survey ? segmentAt(pos - 4u) : nullptr;
-            ps2hle::MscalContext hle;
-            hle.startPc = startPC;
-            hle.top = runTop;
-            hle.itop = runItop;
-            hle.vuCode = m_vu1Code;
-            hle.vuData = m_vu1Data;
-            hle.codeGeneration = m_vu1CodeGeneration.load(std::memory_order_relaxed);
-            hle.segment = segment;
-            if (survey)
-                ps2hle::beforeMscal(segment, startPC, m_vu1Code, m_vu1Data, data, sizeBytes);
-            const bool handled = hleBefore && hleBefore(hle);
-            if (!handled && m_vu1MscalCallback)
-                m_vu1MscalCallback(startPC, runTop, runItop);
-            if (!handled && hleAfter)
-                hleAfter(hle);
-            if (survey)
-            {
-                ps2vu1tap::g_mscalNative = handled; // [gta-recomp] runtime/ps2_vu1_tap.h
-                ps2hle::afterMscal(m_vu1Data);
-            }
+            vu1MscalInternal(startPC, survey ? segmentAt(pos - 4u) : nullptr, survey, data, sizeBytes);
             continue;
         }
         else if (opcode == VIF_MSCNT)
@@ -971,6 +982,9 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     std::fprintf(stderr, "[vif1-unpack-verify] %llu checked, %llu differ%c", static_cast<unsigned long long>(checked),
                                  static_cast<unsigned long long>(differing), 10);
             }
+            if (ps2chain::VifRecorder *recorder = ps2chain::vifRecorder()) // [gta-recomp] runtime/ps2_chain_observer.h
+                recorder->unpack(vuAddr, writeVectorCount, (imm & 0x8000u) != 0u, vif1_regs.tops & 0x3FFu, vif1_regs.cycle,
+                                 maskEnable, vif1_regs.mode, m_vu1Data);
             pos += totalBytes;
 
             if (pos > sizeBytes)
