@@ -49,6 +49,7 @@ namespace ps2recomp
         uint32_t delayPc() const;
         uint32_t fallthroughPc() const;
         bool hasRealDelaySlot() const;
+        bool leanDelaySlot() const; // [gta-recomp]
         bool isLikelyBranch() const;
         bool isCallLikeEdge() const;
         bool isInternalTarget(uint32_t target) const;

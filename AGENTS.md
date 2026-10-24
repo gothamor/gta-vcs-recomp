@@ -13,6 +13,7 @@ detailed knowledge lives in `docs/`:
 | [docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md) | The D3D11 renderer: layers, stages, HLE method |
 | [docs/SETTINGS_MENU_WIDESCREEN.md](docs/SETTINGS_MENU_WIDESCREEN.md) | Settings registry / menu, Hor+ widescreen |
 | [docs/FULLY_NATIVE.md](docs/FULLY_NATIVE.md) | The steps left until a normal frame is fully native, with their status - the working list |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | Frame rate well past 100 fps everywhere: how it is measured, what was done (numbers), what is next |
 | [docs/RSL_SUBMISSION.md](docs/RSL_SUBMISSION.md) | Plan: render submission at the RSL level (milestone 7) - draws from the game's render calls instead of DMA packets |
 | [docs/DISC.md](docs/DISC.md), [docs/CONTROLS.md](docs/CONTROLS.md) | Disc layout; keyboard / gamepad mapping |
 

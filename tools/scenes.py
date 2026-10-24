@@ -30,15 +30,16 @@ import gamectl  # noqa: E402
 import toolchain as tc  # noqa: E402
 
 # (seconds, action, argument, static?) - action: shot <scene> | press <key[:ms]> | perf <scene>
-# Timeline from `explore` runs (empty card, PS2X_GS=hw, i7-7700K): legal screen ~0.5 s, loading screens 1-4 s,
-# flyover 6-45 s, intro cutscene from ~48 s (Cross skips it), gameplay next to Martinez's bike from ~100 s.
+# Timeline from `explore` runs (empty card, PS2X_GS=hw, i7-7700K): legal screen ~0.5 s, loading screen 1.2-1.6 s,
+# flyover ~3-38 s (a fade at ~40 s), intro cutscene from ~44 s (Cross skips it), gameplay next to Martinez's bike from
+# ~100 s. (Until 2026-10-25 the boot took longer - loading 1-4 s, flyover 6-45 s: the game thread got ~2x faster.)
 # Moving scenes drift by a second or two between runs; static ones are loading screen and the pause map.
 SCRIPT = [
-    (2.5, "shot", "loading", True),
+    (1.4, "shot", "loading", True),
     (12.0, "shot", "flyover_road", False),
     (24.0, "shot", "flyover_tower", False),
-    (40.0, "shot", "flyover_base", False),
-    (42.0, "perf", "flyover", False),
+    (36.0, "shot", "flyover_base", False),
+    (38.0, "perf", "flyover", False),
     (72.0, "shot", "cutscene_office", False),
     (86.0, "perf", "cutscene", False),
     (88.0, "press", "Shift", False),            # Cross: skip the cutscene

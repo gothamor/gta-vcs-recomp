@@ -71,6 +71,12 @@ namespace vcs
         gsHwSetTargetRole(420u, 4u, "bloom", false);
         gsHwSetTargetRole(452u, 4u, "bloom (second buffer)", false);
         gsHwSetTargetRole(384u, 8u, "trails", false);
+        // The flip (FUN_003706c8) reads GS CSR at 0x370714 for the FIELD bit alone ($s4 = (CSR >> 13) & 1, the rest of
+        // the value is overwritten in the next delay slot). FIELD is set at VBlank on the game thread: no need to wait
+        // for the render worker to finish the frame's GS work (that fence was ~25% of the game thread uncapped,
+        // game-internals.md 6). VCS_CSR_FENCE=1: fence as before.
+        if (!std::getenv("VCS_CSR_FENCE"))
+            runtime.addCsrReadWithoutFence(0x00370714u);
     }
 
     void applyDisplay(uint8_t *rdram)

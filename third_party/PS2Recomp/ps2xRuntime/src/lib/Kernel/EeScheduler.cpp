@@ -362,7 +362,7 @@ void EeScheduler::postEvent(EeEvent event)
 
 bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
 {
-    accountCycles(cycles);
+    accountCycles(cycles >> m_clock.chargeShift); // [gta-recomp] setGuestChargeShift
 
     if (m_checkpointPending.load(std::memory_order_acquire) ||
         m_stopRequested.load(std::memory_order_acquire))
@@ -1795,12 +1795,14 @@ void EeScheduler::processPendingEvents()
             dispatchIrq(false, 9u + timer);
         }
     }
-    std::deque<EeEvent> pending;
+    // [gta-recomp] into a buffer kept between calls (not reentered: interrupts are queued as invocations), not a
+    // container allocated and freed per call (~2% of the game thread with the scheduler's other allocations)
+    m_eventsTaken.clear();
     {
         std::lock_guard lock(m_eventMutex);
-        pending.swap(m_events);
+        m_eventsTaken.swap(m_events);
     }
-    for (const EeEvent &event : pending)
+    for (const EeEvent &event : m_eventsTaken)
     {
         processEvent(event);
     }
@@ -1819,7 +1821,8 @@ void EeScheduler::processDueDeadlines()
 {
     for (;;)
     {
-        std::vector<ScheduledEvent> due;
+        std::vector<ScheduledEvent> &due = m_dueScratch; // [gta-recomp] kept between calls (see processPendingEvents)
+        due.clear();
         std::chrono::steady_clock::time_point pacingDeadline{};
         {
             std::unique_lock lock(m_eventMutex);

@@ -252,6 +252,11 @@ struct Ps2WriteWatch
     uint32_t laneMask = 0; // nonzero: match any 32-bit lane with (lane & laneMask) == value
 };
 inline Ps2WriteWatch g_ps2WriteWatch{};
+// [gta-recomp] The generated code's loads / stores below these guest addresses go straight to RDRAM (one compare,
+// ps2_runtime_macros.h); the rest - and everything while a watch is armed (limit 0) - through the checked path.
+inline constexpr uint32_t PS2_FAST_RAM_LIMIT = 0x01FFFFF0u; // main RAM, room for a 16-byte access
+inline uint32_t g_ps2FastReadLimit = PS2_FAST_RAM_LIMIT;
+inline uint32_t g_ps2FastWriteLimit = PS2_FAST_RAM_LIMIT;
 void ps2WriteWatchHit(uint32_t guestAddr, uint32_t size, uint64_t value, const char *op, const R5900Context *ctx);
 // [gta-recomp] generated code entered mid-body at a pc with no resume label
 void ps2ReportUnlistedResume(const R5900Context *ctx, uint32_t functionStart);
@@ -480,17 +485,36 @@ public:
     void setEeSyscallOverride(uint8_t *rdram, uint32_t syscallNumber, uint32_t handler);
     void initializeEeKernelState(uint8_t *rdram);
 
-    uint8_t Load8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
-    uint16_t Load16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
-    uint32_t Load32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
-    uint64_t Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
-    __m128i Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
+    // [gta-recomp] Scratchpad accesses inline (below; the generated code calls these directly for constant scratchpad
+    // addresses - VCS keeps much of its per-frame state there), everything else through the loadSlow / storeSlow paths.
+    inline uint8_t Load8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
+    inline uint16_t Load16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
+    inline uint32_t Load32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
+    inline uint64_t Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
+    inline __m128i Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
 
-    void Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8_t value);
-    void Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint16_t value);
-    void Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint32_t value);
-    void Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint64_t value);
-    void Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m128i value);
+    inline void Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8_t value);
+    inline void Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint16_t value);
+    inline void Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint32_t value);
+    inline void Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint64_t value);
+    inline void Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m128i value);
+
+    uint8_t loadSlow8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
+    uint16_t loadSlow16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
+    uint32_t loadSlow32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
+    uint64_t loadSlow64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
+    __m128i loadSlow128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
+
+    // [gta-recomp] A GS CSR read fences on the render worker (SIGNAL / FINISH are set by GS work it may not have done
+    // yet), which stalls the game thread until the worker is idle. A game layer names the guest loads that only use
+    // bits the EE side keeps (FIELD, set at VBlank by the scheduler): those read CSR as it is.
+    void addCsrReadWithoutFence(uint32_t guestPc) { m_csrNoFencePcs.push_back(guestPc); }
+
+    void storeSlow8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8_t value);
+    void storeSlow16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint16_t value);
+    void storeSlow32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint32_t value);
+    void storeSlow64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint64_t value);
+    void storeSlow128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m128i value);
     void kickGifDmaChainFromMMIO(uint8_t *rdram,
                                  R5900Context *ctx,
                                  uint32_t dPcrValue,
@@ -587,6 +611,7 @@ private:
     uint32_t m_guestHeapBase = 0x00100000u;
     uint32_t m_guestHeapEnd = 0x00100000u;
     uint32_t m_guestHeapLimit = PS2_RAM_SIZE;
+    std::vector<uint32_t> m_csrNoFencePcs; // [gta-recomp] addCsrReadWithoutFence
     uint32_t m_guestHeapSuggestedBase = 0x00100000u;
     bool m_guestHeapConfigured = false;
     static constexpr uint32_t kAsyncCallbackStackFloor = 0x00080000u; // [gta-recomp]
@@ -663,6 +688,88 @@ inline bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
     if (m_eeClock && m_eeClock->tryAdvance(cycles))
         return false;
     return eeCheckpointDueSlow(cycles);
+}
+
+// [gta-recomp] Scratchpad offset of an aligned N-byte access, or ~0u: one subtract and one test
+template <uint32_t N>
+inline uint32_t ps2ScratchOffset(uint32_t vaddr)
+{
+    const uint32_t off = vaddr - PS2_SCRATCHPAD_BASE;
+    return (off & ~((PS2_SCRATCHPAD_SIZE - 1u) & ~(N - 1u))) == 0u ? off : ~0u;
+}
+
+// [gta-recomp] An aligned scratchpad access done in place (true), or not a scratchpad address (false)
+template <typename T>
+inline bool ps2ScratchLoad(uint32_t vaddr, T &value)
+{
+    const uint32_t off = ps2ScratchOffset<sizeof(T)>(vaddr);
+    if (off == ~0u)
+        return false;
+    std::memcpy(&value, g_ps2ScratchpadHost + off, sizeof(T));
+    return true;
+}
+
+template <typename T>
+inline bool ps2ScratchStore(uint32_t vaddr, const T &value)
+{
+    const uint32_t off = ps2ScratchOffset<sizeof(T)>(vaddr);
+    if (off == ~0u)
+        return false;
+    std::memcpy(g_ps2ScratchpadHost + off, &value, sizeof(T));
+    return true;
+}
+
+inline uint8_t PS2Runtime::Load8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+{
+    uint8_t v;
+    return ps2ScratchLoad(vaddr, v) ? v : loadSlow8(rdram, ctx, vaddr);
+}
+inline uint16_t PS2Runtime::Load16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+{
+    uint16_t v;
+    return ps2ScratchLoad(vaddr, v) ? v : loadSlow16(rdram, ctx, vaddr);
+}
+inline uint32_t PS2Runtime::Load32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+{
+    uint32_t v;
+    return ps2ScratchLoad(vaddr, v) ? v : loadSlow32(rdram, ctx, vaddr);
+}
+inline uint64_t PS2Runtime::Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+{
+    uint64_t v;
+    return ps2ScratchLoad(vaddr, v) ? v : loadSlow64(rdram, ctx, vaddr);
+}
+inline __m128i PS2Runtime::Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+{
+    __m128i v;
+    return ps2ScratchLoad(vaddr, v) ? v : loadSlow128(rdram, ctx, vaddr);
+}
+inline void PS2Runtime::Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8_t value)
+{
+    if (!ps2ScratchStore(vaddr, value))
+        storeSlow8(rdram, ctx, vaddr, value);
+}
+inline void PS2Runtime::Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint16_t value)
+{
+    if (!ps2ScratchStore(vaddr, value))
+        storeSlow16(rdram, ctx, vaddr, value);
+}
+inline void PS2Runtime::Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint32_t value)
+{
+    if (!ps2ScratchStore(vaddr, value))
+        storeSlow32(rdram, ctx, vaddr, value);
+    else if (m_memory.hasCompletedDmacCauses()) [[unlikely]] // as storeSlow32: DMAC handlers run after a 32-bit store
+        drainCompletedDmacHandlers(rdram);
+}
+inline void PS2Runtime::Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint64_t value)
+{
+    if (!ps2ScratchStore(vaddr, value))
+        storeSlow64(rdram, ctx, vaddr, value);
+}
+inline void PS2Runtime::Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m128i value)
+{
+    if (!ps2ScratchStore(vaddr, value))
+        storeSlow128(rdram, ctx, vaddr, value);
 }
 
 #endif // PS2_RUNTIME_H

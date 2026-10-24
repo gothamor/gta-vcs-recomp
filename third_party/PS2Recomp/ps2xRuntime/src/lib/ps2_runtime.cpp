@@ -2018,16 +2018,33 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
         return;
     }
 
-    const auto statStart = std::chrono::steady_clock::now();
-    const Vu0NativeEntry *native = findVu0Native(startPC, vu0Code);
+    static const bool traceVu0 = std::getenv("PS2X_TRACE_VU0") != nullptr;
+    const auto statStart = traceVu0 ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    // [gta-recomp] the native for a start pc is looked up (code compared / hashed) again only after VU0 code memory
+    // changed: per call that memcmp of the program was ~1% of the game thread
+    struct NativeSlot
+    {
+        uint64_t generation = ~0ull;
+        const Vu0NativeEntry *entry = nullptr;
+    };
+    static NativeSlot nativeSlots[PS2_VU0_CODE_SIZE / 8u];
+    NativeSlot &slot = nativeSlots[startPC / 8u];
+    const uint64_t codeGeneration = m_memory.getVU0CodeGeneration();
+    if (slot.generation != codeGeneration)
+    {
+        slot.entry = findVu0Native(startPC, vu0Code);
+        slot.generation = codeGeneration;
+    }
+    const Vu0NativeEntry *native = slot.entry;
     static const bool verifyNative = std::getenv("PS2X_VU0_VERIFY") != nullptr;
     if (native && !verifyNative)
     {
-        // [gta-recomp] native replacement (see runtime/ps2_vu0_native.h), run in the VU's rounding mode
-        const int rounding = std::fegetround();
-        std::fesetround(FE_TOWARDZERO);
+        // [gta-recomp] native replacement (see runtime/ps2_vu0_native.h), run in the VU's rounding mode: toward zero
+        // in MXCSR alone (fesetround also reprograms the x87 unit, unused on x64 - ~0.5% of the game thread)
+        const unsigned csr = _mm_getcsr();
+        _mm_setcsr((csr & ~0x6000u) | 0x6000u);
         native->fn(ctx, vu0Data, PS2_VU0_DATA_SIZE);
-        std::fesetround(rounding);
+        _mm_setcsr(csr);
     }
     else
     {
@@ -2070,8 +2087,7 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
         }
     }
     { // [gta-recomp] PS2X_TRACE_VU0=1: VU0 microprogram calls and host time per start address, every 5 s
-        static const bool trace = std::getenv("PS2X_TRACE_VU0") != nullptr;
-        if (trace)
+        if (traceVu0)
         {
             static std::map<uint32_t, std::pair<uint64_t, double>> stats;
             static auto last = std::chrono::steady_clock::now();
@@ -2129,6 +2145,8 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
 
 void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram)
 {
+    if (!m_memory.hasCompletedDmacCauses()) // [gta-recomp] the common case, without the mutex
+        return;
     for (uint32_t cause : m_memory.consumeCompletedDmacCauses())
     {
         ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause);
@@ -2657,7 +2675,7 @@ uint32_t PS2Runtime::reserveAsyncCallbackStack(uint32_t size, uint32_t alignment
     return top - 0x10u;
 }
 
-uint8_t PS2Runtime::Load8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+uint8_t PS2Runtime::loadSlow8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
     try
     {
@@ -2670,7 +2688,7 @@ uint8_t PS2Runtime::Load8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
     }
 }
 
-uint16_t PS2Runtime::Load16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+uint16_t PS2Runtime::loadSlow16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
     try
     {
@@ -2683,7 +2701,7 @@ uint16_t PS2Runtime::Load16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
     }
 }
 
-uint32_t PS2Runtime::Load32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+uint32_t PS2Runtime::loadSlow32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
     try
     {
@@ -2696,8 +2714,11 @@ uint32_t PS2Runtime::Load32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
     }
 }
 
-uint64_t PS2Runtime::Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+uint64_t PS2Runtime::loadSlow64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
+    if ((vaddr & 0x1FFFFFFFu) == PS2_GS_PRIV_REG_BASE + 0x1000u && !m_csrNoFencePcs.empty() && // [gta-recomp] CSR
+        std::find(m_csrNoFencePcs.begin(), m_csrNoFencePcs.end(), ctx->pc) != m_csrNoFencePcs.end())
+        return m_memory.gs().csr.load(std::memory_order_acquire);
     try
     {
         return m_memory.read64(vaddr);
@@ -2709,7 +2730,7 @@ uint64_t PS2Runtime::Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
     }
 }
 
-__m128i PS2Runtime::Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+__m128i PS2Runtime::loadSlow128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
 {
     try
     {
@@ -2722,7 +2743,7 @@ __m128i PS2Runtime::Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
     }
 }
 
-void PS2Runtime::Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8_t value)
+void PS2Runtime::storeSlow8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8_t value)
 {
     ps2TraceGuestWrite(rdram, vaddr, 1u, value, 0u, "WRITE8", ctx);
     try
@@ -2735,7 +2756,7 @@ void PS2Runtime::Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8
     }
 }
 
-void PS2Runtime::Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint16_t value)
+void PS2Runtime::storeSlow16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint16_t value)
 {
     ps2TraceGuestWrite(rdram, vaddr, 2u, value, 0u, "WRITE16", ctx);
     try
@@ -2748,7 +2769,7 @@ void PS2Runtime::Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
     }
 }
 
-void PS2Runtime::Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint32_t value)
+void PS2Runtime::storeSlow32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint32_t value)
 {
     ps2TraceGuestWrite(rdram, vaddr, 4u, value, 0u, "WRITE32", ctx);
     try
@@ -2762,7 +2783,7 @@ void PS2Runtime::Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
     }
 }
 
-void PS2Runtime::Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint64_t value)
+void PS2Runtime::storeSlow64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint64_t value)
 {
     ps2TraceGuestWrite(rdram, vaddr, 8u, value, 0u, "WRITE64", ctx);
     try
@@ -2775,7 +2796,7 @@ void PS2Runtime::Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
     }
 }
 
-void PS2Runtime::Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m128i value)
+void PS2Runtime::storeSlow128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m128i value)
 {
     alignas(16) uint64_t _parts[2];
     _mm_storeu_si128(reinterpret_cast<__m128i *>(_parts), value);

@@ -282,6 +282,10 @@ public:
     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
     void accountCycles(uint32_t cycles) noexcept;
     EeFastClock &fastClock() noexcept { return m_clock; } // [gta-recomp] PS2Runtime's inline fast paths
+    // [gta-recomp] Guest work charged at 1/2^shift of the estimated cycles (EeFastClock::chargeShift). Frame-rate
+    // independent timing tops the clock up to real time at each frame end, so a lower charge only keeps the clock
+    // from running ahead of real time - which held the EE at every due event (VBlank) above ~100 fps.
+    void setGuestChargeShift(uint32_t shift) noexcept { m_clock.chargeShift = shift; }
     // [gta-recomp] EE executor: bring the EE clock up to where real time is on the VBlank chain (the last VBlank's
     // cycle + the host time since it), at most maxCycles; for a game that paces itself on the host clock (VCS
     // independent timing), whose idle time would otherwise not advance emulated time. Never moves the clock past
@@ -445,8 +449,10 @@ private:
 
     mutable std::mutex m_eventMutex;
     std::condition_variable m_eventCv;
-    std::deque<EeEvent> m_events;
+    std::vector<EeEvent> m_events; // [gta-recomp] a vector swapped with m_eventsTaken (was a deque made per call)
+    std::vector<EeEvent> m_eventsTaken;          // [gta-recomp] processPendingEvents' buffer, kept between calls
     std::vector<ScheduledEvent> m_deadlines;
+    std::vector<ScheduledEvent> m_dueScratch;    // [gta-recomp] processDueDeadlines' buffer, kept between calls
     std::deque<GuestInvocation> m_pendingInvocations;
     uint64_t m_eventSequence = 0;
     uint64_t m_invocationSequence = 0;

@@ -225,6 +225,15 @@ the globals each frame:
   drawn at FBP 280, whose own Z write goes to ZBP 350 (the second half).
 - Display: PMODE 0x8027 = both circuits on the same buffer one line apart, blended (anti-flicker);
   DISPFB FBP 0, FBW 10 (640), DBY 2 / 1; 640x445 shown.
+- **The flip (FUN_003706c8) reads GS CSR** at `0x370714` (`ld $v1, 0($a0)`, $a0 = 0x12001000) and keeps only the
+  FIELD bit: `dsrl $v1, 13` then `andi $s4, $v1, 1` in the next branch's delay slot; $v1 is overwritten right after.
+  It is the game's only CSR read per frame (2026-10-25, a game-thread profile with call stacks: the runtime's CSR
+  fence - waiting for the render worker to finish all queued GS work, for SIGNAL / FINISH - was ~25% of the game
+  thread uncapped). FIELD is set at VBlank by the EE scheduler, so that read skips the fence
+  (`PS2Runtime::addCsrReadWithoutFence`, src/game/vcs_display.cpp; `VCS_CSR_FENCE=1` = as before).
+- **Scratchpad**: the per-frame render state lives at `0x70002020+` (e.g. FUN_002b8ed0, the busiest draw function,
+  stores ~10 words there per call through `$s0 = 0x70002020`). The recompiler resolves those addresses as constants;
+  the runtime's Load / Store for them are inline since 2026-10-25 (they were out-of-line calls taking a mutex).
 
 ### 6b. World and culling
 
@@ -810,6 +819,12 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   MAINLA inflates to 0x54F358 bytes at `0x756680` (read into `0xA8FE00`, inflated by
   `FUN_0021FA38`, relocated by `FUN_00324A50`). Sectors then stream from the matching `.IMG`
   through CDSTREAM.
+- **zlib 1.2.2** (version string at file offset 0x3A6250; message strings "invalid distance too far back" ...),
+  built with the EE's 64-bit `long`: `z_stream` = next_in 0, avail_in 4, total_in 8 (8 bytes), next_out 0x10,
+  avail_out 0x14, total_out 0x18, msg 0x20, state 0x24; `inflate_state` = mode 0, ..., wsize 0x2C, whave 0x30,
+  write 0x34, window 0x38, hold 0x40 (8 bytes), bits 0x48, lencode 0x58, distcode 0x5C, lenbits 0x60, distbits
+  0x64 (mode BAD = 27). **FUN_00184428 = inflate_fast** (OFF = 1, pre-increment pointers) - read from its loads,
+  2026-10-25. It is the busiest guest function while streaming: ~12% of guest time in a standing profile window.
 
 ## 9. Streaming and sound (CDSTREAM.IRX)
 

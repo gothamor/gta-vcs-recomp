@@ -337,6 +337,11 @@ dropped on uploads (lazy render-target patching).
       spots 80-100 fps, AI drive 68 fps (game 13.7 ms, worker 14.0 ms). Original timing unchanged (static
       reference scenes 0.00).
 - [x] User playtest (2026-10-24): missions play well in frame-rate independent timing at 60 and 100 fps.
+- [ ] Well past 100 fps everywhere (started 2026-10-25, docs/PERFORMANCE.md). Done: guest memory accesses with one
+      compare and the scratchpad inline (game thread ~2x faster), lean pc and `__restrict ctx` in the recompiler, the EE
+      clock no longer holding the game at ~100 fps, the flip's CSR read without the render-worker fence, the main loop
+      unpaced for an unlimited cap. Uncapped (`--opt none`): Fort Baxter 111 -> 209 fps, city spots 118-166 -> 135-331,
+      AI drive 95 -> 126 fps. Next: the render worker (7-8 ms busy city / driving), the 100 fps step floor.
 - [ ] Frame-rate independence, phases 3-4. Done: falling / jumping explained (Euler integration error, <= 6%, not a
       bug - game-internals.md 4); real-time pacing checked (game clock = wall clock at caps 60 / 100 / refresh,
       presents at the cap). HUD / radar flashing at the original rate above 30 fps (2D pass on a 30 Hz frame counter). Left: the four
@@ -444,6 +449,9 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_VIF_UNPACK_FAST=0\|verify` | VIF1 UNPACK general loop only / both, compared |
 | `PS2X_GS_RECT_VERIFY=1` | every 64th rect upload also written pixel by pixel and compared |
 | `PS2X_HW_LAZY_INDEX=0` | lazy uploads to write found by rescanning the queue (the old way) |
+| `VCS_EE_CHARGE_SHIFT=<n>` | frame-rate independent timing charges guest work 1/2^n of its estimated EE cycles (default 2; 0 = as original timing) |
+| `VCS_CSR_FENCE=1` | the flip's GS CSR read (0x370714) waits for the render worker as other CSR reads do |
+| `PS2X_RECOMP_FULL_PC=1`, `PS2X_RECOMP_NO_RESTRICT=1` | when running the recompiler: a `ctx->pc` store before every load / store and branch as before; generated functions without `__restrict ctx` |
 | `PS2X_RENDER_THREAD=0\|1` | render submission on the game thread / on its own thread (default with `PS2X_GS=hw`) |
 | `PS2X_RENDER_THREAD_LOG=1`, `PS2X_RENDER_THREAD_AHEAD=n` | worker items / fences every 5 s; frames the game may run ahead (1) |
 | `VCS_PROFILE_THREAD=RenderWorker` | `VCS_PROFILE` samples the render worker instead of the game thread |

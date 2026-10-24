@@ -77,9 +77,14 @@ inline std::atomic<uint8_t *> &ps2ScratchpadHostPtrStorage()
     return ptr;
 }
 
+// [gta-recomp] The same pointer as a plain global, for the generated code's inline scratchpad accesses
+// (ps2_runtime_macros.h, PS2Runtime::Load32 / Store32 ...). Set before any guest code runs.
+inline uint8_t *g_ps2ScratchpadHost = nullptr;
+
 inline void ps2SetScratchpadHostPtr(uint8_t *ptr)
 {
     ps2ScratchpadHostPtrStorage().store(ptr, std::memory_order_relaxed);
+    g_ps2ScratchpadHost = ptr;
 }
 
 inline uint8_t *ps2GetScratchpadHostPtr()
@@ -350,6 +355,8 @@ public:
     void vu1MscalInternal(uint32_t startPc, const ps2hle::ChainSegment *segment, bool survey, const uint8_t *data, uint32_t sizeBytes);
     void processPendingTransfers();
     std::vector<uint32_t> consumeCompletedDmacCauses();
+    // [gta-recomp] whether consumeCompletedDmacCauses has anything: one load instead of the mutex (every 32-bit store asks)
+    bool hasCompletedDmacCauses() const { return m_completedDmacPending.load(std::memory_order_acquire); }
 
     int pollDmaRegisters();
 
@@ -449,6 +456,7 @@ public:
             m_chainBufferPool.push_back(std::move(buffer));
     }
     std::mutex m_completedDmacMutex;
+    std::atomic<bool> m_completedDmacPending{false}; // [gta-recomp]
     std::vector<uint32_t> m_completedDmacCauses;
 
     struct CodeRegion

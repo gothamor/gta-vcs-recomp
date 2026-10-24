@@ -2,11 +2,14 @@
 #include "ps2recomp/code_generator.h"
 #include "ps2recomp/gif_dma_kick_analyzer.h"
 #include "ps2recomp/instructions.h"
+#include "ps2recomp/pc_observation.h"
 #include "ps2recomp/r5900_decoder.h"
 #include "ps2recomp/recompiler_reporter.h"
 #include "ps2recomp/types.h"
+#include "runtime/ps2_address.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_set>
@@ -25,39 +28,73 @@ namespace ps2recomp
             return inst;
         }
 
-        // [gta-recomp] Pure ALU/FPU/MMI instructions neither trap nor call into the runtime, so
-        // nothing can read ctx->pc while they run: skip the per-instruction pc store for them.
-        bool cannotObservePc(const Instruction &inst)
+    }
+
+    // [gta-recomp] Pure ALU/FPU/MMI instructions neither trap nor call into the runtime, so
+    // nothing can read ctx->pc while they run: skip the per-instruction pc store for them.
+    bool cannotObservePc(const Instruction &inst)
+    {
+        if (inst.isLoad || inst.isStore || inst.isMmio || inst.isBranch || inst.isJump)
+            return false;
+        switch (inst.opcode)
         {
-            if (inst.isLoad || inst.isStore || inst.isMmio || inst.isBranch || inst.isJump)
-                return false;
-            switch (inst.opcode)
+        case 0x00: // SPECIAL
+            switch (inst.function)
             {
-            case 0x00: // SPECIAL
-                switch (inst.function)
-                {
-                case 0x00: case 0x02: case 0x03: case 0x04: case 0x06: case 0x07: // shifts
-                case 0x0A: case 0x0B:                                               // MOVZ/MOVN
-                case 0x10: case 0x11: case 0x12: case 0x13:                         // HI/LO moves
-                case 0x14: case 0x16: case 0x17:                                    // 64-bit shifts
-                case 0x18: case 0x19: case 0x1A: case 0x1B:                         // MULT/DIV (no traps)
-                case 0x21: case 0x23: case 0x24: case 0x25: case 0x26: case 0x27:   // ADDU SUBU AND OR XOR NOR
-                case 0x28: case 0x29: case 0x2A: case 0x2B: case 0x2D: case 0x2F:   // MFSA MTSA SLT SLTU DADDU DSUBU
-                case 0x38: case 0x3A: case 0x3B: case 0x3C: case 0x3E: case 0x3F:   // DSLL...DSRA32
-                    return true;
-                default:
-                    return false; // ADD/SUB/DADD/DSUB (overflow), SYSCALL, BREAK, SYNC, traps
-                }
-            case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E: case 0x0F: // ADDIU..LUI
-            case 0x19:                                                                  // DADDIU
-            case 0x1C:                                                                  // MMI
-                return true;
-            case 0x11: // COP1 (branches excluded above)
+            case 0x00: case 0x02: case 0x03: case 0x04: case 0x06: case 0x07: // shifts
+            case 0x0A: case 0x0B:                                               // MOVZ/MOVN
+            case 0x10: case 0x11: case 0x12: case 0x13:                         // HI/LO moves
+            case 0x14: case 0x16: case 0x17:                                    // 64-bit shifts
+            case 0x18: case 0x19: case 0x1A: case 0x1B:                         // MULT/DIV (no traps)
+            case 0x21: case 0x23: case 0x24: case 0x25: case 0x26: case 0x27:   // ADDU SUBU AND OR XOR NOR
+            case 0x28: case 0x29: case 0x2A: case 0x2B: case 0x2D: case 0x2F:   // MFSA MTSA SLT SLTU DADDU DSUBU
+            case 0x38: case 0x3A: case 0x3B: case 0x3C: case 0x3E: case 0x3F:   // DSLL...DSRA32
                 return true;
             default:
-                return false;
+                return false; // ADD/SUB/DADD/DSUB (overflow), SYSCALL, BREAK, SYNC, traps
             }
+        case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E: case 0x0F: // ADDIU..LUI
+        case 0x19:                                                                  // DADDIU
+        case 0x1C:                                                                  // MMI
+            return true;
+        case 0x11: // COP1 (branches excluded above)
+            return true;
+        default:
+            return false;
         }
+    }
+
+    bool isPlainMemoryOpcode(const Instruction &inst)
+    {
+        switch (inst.opcode)
+        {
+        case OPCODE_LB: case OPCODE_LH: case OPCODE_LWL: case OPCODE_LW: case OPCODE_LBU: case OPCODE_LHU:
+        case OPCODE_LWR: case OPCODE_LWU: case OPCODE_LD: case OPCODE_LDL: case OPCODE_LDR: case OPCODE_LQ:
+        case OPCODE_LWC1: case OPCODE_LQC2:
+        case OPCODE_SB: case OPCODE_SH: case OPCODE_SWL: case OPCODE_SW: case OPCODE_SWR: case OPCODE_SD:
+        case OPCODE_SDL: case OPCODE_SDR: case OPCODE_SQ: case OPCODE_SWC1: case OPCODE_SQC2:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool restrictCtxEnabled()
+    {
+        static const bool on = [] {
+            const char *off = std::getenv("PS2X_RECOMP_NO_RESTRICT");
+            return !(off && *off && *off != '0');
+        }();
+        return on;
+    }
+
+    bool leanPcEnabled()
+    {
+        static const bool lean = [] {
+            const char *full = std::getenv("PS2X_RECOMP_FULL_PC");
+            return !(full && *full && *full != '0');
+        }();
+        return lean;
     }
 
     FunctionEmitter::FunctionEmitter(CodeGenerator &codeGenerator)
@@ -117,11 +154,17 @@ namespace ps2recomp
             sanitizedName = nameBuilder.str();
         }
 
-        ss << "void " << sanitizedName << "(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runtime) {\n";
+        // [gta-recomp] ctx as __restrict: the guest's RAM (rdram, a uint8_t*) never holds the register file, and every
+        // runtime call that touches the context is handed ctx - so the compiler may keep guest registers in host
+        // registers across guest stores instead of reloading them after each one. PS2X_RECOMP_NO_RESTRICT=1: off.
+        ss << "void " << sanitizedName << "(uint8_t* rdram, R5900Context* " << (restrictCtxEnabled() ? "__restrict " : "")
+           << "ctx, PS2Runtime *runtime) {\n";
         ss << "#ifdef PS2_FUNCTION_LOG_TRACKER\n";
         ss << "    PS_LOG_ENTRY(\"" << sanitizedName << "\");\n";
         ss << "#endif\n";
         ss << "\n";
+        // [gta-recomp] entered at the start (the common case): straight to the body
+        ss << "    if (ctx->pc != 0x" << std::hex << function.start << std::dec << "u) {\n";
         if (!resumeTargets.empty())
         {
             ss << "    switch (ctx->pc) {\n";
@@ -141,6 +184,7 @@ namespace ps2recomp
            << std::dec;
         ss << "    ctx->pc = 0x" << std::hex << function.start << "u;\n"
            << std::dec;
+        ss << "    }\n";
         ss << "\n";
 
         bool lastInstructionWasControlFlow = false;
@@ -240,13 +284,28 @@ namespace ps2recomp
                         continue;
                     }
 
-                    if (!cannotObservePc(inst))
+                    const MemoryAccessHint memoryHint = resolveMemoryAccessHint(inst, constantRegisters);
+                    // [gta-recomp] lean pc: a RAM / scratchpad access (constant scratchpad addresses go to the
+                    // runtime's inline Load / Store) takes its pc as ps2AccessPc instead of a store
+                    const bool scratchConstant = memoryHint.hasAddress && memoryHint.address - 0x70000000u < 0x4000u;
+                    const bool plainAccess =
+                        leanPcEnabled() && isPlainMemoryOpcode(inst) &&
+                        (scratchConstant ||
+                         (!inst.isMmio && (!memoryHint.hasAddress || !Ps2IsSpecialAddress(memoryHint.address))));
+                    if (!plainAccess && !cannotObservePc(inst))
                     {
                         ss << "    ctx->pc = 0x" << std::hex << inst.address << "u;\n"
                            << std::dec;
                     }
-                    const MemoryAccessHint memoryHint = resolveMemoryAccessHint(inst, constantRegisters);
-                    ss << "    " << cg.translateInstruction(inst, memoryHint);
+                    if (plainAccess && !memoryHint.hasAddress)
+                    {
+                        ss << "    { constexpr uint32_t ps2AccessPc = 0x" << std::hex << inst.address << std::dec
+                           << "u; " << cg.translateInstruction(inst, memoryHint) << " }";
+                    }
+                    else
+                    {
+                        ss << "    " << cg.translateInstruction(inst, memoryHint);
+                    }
                     if (inst.isMmio)
                     {
                         ss << " // MMIO: 0x" << std::hex << inst.mmioAddress << std::dec;

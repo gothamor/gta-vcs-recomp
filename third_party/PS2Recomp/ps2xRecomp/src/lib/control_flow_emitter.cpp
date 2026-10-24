@@ -1,3 +1,4 @@
+#include "ps2recomp/pc_observation.h"
 #include "ps2recomp/Emitters/control_flow_emitter.h"
 
 #include "ps2recomp/control_flow_utils.h"
@@ -40,6 +41,17 @@ namespace ps2recomp
     uint32_t ControlFlowEmitter::fallthroughPc() const
     {
         return m_branchInst.address + 8u;
+    }
+
+    // [gta-recomp] lean pc (pc_observation.h): a delay slot that reads no pc (pure, or a RAM / scratchpad access
+    // taking its pc as ps2AccessPc) needs no pc / in_delay_slot / branch_pc stores, and then neither does the branch
+    bool ControlFlowEmitter::leanDelaySlot() const
+    {
+        if (!leanPcEnabled() || !m_delaySlotOverride.empty() || isInternalTarget(delayPc()))
+            return false;
+        if (!hasRealDelaySlot())
+            return true;
+        return cannotObservePc(m_delaySlot) || (isPlainMemoryOpcode(m_delaySlot) && !m_delaySlot.isMmio);
     }
 
     bool ControlFlowEmitter::hasRealDelaySlot() const
@@ -131,6 +143,24 @@ namespace ps2recomp
             return;
         }
 
+        if (leanDelaySlot())
+        {
+            const bool access = isPlainMemoryOpcode(m_delaySlot);
+            if (access)
+                m_ss << fmt::format("{}{{ constexpr uint32_t ps2AccessPc = 0x{:X}u;\n", indent, delayPc());
+            const std::string code = delaySlotCode();
+            std::istringstream lines(code);
+            std::string line;
+            while (std::getline(lines, line))
+            {
+                if (!line.empty())
+                    m_ss << indent << line << "\n";
+            }
+            if (access)
+                m_ss << indent << "}\n";
+            return;
+        }
+
         m_ss << fmt::format("{}ctx->pc = 0x{:X}u;\n", indent, delayPc());
         m_ss << fmt::format("{}ctx->in_delay_slot = true;\n", indent);
         m_ss << fmt::format("{}ctx->branch_pc = 0x{:X}u;\n", indent, branchPc());
@@ -174,8 +204,10 @@ namespace ps2recomp
 
     void ControlFlowEmitter::emitInternalTarget(uint32_t target, uint32_t sourcePc, std::string_view indent)
     {
-        m_ss << fmt::format("{}ctx->pc = 0x{:X}u;\n", indent, target);
-        if (target <= sourcePc && !isCallLikeEdge())
+        const bool backEdge = target <= sourcePc && !isCallLikeEdge();
+        if (backEdge || !leanDelaySlot()) // a checkpoint resumes at the target: keep it
+            m_ss << fmt::format("{}ctx->pc = 0x{:X}u;\n", indent, target);
+        if (backEdge)
         {
             m_ss << fmt::format("{}if (runtime->eeCheckpointDue()) {{\n", indent);
             m_ss << fmt::format("{}    return;\n", indent);
@@ -336,7 +368,9 @@ namespace ps2recomp
             return;
         }
 
-        m_ss << fmt::format("    ctx->pc = 0x{:X}u;\n", target);
+        // [gta-recomp] lean pc: a call's dispatch (and the relocation stub path) store the pc themselves
+        if (kind != StaticBranchKind::Call || !leanDelaySlot())
+            m_ss << fmt::format("    ctx->pc = 0x{:X}u;\n", target);
 
         if (kind == StaticBranchKind::Call && emitRelocationCallIfAvailable(kind, "    "))
         {
@@ -554,7 +588,13 @@ namespace ps2recomp
     {
         (void)m_function;
         emitResumeFromDelaySlotEntry();
-        m_ss << fmt::format("    ctx->pc = 0x{:X}u;\n", branchPc());
+        // [gta-recomp] lean pc: conditional branches and J / JAL read no pc of their own (dispatchGuestBranch is
+        // handed the source pc; the delay slot is lean)
+        const bool leanBranch = leanDelaySlot() &&
+                                (m_branchInst.opcode == OPCODE_J || m_branchInst.opcode == OPCODE_JAL ||
+                                 (m_branchInst.isBranch && !(m_branchInst.opcode == OPCODE_SPECIAL)));
+        if (!leanBranch)
+            m_ss << fmt::format("    ctx->pc = 0x{:X}u;\n", branchPc());
 
         if (m_branchInst.opcode == OPCODE_J || m_branchInst.opcode == OPCODE_JAL)
         {
@@ -575,7 +615,12 @@ namespace ps2recomp
         }
 
         emitFallthroughLabelIfNeeded();
-        emitFinalFallthrough();
+        // [gta-recomp] lean pc: after a conditional branch not taken nothing reads the pc before the next instruction
+        // that stores its own; after a JAL dispatchGuestBranch returned true only with pc == fallthrough already
+        const bool leanFallthrough = leanBranch && m_branchInst.opcode != OPCODE_J &&
+                                     !isInternalTarget(delayPc());
+        if (!leanFallthrough)
+            emitFinalFallthrough();
         return m_ss.str();
     }
 }

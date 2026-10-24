@@ -16,12 +16,15 @@ struct EeFastClock
     uint64_t fedCycle = 0u; // timers / IOP have been given the cycles up to here
     const std::atomic<bool> *pending = nullptr;      // a checkpoint is pending (events, stop, timer interrupts)
     const std::atomic<uint64_t> *deadline = nullptr; // next scheduled event's cycle (0: none)
+    // [gta-recomp] Guest work is charged cycles >> chargeShift (dispatches, loop back-edges; not idle time or the
+    // top-up to real time). 0 = as estimated (8 per call, 32 per loop iteration). EeScheduler::setGuestChargeShift.
+    uint32_t chargeShift = 0u;
 
     // True: `cycles` passed with nothing due - counted, as EeScheduler::checkpointDue would. False: nothing changed;
     // the scheduler's checkpointDue decides (time slice end, an event, timers / IOP to feed).
     bool tryAdvance(uint32_t cycles) noexcept
     {
-        const uint64_t next = cycle + (cycles ? cycles : 1u);
+        const uint64_t next = cycle + ((cycles ? cycles : 1u) >> chargeShift);
         if (next >= sliceEnd || next - fedCycle >= kFeedCycles || pending->load(std::memory_order_acquire))
             return false;
         const uint64_t due = deadline->load(std::memory_order_acquire);

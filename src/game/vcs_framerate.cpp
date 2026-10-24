@@ -213,6 +213,14 @@ namespace vcs
             // on the VBlank chain - never past it, or the EE is held at every VBlank (runtime/ee_scheduler.h)
             static uint64_t lastNs = 0, lastCycle = 0;
             EeScheduler &scheduler = runtime->eeScheduler();
+            // guest work charged at a quarter of its estimated cycles: topped up to real time here anyway, and at the
+            // full estimate the clock ran ahead of real time above ~100 fps, holding the EE at every VBlank until real
+            // time caught up (~3 ms a frame). VCS_EE_CHARGE_SHIFT=<n>: 1/2^n (0 = as in original timing).
+            static const uint32_t chargeShift = [] {
+                const char *v = std::getenv("VCS_EE_CHARGE_SHIFT");
+                return v && *v ? static_cast<uint32_t>(std::atoi(v)) : 2u;
+            }();
+            scheduler.setGuestChargeShift(chargeShift);
             const uint64_t now = hostNs();
             scheduler.syncToRealTime(static_cast<uint64_t>(200e6 * kEeCyclesPerNs)); // a longer hitch is forgiven
             { // VCS_TIMING_LOG=1: frames, sleep, emulated-clock top-up, every 2 s
@@ -304,9 +312,12 @@ namespace vcs
             g_origWait(rdram, ctx, runtime);
         }
 
+        // the main loop's rate: it executes the frames the game queued (at most 3 ahead, runtime/gs/gs_hw.h) and presents
+        // the last. Unlimited paces it at the platform's maximum: at 60 the queue held the game to 180 fps.
         void applyPresentRate()
         {
-            platform::setFrameRate(independent() ? std::max(60.0, effectiveFps()) : 60.0);
+            const double fps = effectiveFps();
+            platform::setFrameRate(independent() ? (fps > 0.0 ? std::max(60.0, fps) : 1000.0) : 60.0);
         }
     }
 

@@ -47,6 +47,7 @@ namespace vcs
             {
                 g_ps2ReadWatch.lo = static_cast<uint32_t>(lo);
                 g_ps2ReadWatch.span = static_cast<uint32_t>(hi - lo);
+                g_ps2FastReadLimit = 0u; // every read through the checked path
                 std::fprintf(stderr, "[rwatch] armed 0x%08llx..0x%08llx\n", lo, hi);
             }
         }
@@ -62,6 +63,7 @@ namespace vcs
         g_ps2WriteWatch.matchValue = n >= 3;
         g_ps2WriteWatch.value = value;
         g_ps2WriteWatch.laneMask = n >= 4 ? static_cast<uint32_t>(mask) : 0u;
+        g_ps2FastWriteLimit = 0u; // every write through the checked path
         std::fprintf(stderr, "[watch] armed 0x%08llx..0x%08llx%s\n", lo, hi, n >= 3 ? " (value match)" : "");
     }
 }
