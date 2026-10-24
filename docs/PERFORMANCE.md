@@ -148,6 +148,18 @@ scheduler, an override calling its original). The scheduler's `EeDispatcherTrans
 guest frames as before. A/B against the build before (same route, two alternating rounds, 60 fps): game thread
 standing 4.18 -> 3.90 ms, driving 7.18 -> 6.97 ms (~3-7%). Scenes unchanged.
 
+### 9. Game-thread odds and ends (2026-10-25)
+
+- The FPU multiply took its out-of-line path for every zero result (`ps2_fnormal(0)` is false) - multiplying by 0 is
+  common; an exact +-0 product is the PS2's result too, so it returns inline now (`ps2_fmul_slow` was 1.3% driving).
+- Chain buffers taken from the render worker's pool went back to PS2Memory's own 4-buffer pool for the transfers handled
+  on the game thread; it filled and the rest were freed every frame (VirtualFree, ~1.6% driving) while the worker's
+  pool allocated new ones. They go back where they came from.
+- FUN_003F9E50 (identity matrix: 16 words zeroed in a loop, a checkpoint per iteration) runs natively
+  (`VCS_NATIVE_IDENTITY=0` = the original).
+Each was ~1%: gone from the profile (guest share 65.7 -> 67.8% of the busy game thread), below what the A/B resolves.
+Scenes unchanged.
+
 ## Next
 
 - **Game thread** (4-6 ms; the limit again): the per-call cost of guest functions (Win64 prologues save 8 GPRs + 6 XMM

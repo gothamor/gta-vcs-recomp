@@ -290,7 +290,9 @@ inline float ps2_fsub(float a, float b)
 inline float ps2_fmul(float a, float b)
 {
     const float r = a * b;
-    return ps2_fnormal(r) ? r : ps2_fmul_slow(a, b);
+    // [gta-recomp] an exact +-0 product is the PS2's too (a zero operand, or an underflow the PS2 flushes; inf / NaN
+    // never give 0): no slow path for it - multiplying by 0 is common (vector components)
+    return ps2_fnormal(r) || r == 0.0f ? r : ps2_fmul_slow(a, b);
 }
 
 inline float ps2_fdiv(float a, float b)

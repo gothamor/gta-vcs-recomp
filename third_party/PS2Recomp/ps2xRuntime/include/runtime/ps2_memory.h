@@ -450,11 +450,7 @@ public:
         buffer.clear();
         return buffer;
     }
-    void recycleChainBuffer(std::vector<uint8_t> &&buffer)
-    {
-        if (buffer.capacity() != 0u && m_chainBufferPool.size() < 4u)
-            m_chainBufferPool.push_back(std::move(buffer));
-    }
+    void recycleChainBuffer(std::vector<uint8_t> &&buffer); // [gta-recomp] back to the pool it came from (ps2_memory.cpp)
     std::mutex m_completedDmacMutex;
     std::atomic<bool> m_completedDmacPending{false}; // [gta-recomp]
     std::vector<uint32_t> m_completedDmacCauses;

@@ -2538,6 +2538,20 @@ void PS2Memory::processPendingTransfers()
     }
 }
 
+void PS2Memory::recycleChainBuffer(std::vector<uint8_t> &&buffer)
+{
+    // [gta-recomp] With the render worker, chain buffers come from its pool (ps2_render_worker::takeBuffer): back there.
+    // Returned here, the VIF0 / GIF transfers handled on the game thread filled this 4-buffer pool and freed the rest
+    // every frame (VirtualFree, ~1.6% of the game thread driving) while the worker's pool allocated new ones.
+    if (ps2_render_worker::enabled())
+    {
+        ps2_render_worker::recycleBuffer(std::move(buffer));
+        return;
+    }
+    if (buffer.capacity() != 0u && m_chainBufferPool.size() < 4u)
+        m_chainBufferPool.push_back(std::move(buffer));
+}
+
 void PS2Memory::queueCompletedDmacCause(uint32_t cause)
 {
     std::lock_guard<std::mutex> lock(m_completedDmacMutex);

@@ -51,6 +51,12 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   tables) and falls back to dispatch through the function table. The memory card state machine
   `FUN_002788e0` is one (`jr` through the table at `0x4B0400`, indexed by the state at `0x487730`).
 
+- Small hot leaf functions seen in game-thread profiles (2026-10-25): **FUN_003F9E50** = 4x4 identity matrix at $a0
+  (zeroes 16 words in a loop, then 1.0 at +0, +0x14, +0x28, +0x3C; native since 2026-10-25); **FUN_00408058** = rand()
+  (Park-Miller: seed at 0x48A5B8, q 127773, a 16807, r 2836; `div` then two `mult`, + 0x7FFFFFFF when <= 0);
+  **FUN_002560D8** = the script VM's command dispatch (reads the 16-bit opcode at the script's ip, bit 15 = negate the
+  result, handler table at 0x4BEAF0, 8 bytes per entry).
+
 ## 3. Boot
 
 - Entry `0x001DD6A0` is standard crt0: zero GPRs / FPRs, clear .bss (`0x4CD100..0x74DF54`), set

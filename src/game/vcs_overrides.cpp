@@ -304,6 +304,28 @@ namespace
     }
 
     // VCS_TRACE_DMASEND=1: sceDmaSend(channel, tag) callers (ra) with counts, every 5 s.
+    // FUN_003F9E50: a 4x4 float matrix at $a0 set to identity - 16 words zeroed in a loop, then 1.0 on the diagonal
+    // (game-internals.md 2). ~1% of the guest time driving, most of it the loop's per-iteration checkpoint. Natively,
+    // with the registers left as the guest code leaves them ($v1 = -1, $v0 = $a0 + 64, $at / $f0 = 1.0); a matrix not
+    // in main RAM (the scratchpad) runs the original. VCS_NATIVE_IDENTITY=0: the original always.
+    PS2Runtime::RecompiledFunction g_origIdentity = nullptr;
+    PS2_GUEST_CC void identityMatrix(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4);
+        if (m >= 0x01FFFFC0u || (m & 3u))
+        {
+            g_origIdentity(rdram, ctx, runtime);
+            return;
+        }
+        static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        std::memcpy(rdram + m, kIdentity, sizeof(kIdentity));
+        SET_GPR_S32(ctx, 3, -1);
+        SET_GPR_S32(ctx, 2, static_cast<int32_t>(m + 64u));
+        SET_GPR_S32(ctx, 1, 0x3F800000);
+        ctx->f[0] = 1.0f;
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+
     PS2Runtime::RecompiledFunction g_origDmaSend = nullptr;
     PS2_GUEST_CC void traceDmaSend(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -718,6 +740,12 @@ namespace
             runtime.replaceFunction(0x0023C188u, &traceCellFocus);
         }
         installCallCounters(runtime);
+        if (!std::getenv("VCS_NATIVE_IDENTITY") || std::getenv("VCS_NATIVE_IDENTITY")[0] != '0')
+        {
+            g_origIdentity = runtime.lookupFunction(0x003F9E50u);
+            if (g_origIdentity)
+                runtime.replaceFunction(0x003F9E50u, &identityMatrix);
+        }
         vcs::rslnative::install(runtime); // before the RSL tools: they wrap whatever the flush is then
         vcs::rsltrace::install(runtime);
         vcs::rslshadow::install(runtime);
