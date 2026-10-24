@@ -68,6 +68,7 @@ python tools/saves.py [OUT]                                   # save / Load Game
 python tools/soak.py [OUT] --hours 3                          # hours of autodrive: crash / hang / leak / falling
 python tools/soundcheck.py all OUT [--mission N]             # native sound vs the emulated IOP: record, replay, compare
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
+python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```
 
 The rig (`src/debug/rig.cpp`, `tools/rig.py`) drives the game through its own script VM: `Game.teleport`,

@@ -4,6 +4,10 @@
 #include "runtime/gs/gs_frontend.h"
 #include "ps2_log.h"
 #include <atomic>
+#include <chrono> // [gta-recomp] chain census
+#include <cstdio>
+#include <cstdlib>
+#include <map>
 #include <cstring>
 #include <set>
 #include <tuple>
@@ -17,6 +21,77 @@
 
 namespace
 {
+    // [gta-recomp] PS2X_CHAIN_CENSUS=1: what a frame's VIF1 chain is made of (docs/RSL_SUBMISSION.md phase 0) - every
+    // tag by the RAM region it sits in, its id and the region its data comes from, counted (tags, quadwords) and
+    // reported per chain every 5 s. The regions are VCS's (game-internals.md 6a / 6b / 6i).
+    bool chainCensus()
+    {
+        static const bool on = std::getenv("PS2X_CHAIN_CENSUS") != nullptr;
+        return on;
+    }
+
+    const char *censusRegion(uint32_t address)
+    {
+        address &= 0x1FFFFFFFu;
+        if (address >= 0x10000000u)
+            return "spr";
+        if (address < 0x480000u)
+            return "text";
+        if (address < 0x520F90u)
+            return "data";
+        if (address < 0x6EDC70u)
+            return "pktbuf"; // the two halves of the per-frame packet buffer
+        if (address < 0xCB7A80u)
+            return "bss";
+        if (address < 0x112A660u)
+            return "cells"; // streamed world cells
+        if (address < 0x1200000u)
+            return "heap";
+        if (address < 0x1800000u)
+            return "models"; // the model heap
+        return "high";
+    }
+
+    void censusTag(uint32_t tagAddr, uint32_t id, uint32_t dataAddr, uint32_t qwc, bool chainStart)
+    {
+        static const char *const kIds[] = {"refe", "cnt", "next", "ref", "refs", "call", "ret", "end"};
+        struct Count
+        {
+            uint64_t tags = 0, qwords = 0;
+        };
+        static std::map<std::string, Count> counts;
+        static uint64_t chains = 0;
+        static auto last = std::chrono::steady_clock::now();
+        if (chainStart)
+        {
+            ++chains;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last >= std::chrono::seconds(5) && chains > 1u)
+            {
+                last = now;
+                const double n = static_cast<double>(chains - 1u);
+                std::vector<std::pair<std::string, Count>> rows(counts.begin(), counts.end());
+                std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) { return a.second.qwords > b.second.qwords; });
+                uint64_t tags = 0, qwords = 0;
+                for (const auto &[key, c] : rows)
+                {
+                    tags += c.tags;
+                    qwords += c.qwords;
+                }
+                std::fprintf(stderr, "[chain] %llu chains: %.0f tags, %.0f payload qwords per chain (tag in / id / data from)\n",
+                             static_cast<unsigned long long>(chains - 1u), tags / n, qwords / n);
+                for (const auto &[key, c] : rows)
+                    std::fprintf(stderr, "[chain]   %-26s %8.1f tags %9.1f qwords\n", key.c_str(), c.tags / n, c.qwords / n);
+                counts.clear();
+                chains = 1;
+            }
+        }
+        std::string key = std::string(censusRegion(tagAddr)) + " " + kIds[id & 7u] + " " + (qwc ? censusRegion(dataAddr) : "-");
+        Count &c = counts[key];
+        ++c.tags;
+        c.qwords += qwc;
+    }
+
     // [gta-recomp] VIF1 FIFO data went to the render worker since its GIF arbiter last drained (game thread)
     bool g_renderWorkerNeedsDrain = false;
 
@@ -1670,6 +1745,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                                 }
                             }
                         }
+                        if (chainCensus() && channelBase == 0x10009000u) // [gta-recomp] PS2X_CHAIN_CENSUS
+                            censusTag(currentTagAddr, id, hasPayload ? dataAddr : 0u, hasPayload ? tagQwc : 0u, tagsProcessed == 1);
                         if (irq && tieEnabled)
                             endChain = true;
                         if (endChain)

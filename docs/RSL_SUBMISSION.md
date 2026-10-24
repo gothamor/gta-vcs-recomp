@@ -46,7 +46,19 @@ The emulated chain then only carries what is not converted yet (2D, effects) - a
 
 Each phase keeps the packet path as the reference with a switch back, as everything before (AGENTS.md rule 1).
 
-### Phase 0 - map the submission path (research, no behaviour change)
+### Phase 0 - map the submission path (research, no behaviour change) - done 2026-10-24
+
+Result in game-internals.md 6i: RSL keeps state in memory and flushes it at each draw; the draw entry points are
+`FUN_002F7D58` (model instance, CALL), `FUN_002F80A0` (variant), `FUN_002F7EB0` (world geometry, REF), `FUN_002F8250`
+(immediate geometry) and Im2D (`FUN_002FB9D0` -> `FUN_002FB690`); textures go through `FUN_003298D8`'s upload cache.
+Numbers while driving: ~470 KB built a frame, ~4.7 MB through VIF1 (90% prebuilt), and about 17% of the game thread
+(~3 ms of ~19) building and handing over packets. So phase 2 can take ~2-3 ms off the game thread while driving (the
+state setters and culling stay game logic) and most of the worker's VIF1 / copy time; worth continuing, but it does
+not by itself make 60 fps driving: the other ~80% of game code is game logic.
+
+Tools: `VCS_TRACE_RSL=1`, `PS2X_CHAIN_CENSUS=1`, `VCS_PROFILE_GUEST_FILE`, `tools/eedecomp.py`.
+
+Planned (kept for reference):
 
 - A **submission trace** (`VCS_TRACE_RSL=1`): before-hooks (DECISIONS.md "Rule for hooks on recompiled functions") on
   the candidate functions log their arguments and the packet-buffer range each one writes; the worker tags every

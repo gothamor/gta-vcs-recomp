@@ -6,6 +6,7 @@
 // Once a binding is settled it can move to overrides.toml.
 #include "game_overrides.h"
 #include "debug/rig.h"
+#include "debug/rsl_trace.h"
 #include "game/vcs_display.h"
 #include "game/vcs_framerate.h"
 #include "game/vcs_movie.h"
@@ -636,6 +637,7 @@ namespace
         vcs::applyDisplay(rdram); // widescreen preference / aspect (settings menu)
         vcs::rig::onGameFrame(rdram, ctx, runtime); // automation rig jobs (debug/rig.h)
         vcs::onFrameKick();                         // the HUD context ends (game/vcs_hud.h)
+        vcs::rsltrace::onFrameKick(rdram);          // VCS_TRACE_RSL (debug/rsl_trace.h)
         FUN_002723e8_0x2723e8(rdram, ctx, runtime);
     }
 
@@ -710,6 +712,7 @@ namespace
             runtime.replaceFunction(0x0023C188u, &traceCellFocus);
         }
         installCallCounters(runtime);
+        vcs::rsltrace::install(runtime);
         if (std::getenv("VCS_TEST_SAVE") || std::getenv("VCS_DUMP_RAM"))
         {
             g_origPadRead = runtime.lookupFunction(0x00449488u); // scePadRead: polled every frame

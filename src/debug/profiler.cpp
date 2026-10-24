@@ -171,6 +171,19 @@ namespace vcs
                              100.0 * guestTotal / total);
                 for (size_t i = 0; i < top.size() && i < 15; ++i)
                     std::fprintf(stderr, "[profile]   %5.1f%%  guest 0x%08x\n", 100.0 * top[i].second / total, top[i].first);
+                // VCS_PROFILE_GUEST_FILE=<path>: every guest function's samples, appended per report window ("window <s> total
+                // N" then "0xADDR N" lines; s = seconds since the profiler started) - for summing by subsystem offline
+                static const char *guestFile = std::getenv("VCS_PROFILE_GUEST_FILE");
+                static const auto profileStart = std::chrono::steady_clock::now();
+                if (guestFile && *guestFile)
+                    if (FILE *f = std::fopen(guestFile, "a"))
+                    {
+                        std::fprintf(f, "window %.0f total %llu\n", std::chrono::duration<double>(now - profileStart).count(),
+                                     static_cast<unsigned long long>(total));
+                        for (const auto &[pc, n] : top)
+                            std::fprintf(f, "0x%08x %llu\n", pc, static_cast<unsigned long long>(n));
+                        std::fclose(f);
+                    }
                 // Resolve non-generated samples to host symbols (needs the PDB; see VCS_RUNTIME_DEBUG_INFO).
                 std::unordered_map<std::string, uint64_t> byName;
                 for (const auto &[rip, count] : other)

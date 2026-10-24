@@ -215,7 +215,7 @@ the globals each frame:
   between static root lists `0x480D20` / `0x480DE0`. Full frames are 7-14k tags (CALL / RET per
   model) - more than the runtime's original 4096-tag guard.
 - Models are prebuilt packets in the model heap, entered with CALL tags and ended by RET; CALL tags
-  are written by the RSL mesh code (`0x2F62B8..0x2FB690`, `FUN_003298D8`). VU1 microcode sits inside
+  are written by the RSL draw functions (6i; `FUN_003298D8`, named here before, builds texture uploads). VU1 microcode sits inside
   `.text` and is uploaded each frame by REF tags with `MPG` VIFcodes (`0x2AC130`, `0x2F13D0`,
   `0x368730`, ...).
 - VIF1 payloads come from packet buffers (`0x500000-0x6FFFFF`) and the model heap
@@ -602,6 +602,63 @@ GPU clipping that drew the ground black is `PS2X_HLE_CLIPPED=1`). Cost over the 
 section: flyover render 14.6 ms (GPU clipping 14.1, VU1 17.7), cutscene 11.8 (11.3, 14.5), gameplay 5.9 (5.6, 7.6);
 frame time at the 30 fps cap again. The intro office, which the stage-5 notes called black on the VU clipper, draws
 correctly on it.
+
+### 6i. RSL submission: how a frame's packets are built (2026-10-24, docs/RSL_SUBMISSION.md phase 0)
+
+Found by decompiling the candidates (`tools/eedecomp.py`, headless Ghidra on the analysed EE project; output in
+`build/analysis/decomp/`), a scan of the code for the packet buffer object, and two runtime measurements:
+`VCS_TRACE_RSL=1` (before-hooks on every function that moves the cursor; bytes per function per frame,
+`src/debug/rsl_trace.cpp`) and `PS2X_CHAIN_CENSUS=1` (every VIF1 chain tag by where it sits, its id and where its data
+comes from).
+
+**The packet buffer** is an object at `0x520F90`: +0x14 the half in use (two halves of 0xE6670 bytes from +0x20),
++0x18 the DMA cursor growing up from the half's start, +0x1C a data pointer growing down from its end.
+`FUN_00476770` = bytes used (both ends), `FUN_00478628` = bytes free (checked before each write). About 33 functions
+write it (the scan: `0x2F0360..0x2FB690`, `0x1CEF18`, `0x266868`, `0x2A92C0`, `0x2ABF68`, `0x32CD60..0x32D880`,
+`0x40C430`, `0x40F6C8`).
+
+**State, then draw.** RSL keeps render state in memory and writes it into the buffer only when a draw needs it:
+- Matrices: blocks at `0x520860..0x520B8C` (view / projection / object, with dirty flags); `FUN_002F7620` computes the
+  camera's. `FUN_002F8710` is the **state flush**: every dirty block as CNT + UNPACK into VU1 memory. Small setters
+  upload single constants directly: `FUN_002F7090` (3 qwords at VU 0x2c = 44-46, the texture matrix),
+  `FUN_002F9FA0` (one vector), `FUN_001CEF18` (3 qwords at VU 0).
+- GS registers: queued as A+D pairs at `0x729510`, count at `0x488308`; each draw (and `FUN_002F7B30` on its own)
+  sends the queue as one DIRECT GIF packet (CNT, `0x51` DIRECT, tag `0x1000000000008000 | n`).
+- Textures: the texture bind `FUN_00408F30` -> `FUN_00317FB8` (material) -> `FUN_002F62B8` / `FUN_002F6A78` queue
+  TEX0 / CLUT state and, when the raster is not resident, its upload: `FUN_003298D8` keeps a binary tree of transfer
+  headers (nodes of 0x70 bytes from `0x6EE3F0`, pool at `*0x488760`, used / max `0x4CD58C` / `0x4CD588`: a cached
+  BITBLTBUF / TRXPOS / TRXREG / TRXDIR packet per destination) and writes two REF tags - the header packet and the
+  image - both sent as VIF DIRECT (PATH2).
+- **Draws**, each starting with the state flush and the GS-register queue:
+  - `FUN_002F7D58(packet)`: a **model instance** - CALL to the model's prebuilt packet in the model heap (444 calls a
+    frame while driving); `FUN_002F80A0(packet)` the same shape (a variant);
+  - `FUN_002F7EB0(addr, qwc)`: **world geometry** - REF to a sector's prebuilt packet in the streamed cells (called by
+    the sector draw `FUN_002409C8`, whose texture / material setup is itself cached: the first frame copies the
+    setup packet into a block on the heap at `0x6F3DB8`, later frames CALL it);
+  - `FUN_002F8250(...)`: REF with its own UNPACK / MSCAL (immediate geometry);
+  - `FUN_002FB9D0` -> `FUN_002FB690`: **Im2D** (the 2D primitives of 6f: CNT + DIRECT, vertices converted from the
+    16-byte Im2D format; 515 calls a frame while driving).
+
+**Measured** (one bench run, i7-7700K, 60 fps cap; per frame):
+
+| | standing in the city | driving (AI car) |
+|---|---|---|
+| bytes built in the packet buffer | 90-150 KB | ~470 KB |
+| VIF1 chain | 720-1,300 tags, ~33-48k payload qwords | ~9,600 tags, ~294k qwords (~4.7 MB) |
+
+Driving, by function (bytes are charged to the hooked function entered last, so a draw's own CALL / REF lands on
+`FUN_002F8710`, which every draw enters first): `2F8710` 848 calls / 135 KB, `2FB690` 515 / 125 KB (2D),
+`2F62B8` 326 / 64 KB (textures), `2F7090` 304 / 33 KB, `2F7908` 238 / 23 KB, the rest < 20 KB each. The chain while
+driving: REFs from cell packets to data in the `0x6EDC70..0xCB7A80` range 78k qwords, the per-frame REFs into the
+model heap 55k, cell geometry 34k, CALLed model packets 31k, per-frame CNT data (2,250 tags) 16k, VU1 code (REFs to
+`.text`) 8k. **About 10% of what VIF1 receives is built each frame; the rest is prebuilt** (cells, model heap,
+cached blocks).
+
+Game thread while driving (`VCS_PROFILE=5`, `VCS_PROFILE_GUEST_FILE`, the two drive windows: 70% guest code, no
+waiting): the RSL range `0x2F0000..0x2FD000` 12.5% of samples (the packet emitters 10.1%), the world sector walk 1.5%,
+plus `memmove` 3.8% (the runtime flattening the ~4.7 MB chain when it is kicked) - **about 17% of the game thread,
+~3 ms of a ~19 ms frame**, goes into building and handing over packets. The rest is spread thin (no other function
+above 2.3%).
 
 ## 7. Textures: `.XTX`
 
