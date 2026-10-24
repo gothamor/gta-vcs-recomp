@@ -1052,6 +1052,8 @@ bool PS2Runtime::syncCoreSubsystems()
     m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
                                     { m_gs.processGIFPacket(data, size); });
     m_memory.setGifArbiter(&m_gifArbiter);
+    // [gta-recomp] the same processing for a PATH2 packet handled in place (PS2Memory::submitGifPacket)
+    m_memory.setGifPacketCallback([this](const uint8_t *data, uint32_t size) { m_gs.processGIFPacket(data, size); });
     m_memory.setVu1MscalCallback([this](uint32_t startPC, uint32_t top, uint32_t itop)
                                  {
                                      // [gta-recomp] On the render worker the game thread's context is not ours to read or

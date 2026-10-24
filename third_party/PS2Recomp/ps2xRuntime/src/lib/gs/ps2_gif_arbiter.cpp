@@ -3,6 +3,13 @@
 #include <algorithm>
 #include <cstring>
 
+namespace
+{
+    // [gta-recomp] packet buffers kept with their capacity: every DIRECT / PATH3 packet was a heap allocation and free
+    // (thread-local: the render worker submits and drains; a few buffers per thread, the large ones not kept)
+    thread_local std::vector<std::vector<uint8_t>> t_packetPool;
+}
+
 GifArbiter::GifArbiter(ProcessPacketFn processFn)
     : m_processFn(std::move(processFn))
 {
@@ -28,6 +35,11 @@ void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeByte
     pkt.pathId = pathId;
     pkt.path2DirectHl = (pathId == GifPathId::Path2) && path2DirectHl;
     pkt.path3Image = (pathId == GifPathId::Path3) && isImagePacket(data, sizeBytes);
+    if (!t_packetPool.empty()) // [gta-recomp]
+    {
+        pkt.data = std::move(t_packetPool.back());
+        t_packetPool.pop_back();
+    }
     pkt.data.resize(sizeBytes);
     std::memcpy(pkt.data.data(), data, sizeBytes);
     m_queue.push_back(std::move(pkt));
@@ -62,6 +74,9 @@ void GifArbiter::drain()
             gsSetCurrentGifPath(3u);
         }
     }
+    for (auto &pkt : m_queue) // [gta-recomp] back to the pool
+        if (t_packetPool.size() < 16u && pkt.data.capacity() <= (1u << 20))
+            t_packetPool.push_back(std::move(pkt.data));
     m_queue.clear();
 }
 

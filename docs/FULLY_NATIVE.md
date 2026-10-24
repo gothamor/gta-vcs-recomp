@@ -21,7 +21,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 |---|---|---|---|
 | 1 | The last GS draws | S-M | done 2026-10-24 (3 render-target reads left for step 3) |
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
-| 3 | Textures and render targets without GS memory | L | in progress: 3a done 2026-10-24 (3b-3d planned) |
+| 3 | Textures and render targets without GS memory | L | in progress: 3a, 3b done 2026-10-24 (3c, 3d planned) |
 | 4 | Draw-call replay (3D without building packets) | M-L | planned |
 | 5 | An empty chain | M | planned |
 
@@ -77,10 +77,11 @@ Phases:
 - **3a - palettes from the upload, no VRAM in steady state** (done 2026-10-24): CLUT loads read the queued upload's
   data; uploads without data no longer force the queue. Swizzled VRAM writes while driving ~245k -> ~7 per 5 s; render
   worker idle 27% -> 41% of the drive. Details below.
-- **3b - the uploads' own cost**: each streamed upload is still hashed and copied into the queue (`UploadImage` ~4.5%
-  of the worker) although nearly all are made obsolete by the next upload to the slot. Hash once, keep a reference
-  instead of a copy where the source outlives the queue, or recognise the slot's re-upload of the same raster at the
-  game's bind (`FUN_002F62B8`'s own "same key" test) before any bytes move.
+- **3b - the uploads' own cost** (done 2026-10-24): the allocations, copies and the serial hash around each streamed
+  upload. Details below. Left: the copy into the queue and the hash itself (`UploadImage` ~3.8% of the worker). The
+  copy goes only if the queued upload can point at the pixels where they arrive - the chain's copy, alive while the
+  chain is processed, with the uploads still queued at its end copied then - which needs the image continuation to
+  reach the GS without being re-tagged into a buffer of its own (a GS front-end entry point: a full rebuild).
 - **3c - textures decoded from the upload data**: the cache-miss decode reads the upload's linear data instead of
   VRAM (T4 / T8 / CT32 / CT16, and the T8-uploaded-as-CT32 case, which needs the GS's swizzle relation between the
   two formats). Then a normal frame needs no emulated VRAM for textures at all.
@@ -96,6 +97,16 @@ and nothing is written. Upload calls without data (the header packet's IMAGE tag
 longer force queued uploads out. Checked with `PS2X_HW_CLUT_VERIFY=1`: 1.5M loads on the drive, 1.2M over the
 reference scenes, all the same as from VRAM. Reference scenes ok; tour classes unchanged, frame time median 11.7 ->
 11.1, p90 19.1 -> 15.6 ms. `PS2X_HW_CLUT_FROM_UPLOAD=0` = from VRAM.
+
+**3b done 2026-10-24.** A worker profile with call chains on the drive put the rest of the texture streaming in
+allocations and copies around each packet: the GIF arbiter copied every packet into a new buffer before processing it,
+`submitVif1DirectData` built a new buffer to re-tag each texture's pixel DIRECT, and the upload queue allocated (and
+freed) a buffer per upload; the content hash was one serial multiply chain. Now: a PATH2 packet that would be drained
+at once into an empty arbiter queue is processed in place (same order, same path tag); the arbiter's, the re-tag's and
+the queue's buffers are reused; the hash runs four lanes. Worker profile on the drive: busy ~59% -> ~50% of samples
+(allocator and `memset` gone from the top, `memmove` 4.6% -> 3.7%). A/B against the 3a build, two alternating rounds:
+standing worker 3.7 -> 3.4 and ~4.3 -> 3.8 ms; the drive 10.6 -> 8.8 ms in one round, level in the other (route
+variance). Reference scenes ok, tour classes unchanged.
 
 ### 4. Draw-call replay
 

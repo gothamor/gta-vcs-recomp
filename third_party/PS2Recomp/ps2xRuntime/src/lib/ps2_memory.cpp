@@ -2467,6 +2467,15 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
         flushMaskedPath3Packets(false);
     }
 
+    // [gta-recomp] A PATH2 packet drained at once into an empty arbiter queue is processed in place: what submit + drain
+    // would do, without copying it (every VIF DIRECT, texture data included)
+    if (m_gifArbiter && drainImmediately && pathId == GifPathId::Path2 && m_gifArbiter->empty() && m_gifPacketCallback)
+    {
+        gsSetCurrentGifPath(2u);
+        m_gifPacketCallback(data, sizeBytes);
+        gsSetCurrentGifPath(3u);
+        return;
+    }
     if (m_gifArbiter)
         m_gifArbiter->submit(pathId, data, sizeBytes, path2DirectHl);
     else if (m_gifPacketCallback)

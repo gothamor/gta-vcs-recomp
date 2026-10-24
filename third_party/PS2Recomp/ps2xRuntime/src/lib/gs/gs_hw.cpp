@@ -2744,18 +2744,40 @@ namespace
 
         static uint64_t hashBytes(const uint8_t *data, uint32_t size)
         {
-            uint64_t h = 0x9E3779B97F4A7C15ull ^ size;
+            // [gta-recomp] four independent lanes (one multiply chain was the cost of hashing every streamed upload)
+            uint64_t h[4] = {0x9E3779B97F4A7C15ull ^ size, 0xC2B2AE3D27D4EB4Full, 0x165667B19E3779F9ull, 0x27D4EB2F165667C5ull};
             uint32_t i = 0;
+            for (; i + 32u <= size; i += 32u)
+                for (int l = 0; l < 4; ++l)
+                {
+                    uint64_t v;
+                    std::memcpy(&v, data + i + l * 8u, 8);
+                    h[l] = (h[l] ^ (v * 0xBF58476D1CE4E5B9ull)) * 0x94D049BB133111EBull;
+                    h[l] ^= h[l] >> 29;
+                }
             for (; i + 8u <= size; i += 8u)
             {
                 uint64_t v;
                 std::memcpy(&v, data + i, 8);
-                h = (h ^ (v * 0xBF58476D1CE4E5B9ull)) * 0x94D049BB133111EBull;
-                h ^= h >> 29;
+                h[0] = (h[0] ^ (v * 0xBF58476D1CE4E5B9ull)) * 0x94D049BB133111EBull;
+                h[0] ^= h[0] >> 29;
             }
             for (; i < size; ++i)
-                h = (h ^ data[i]) * 0x100000001B3ull;
-            return h;
+                h[0] = (h[0] ^ data[i]) * 0x100000001B3ull;
+            return mix64(mix64(mix64(h[0], h[1]), h[2]), h[3]);
+        }
+
+        // [gta-recomp] queued uploads' data buffers, kept with their capacity (an allocation and a free per streamed
+        // texture before)
+        std::vector<std::vector<uint8_t>> m_uploadBufferPool;
+        void recycleUploadData(std::vector<uint8_t> &data)
+        {
+            if (m_uploadBufferPool.size() < 256u && data.capacity() <= (1u << 20))
+            {
+                data.clear();
+                m_uploadBufferPool.push_back(std::move(data));
+            }
+            std::vector<uint8_t>().swap(data);
         }
 
         void Flush() override { m_cpu.Flush(); }
@@ -2872,7 +2894,7 @@ namespace
             for (uint16_t b : u.blocks)
                 --m_blockPending[b];
             m_pendingBytes -= u.data.size();
-            std::vector<uint8_t>().swap(u.data);
+            recycleUploadData(u.data);
             while (!m_pendingUploads.empty() && m_pendingUploads.front().done)
             {
                 m_pendingUploads.pop_front();
@@ -2901,6 +2923,11 @@ namespace
             }
             PendingUpload pu;
             pu.cmd = t;
+            if (!m_uploadBufferPool.empty())
+            {
+                pu.data = std::move(m_uploadBufferPool.back());
+                m_uploadBufferPool.pop_back();
+            }
             pu.data.assign(data, data + sizeBytes);
             pu.blocks = m_scratchTouched;
             std::sort(pu.blocks.begin(), pu.blocks.end());
@@ -3036,7 +3063,7 @@ namespace
                 for (uint16_t b : u.blocks)
                     --m_blockPending[b];
                 m_pendingBytes -= u.data.size();
-                std::vector<uint8_t>().swap(u.data);
+                recycleUploadData(u.data);
                 ++m_lazyWritten;
                 wrote = true;
             }

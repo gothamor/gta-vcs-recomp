@@ -199,6 +199,9 @@ dropped on uploads (lazy render-target patching).
       writes while driving ~245k -> ~7 per 5 s, render worker idle 27% -> 41% on the drive (`writeRectFast` was 11% of
       its samples). Verify: 2.7M CLUT loads the same as from VRAM. Scenes ok, tour classes unchanged (frame p90 19.1 ->
       15.6 ms). `PS2X_HW_CLUT_FROM_UPLOAD=0` = from VRAM.
+- [x] **Streamed uploads cheaper** (2026-10-24, FULLY_NATIVE.md step 3b): PATH2 packets processed in place, packet / upload
+      buffers reused, a four-lane upload hash; render worker busy on the drive ~59% -> ~50% of samples, standing worker
+      -0.3 to -0.5 ms (A/B, alternating).
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.

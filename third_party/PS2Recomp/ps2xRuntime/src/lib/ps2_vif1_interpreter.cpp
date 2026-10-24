@@ -344,7 +344,9 @@ void PS2Memory::submitVif1DirectData(const uint8_t *data, uint32_t qwCount, bool
     if (m_vif1PendingPath2ImageQwc != 0u && qwCount != 0u)
     {
         const uint32_t chunkQw = std::min<uint32_t>(m_vif1PendingPath2ImageQwc, qwCount);
-        std::vector<uint8_t> imagePacket(16u + static_cast<size_t>(chunkQw) * 16u, 0u);
+        thread_local std::vector<uint8_t> imagePacket; // [gta-recomp] reused: one allocation per texture upload before
+        imagePacket.resize(16u + static_cast<size_t>(chunkQw) * 16u);
+        std::memset(imagePacket.data() + 8u, 0, 8u);
         const uint64_t imageTag =
             static_cast<uint64_t>(chunkQw & 0x7FFFu) |
             ((m_vif1PendingPath2ImageQwc == chunkQw) ? (1ull << 15) : 0ull) |
