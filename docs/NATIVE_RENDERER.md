@@ -494,6 +494,30 @@ thread waits rather than get more than one frame ahead (`PS2X_RENDER_THREAD_AHEA
   ~5 ms); driving (AI car from Fort Baxter) 26-29 -> 44-54 fps - game code ~17-20 ms is now the limit, worker ~17 ms
   in parallel; reference scenes' flyover 42.5 -> 59.9 fps.
 
+### The GS stage (2026-10-25, docs/PERFORMANCE.md 7)
+
+The render worker split in two (`PS2X_GS_THREAD=0` = one thread as before; on by default with the worker and the HW
+renderer). The worker keeps the VIF1 chains, RSL replay, VU1 programs and their native reproductions (skinning,
+clipping, lighting); the GS front end and the HW backend's frame building (draw state, texture binding and decoding,
+uploads, CLUT loads, packed / native draw recording, the frame end) run on a second thread, `GsStage`.
+- **Commands**: the GS entry points the worker calls (`processGIFPacket`, `submitPackedKick`, `submitNative`,
+  `writeRegister`) go into a single-producer ring (64 MB, `ps2_render_worker::gsReserve / gsSend`) with their data
+  copied - GIF packets, the native draw and its vertices - and the worker's thread-locals the GS reads (GIF path, PATH1
+  producer = draw source, the upload's raster) captured; the stage runs them in order.
+- **Answers the worker needs**: `submitPackedKick`'s "not that shape" fallback (`processGIFPacket`) runs on the stage;
+  `submitNative`'s refusal is decided by the draw alone - the backend's `AcceptsNative`, which SubmitNative uses too -
+  so the worker knows at once whether to run the VU program instead (PRIM is written either way, as before).
+- **In order with the commands**: the frame end (`endFrame`, run through `runOnGsStage`; the worker is never more
+  than one frame end ahead of the stage) and the HUD anchor map (`vcs_hud.cpp`). The rest of the GS that the worker
+  could reach (native packed / image upload paths, framebuffer clears, local->host transfers) drains the stage first
+  and runs on the worker.
+- **Fences** wait for the worker, then for the stage (`gsDrain`). Off while `PS2X_HLE_VERIFY` / `PS2X_HLE_SURVEY` read
+  what the GS recorded from the worker, and with the GPU renderer.
+- The perf line gains `gs_ms` (the stage's busy time per frame; `worker_ms` is the worker's own now).
+- Measured (uncapped, `--opt none`): city 1325,-325 (~1,150 draws) 142 -> 215 fps (worker 6.7 ms -> 3.5 + stage 4.5
+  in parallel); the world tour's slowest points were all worker-bound. Reference scenes: static ones unchanged
+  (loading 1.12, pause map 1.81); tour subset unchanged; save / load / delete through the menus pass.
+
 ### Draw sources - what is still drawn through the GS path (milestone 3, 2026-10-24)
 
 The roadmap's "unconverted draws" counter. Every recorded GS-path draw carries where its GIF packet came from

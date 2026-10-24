@@ -230,7 +230,7 @@ namespace vcs
             }
             g_prims.clear();
             g_primKeys.clear();
-            ps2_render_worker::post([anchors] { g_anchors = anchors; });
+            ps2_render_worker::post([anchors] { ps2_render_worker::runOnGsStage([anchors] { g_anchors = anchors; }); });
         }
 
         // gsHwSetHudClassifier: a primitive whose every vertex is a HUD vertex of the kicked frame takes its anchor

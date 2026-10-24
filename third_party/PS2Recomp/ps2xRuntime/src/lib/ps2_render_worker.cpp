@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <immintrin.h>
+#include <new>
 #include <exception>
 #include <mutex>
 #include <thread>
@@ -58,7 +60,8 @@ namespace ps2_render_worker
         }
 
         std::atomic<int> g_enabled{-1}; // -1 until configure()
-        thread_local bool t_onWorker = false;
+        thread_local bool t_onWorker = false;   // the worker or the GS stage
+        thread_local bool t_onGsStage = false;  // the GS stage
 
         uint64_t nowNs()
         {
@@ -74,6 +77,148 @@ namespace ps2_render_worker
                 return static_cast<uint32_t>(n < 1 ? 1 : n);
             }();
             return ahead;
+        }
+
+        // ---- [gta-recomp] the GS stage (see the header) ----
+        // One producer (the worker), one consumer (the GS stage): records of a 64-byte header and a payload padded to 64
+        // bytes in a ring; a record that would wrap is preceded by a skip record to the ring's end.
+        constexpr uint64_t kGsRingBytes = uint64_t(64) << 20;
+        constexpr uint64_t kGsAlign = 64u;
+        constexpr uint64_t kGsHeaderBytes = 64u;
+        constexpr uint32_t kGsSkip = 0xFFFFFFFFu, kGsRun = 0xFFFFFFFEu;
+        static_assert(sizeof(GsCommand) <= kGsHeaderBytes, "header");
+
+        struct GsStage
+        {
+            uint8_t *ring = nullptr;
+            alignas(64) std::atomic<uint64_t> head{0}; // the consumer's position: everything before it has run
+            alignas(64) std::atomic<uint64_t> tail{0}; // the producer's committed end
+            uint64_t reserved = 0;                     // the producer's reserved record end (gsSend commits it)
+            std::atomic<uint32_t> framesPending{0};    // frame ends sent, not run yet
+            std::atomic<bool> consumerWaiting{false}, producerWaiting{false};
+            std::atomic<uint32_t> drainWaiters{0};
+            std::mutex mutex;
+            std::condition_variable workCv, spaceCv, doneCv;
+            bool started = false, stopping = false;
+            std::thread thread;
+            GsHandler handler = nullptr;
+        };
+
+        GsStage &gsState()
+        {
+            static GsStage *g = new GsStage(); // never destroyed (as State)
+            return *g;
+        }
+
+        std::atomic<int> g_gsStageOn{0};
+
+        void gsNotify(GsStage &g, std::condition_variable &cv)
+        {
+            std::lock_guard<std::mutex> lock(g.mutex);
+            cv.notify_all();
+        }
+
+        void gsRun()
+        {
+            ThreadNaming::SetCurrentThreadName("GsStage");
+            t_onWorker = true;
+            t_onGsStage = true;
+            GsStage &g = gsState();
+            uint64_t busySince = 0;
+            for (;;)
+            {
+                const uint64_t head = g.head.load(std::memory_order_relaxed);
+                if (g.tail.load(std::memory_order_acquire) == head)
+                {
+                    if (busySince)
+                    {
+                        ps2perf::addGsStageTime(nowNs() - busySince);
+                        busySince = 0;
+                    }
+                    if (g.drainWaiters.load(std::memory_order_seq_cst))
+                        gsNotify(g, g.doneCv);
+                    bool more = false;
+                    for (int i = 0; i < 4000 && !more; ++i) // the next command is usually microseconds away
+                    {
+                        _mm_pause();
+                        more = g.tail.load(std::memory_order_acquire) != head;
+                    }
+                    if (!more)
+                    {
+                        std::unique_lock<std::mutex> lock(g.mutex);
+                        g.consumerWaiting.store(true, std::memory_order_seq_cst);
+                        g.workCv.wait(lock, [&] { return g.tail.load(std::memory_order_seq_cst) != head || g.stopping; });
+                        g.consumerWaiting.store(false, std::memory_order_relaxed);
+                        if (g.tail.load(std::memory_order_seq_cst) == head)
+                            break; // stopping, nothing left
+                    }
+                    continue;
+                }
+                if (!busySince)
+                    busySince = nowNs();
+                const uint8_t *record = g.ring + (head & (kGsRingBytes - 1u));
+                GsCommand c;
+                std::memcpy(&c, record, sizeof(c));
+                const uint64_t size = kGsHeaderBytes + ((c.bytes + kGsAlign - 1u) & ~(kGsAlign - 1u));
+                if (c.type != kGsSkip)
+                {
+                    if (_mm_getcsr() != c.csr)
+                        _mm_setcsr(c.csr);
+                    try
+                    {
+                        if (c.type == kGsRun)
+                        {
+                            auto *work = reinterpret_cast<std::function<void()> *>(static_cast<uintptr_t>(c.a));
+                            (*work)();
+                            delete work;
+                        }
+                        else if (g.handler)
+                            g.handler(c, record + kGsHeaderBytes);
+                    }
+                    catch (const std::exception &e)
+                    {
+                        static int reported = 0;
+                        if (reported++ < 20)
+                            std::fprintf(stderr, "[gs-stage] command failed: %s\n", e.what());
+                    }
+                    catch (...)
+                    {
+                        static int reported = 0;
+                        if (reported++ < 20)
+                            std::fprintf(stderr, "[gs-stage] command failed (unknown exception)\n");
+                    }
+                    if (c.type == kGsRun && c.b)
+                        g.framesPending.fetch_sub(1u, std::memory_order_seq_cst);
+                }
+                g.head.store(head + size, std::memory_order_seq_cst);
+                if (g.producerWaiting.load(std::memory_order_seq_cst))
+                    gsNotify(g, g.spaceCv);
+            }
+        }
+
+        // the producer waits until `ready()` (space in the ring, the frame bound)
+        template <typename Ready>
+        void gsWaitProducer(GsStage &g, Ready ready)
+        {
+            for (int i = 0; i < 2000; ++i)
+            {
+                if (ready())
+                    return;
+                _mm_pause();
+            }
+            std::unique_lock<std::mutex> lock(g.mutex);
+            g.producerWaiting.store(true, std::memory_order_seq_cst);
+            g.spaceCv.wait(lock, ready);
+            g.producerWaiting.store(false, std::memory_order_relaxed);
+        }
+
+        void gsStart(GsStage &g)
+        {
+            if (g.started)
+                return;
+            g.started = true;
+            g.ring = static_cast<uint8_t *>(::operator new(static_cast<size_t>(kGsRingBytes), std::align_val_t(64)));
+            g.thread = std::thread(gsRun);
         }
 
         void run()
@@ -204,20 +349,135 @@ namespace ps2_render_worker
 
     void fence(FenceReason reason)
     {
-        if (!enabled() || t_onWorker)
+        if (!enabled() || t_onGsStage)
             return;
+        if (t_onWorker) // [gta-recomp] the worker reading what the GS stage makes
+        {
+            gsDrain();
+            return;
+        }
         State &s = state();
         std::unique_lock<std::mutex> lock(s.mutex);
         const size_t r = static_cast<size_t>(reason);
         ++s.fences[r];
-        if (s.queue.empty() && !s.busy)
+        const bool gsIdle = gsState().head.load(std::memory_order_seq_cst) == gsState().tail.load(std::memory_order_seq_cst);
+        if (s.queue.empty() && !s.busy && gsIdle)
             return;
         const uint64_t start = nowNs();
         ++s.waiters;
         s.doneCv.wait(lock, [&] { return s.queue.empty() && !s.busy; });
         --s.waiters;
+        lock.unlock();
+        gsDrain(); // [gta-recomp] and the GS stage behind it
+        lock.lock();
         ++s.fenceWaits[r];
         s.fenceWaitNs += nowNs() - start;
+    }
+
+    void configureGsStage(bool defaultOn)
+    {
+        const char *v = std::getenv("PS2X_GS_THREAD");
+        const bool on = enabled() && (v && *v ? *v != '0' : defaultOn);
+        g_gsStageOn.store(on ? 1 : 0, std::memory_order_relaxed);
+        std::fprintf(stderr, "[render-worker] GS stage %s\n", on ? "on: the GS front end and frame building on a second thread" : "off");
+    }
+
+    void setGsHandler(GsHandler handler)
+    {
+        gsState().handler = handler;
+    }
+
+    bool gsStage()
+    {
+        return t_onWorker && !t_onGsStage && g_gsStageOn.load(std::memory_order_relaxed) == 1;
+    }
+
+    bool onGsStage()
+    {
+        return t_onGsStage;
+    }
+
+    uint8_t *gsReserve(const GsCommand &command)
+    {
+        GsStage &g = gsState();
+        gsStart(g);
+        const uint64_t need = kGsHeaderBytes + ((command.bytes + kGsAlign - 1u) & ~(kGsAlign - 1u));
+        if (need > kGsRingBytes / 4u)
+        {
+            gsDrain();
+            return nullptr;
+        }
+        uint64_t at = g.tail.load(std::memory_order_relaxed); // the producer's own
+        const uint64_t offset = at & (kGsRingBytes - 1u);
+        const uint64_t toEnd = kGsRingBytes - offset;
+        const uint64_t total = need > toEnd ? toEnd + need : need;
+        gsWaitProducer(g, [&] { return at + total - g.head.load(std::memory_order_seq_cst) <= kGsRingBytes; });
+        if (need > toEnd) // a skip to the ring's end (records are multiples of 64 bytes, so toEnd holds a header)
+        {
+            GsCommand skip;
+            skip.type = kGsSkip;
+            skip.bytes = static_cast<uint32_t>(toEnd - kGsHeaderBytes);
+            std::memcpy(g.ring + offset, &skip, sizeof(skip));
+            at += toEnd;
+        }
+        GsCommand header = command;
+        header.csr = _mm_getcsr();
+        uint8_t *record = g.ring + (at & (kGsRingBytes - 1u));
+        std::memcpy(record, &header, sizeof(header));
+        g.reserved = at + need;
+        return record + kGsHeaderBytes;
+    }
+
+    void gsSend()
+    {
+        GsStage &g = gsState();
+        g.tail.store(g.reserved, std::memory_order_seq_cst);
+        if (g.consumerWaiting.load(std::memory_order_seq_cst))
+            gsNotify(g, g.workCv);
+    }
+
+    void runOnGsStage(std::function<void()> work, bool frameEnd)
+    {
+        if (!gsStage())
+        {
+            work();
+            return;
+        }
+        GsStage &g = gsState();
+        if (frameEnd) // at most one frame end waiting on the GS stage
+        {
+            gsStart(g);
+            gsWaitProducer(g, [&] { return g.framesPending.load(std::memory_order_seq_cst) < 1u; });
+            g.framesPending.fetch_add(1u, std::memory_order_seq_cst);
+        }
+        GsCommand c;
+        c.type = kGsRun;
+        c.a = reinterpret_cast<uintptr_t>(new std::function<void()>(std::move(work)));
+        c.b = frameEnd ? 1u : 0u;
+        gsReserve(c); // (no payload: never too large)
+        gsSend();
+    }
+
+    void gsDrain()
+    {
+        if (t_onGsStage)
+            return;
+        GsStage &g = gsState();
+        const uint64_t target = g.tail.load(std::memory_order_seq_cst);
+        auto done = [&] { return g.head.load(std::memory_order_seq_cst) >= target; };
+        if (done())
+            return;
+        for (int i = 0; i < 4000; ++i)
+        {
+            if (done())
+                return;
+            _mm_pause();
+        }
+        std::unique_lock<std::mutex> lock(g.mutex);
+        g.drainWaiters.fetch_add(1u, std::memory_order_seq_cst);
+        while (!done())
+            g.doneCv.wait_for(lock, std::chrono::milliseconds(1)); // (the stage notifies when idle; the timeout is a guard)
+        g.drainWaiters.fetch_sub(1u, std::memory_order_seq_cst);
     }
 
     std::vector<uint8_t> takeBuffer(size_t want)
@@ -271,5 +531,15 @@ namespace ps2_render_worker
         s.workCv.notify_one();
         if (s.thread.joinable())
             s.thread.join();
+        GsStage &g = gsState(); // [gta-recomp] then the GS stage, once it ran what the worker sent
+        {
+            std::lock_guard<std::mutex> lock(g.mutex);
+            if (!g.started)
+                return;
+            g.stopping = true;
+            g.workCv.notify_all();
+        }
+        if (g.thread.joinable())
+            g.thread.join();
     }
 }

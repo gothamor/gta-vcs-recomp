@@ -454,6 +454,7 @@ dropped on uploads (lazy render-target patching).
 | `VCS_EE_CHARGE_SHIFT=<n>` | frame-rate independent timing charges guest work 1/2^n of its estimated EE cycles (default 2; 0 = as original timing) |
 | `VCS_CSR_FENCE=1` | the flip's GS CSR read (0x370714) waits for the render worker as other CSR reads do |
 | `PS2X_RECOMP_FULL_PC=1`, `PS2X_RECOMP_NO_RESTRICT=1` | when running the recompiler: a `ctx->pc` store before every load / store and branch as before; generated functions without `__restrict ctx` |
+| `PS2X_GS_THREAD=0\|1` | the render worker's GS stage (GS front end + frame building on a second thread; default on with the worker and the HW renderer) |
 | `PS2X_RENDER_THREAD=0\|1` | render submission on the game thread / on its own thread (default with `PS2X_GS=hw`) |
 | `PS2X_RENDER_THREAD_LOG=1`, `PS2X_RENDER_THREAD_AHEAD=n` | worker items / fences every 5 s; frames the game may run ahead (1) |
 | `VCS_PROFILE_THREAD=RenderWorker` | `VCS_PROFILE` samples the render worker instead of the game thread |

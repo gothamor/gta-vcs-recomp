@@ -52,10 +52,12 @@ namespace ps2perf
             float audioMs = 0.0f;
             uint32_t underruns = 0;
             float workerMs = 0.0f; // [gta-recomp] render submission worker busy
+            float gsMs = 0.0f;     // [gta-recomp] its GS stage busy
         };
 
         std::atomic<uint64_t> g_phaseNs[kPhases];
         std::atomic<uint64_t> g_workerNs{0};
+        std::atomic<uint64_t> g_gsStageNs{0}; // [gta-recomp]
         std::atomic<uint64_t> g_counters[kCounters];
         std::atomic<uint64_t> g_hostFrames{0}, g_hostNs{0}, g_glNs{0};
         thread_local PhaseScope *t_current = nullptr;
@@ -140,6 +142,7 @@ namespace ps2perf
             double vblanksPerS = 0.0, hostFps = 0.0, hostMs = 0.0, glMs = 0.0, audioMs = 0.0;
             uint64_t underruns = 0;
             double workerMs = 0.0;
+            double gsMs = 0.0;
         };
 
         Summary summarize(const std::vector<Sample> &s)
@@ -169,6 +172,7 @@ namespace ps2perf
                 }
                 r.underruns += x.underruns;
                 r.workerMs += x.workerMs;
+                r.gsMs += x.gsMs;
             }
             const double n = static_cast<double>(s.size());
             for (double &p : r.phaseMs)
@@ -176,6 +180,7 @@ namespace ps2perf
             for (double &c : r.counters)
                 c /= n;
             r.workerMs /= n;
+            r.gsMs /= n;
             if (hostW > 0.0)
             {
                 r.hostFps /= hostW;
@@ -226,6 +231,7 @@ namespace ps2perf
             s.vblanks = g_vblanks;
             g_vblanks = 0;
             s.workerMs = static_cast<float>(g_workerNs.exchange(0, std::memory_order_relaxed) / 1e6);
+            s.gsMs = static_cast<float>(g_gsStageNs.exchange(0, std::memory_order_relaxed) / 1e6);
             const uint64_t hostFrames = g_hostFrames.exchange(0, std::memory_order_relaxed);
             const uint64_t hostNs = g_hostNs.exchange(0, std::memory_order_relaxed);
             const uint64_t glNs = g_glNs.exchange(0, std::memory_order_relaxed);
@@ -434,6 +440,11 @@ namespace ps2perf
         g_workerNs.fetch_add(ns, std::memory_order_relaxed);
     }
 
+    void addGsStageTime(uint64_t ns)
+    {
+        g_gsStageNs.fetch_add(ns, std::memory_order_relaxed);
+    }
+
     PhaseScope::PhaseScope(Phase phase) noexcept : m_parent(t_current), m_start(nowNs()), m_childNs(0), m_phase(phase)
     {
         t_current = this;
@@ -588,7 +599,7 @@ namespace ps2perf
                fmt(" black_frames=%llu dip_frames=%llu probed_frames=%llu", static_cast<unsigned long long>(g_blackFrames.load()),
                    static_cast<unsigned long long>(g_dipFrames.load()),
                    static_cast<unsigned long long>(g_probedFrames.load())) + // [gta-recomp] brightness probe
-               fmt(" worker_ms=%.1f", r.workerMs) + // [gta-recomp] render submission worker
+               fmt(" worker_ms=%.1f gs_ms=%.1f", r.workerMs, r.gsMs) + // [gta-recomp] render submission worker, its GS stage
                [&] { // [gta-recomp] draw sources
                    std::string s;
                    for (size_t c = kFirstSourceCounter; c < kCounters; ++c)

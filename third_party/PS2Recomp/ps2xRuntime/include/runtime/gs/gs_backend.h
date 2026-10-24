@@ -31,6 +31,14 @@ class GSRasterBackend
 public:
     virtual ~GSRasterBackend() = default;
 
+    // [gta-recomp] Whether SubmitNative would take the draw - all it decides it on (the GS stage answers for it ahead,
+    // runtime/ps2_render_worker.h)
+    virtual bool AcceptsNative(const GSNativeDraw &draw) const
+    {
+        (void)draw;
+        return false;
+    }
+
     // [gta-recomp] false: not supported (the caller lets the VU run instead)
     virtual bool SubmitNative(const GSDrawState &state, const GSNativeDraw &draw)
     {

@@ -66,6 +66,13 @@ void gsHwSetUploadSource(uint32_t address, uint32_t bytes)
     t_uploadSourceBytes = bytes;
 }
 
+void gsHwTakeUploadSource(uint32_t &address, uint32_t &bytes)
+{
+    address = t_uploadSourceAddress;
+    bytes = t_uploadSourceBytes;
+    t_uploadSourceAddress = t_uploadSourceBytes = 0u;
+}
+
 uint64_t gsHwTextureForRaster(uint32_t address)
 {
     const auto it = g_rasterTextures.find(address);
@@ -2264,6 +2271,53 @@ namespace
             // [gta-recomp] PATH2 (the game's Im2D: HUD, text, menus, sprites) is asked about by the HUD classifier, with each
             // primitive's GS vertices as the front end's Submit gives them; the VU1 reproductions' 3D packets are never HUD
             const bool classify = gsDrawSourcePath(source) == 2u;
+            // [gta-recomp] The 3D packets (not PATH2, no render-target texture, no widescreen HUD squeeze to decide per
+            // primitive): what recordPrimitive does per triangle - flat colour, the 3D flag - inline, then one state
+            // check for the whole packet and its triangles appended at once (was a state copy + memcmp per triangle,
+            // ~10% of the render worker in the city). The same draws and vertices as the per-primitive path.
+            const bool wide = g_hudSqueeze.load(std::memory_order_relaxed) < 0.9999f && m_showing3d.load(std::memory_order_relaxed);
+            if (!classify && !s.texIsRt && !(wide && s.fbw == 10u))
+            {
+                Frame &f = *m_frame;
+                const size_t firstVertex = f.vertices.size();
+                const bool depthTested = s.zte && s.ztst >= 2u;
+                bool had3d = false;
+                for (uint32_t i = 2; i < count; ++i)
+                {
+                    if ((type == GS_PRIM_TRIANGLE && i % 3u != 2u) || !kick[i])
+                        continue;
+                    const uint32_t a = type == GS_PRIM_TRIFAN ? 0u : i - 2u;
+                    HwVertex out[3] = {hv[a], hv[i - 1u], hv[i]};
+                    if (!s.iip)
+                        for (int k = 0; k < 2; ++k)
+                        {
+                            out[k].r = out[2].r;
+                            out[k].g = out[2].g;
+                            out[k].b = out[2].b;
+                            out[k].a = out[2].a;
+                        }
+                    if (depthTested && !(out[0].z >= 0.99999f && out[1].z >= 0.99999f && out[2].z >= 0.99999f))
+                        had3d = true;
+                    f.vertices.insert(f.vertices.end(), out, out + 3);
+                }
+                const uint32_t added = static_cast<uint32_t>(f.vertices.size() - firstVertex);
+                if (added == 0u)
+                    return true;
+                if (had3d)
+                    f.had3d = true;
+                if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != CmdType::Draw || f.draws.back().source != source ||
+                    std::memcmp(&f.draws.back().s, &s, sizeof(HwState)) != 0)
+                {
+                    f.cmds.push_back({CmdType::Draw, static_cast<uint32_t>(f.draws.size())});
+                    f.draws.push_back({s, static_cast<uint32_t>(firstVertex), 0u, source});
+                }
+                f.draws.back().count += added;
+                ps2hle::g_gsVerticesRecorded += added;
+                if (s.zte && s.ztst != 1u && s.zbp != s.fbp)
+                    noteDepthBuffer(s);
+                noteTarget(s.fbp, s.fbw, s.fpsm, hv.data(), count, s.scy1);
+                return true;
+            }
             GSPrimitiveBatch prim{};
             prim.state = state;
             prim.vertexCount = 3;
@@ -3339,7 +3393,13 @@ namespace
                          (unsigned long long)m_decodeFromVram);
             std::fprintf(stderr, "[upload] textures made: %llu named by their raster, %llu not (%zu rasters known)\n",
                          (unsigned long long)m_texNamed, (unsigned long long)m_texUnnamed, g_rasterTextures.size());
+            std::fprintf(stderr, "[upload] texture binds: %llu, %llu as the last one, %llu looked up (%llu found cached)\n",
+                         (unsigned long long)m_bindCalls, (unsigned long long)m_bindRepeats, (unsigned long long)m_bindLookups,
+                         (unsigned long long)m_bindLookupHits);
+            std::fprintf(stderr, "[upload] texture binds from the memo: %llu\n", (unsigned long long)m_bindMemoHits);
+            m_bindMemoHits = 0;
             m_texNamed = m_texUnnamed = 0;
+            m_bindCalls = m_bindRepeats = m_bindLookups = m_bindLookupHits = 0;
             m_clutFromUpload = m_decodeFromUpload = m_decodeCrossFormat = m_decodeFromVram = 0;
             m_lazyDeferred = m_lazyWritten = m_lazyDropped = 0;
             for (uint64_t &w : m_lazyWhy)
@@ -3453,10 +3513,15 @@ namespace
         }
 
         // [gta-recomp] packet-level HLE: a draw the GPU transforms (see GSNativeDraw)
+        bool AcceptsNative(const GSNativeDraw &draw) const override
+        {
+            return (draw.kind == GSNativeDraw::VcsWorld || draw.kind == GSNativeDraw::VcsLit) && draw.drawCount && draw.vertexCount &&
+                   draw.constantCount <= 124u;
+        }
+
         bool SubmitNative(const GSDrawState &state, const GSNativeDraw &draw) override
         {
-            if ((draw.kind != GSNativeDraw::VcsWorld && draw.kind != GSNativeDraw::VcsLit) || !draw.drawCount || !draw.vertexCount ||
-                draw.constantCount > 124u)
+            if (!AcceptsNative(draw)) // (the only refusal: the GS stage relies on it)
                 return false;
             GSPrimitiveBatch batch{};
             batch.state = state;
@@ -3767,8 +3832,10 @@ namespace
             in.aem = d.texa.aem ? 1u : 0u;
             in.w = d.textureWidth;
             in.h = d.textureHeight;
+            ++m_bindCalls;
             if (m_bindCacheValid && std::memcmp(&in, &m_bindIn, sizeof(in)) == 0)
             {
+                ++m_bindRepeats;
                 s.texIsRt = m_bindOut.texIsRt;
                 s.rtFbp = m_bindOut.rtFbp;
                 s.rtOx = m_bindOut.rtOx;
@@ -3781,7 +3848,66 @@ namespace
                 }
                 return m_bindResult;
             }
+            // [gta-recomp] Second level: recent bindings by their registers (the version left out), each valid while what
+            // its result depends on is unchanged - the texture's VRAM page generations, the CLUT (paletted), the render
+            // targets, the texture cache's evictions. VCS reloads a CLUT or uploads a texture before most draws, so the
+            // version above changes all the time; ~840 binds a frame found their texture again through the full
+            // lookup (four hash maps) at a busy city spot.
+            TexBindInput memoIn = in;
+            memoIn.version = 0;
+            const bool paletted = t.psm == GS_PSM_T4 || t.psm == GS_PSM_T8 || t.psm == GS_PSM_T8H || t.psm == GS_PSM_T4HL ||
+                                  t.psm == GS_PSM_T4HH;
+            uint32_t first = 0, last = 0;
+            pageRange(t.tbp0, t.tbw, t.psm, 0, 0, d.textureWidth, d.textureHeight, first, last);
+            uint64_t deps = mix64(m_rtVersion, m_texEvictions);
+            if (paletted)
+                deps = mix64(deps, m_cpu.ClutHash(t));
+            for (uint32_t p = first; p < last && p < kPages; ++p)
+                deps = mix64(deps, m_pageGen[p]);
+            uint64_t memoHash = 0x2545F4914F6CDD1Dull;
+            {
+                uint64_t words[4] = {};
+                static_assert(sizeof(TexBindInput) <= sizeof(words));
+                std::memcpy(words, &memoIn, sizeof(memoIn));
+                for (uint64_t w : words)
+                    memoHash = mix64(memoHash, w);
+            }
+            BindMemo &memo = m_bindMemo[memoHash & (kBindMemoSize - 1u)];
+            if (memo.valid && memo.deps == deps && std::memcmp(&memo.in, &memoIn, sizeof(memoIn)) == 0)
+            {
+                ++m_bindMemoHits;
+                s.texIsRt = memo.texIsRt;
+                s.rtFbp = memo.rtFbp;
+                s.rtOx = memo.rtOx;
+                s.rtOy = memo.rtOy;
+                s.texKey = memo.texKey;
+                if (!s.texIsRt && memo.touchedFrame != m_frameIndex)
+                    m_texLru[s.texKey] = m_frameIndex;
+                memo.touchedFrame = m_frameIndex;
+                m_bindIn = in;
+                m_bindOut = s;
+                m_bindResult = memo.result;
+                m_bindTouchedFrame = m_frameIndex;
+                m_bindCacheValid = true;
+                return memo.result;
+            }
             const bool result = bindTextureUncached(d, s);
+            // the deps again: binding can create a texture (and evict others) or note a render target
+            uint64_t after = mix64(m_rtVersion, m_texEvictions);
+            if (paletted)
+                after = mix64(after, m_cpu.ClutHash(t));
+            for (uint32_t p = first; p < last && p < kPages; ++p)
+                after = mix64(after, m_pageGen[p]);
+            memo.valid = true;
+            memo.in = memoIn;
+            memo.deps = after;
+            memo.texIsRt = s.texIsRt;
+            memo.rtFbp = s.rtFbp;
+            memo.rtOx = s.rtOx;
+            memo.rtOy = s.rtOy;
+            memo.texKey = s.texKey;
+            memo.result = result;
+            memo.touchedFrame = m_frameIndex;
             m_bindIn = in;
             m_bindOut = s;
             m_bindResult = result;
@@ -3875,9 +4001,11 @@ namespace
             s.texKey = key;
             if (raster) // [gta-recomp] step 3d: the texture by the raster it came from
                 g_rasterTextures[raster] = key;
+            ++m_bindLookups;
             auto it = m_texLru.find(key);
             if (it != m_texLru.end())
             {
+                ++m_bindLookupHits;
                 it->second = m_frameIndex;
                 return true;
             }
@@ -3928,6 +4056,7 @@ namespace
 
         void evictTextures()
         {
+            ++m_texEvictions;
             std::vector<std::pair<uint64_t, uint64_t>> byAge(m_texLru.begin(), m_texLru.end());
             std::sort(byAge.begin(), byAge.end(), [](auto &a, auto &b) { return a.second < b.second; });
             Frame &f = *m_frame;
@@ -3950,8 +4079,13 @@ namespace
         {
             auto found = m_rts.find(fbp);
             if (found == m_rts.end())
+            {
                 ++m_texStateVersion; // a new render target: textures there now come from it
+                ++m_rtVersion;
+            }
             RtInfo &rt = found != m_rts.end() ? found->second : m_rts[fbp];
+            if (fbw > rt.fbw)
+                ++m_rtVersion;
             rt.fbw = std::max(rt.fbw, fbw);
             rt.psm = psm;
             float maxY = 0.0f;
@@ -3966,6 +4100,7 @@ namespace
             if (rows > rt.pageRows)
             {
                 ++m_texStateVersion;
+                ++m_rtVersion;
                 static int logged = 0;
                 if (rows > 15u && logged < 40 && logDrops())
                 {
@@ -4049,6 +4184,7 @@ namespace
                         f.cmds.push_back({CmdType::RtDrop, static_cast<uint32_t>(f.rtDrops.size())});
                         f.rtDrops.push_back(it->first);
                         it = m_rts.erase(it);
+                        ++m_rtVersion;
                     }
                 }
                 else
@@ -4080,6 +4216,7 @@ namespace
                         std::fprintf(stderr, "[gs-hw] rt fbp=%u trimmed %u -> %u page rows\n", fbp, rt.pageRows, rt.recentRows);
                     rt.pageRows = rt.recentRows;
                     ++m_texStateVersion;
+                    ++m_rtVersion;
                 }
                 rt.recentRows = 0;
             }
@@ -4225,6 +4362,7 @@ namespace
             std::vector<uint32_t> gens;
         };
         uint64_t m_texNamed = 0, m_texUnnamed = 0; // [gta-recomp] textures made, by whether their raster is known
+        uint64_t m_bindCalls = 0, m_bindRepeats = 0, m_bindLookups = 0, m_bindLookupHits = 0; // [gta-recomp] PS2X_HW_UPSTATS
         std::unordered_map<uint32_t, UploadInfo> m_uploadAt;
         uint64_t m_skippedUploads = 0;
         std::unordered_map<uint64_t, uint64_t> m_texLru;  // key -> last frame used
@@ -4242,6 +4380,20 @@ namespace
         HwState m_bindOut{};
         bool m_bindResult = false, m_bindCacheValid = false;
         uint64_t m_bindTouchedFrame = 0;
+        struct BindMemo // [gta-recomp] bindTexture's second level
+        {
+            TexBindInput in{};
+            uint64_t deps = 0, texKey = 0, touchedFrame = 0;
+            uint32_t rtFbp = 0;
+            uint16_t rtOx = 0, rtOy = 0;
+            uint8_t texIsRt = 0;
+            bool result = false, valid = false;
+        };
+        static constexpr size_t kBindMemoSize = 4096;
+        std::vector<BindMemo> m_bindMemo = std::vector<BindMemo>(kBindMemoSize);
+        uint64_t m_rtVersion = 1;    // [gta-recomp] the render targets (m_rts) changed: bindTexture's memo
+        uint64_t m_texEvictions = 0; // [gta-recomp] evictTextures ran: bindTexture's memo
+        uint64_t m_bindMemoHits = 0;
         std::deque<PendingUpload> m_pendingUploads;       // [gta-recomp] lazy uploads, in submission order
         uint64_t m_pendingFrontId = 0;                    // id of m_pendingUploads.front()
         std::vector<uint16_t> m_blockPending = std::vector<uint16_t>(kBlocks, 0u); // queued uploads touching each block

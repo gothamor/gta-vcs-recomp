@@ -111,11 +111,36 @@ and ~930 CLUT loads a frame, nearly all overwritten before use) ~30%, the chain 
 Uncapped at the user-facing settings (independent timing, unlimited = up to 240, `--opt none`): Fort Baxter 170 fps,
 city 149 / 192 / 205 / 239 (at the ceiling), AI drive 136 fps.
 
+Then: packed 3D draws recorded per packet (one state check, triangles appended at once - the same draws), and a memo of
+texture binds (by their registers, valid while the texture's pages / CLUT / render targets / evictions are unchanged).
+Small gains: at the busy spot ~2,700 binds a frame, 69% the same as the last, ~840 through the full lookup (which finds
+the texture cached 99.9% of the time; ~1 texture a frame is decoded); the memo catches ~20% of those - VCS uploads each
+texture into shared VRAM before its draw, so the pages' generations change constantly. Content-derived page generations
+would let more of them hit (not done).
+
+### 7. The GS stage: the render worker on two threads (2026-10-25)
+
+The world tour uncapped (40 points, `VCS_TIMING=1 VCS_FPS=0 tools/tour.py`) had a median of 200 fps and its slowest
+points at ~110 fps, all limited by the render worker (8.5-8.8 ms, ~1,900 draws). Its work splits cleanly: the VIF1 /
+VU1 / native-draw side ~45%, the GS front end and frame building ~55%. The GS side now runs on its own thread behind
+the worker (NATIVE_RENDERER.md "The GS stage", `PS2X_GS_THREAD=0` = off). Uncapped (`--opt none`, independent timing):
+
+| spot | before | after (game / worker / GS stage ms) |
+|---|---|---|
+| Fort Baxter | 211 | 194 (4.6 / 2.1 / 1.7) |
+| city 575,175 | 235 | 239 - the ceiling |
+| city -675,1425 | 204 | 213 (4.2 / 0.8 / 0.7) |
+| city 1325,-325 | 151 | 215 (3.6 / 3.5 / 4.5) |
+| city -1425,-575 | 220 | 203 (4.5 / 0.9 / 0.7) |
+| AI drive | 129-136 | 133 (6.3 / 4.4 / 4.3) |
+
+(standing spots vary +-10% between runs with the scene). Now the game thread is the limit nearly everywhere.
+
 ## Next
 
-- **Render worker** (6.7 ms at city 1325,-325, 7.1 driving): per-upload / per-CLUT-load bookkeeping, texture binding
-  misses, packed-draw recording; or a second worker thread (VU1 / native draws vs the HW backend).
+- **Game thread** (4-6 ms; the limit again): the per-call cost of guest functions (Win64 prologues save 8 GPRs + 6 XMM
+  registers per call); VU0 natives; `inflate_fast` natively (zlib 1.2.2, game-internals.md 8) for streaming; the VIF1
+  chain copy; the IOP / SPU2 mixing.
+- Render worker / GS stage: per-upload / per-CLUT-load bookkeeping; content-derived page generations.
 - Playtest missions above 100 fps; sprint at 1/240 s (-11%).
-- **Game thread**: the per-call cost of guest functions (Win64 prologues save 8 GPRs + 6 XMM registers per call);
-  `inflate_fast` natively (zlib 1.2.2, game-internals.md 8) for streaming; the VIF1 chain copy; the IOP / SPU2 mixing.
 - PGO retrain after the codegen changes (`--opt pgo --train`) for release numbers.

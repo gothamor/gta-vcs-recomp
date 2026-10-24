@@ -51,4 +51,33 @@ namespace ps2_render_worker
 
     // Runtime shutdown: runs what is queued, then ends the thread.
     void shutdown();
+
+    // [gta-recomp] The GS stage (PS2X_GS_THREAD=0 / 1; on by default with the worker and the hardware renderer): the GS
+    // front end and the hardware renderer's frame building run on a second thread behind the worker. The worker
+    // interprets the VIF1 chains and runs the VU1 programs (and their native reproductions); what they hand the GS goes
+    // to the GS stage as commands, data copied, in order (runtime/gs/gs_frontend.cpp). Fences wait for both stages.
+    struct GsCommand
+    {
+        uint32_t type = 0;  // the GS front end's command (gs_frontend.cpp)
+        uint32_t bytes = 0; // payload after the header
+        uint64_t a = 0, b = 0;
+        uint32_t gifPath = 0, producer = 0, uploadAddress = 0, uploadBytes = 0; // the worker's thread-locals when sent
+        uint32_t csr = 0;                                                    // the worker's MXCSR
+    };
+    using GsHandler = void (*)(const GsCommand &command, const uint8_t *payload);
+
+    void configureGsStage(bool defaultOn); // at start, after configure(); off when the worker is
+    void setGsHandler(GsHandler handler);  // the GS front end, once
+    // GS calls made on this thread go to the GS stage (the worker, with the stage on)
+    bool gsStage();
+    bool onGsStage();
+    // Room for a command and `bytes` of payload (the worker only); fill it, then gsSend(). nullptr: too large for the
+    // queue - the GS stage has been drained, call the GS directly.
+    uint8_t *gsReserve(const GsCommand &command);
+    void gsSend();
+    // `work` on the GS stage in order with the commands, or at once without it; frameEnd: a displayed frame's end (the
+    // worker waits rather than get more than one frame ahead of the GS stage)
+    void runOnGsStage(std::function<void()> work, bool frameEnd = false);
+    // Until the GS stage has run everything sent so far (any thread but the GS stage)
+    void gsDrain();
 }

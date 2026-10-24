@@ -6,7 +6,7 @@
 From a copy of build/rig/saves/fortbaxter: noon, sunny, invincible; outside the barracks door, then teleports to the
 busiest standing spots of the world tour (tools/tour.py: most game time / draws), each settled for a few seconds and
 measured over ~8 s (4 perf readings); last an AI-driven car (rig autodrive) from the first city spot - the route is
-the AI's, so that one varies more between runs. Prints a table (game fps, game / worker / render ms, draws) and writes
+the AI's, so that one varies more between runs. Prints a table (game fps, game / worker / GS stage / render ms, draws) and writes
 OUT/bench.json (OUT defaults to build/bench/<name>). VCS_EXE=<path> runs another build (tools/run.py), e.g. the
 instrumented one during tools/build.py --opt pgo. Extra ENV=VAL pairs go to the game (VCS_FPS defaults to --fps).
 """
@@ -27,7 +27,7 @@ SPOTS = [
     ("city_1325_-325", 1325.0, -325.0, 180.0),
     ("city_-1425_-575", -1425.0, -575.0, 270.0),
 ]
-KEYS = ("game_fps", "frame_ms", "game_ms", "render_ms", "worker_ms", "iop_ms", "wait_ms", "draws")
+KEYS = ("game_fps", "frame_ms", "game_ms", "render_ms", "worker_ms", "gs_ms", "iop_ms", "wait_ms", "draws")
 
 
 def parse_perf(line):
@@ -78,10 +78,10 @@ def run(out, fps, name, extra_env, settle=6.0):
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "bench.json"), "w", encoding="utf-8") as f:
         json.dump({"fps": fps, "env": env, "results": results}, f, indent=1)
-    print("%-18s %7s %7s %7s %7s %7s %6s" % ("spot", "fps", "game", "worker", "render", "frame", "draws"))
+    print("%-18s %7s %7s %7s %7s %7s %7s %6s" % ("spot", "fps", "game", "worker", "gs", "render", "frame", "draws"))
     for spot, r in results.items():
-        print("%-18s %7.1f %7.1f %7.1f %7.1f %7.1f %6.0f" % (spot, r["game_fps"], r["game_ms"], r["worker_ms"], r["render_ms"],
-                                                            r["frame_ms"], r["draws"]))
+        print("%-18s %7.1f %7.1f %7.1f %7.1f %7.1f %7.1f %6.0f" % (spot, r["game_fps"], r["game_ms"], r["worker_ms"], r["gs_ms"],
+                                                                  r["render_ms"], r["frame_ms"], r["draws"]))
     return results
 
 

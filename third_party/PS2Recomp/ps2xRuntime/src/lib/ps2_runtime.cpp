@@ -541,7 +541,7 @@ namespace
         } regs;
         std::memcpy(regs.v, &memory.gs(), sizeof(regs.v));
         ps2perf::PhaseScope renderTime(ps2perf::Phase::Render); // waiting for the worker counts as render time
-        ps2_render_worker::post([hw, regs] { hw->endFrame(regs.v); }, true);
+        ps2_render_worker::post([hw, regs] { ps2_render_worker::runOnGsStage([hw, regs] { hw->endFrame(regs.v); }, true); }, true);
     }
 }
 
@@ -1048,6 +1048,10 @@ bool PS2Runtime::syncCoreSubsystems()
         m_gs.setGpuRenderer(m_gpu.get(), mode == GSRendererMode::Gpu || mode == GSRendererMode::Null);
         // [gta-recomp] render submission on its own thread with the hardware renderer (runtime/ps2_render_worker.h)
         ps2_render_worker::configure(m_hw != nullptr);
+        // [gta-recomp] and the GS stage behind it (the hardware renderer only; not while the HLE verify / survey modes
+        // read what the GS recorded from the worker)
+        ps2_render_worker::configureGsStage(m_hw != nullptr && !m_gpu && !std::getenv("PS2X_HLE_VERIFY") &&
+                                            !std::getenv("PS2X_HLE_SURVEY"));
     }
     m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
                                     { m_gs.processGIFPacket(data, size); });

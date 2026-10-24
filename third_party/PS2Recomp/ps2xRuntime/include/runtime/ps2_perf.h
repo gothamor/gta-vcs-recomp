@@ -53,6 +53,8 @@ namespace ps2perf
 
     // The render submission worker (runtime/ps2_render_worker.h) was busy for `ns`: worker_ms per game frame. Any thread.
     void addWorkerTime(uint64_t ns);
+    // [gta-recomp] The GS stage (runtime/ps2_render_worker.h) was busy for `ns`: gs_ms per game frame. Any thread.
+    void addGsStageTime(uint64_t ns);
 
     // Time spent until the scope ends goes to `phase` (nested scopes are subtracted from their parent).
     // EE thread only.

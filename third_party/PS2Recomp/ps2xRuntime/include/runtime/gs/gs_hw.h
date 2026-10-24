@@ -98,6 +98,8 @@ void gsHwSetTargetRole(uint32_t fbp, uint32_t fbw, const char *name, bool window
 // this thread sends, and its byte count - taken by the next upload of exactly that many bytes; a texture made from that
 // upload is named by the address (gsHwTextureForRaster). The thread that processes the VIF1 chain.
 void gsHwSetUploadSource(uint32_t address, uint32_t bytes);
+// [gta-recomp] this thread's upload source, cleared: handed to the GS stage with the next command (gs_frontend.cpp)
+void gsHwTakeUploadSource(uint32_t &address, uint32_t &bytes);
 // [gta-recomp] The renderer's texture key of the raster at `address` (the latest made from it), 0 if none. Render thread.
 uint64_t gsHwTextureForRaster(uint32_t address);
 // [gta-recomp] Draw sources (milestone 3's "unconverted draws"): the draws still made from GS primitives, by kind -

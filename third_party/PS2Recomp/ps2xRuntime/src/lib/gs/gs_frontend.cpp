@@ -2,6 +2,8 @@
 #include "runtime/gs/gs_draw_source.h" // [gta-recomp]
 #include "runtime/gs/gs_gpu.h"
 #include "runtime/gs/gs_cpu_backend.h"
+#include "runtime/gs/gs_hw.h"            // [gta-recomp] the upload source handed to the GS stage
+#include "runtime/ps2_render_worker.h"   // [gta-recomp] the GS stage
 #include "ps2_log.h"
 #include "runtime/ps2_memory.h"
 #include <atomic>
@@ -164,6 +166,82 @@ uint32_t gsCurrentDrawSource()
     return path == 1u ? (path | g_path1Producer) : path;
 }
 
+namespace
+{
+    // [gta-recomp] The GS stage (runtime/ps2_render_worker.h): GS calls the render worker makes run on the stage's thread,
+    // in order, with their data copied and the worker's thread-locals (GIF path, PATH1 producer, upload source) as they
+    // were. What the worker needs back is answered here: submitPackedKick's fallback runs on the stage, submitNative's
+    // refusal is the backend's AcceptsNative.
+    enum GsStageCommand : uint32_t
+    {
+        kGsGif = 1,
+        kGsPackedKick = 2,
+        kGsNative = 3,
+        kGsRegister = 4,
+    };
+    GS *g_stageGs = nullptr;
+
+    void gsStageHandler(const ps2_render_worker::GsCommand &c, const uint8_t *payload)
+    {
+        g_currentGifPath = static_cast<uint8_t>(c.gifPath);
+        g_path1Producer = c.producer;
+        if (c.uploadBytes)
+            gsHwSetUploadSource(c.uploadAddress, c.uploadBytes);
+        GS &gs = *g_stageGs;
+        switch (c.type)
+        {
+        case kGsGif:
+            gs.processGIFPacket(payload, c.bytes);
+            break;
+        case kGsPackedKick:
+            if (!gs.submitPackedKick(payload, c.bytes))
+                gs.processGIFPacket(payload, c.bytes);
+            break;
+        case kGsNative:
+        {
+            GSNativeDraw draw;
+            std::memcpy(&draw, payload, sizeof(draw));
+            draw.vertices = c.a ? payload + sizeof(GSNativeDraw) : nullptr;
+            gs.submitNative(c.b, draw);
+            break;
+        }
+        case kGsRegister:
+            gs.writeRegister(static_cast<uint8_t>(c.a), c.b);
+            break;
+        default:
+            break;
+        }
+    }
+
+    // On the worker: the command and its data to the GS stage. false: too large for the queue (the stage has been
+    // drained - the caller does the work itself).
+    bool toGsStage(uint32_t type, const void *data, uint32_t bytes, uint64_t a, uint64_t b, const void *extra = nullptr,
+                   uint32_t extraBytes = 0u)
+    {
+        ps2_render_worker::GsCommand c;
+        c.type = type;
+        c.bytes = bytes + extraBytes;
+        c.a = a;
+        c.b = b;
+        c.gifPath = g_currentGifPath;
+        c.producer = g_path1Producer;
+        gsHwTakeUploadSource(c.uploadAddress, c.uploadBytes);
+        uint8_t *p = ps2_render_worker::gsReserve(c);
+        if (!p)
+        {
+            if (c.uploadBytes)
+                gsHwSetUploadSource(c.uploadAddress, c.uploadBytes);
+            return false;
+        }
+        if (bytes)
+            std::memcpy(p, data, bytes);
+        if (extraBytes)
+            std::memcpy(p + bytes, extra, extraBytes);
+        ps2_render_worker::gsSend();
+        return true;
+    }
+}
+
 void GS::setGpuRenderer(GSGpuRenderer *gpu, bool gpuOnly)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
@@ -173,6 +251,8 @@ void GS::setGpuRenderer(GSGpuRenderer *gpu, bool gpuOnly)
 
 void GS::init(uint8_t *vram, uint32_t vramSize, GSRegisters *privRegs)
 {
+    g_stageGs = this; // [gta-recomp] the GS stage runs its commands on this GS
+    ps2_render_worker::setGsHandler(&gsStageHandler);
     m_localMemoryStorage = vram;
     m_localMemorySize = vramSize;
     m_privRegs = privRegs;
@@ -702,6 +782,8 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
 
 void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
 {
+    if (ps2_render_worker::gsStage() && data && sizeBytes >= 16u && toGsStage(kGsGif, data, sizeBytes, 0u, 0u)) // [gta-recomp]
+        return;
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (!data || sizeBytes < 16 || !m_backend)
         return;
@@ -816,6 +898,8 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
 
 bool GS::processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes)
 {
+    if (ps2_render_worker::gsStage()) // [gta-recomp] in order with the GS stage
+        ps2_render_worker::gsDrain();
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (!data || sizeBytes < 16u || !m_backend)
         return false;
@@ -861,6 +945,8 @@ bool GS::processNativePackedGIFPacket(const uint8_t *data, uint32_t sizeBytes)
 
 bool GS::submitPackedKick(const uint8_t *data, uint32_t sizeBytes) // [gta-recomp]
 {
+    if (ps2_render_worker::gsStage() && data && toGsStage(kGsPackedKick, data, sizeBytes, 0u, 0u)) // the fallback runs on
+        return true;                                                                            // the GS stage
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (!data || sizeBytes < 16u || !m_backend || m_gpu)
         return false;
@@ -1030,6 +1116,8 @@ void GS::uploadImageNative(uint64_t bitbltbuf,
                            const uint8_t *data,
                            uint32_t sizeBytes)
 {
+    if (ps2_render_worker::gsStage()) // [gta-recomp] in order with the GS stage
+        ps2_render_worker::gsDrain();
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (m_gpu && data && sizeBytes)
     {
@@ -1314,6 +1402,8 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
 
 void GS::writeRegister(uint8_t regAddr, uint64_t value)
 {
+    if (ps2_render_worker::gsStage() && toGsStage(kGsRegister, nullptr, 0u, regAddr, value)) // [gta-recomp]
+        return;
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (m_gpu)
     {
@@ -1882,18 +1972,24 @@ void GS::processImageData(const uint8_t *data, uint32_t sizeBytes)
 
 bool GS::clearFramebufferContext(uint32_t contextIndex, uint32_t rgba)
 {
+    if (ps2_render_worker::gsStage()) // [gta-recomp] in order with the GS stage
+        ps2_render_worker::gsDrain();
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     return m_backend && m_backend->ClearFramebuffer(m_ctx[(contextIndex != 0u) ? 1 : 0], rgba);
 }
 
 bool GS::clearActiveFramebuffer(uint32_t rgba)
 {
+    if (ps2_render_worker::gsStage()) // [gta-recomp] in order with the GS stage
+        ps2_render_worker::gsDrain();
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     return m_backend && m_backend->ClearFramebuffer(activeContext(), rgba);
 }
 
 uint32_t GS::consumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
 {
+    if (ps2_render_worker::gsStage()) // [gta-recomp] in order with the GS stage
+        ps2_render_worker::gsDrain();
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (m_gpuOnly)
         return m_gpu->readTransfer(dst, maxBytes);
@@ -1944,6 +2040,20 @@ void GS::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_
 
 bool GS::submitNative(uint64_t prim, const GSNativeDraw &draw)
 {
+    if (ps2_render_worker::gsStage()) // [gta-recomp] PRIM written either way, as below
+    {
+        if (!m_backend || m_gpuOnly)
+            return false;
+        if (!m_backend->AcceptsNative(draw))
+        {
+            if (!toGsStage(kGsRegister, nullptr, 0u, GS_REG_PRIM, prim))
+                writeRegister(GS_REG_PRIM, prim);
+            return false;
+        }
+        const uint32_t vertexBytes = draw.vertices ? draw.vertexCount * draw.vertexStride : 0u;
+        if (toGsStage(kGsNative, &draw, sizeof(GSNativeDraw), draw.vertices ? 1u : 0u, prim, draw.vertices, vertexBytes))
+            return true;
+    }
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (!m_backend || m_gpuOnly)
         return false;
