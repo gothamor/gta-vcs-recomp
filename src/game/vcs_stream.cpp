@@ -13,6 +13,7 @@
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/ps2_disc_image.h"
+#include "runtime/ps2_iop_native.h"
 
 #include <algorithm>
 #include <atomic>
@@ -28,6 +29,7 @@ namespace vcs
 {
     namespace
     {
+        constexpr uint32_t kSid = 0x65686577u;
         constexpr uint32_t kRead = 0x00221818u;
         constexpr uint32_t kPoll = 0x002218F0u;
         constexpr uint32_t kFn5 = 0x00221968u;
@@ -151,16 +153,39 @@ namespace vcs
         }
     }
 
-    void installStreamHooks(PS2Runtime &runtime)
+    bool installStreamHooks(PS2Runtime &runtime)
     {
         const char *v = std::getenv("VCS_NATIVE_STREAM");
         if (v && *v == '0')
         {
             std::fprintf(stderr, "[stream] through the IOP (VCS_NATIVE_STREAM=0)\n");
-            return;
+            return false;
         }
         runtime.replaceFunction(kRead, &streamRead);
         runtime.replaceFunction(kPoll, &streamPoll);
         runtime.replaceFunction(kFn5, &streamFn5);
+        return true;
+    }
+
+    void retireIop(bool nativeComplete)
+    {
+        const char *v = std::getenv("PS2X_IOP");
+        if ((v && *v == '1') || (!v && !nativeComplete))
+        {
+            ps2_iop_native::setEmulatedIop(true);
+            std::fprintf(stderr, "[iop] emulated IOP on%s\n", nativeComplete ? " (PS2X_IOP=1)" : " (sound or streaming through it)");
+            return;
+        }
+        ps2_iop_native::setEmulatedIop(false);
+        // The only call that still reaches the stream server: fn 0 at boot (CDSTREAM 0x0000: its read queues and CD
+        // thread for 6 channels - the IOP's own sound code reads through channels 2 and 3), no reply. Reads, polls and
+        // fn 5 never get to it (the EE functions are replaced).
+        ps2_iop_native::registerServer(kSid, [](uint8_t *, const ps2x::iop::RpcRequest &request)
+                                       {
+                                           if (request.function != 0)
+                                               std::fprintf(stderr, "[stream] unexpected call %u to the stream server\n",
+                                                            request.function);
+                                       });
+        std::fprintf(stderr, "[iop] emulated IOP off: no IRX module loaded or run (PS2X_IOP=1 runs it)\n");
     }
 }

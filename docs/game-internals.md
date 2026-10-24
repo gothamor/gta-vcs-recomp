@@ -625,6 +625,78 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   `0x80E00` x3207, `0xC00` x224, `0x80700` x120, `0x80000`-`0x80221`, `0x90000`-`0x90400` a few. No PADMAN /
   MCSERV RPCs in play (pads and the card don't go through RPC here). All nine IRX modules run as IOP code.
 
+### 9a. The sound engine, read from CDSTREAM.IRX (native since milestone 6 step 2, 2026-10-24)
+
+How it was read: `tools/irxdis.py --decompile` (headless Ghidra on the module as a raw MIPS image, import stubs and
+exports named, `tools/ghidra/DecompileAll.java`) for the logic, the plain listing for register-level detail, and the
+SPU2 write traces of the emulated IOP (`PS2X_SPU2_TRACE`) as the final word. **Ghidra drops stores to hardware
+registers it thinks are dead** (a write followed by another to the same address, e.g. libsd's `ATTR &= ~0x30` before
+the voice reset) and reorders stores (SPDIF: the IRX writes 0x7C8, 0x7C0, 0x7C6) - the traces caught both. Offsets
+below are module offsets (CDSTREAM loads at IOP 0x1D600 on the emulated IOP); "data" is module data.
+
+- **Replies**: both servers answer with a pointer to one result word (0x8160 effects, 0x7FD0 music); the EE asks for
+  64 bytes (1444 for `0xB0000`) and only the first word means anything. Commands that return nothing leave the old
+  word in place (`0xA0F00`, `0xB0000`, `0xA0200`; music `0xB00`, `0xC00`, `0xD00`, `0x100`, `0x90400`, `0x90500`).
+  The request's first word is the argument; `cmd & 0xFF` is a second one.
+- **Effects server 0x65686579** (handler 0x57C0): `0xA0000` init(extra sounds) -> 1; `0xA0200` shutdown (key off
+  all); `0xA0A00+v` voice v playing (ENVX != 0); `0xA0B00` / `0xA0C00` a sound's length in samples (bytes x 7 / 4) /
+  sample rate; `0xA0D00` request bank (arg >> 8 = bank, arg & 0xFF = 0xFF to load); `0xA0F00` effects volume
+  (signed byte, 0x7F); `0xB0000` the voice block; `0xB0100` bank status (1 loaded, 2 loading); `0xB0200` / `0xB0300`
+  is a special sound ready / load one (arg >> 8 = sound, & 0xFF = slot type).
+- **Init** (0x3B10): `sceSdInit(0)`, SPDIF mode 0x800, main volumes 0 then 0x3FFF, a 128 KB IOP buffer, then every
+  bank's `\AUDIO\SET<b/10>\SFX<b>_PS.SDT` read into one sound table: **12 bytes per sound** - offset in the bank's
+  .RAW, bytes, sample rate - indexed from bank b's first sound (68 constants written by 0x3B10 to data 0x9FC0; last
+  bank sized by the init argument: 1). ADSR of all 48 voices 0x0F0F / 0x1FC7.
+- **The voice block** (`0xB0000`, 1444 bytes, sent every frame): words 3-4 key-on mask per core, 5-6 key-off mask
+  per core, then eight arrays of 44 words from word 9: sound, bank, -, -, rate (Hz), pan (0-127), volume, -. Voices
+  0-23 = core 0, 24-43 = core 1 voices 0-19 (core 1 voices 22 / 23 are the music). Applied by the thread 0x4B8C:
+  key off; per voice: start address = sound offset + the bank's SPU2 address + 0x30 (past the VAG header) - a voice
+  whose bank is not loaded is not keyed on -, pitch = rate x 4096 / 48000, volume L / R = min(2 x vol x (127 - pan) /
+  127, vol) / min(2 x vol x pan / 127, vol), times the effects volume; then key on (KOFF + KON of the same mask).
+- **Banks** (68; SPU2 address table in data 0x8000): 0-1 at 0x79810, 2 = specials at 0x21810, 3-0x27 "level" banks
+  sharing 0xD010 (loading one unloads the others), 0x28-0x3C "building" banks in two slots at 0x21810 (the quieter
+  slot is replaced; the loader prints "BUILDING BANKS NOT USED"), 0x3D-0x42 one area at 0x6F010, 0x43 specials.
+  Loading (thread 0x50DC): the .RAW through the 128 KB buffer, `sceSdVoiceTrans` on core 0 in 128 KB pieces.
+- **Special sounds** (speech, mission audio): sounds 0x125-0x16BA come out of bank 2's .RAW, sounds above 0x1750 out
+  of bank 0x43's, one at a time, into a slot by type: 0-4 fixed (0x3A810, 0x45010, 0x4F810, 0x5A010, 0x64810), 5-7
+  at 0x74010, 0xFF a ring of 5 at 0x21810 + n x 0x5000 (voices find a ring sound among the last two loaded).
+- **Music server 0x65686578** (handler 0x36DC, thread 0x26E8): `0x80000` init (finds the 112 streams - names at
+  data 0x6410, 40 bytes apart: radio stations, ambience, news, cutscene audio; SLES builds swap in WAVE_EU.VB) ->
+  the thread id; `0x80200+n` open stream n at arg ms; `0x80700` stop; `0x80E00` state; `0x90000` a stream's length in
+  ms (bytes x 7 / 256); `0x90100` position in ms; `0x90200+n` preload n held (cutscenes) / `0x90300` start it;
+  `0x90400` mono; `0x90500` loop; `0xB00` volume at the next step; `0xC00` volume now (left voice gets the high
+  half, right voice the low half); `0xD00+core` a core's main volume.
+- **Streams** (.VB): stereo ADPCM at 32 kHz, interleaved in 8 KB chunks (L R L R ...). Two 256 KB IOP buffers read
+  from disc; two 16 KB SPU2 rings at 0x5010 (left) / 0x9010 (right) played by core 1 voices 22 / 23 as loops. The
+  IOP marks the ADPCM block flags in each 8 KB chunk before sending it (first block 6 = loop start or 2, last block
+  of the ring 3 = jump back). The IRQ address sits at the start of the half that just started playing: the IRQ
+  (every 448 ms) refills the other half - left, then right on its DMA completion, then the IRQ moves. A start
+  position in ms maps to a 16 KB-aligned offset piecewise over eighths of the file (0x1524).
+- **The music thread** is a state machine driven by one semaphore (max count 1) signalled by commands, DMA
+  completions (`sceSdSetTransCallback`) and the SPU2 IRQ (`sceSdSetIRQCallback`): 0x80200 open -> fill both disc
+  buffers -> 0x1000 / 0x7000 / 0x2000 / 0x8000 send the four ring halves -> 0x3000 IRQ armed -> 0x4000 preloaded ->
+  0x5000 playing (keys on, volume, IRQ enable) -> 0x6000 stop. A stop request takes effect at the next step.
+- **Timing the game relies on**: after opening a radio station the EE sends the station's volume 3 samples later;
+  on the IOP the preload's four 8 KB DMAs take ~22 samples, so the volume is in before key-on. A preload done
+  instantly started the radio at the old volume (0) for one refill period (found by the replay comparison).
+- **libsd** (LIBSD.IRX, `src/sound/libsd.cpp`): entries are `core | voice << 1 | param << 8` (+0x80 for per-core
+  volumes, core stride 0x28 instead of 0x400); the register table is data 0x4CA0. `sceSdSetCoreAttr` 2 / 4 / 6 =
+  ATTR bit 7 / 6 / 14, 8 = noise clock, 10 = SPDIF. VoiceTrans mode 0 = TSA, ATTR DMA-write mode (0x20), DMA; the
+  DMA interrupt clears ATTR & 0x30 and calls the channel's callback. The SPU2 IRQ handler clears the IRQ-enable bit
+  of the core that hit, then calls the IRQ callback. `sceSdInit(0)` resets the hardware, writes a silent looping
+  block at 0x5000 through the data port, points every voice at it, keys all on and off.
+
+### 9b. Running without the IOP (milestone 6 step 3, 2026-10-24)
+
+- With streaming and sound native the EE's only remaining IOP call is the stream server's fn 0 at boot (CDSTREAM
+  0x0000: read queues + CD thread; the IOP's own sound code reads through its channels 2 and 3, so with the emulated
+  IOP on this call must still reach it). `retireIop` (`src/game/vcs_stream.cpp`) answers it natively and switches
+  the emulated IOP off: no IRX module is loaded or run (loads report success), no IOP time is emulated.
+- Pads and the memory card never went through the IOP here (EE-side HLE in the runtime), nor did the EE's own
+  `cdrom0:` file access. IOPRP300.IMG is never needed.
+- Boot to gameplay from the rig card: 4.9-6.1 s with the IOP off, on with the native paths, or fully emulated (the
+  game is the limit). IOP time per frame: 0.2 ms off, 0.3-0.4 ms emulated.
+
 ## 10. Memory card and saves
 
 libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`); files live in `%LOCALAPPDATA%/VCSRecomp/mc0`

@@ -285,10 +285,30 @@ dropped on uploads (lazy render-target patching).
       the disc image (`src/game/vcs_stream.cpp`, `VCS_NATIVE_STREAM=0` for the IOP's). Loading as fast as before
       (boot 6.3-7.8 s, five LOAD_SCENE teleports 2.1 s - the game is the limit, not the reads: 14 MB in ~5 ms).
       Static reference scenes unchanged; world tour subset clean.
-- [ ] Step 2, sound: CDSTREAM's sound servers (0x65686578 / 0x65686579) and libsd natively, the SPU2 emulation as
-      the reference. Mapped (game-internals.md 9): ~4,800 instructions of Rockstar's sound engine driving the SPU2
-      through libsd. `tools/irxdis.py` no longer needs capstone (`tools/mipsdis.py`, MIPS I, standard library).
-- [ ] Step 3: no IOP in the normal run (modules not loaded, no interpreter); the emulated IOP switchable.
+- [x] Step 2, sound (2026-10-24): CDSTREAM's two sound servers ported to the host (`src/game/vcs_sound.cpp`, the
+      effects and music engines) on a native libsd (`src/sound/libsd.cpp`) and an SPU2 core of their own (the
+      emulator's SPU2 class, now public), which is the audio output; `VCS_NATIVE_SOUND=0` for the IOP's. Tables the
+      module carries (stream names, SPU2 addresses) are read from the disc's own CDSTREAM.IRX. Checked against the
+      emulated IOP on identical input with `tools/soundcheck.py` (the IOP run's sound RPCs recorded with their IOP
+      times and replayed into the native driver): **PHI_A1 + cutscene preload: 11 of 12 sounding 5 s windows
+      bit-identical to the emulated IOP's output**, the 12th spans a jump in the reference's own timing; an AI drive
+      with the radio: 99.5% of 19,314 SPU2 register writes / DMAs in the same second, none of the reference's
+      missing, the rest of the audio differs by +-1-sample event timing (the emulated SPU2 runs up to one IOP batch
+      behind the IOP clock). Found on the way: the radio started at volume 0 for 0.45 s after a station change (the
+      preload must take its DMA time - game-internals.md 9a). The loop at a stream's end (no capture reaches one):
+      a synthetic call sequence opening FLASH.VB 3 s before its end with looping on plays 13 s on without a gap.
+      Mapping tools: `tools/irxdis.py --map / --decompile`
+      (headless Ghidra), `tools/mipsdis.py` (MIPS I, standard library).
+- [x] Step 3 (2026-10-24): no emulated IOP in the normal run - no IRX module loaded or run, no IOP time emulated
+      (`retireIop`, game-internals.md 9b); `PS2X_IOP=1` runs it again (`VCS_NATIVE_SOUND=0` / `VCS_NATIVE_STREAM=0`
+      do too). Boot to gameplay 4.9-6.1 s in all three configurations (game-bound); IOP 0.2 ms per frame (was
+      0.3-0.4). Memory card save / Load Game / Delete Game through the menus pass (`tools/saves.py`, whose load check
+      now looks at where the player ends up: the runtime's `[MC]` log lines arrive late). Tour subset (`--every 9
+      --limit 18`): 15 ok, 2 relocated, 1 falling - identical with the IOP off, on, and everything emulated. Six story
+      missions (JER_A3, PHI_A1, MAR_A1, LOU_A1, LAN_B1, BRY_B1) run without problems with the IOP off.
+- [ ] Open (found 2026-10-24, not milestone 6): tour point (-925, 1175) falls through the world when the tour reaches
+      it after the points before it, in every configuration; a fresh teleport there from Fort Baxter lands (z 14.5).
+      Collision streaming order / timing at that spot needs a look.
 ## Phase 5 - stability
 - [x] Vic falls through the world in some places - **no longer happens** at the spot the user saw it (user
       playtest 2026-10-24); fixed along the way by other work (which change is not known: the VU0 collision
@@ -319,6 +339,11 @@ dropped on uploads (lazy render-target patching).
 | `VCS_SKIP_MOVIES=0\|1` | play / skip the intro movies (Display > Skip intro movies); test tools default to 1 |
 | `VCS_MOVIE_LOG=1` | movie playback: sound pushed / queued / played vs the pictures, every second |
 | `VCS_NATIVE_STREAM=0`, `VCS_STREAM_LOG=1` | disc streaming through the IOP (the reference); native read stats every 5 s |
+| `VCS_NATIVE_SOUND=0` | sound through the emulated IOP's CDSTREAM / LIBSD (the reference) |
+| `PS2X_IOP=0\|1` | emulated IOP off / on (default: off when streaming and sound are native) |
+| `PS2X_SPU2_TRACE=<file>` | every SPU2 register write and DMA to `<file>.<n>` per SPU2 instance (0 = the emulated IOP's) |
+| `PS2X_RPC_RECORD=<file>`, `PS2X_RPC_RECORD_SIDS=<hex,...>` | record RPC calls with their IOP time (tools/soundcheck.py) |
+| `VCS_SOUND_REPLAY=<record>`, `VCS_SOUND_REPLAY_OUT=<wav>` | replay recorded sound calls into the native driver, write its output, exit |
 | `VCS_MIN_STEP=x` | independent timing's step floor (0.5, the game's; lower lifts the 100 fps cap - breaks ped movement) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
 | `VCS_PERF_OVERLAY=0\|1` | the perf overlay setting for one run |

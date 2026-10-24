@@ -238,3 +238,20 @@ The user's choices on the roadmap's open questions:
 - Skipping as on the PS2: the logos can't be skipped (the game passes a threshold of 1,000,000 frames), the intro can
   with Start / Cross. The user asked to keep skipping the intro possible: Display > Skip intro movies skips both
   movies; off by default (authentic). Test tools set VCS_SKIP_MOVIES=1 so their boot timelines stay as they were.
+
+## 2026-10-24 - Sound without the IOP: Rockstar's sound code ported onto a native libsd and the existing SPU2 core
+- The roadmap's "native mixer" is the SPU2 core we already had (ADPCM, ADSR, interpolation, reverb - in C++, checked
+  against hardware behaviour); what was emulated around it was MIPS code: Sony's libsd and Rockstar's CDSTREAM sound
+  engine. Those are ported function by function (src/sound/libsd.cpp, src/game/vcs_sound.cpp), so the sound is the
+  same by construction and checkable write for write; a different mixer would only have added a second way to sound
+  different. A higher-quality mixer can later sit behind the same libsd.
+- The IOP's threads became steps on the EE thread (RPC work in the call, the music thread one step per semaphore
+  signal, max count 1 as the IRX creates it). Disc reads complete at once; DMA transfers keep their duration (the
+  game opens a radio station and sends its volume 3 samples later - it relies on the preload taking that long).
+- Tables the module carries (112 stream names, SPU2 addresses) are read from the disc's own MODULES\CDSTREAM.IRX at
+  start (checked to be SLUS-21590's), so nothing from the game sits in the source; only code constants (bank first
+  sound numbers, slot addresses) are written out.
+- Checked by record / replay (tools/soundcheck.py) rather than by ear alone: the emulated IOP's sound RPCs are
+  recorded with their IOP times and replayed into the native driver; SPU2 writes and audio are compared.
+- With streaming and sound native the emulated IOP is off by default (no modules, no IOP time); `PS2X_IOP=1`,
+  `VCS_NATIVE_SOUND=0` or `VCS_NATIVE_STREAM=0` bring it back for checking. The emulated IOP's code stays.

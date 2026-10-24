@@ -38,6 +38,7 @@ choices).
 | `src/main.cpp` | Launcher: ISO, settings registration, runtime start |
 | `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`) |
 | `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders, the RHI (D3D11 only under `rhi_d3d11/`), SDL3 platform layer |
+| `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
 | `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2) |
 | `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch |
 | `third_party/PS2Recomp/ps2xRuntime` | The runtime (EE, VIF, VU1, GS HW backend, IOP host, stubs); our changes marked `[gta-recomp]` |
@@ -64,6 +65,8 @@ python tools/rig.py player|scripts|peekf 0x4e4910 1|scm <hex>  # inspect / drive
 python tools/tour.py OUT [--every 9 --limit 18]               # world tour (quick subset with --every/--limit)
 python tools/saves.py [OUT]                                   # save / Load Game / Delete Game through the menus
 python tools/soak.py [OUT] --hours 3                          # hours of autodrive: crash / hang / leak / falling
+python tools/soundcheck.py all OUT [--mission N]             # native sound vs the emulated IOP: record, replay, compare
+python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 ```
 
 The rig (`src/debug/rig.cpp`, `tools/rig.py`) drives the game through its own script VM: `Game.teleport`,

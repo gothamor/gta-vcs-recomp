@@ -1,4 +1,5 @@
 #include "ps2_iop_host.h"
+#include "runtime/ps2_iop_native.h" // [gta-recomp]
 #include "runtime/ps2_audio_out.h"
 #include "runtime/ps2_disc_image.h"
 
@@ -600,5 +601,6 @@ bool PS2IopHostAdapter::readDiscSectors(uint32_t lsn, uint32_t sectors, void *de
 // [gta-recomp] SPU2 output (runtime/ps2_audio_out.h)
 void PS2IopHostAdapter::audioSamples(const int16_t *stereo, uint32_t frames)
 {
-    ps2AudioPush(stereo, frames);
+    if (!ps2_iop_native::emulatedAudioMuted()) // a native sound driver owns the output (runtime/ps2_iop_native.h)
+        ps2AudioPush(stereo, frames);
 }

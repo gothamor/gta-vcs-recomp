@@ -1,5 +1,6 @@
 #include "runtime/ps2_render_worker.h" // [gta-recomp]
 #include "runtime/ps2_present.h" // [gta-recomp]
+#include "runtime/ps2_iop_native.h" // [gta-recomp]
 #include "ps2_runtime.h"
 #include "runtime/gs/gs_gpu.h"
 #include "runtime/gs/gs_hw.h"
@@ -830,20 +831,39 @@ PS2Runtime::~PS2Runtime()
     }
 }
 
+namespace
+{
+    int32_t nextNativeModuleId() // [gta-recomp] module ids handed out while the emulated IOP is off
+    {
+        static std::atomic<int32_t> ids{0};
+        return ++ids;
+    }
+}
+
 ps2x::iop::ModuleLoadResult PS2Runtime::loadIopModule(std::string_view path, const void *arguments, uint32_t argumentSize)
 {
+    if (!ps2_iop_native::emulatedIop()) // [gta-recomp] no emulated IOP: the module "loads" and is never run
+        return {true, nextNativeModuleId(), 0};
     auto scope = m_iopHost->enterCall(nullptr, m_memory.getRDRAM());
     return m_iopSubsystem->loadModule(path, arguments, argumentSize);
 }
 
 ps2x::iop::ModuleLoadResult PS2Runtime::loadIopModuleBuffer(uint32_t guestAddress, const void *arguments, uint32_t argumentSize)
 {
+    if (!ps2_iop_native::emulatedIop()) // [gta-recomp]
+        return {true, nextNativeModuleId(), 0};
     auto scope = m_iopHost->enterCall(nullptr, m_memory.getRDRAM());
     return m_iopSubsystem->loadModuleBuffer(guestAddress, arguments, argumentSize);
 }
 
 bool PS2Runtime::stopIopModule(int32_t moduleId, int32_t *result)
 {
+    if (!ps2_iop_native::emulatedIop()) // [gta-recomp] nothing runs: the module "stops"
+    {
+        if (result)
+            *result = 0;
+        return true;
+    }
     auto scope = m_iopHost->enterCall(nullptr, m_memory.getRDRAM());
     return m_iopSubsystem->stopModule(moduleId, result);
 }
@@ -855,11 +875,28 @@ ps2x::iop::RpcAbi PS2Runtime::selectIopRpcAbi(const ps2x::iop::RpcAbiRequest &re
 
 bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
 {
-    return m_iopSubsystem->canBindRpc(sid);
+    if (ps2_iop_native::hasServer(sid)) // [gta-recomp] native servers (runtime/ps2_iop_native.h)
+        return true;
+    return ps2_iop_native::emulatedIop() && m_iopSubsystem->canBindRpc(sid);
 }
 
 ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx, ps2x::iop::RpcRequest request)
 {
+    if (ps2_iop_native::recording()) // [gta-recomp] PS2X_RPC_RECORD
+        ps2_iop_native::record(rdram, request,
+                               ps2_iop_native::emulatedIop() ? m_iopSubsystem->debugSnapshot().emulatorCycles * 8u
+                                                             : ps2_iop_native::eeCycles());
+    ps2x::iop::RpcResult native;            // [gta-recomp] a native server wins over the emulated IOP's
+    if (ps2_iop_native::dispatch(rdram, request, native))
+        return native;
+    if (!ps2_iop_native::emulatedIop())
+    {
+        static int reported = 0;
+        if (reported++ < 16)
+            std::fprintf(stderr, "[iop-native] no native server for sid 0x%x (fn 0x%x) with the emulated IOP off\n",
+                         request.sid, request.function);
+        return {};
+    }
     auto scope = m_iopHost->enterCall(ctx, rdram);
     request.callToken = scope.token();
     return m_iopSubsystem->handleRpc(request);
@@ -914,7 +951,9 @@ void PS2Runtime::advanceIopEeCycles(uint64_t eeCycles) noexcept
         }
     }
     ps2perf::PhaseScope iopTime(ps2perf::Phase::Iop); // [gta-recomp]
-    m_iopSubsystem->runEeCycles(cycles);
+    ps2_iop_native::tick(cycles);                     // [gta-recomp] native IOP-side time (runtime/ps2_iop_native.h)
+    if (ps2_iop_native::emulatedIop())
+        m_iopSubsystem->runEeCycles(cycles);
 }
 
 void PS2Runtime::resetIop()

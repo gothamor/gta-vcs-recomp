@@ -54,6 +54,7 @@ def main():
     checks = {}
     try:
         g.wait_ingame()
+        _, saved_pos, _ = g.player()  # where the card's save put the player
         before = slot_files()
         # save: the menu opens on "Save Game"; the slot list starts on Cancel, two down is slot 2
         g.cmd("scm " + (rig.Scm.op(0x0260) + rig.Scm.end()).hex())
@@ -62,14 +63,19 @@ def main():
         new = [f for f in slot_files() if f not in before]
         checks["save"] = {"ok": len(new) == 1 and new[0].startswith("2 ") and
                           os.path.getsize(os.path.join(folder, new[0])) == 98304, "new_files": new}
-        # load slot 1 (Map -> Brief -> Game tab)
+        # load slot 1 (Map -> Brief -> Game tab), from the other end of the map: the load must bring the player back
+        g.teleport(575.0, 175.0, -100.0)
+        time.sleep(3)
         mark = len(log_text())
         keys("load", "Return@3", "Right", "Right", "Shift@2", "Shift@3", "Down", "Shift@3", "Up", "Shift@15")
+        # the runtime's [MC] lines reach the log through a buffered stdout (maybe only at exit): the player being
+        # back where the save put them is the check; the full read is reported when the log already has it
         tail = log_text()[mark:]
         read_full = "'/BASLUS-21590GTA40001/1 Soldier' flags=0x1" in tail and "result=98300" in tail
         _, pos, mission = g.player()
-        checks["load"] = {"ok": read_full and not mission, "slot1_read": read_full, "mission_running": mission,
-                          "pos": pos}
+        back = abs(pos[0] - saved_pos[0]) < 30 and abs(pos[1] - saved_pos[1]) < 30
+        checks["load"] = {"ok": back and not mission, "back_at_save": back, "slot1_read_logged": read_full,
+                          "mission_running": mission, "pos": pos, "saved_pos": saved_pos}
         # delete slot 2 (the Game tab again: Load, New, Delete)
         keys("delete", "Return@3", "Right", "Right", "Shift@2", "Down", "Down", "Shift@3", "Down", "Down", "Shift@3",
              "Up", "Shift@8", "Shift@3", "F@2", "F@2", "F@2")

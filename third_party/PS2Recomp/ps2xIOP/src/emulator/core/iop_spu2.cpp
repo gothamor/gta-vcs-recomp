@@ -3,6 +3,8 @@
 #include "iop_spu2.h"
 
 #include <algorithm>
+#include <string>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -86,6 +88,10 @@ namespace ps2x::iop::detail
 
     IopSpu2::IopSpu2()
     {
+        static std::atomic<uint32_t> instances{0};
+        m_instance = instances++;
+        if (const char *path = std::getenv("PS2X_SPU2_TRACE"))
+            m_trace = std::fopen((std::string(path) + "." + std::to_string(m_instance)).c_str(), "w");
         reset();
     }
 
@@ -172,6 +178,8 @@ namespace ps2x::iop::detail
     void IopSpu2::write16(uint32_t offset, uint16_t value)
     {
         offset &= kRegSize - 1u;
+        if (m_trace)
+            std::fprintf(m_trace, "%llu W %03x %04x\n", static_cast<unsigned long long>(m_nextSampleCycle / kCyclesPerSample), offset, value);
         static const bool trace = std::getenv("PS2X_TRACE_SPU") != nullptr;
         static int traced = 0;
         if (trace && traced++ < 40000)
@@ -780,6 +788,8 @@ namespace ps2x::iop::detail
                 if (m_sink)
                     m_sink(m_outBuffer.data(), static_cast<uint32_t>(m_outBuffer.size() / 2u));
                 m_outBuffer.clear();
+                if (m_trace)
+                    std::fflush(m_trace); // the game leaves through _Exit
             }
         }
     }
@@ -796,6 +806,14 @@ namespace ps2x::iop::detail
         const uint32_t halfwords = bytes / 2u;
         m_stats.dmaBytes += bytes;
         const uint16_t *src = reinterpret_cast<const uint16_t *>(iopRam + madr);
+        if (m_trace)
+        {
+            uint32_t sum = 0; // FNV-1a over the data
+            for (uint32_t i = 0; i < bytes; ++i)
+                sum = (sum ^ iopRam[madr + i]) * 16777619u;
+            std::fprintf(m_trace, "%llu D %u %05x %x %d %08x\n", static_cast<unsigned long long>(m_nextSampleCycle / kCyclesPerSample), core, c.tsa, bytes,
+                         toSpu ? 1 : 0, sum);
+        }
         if (toSpu && (c.admas & (1u << core)) != 0u)
         {
             // AutoDMA: 512-byte blocks per channel (256 L samples, then 256 R samples)
