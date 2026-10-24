@@ -3,13 +3,36 @@
 The goal (the user, 2026-10-25): at the PS2's resolution the port runs well past 100 fps everywhere, without changing
 what the game does. This is the working list: what was measured, what was done (with numbers), what is next.
 
+## Where it stands (2026-10-25)
+
+Display > Game timing "Frame-rate independent" with the frame rate cap at 240 or Unlimited (= up to 240; the game's
+time step stops getting shorter there). The PGO + ThinLTO build (`tools/build.py --opt pgo`), i7-7700K + GTX 1080 Ti,
+640x448 internal resolution:
+
+| | before (uncapped, floor lowered) | now |
+|---|---|---|
+| Fort Baxter | 111 fps | 223 |
+| city 575,175 / -675,1425 / 1325,-325 / -1425,-575 | 166 / 118 / 130 / 125 | 240 (ceiling) / 201 / 226 / 220 |
+| AI drive | 95 | 150 |
+| world tour, 40 points (median / slowest 10% / slowest) | - (200 / 140 / 110 after step 1) | 208 / 165 / 120 |
+| 30-minute uncapped autodrive soak | - | 60/60 legs ok; frame time median 6.5 ms, worst 30 s average 9.0 ms |
+
+Before this work the game could not run above 100 fps in any setting (independent timing's ceiling) and the AI drive
+did not hold 60 in original timing. Original timing (30 / 60) is unchanged: reference scenes identical throughout.
+Where the slowest frames are now: heavy views (~1,950 draws: a rooftop facing the city) at ~120 fps, the game thread
+(6.2 ms + 1.6 ms submitting the chain) and the render worker (6.2 ms) both near the limit. Memory: the RSL replay's
+recordings grow with the blocks seen (~1.3 GB private after 15 minutes of driving, then flat - keyed by address, so
+bounded by the world; predates this work).
+
 ## How it is measured
 
 - `python tools/bench.py OUT --fps 0 VCS_TIMING=1 VCS_MIN_STEP=0.05`: uncapped, frame-rate independent timing with the
   step floor lowered (so the 100 fps cap of independent timing does not apply - see "The 100 fps cap" below). Five
   standing spots (Fort Baxter, four city spots from the world tour) and the AI drive from the first city spot.
-  Columns: fps, game-thread ms, render-worker ms, frame ms. The build is `--opt none` unless noted (PGO is ~20-30%
-  faster on the game thread).
+  Columns: fps, game-thread ms, render-worker ms, GS-stage ms, frame ms. The build is `--opt none` unless noted (PGO
+  was ~20-30% faster on the game thread before this work, ~5-10% after it). Since section 5 the floor is 50/240 by
+  default: `VCS_TIMING=1 --fps 0` alone is the user-facing "Unlimited (up to 240)".
+- `VCS_TIMING=1 VCS_FPS=0 tools/tour.py OUT --every 3 --limit 40`: the world tour uncapped (perf per point).
 - At the default cap (`tools/bench.py` with no options: 60 fps, original timing) `game` is the game thread's work
   per frame, the rest of the frame is waiting.
 - Game-thread / worker profiles: `VCS_PROFILE=5` (+ `VCS_PROFILE_THREAD=RenderWorker`, `VCS_PROFILE_CALLERS=name,...`
@@ -180,9 +203,12 @@ suggested).
 
 ## Next
 
-- **Game thread** (4-6 ms; the limit again): the per-call cost of guest functions (Win64 prologues save 8 GPRs + 6 XMM
-  registers per call); VU0 natives; `inflate_fast` natively (zlib 1.2.2, game-internals.md 8) for streaming; the VIF1
-  chain copy; the IOP / SPU2 mixing.
-- Render worker / GS stage: per-upload / per-CLUT-load bookkeeping; content-derived page generations.
+- **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker
+  and the RSL observer, the write-watch fold) and the render worker's first stage (6 ms: RSL replay copying recorded
+  unpacks into VU memory, the native draws' setup) - e.g. draws replayed without going through VU memory
+  (docs/FULLY_NATIVE.md step 4).
+- **Game thread** (guest code ~80% of it now, flat: the top function 2.3%): deeper codegen (guest registers kept in host
+  registers across calls), `inflate_fast` natively for streaming bursts (zlib 1.2.2, game-internals.md 8).
+- GS stage: per-upload / per-CLUT-load bookkeeping; content-derived page generations (more texture-bind memo hits).
 - Playtest missions above 100 fps; sprint at 1/240 s (-11%).
-- PGO retrain after the codegen changes (`--opt pgo --train`) for release numbers.
+- The RSL recordings' memory (an LRU bound).

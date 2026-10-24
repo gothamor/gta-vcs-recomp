@@ -342,7 +342,10 @@ dropped on uploads (lazy render-target patching).
       clock no longer holding the game at ~100 fps, the flip's CSR read without the render-worker fence, the main loop
       unpaced for an unlimited cap. Uncapped (`--opt none`): Fort Baxter 111 -> 209 fps, city spots 118-166 -> 135-331,
       AI drive 95 -> 126 fps. Then the ped-movement bug below step 0.5 patched: independent timing goes up to 240
-      fps (was 100). At the user-facing settings: Fort Baxter 170 fps, city 149-239, drive 136. Next: the render worker.
+      fps (was 100). Then the render worker split in two (the GS stage), guest functions without register saves
+      (preserve_none), smaller game-thread items, PGO retrained. PGO build, independent timing, unlimited (= 240):
+      Fort Baxter 223 fps, city 201-240, AI drive 150, world tour (40 points) median 208 / slowest 120; 30-minute
+      uncapped soak clean. Left: heavy views (~1,950 draws) at ~120 fps - game thread and render worker both ~6-8 ms.
 - [ ] Frame-rate independence, phases 3-4. Done: falling / jumping explained (Euler integration error, <= 6%, not a
       bug - game-internals.md 4); real-time pacing checked (game clock = wall clock at caps 60 / 100 / refresh,
       presents at the cap). HUD / radar flashing at the original rate above 30 fps (2D pass on a 30 Hz frame counter). Left: the four
