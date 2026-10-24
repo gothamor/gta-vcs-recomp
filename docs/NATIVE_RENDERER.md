@@ -433,7 +433,9 @@ then makes it hold at higher resolutions:
 "Internal resolution: Match window" (`display.scale` 0, `PS2X_HW_SCALE=0`): the picture's own targets - the
 640-wide ones: the drawn frame FBP 140, the shown copy FBP 0, the Z buffer FBP 280 - are drawn at the window's size
 (the letterboxed area at the 3D frames' aspect, `gsHwSetFrameSize`; it stays when a menu shows at 4:3), every other
-target (effect buffers, the radar / reflection map) at 1x. So the frame is not a multiple of 640x448: at 16:9 1080p
+target (effect buffers) at 1x - except the reflection map, which the game names a window-scaled target
+(`gsHwSetTargetRole`, docs/FULLY_NATIVE.md step 3d; `PS2X_HW_REFLECTION_SCALE=0` = 1x). The radar has no target: it is
+drawn in the HUD layer. So the frame is not a multiple of 640x448: at 16:9 1080p
 it is 1920x1080, 3 x 2.41 pixels per PS2 pixel.
 - Each target and depth buffer has its own scale (`Rt::scale`, `scaleFor`): creation, growth (rescaled when the
   window changes), uploads, clears, depth fills, scissor, the display, write-backs; the shader reads a render target
