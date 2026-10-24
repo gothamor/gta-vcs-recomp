@@ -160,6 +160,16 @@ standing 4.18 -> 3.90 ms, driving 7.18 -> 6.97 ms (~3-7%). Scenes unchanged.
 Each was ~1%: gone from the profile (guest share 65.7 -> 67.8% of the busy game thread), below what the A/B resolves.
 Scenes unchanged.
 
+### 10. PGO retrained; what did not help (2026-10-25)
+
+- PGO + ThinLTO retrained on the new code (`--opt pgo --train`): smaller gain than before (the codegen work removed much
+  of what it used to optimise). Uncapped, user-facing settings: Fort Baxter 213 fps, city 212 / 239 / 221 / 223, busy
+  city 1325,-325 223, AI drive 144 (game thread 6.0 ms + 0.8 ms submission; worker 4.2, GS stage 3.8).
+- The write-watch fold (~0.155 ms per frame, ~430 pages written per fold) cannot be narrowed to a page range: the
+  marked blocks span pages 376-8155 of 8192. Its cost follows the pages written, not the range. Not changed.
+- The sampling profiler counted a host sample as guest code when it fell within 1 MB after a generated function; it now
+  uses each generated function's own symbol size (ThinLTO / PGO builds interleave runtime and generated functions).
+
 ## Next
 
 - **Game thread** (4-6 ms; the limit again): the per-call cost of guest functions (Win64 prologues save 8 GPRs + 6 XMM

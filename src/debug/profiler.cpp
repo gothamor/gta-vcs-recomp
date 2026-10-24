@@ -139,9 +139,17 @@ namespace vcs
             SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
             SymInitialize(GetCurrentProcess(), nullptr, TRUE);
             std::vector<HANDLE> threads;
-            // is the host function at `host` generated code (FUN_*), not a hook installed with replaceFunction?
-            std::unordered_map<uintptr_t, bool> generatedCache;
-            auto isGenerated = [&generatedCache](uintptr_t host) {
+            // is the host function at `host` generated code (FUN_*), not a hook installed with replaceFunction - and how
+            // long is it? [gta-recomp] A sample counts for a generated function only within the function's own symbol
+            // size: in a ThinLTO / PGO build the linker places hot runtime functions between generated ones, and
+            // "the nearest generated function below, within 1 MB" counted them as guest code.
+            struct GeneratedInfo
+            {
+                bool generated = false;
+                uint64_t size = 0x100000u; // unknown size: the old 1 MB window
+            };
+            std::unordered_map<uintptr_t, GeneratedInfo> generatedCache;
+            auto generatedInfo = [&generatedCache](uintptr_t host) -> const GeneratedInfo & {
                 auto found = generatedCache.find(host);
                 if (found != generatedCache.end())
                     return found->second;
@@ -150,10 +158,17 @@ namespace vcs
                 sym->SizeOfStruct = sizeof(SYMBOL_INFO);
                 sym->MaxNameLen = 255;
                 DWORD64 displacement = 0;
-                const bool generated = !SymFromAddr(GetCurrentProcess(), host, &displacement, sym) || std::strncmp(sym->Name, "FUN_", 4) == 0 ||
-                                       std::strstr(sym->Name, "::FUN_") != nullptr;
-                generatedCache.emplace(host, generated);
-                return generated;
+                GeneratedInfo info;
+                const bool known = SymFromAddr(GetCurrentProcess(), host, &displacement, sym) != 0;
+                info.generated = !known || std::strncmp(sym->Name, "FUN_", 4) == 0 || std::strstr(sym->Name, "::FUN_") != nullptr;
+                if (known && sym->Size && displacement == 0)
+                    info.size = sym->Size;
+                return generatedCache.emplace(host, info).first->second;
+            };
+            // pc inside the generated function that starts at `host`
+            auto withinGenerated = [&generatedInfo](uintptr_t host, uintptr_t pc) {
+                const GeneratedInfo &info = generatedInfo(host);
+                return info.generated && pc - host < info.size;
             };
             // VCS_PROFILE_CALLERS=name[,name...]: for samples in host functions whose name contains one of these, the call
             // stack (unwound up to the first generated function) - who calls memchr / memmove / the allocator
@@ -199,7 +214,7 @@ namespace vcs
                                                [](uintptr_t v, const HostFn &f) { return v < f.host; });
                     auto inGenerated = [&](uintptr_t pc) {
                         auto f = std::upper_bound(map.begin(), map.end(), pc, [](uintptr_t v, const HostFn &fn) { return v < fn.host; });
-                        return f != map.begin() && f != map.end() && pc - std::prev(f)->host < 0x100000 && isGenerated(std::prev(f)->host);
+                        return f != map.begin() && f != map.end() && withinGenerated(std::prev(f)->host, pc);
                     };
                     if (got && !callersOf.empty() && !inGenerated(rip))
                     {
@@ -235,8 +250,7 @@ namespace vcs
                     // counted as that function before)
                     // (a replaced function's slot points at a host hook outside the generated code: a sample after it
                     // is host code, not that guest function - checked by the symbol name below)
-                    if (it != map.begin() && it != map.end() && rip - std::prev(it)->host < 0x100000 &&
-                        isGenerated(std::prev(it)->host))
+                    if (it != map.begin() && it != map.end() && withinGenerated(std::prev(it)->host, rip))
                         ++hits[std::prev(it)->guest];
                     else
                         ++other[rip];
@@ -335,7 +349,7 @@ namespace vcs
                         for (uintptr_t pc : frames)
                         {
                             auto f = std::upper_bound(map.begin(), map.end(), pc, [](uintptr_t v, const HostFn &fn) { return v < fn.host; });
-                            const bool gen = f != map.begin() && f != map.end() && pc - std::prev(f)->host < 0x100000 && isGenerated(std::prev(f)->host);
+                            const bool gen = f != map.begin() && f != map.end() && withinGenerated(std::prev(f)->host, pc);
                             char guest[24];
                             if (gen)
                                 std::snprintf(guest, sizeof(guest), "guest 0x%08x", std::prev(f)->guest);
