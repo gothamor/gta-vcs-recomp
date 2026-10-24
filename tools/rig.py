@@ -124,8 +124,10 @@ class Game:
         e["VCS_DATA_DIR"] = os.path.abspath(data)
         e["PS2X_CONTROL_PORT"] = str(port)
         e.update(env or {})
-        # run.py logs to build/run/<name>.log; no inherited pipes, so a caller's shell does not wait for the game
-        proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "run.py"), str(int(seconds)), name, "--control"],
+        # run.py logs to build/run/<name>.log; no inherited pipes, so a caller's shell does not wait for the game. Hidden
+        # (test runs; VCS_TEST_VISIBLE=1 shows the window)
+        proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "run.py"), str(int(seconds)), name, "--control",
+                                 "--hidden"],
                                 cwd=ROOT, env=e, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)
         gamectl.wait(port=port, timeout=90)

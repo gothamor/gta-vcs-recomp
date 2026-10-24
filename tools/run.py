@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Run the built game for a while and keep its output (testing / scripted runs).
 
-    python tools/run.py [seconds=60] [logname=run] [--iso ISO] [--visible] [--control]
+    python tools/run.py [seconds=60] [logname=run] [--iso ISO] [--hidden] [--control]
 
 Runs in build/run/ (so files the game or the debug switches write land there), logs stdout+stderr to
 build/run/<logname>.log and stops the game after <seconds> (0 = until it exits). Environment variables
 (PS2X_*, VCS_*) pass through; PS2X_GS defaults to hw (the D3D11 hardware renderer). Exit code 124 means the time ran out, as with `timeout`.
 
-Test runs are hidden by default: no window on the desktop, the physical keyboard / mouse / gamepad ignored, sound on;
-drive them with tools/gamectl.py (screenshots, key presses, perf numbers). --visible (or VCS_TEST_VISIBLE=1) shows
-the window; --control then also opens the control channel. --hidden is accepted and is the default.
+The window is shown (a run started by hand). --hidden: no window on the desktop, the physical keyboard / mouse /
+gamepad ignored, sound on, the control channel open - what the test tools use (tools/rig.py passes it; the user's
+choice of 2026-10-24: test runs hidden); VCS_TEST_VISIBLE=1 shows those too. --control opens the control channel with
+the window shown. --visible is accepted and is the default.
 """
 import argparse
 import os
@@ -25,8 +26,8 @@ def main():
     ap.add_argument("seconds", nargs="?", type=float, default=60.0)
     ap.add_argument("logname", nargs="?", default="run")
     ap.add_argument("--iso", help="disc image (default: see tools/toolchain.py find_iso)")
-    ap.add_argument("--hidden", action="store_true", help="the default: no window, no physical input; control channel on")
-    ap.add_argument("--visible", action="store_true", help="show the window (VCS_TEST_VISIBLE=1 does too)")
+    ap.add_argument("--hidden", action="store_true", help="no window, no physical input; control channel on (test runs)")
+    ap.add_argument("--visible", action="store_true", help="the default: the window shown")
     ap.add_argument("--control", action="store_true", help="control channel on (tools/gamectl.py) with the window shown")
     a = ap.parse_args()
 
@@ -41,7 +42,7 @@ def main():
         env.setdefault("PS2X_GS", "hw")  # the hardware (D3D11) renderer; the runtime's own default is the slow software one
         env.setdefault("PS2X_CAPTURE_SIZE", "960x672")  # control-channel screenshots independent of the window size
         env.setdefault("VCS_SKIP_MOVIES", "1")  # test runs boot straight on (VCS_SKIP_MOVIES=0 plays the intro movies)
-        tc.test_window(env, visible=a.visible and not a.hidden)
+        tc.test_window(env, visible=not a.hidden)
         if a.control:
             env["PS2X_CONTROL"] = "1"
         proc = subprocess.Popen([tc.VCS_EXE, iso], cwd=rundir, stdout=f, stderr=subprocess.STDOUT, env=env)
