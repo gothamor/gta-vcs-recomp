@@ -43,7 +43,10 @@ namespace ps2_render_worker
     bool onWorker();
 
     // Chain gather buffers, kept with their capacity, shared by the game thread (filling) and the worker (done with).
-    std::vector<uint8_t> takeBuffer();
+    // [gta-recomp] takeBuffer(want): the smallest pooled buffer holding `want` bytes, else the largest - the pool holds
+    // both small GIF copies and multi-MB VIF1 chains, and a chain started in a small one reallocated its way up every
+    // frame (~4% of the game thread while driving, docs/PS2RECOMP_PATCHES.md).
+    std::vector<uint8_t> takeBuffer(size_t want = 0);
     void recycleBuffer(std::vector<uint8_t> &&buffer);
 
     // Runtime shutdown: runs what is queued, then ends the thread.

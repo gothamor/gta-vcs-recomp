@@ -153,6 +153,23 @@ Next: the game thread still builds every packet (phase 0: ~17% of it). With draw
 packet, the hooks can move from "mark the packet" to "replay the packet" without the chain: the draw call's state
 flush and its recording are what the native side needs (phase 2's planned form, below).
 
+### The game thread after phase 2 (2026-10-24): profile first
+
+A drive profile with callers (`VCS_PROFILE_CALLERS`, new) showed the draw calls' own packet writes are small; the game
+thread's rendering overhead was elsewhere, and that was done first:
+- **The chain copy** (~10% of the game thread: `memmove`, the CRT copy routine, `ZwFreeVirtualMemory`): the 4.7 MB
+  chain was often copied into a small pooled buffer (the pool mixed GIF copies with chains) and reallocated its way
+  up. Pooled buffers are now taken by size and the chain buffer is reserved from the last chain's size: ~5.7%.
+- **VU0 microprograms still interpreted** (0x0C10, 0x0068, 0x0E98, 0x0E30: ~5%): native, bit-exact
+  (game-internals.md 6c).
+- **The state flush** `FUN_002F8710` (2.3%): native for the ~90% of flushes that call no plug-in callback, byte-exact
+  against the original (`VCS_RSL_NATIVE_VERIFY=1`: ~700k flushes, 0 differ): 1.3% left (the callback flushes).
+- A/B against the previous build (alternating, two rounds each): drive game thread 18.6 -> 17.8 ms, 45.8 -> 51.0 fps;
+  standing unchanged (within noise).
+What is left in the RSL range (~12% while driving) is spread over many emitters (texture setup `FUN_002F62B8` 1.5%,
+the Im3D vertex writer `FUN_002FC210` 1.3%, Im2D, the camera / frustum setters); the chain copy is still ~3.5%.
+Replacing the draws without the chain (above) removes the copy and the flush together.
+
 Planned (kept for reference):
 
 - The hooks build a native draw list from the RSL calls (mesh id + content key, matrices, lights / tint, material,

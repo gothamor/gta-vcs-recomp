@@ -270,6 +270,17 @@ the globals each frame:
   sphere or segment; out vi1 = hit, vf1 contact point, vf2 / vf3 direction and depth. Program 0 has E-bit exits at 0x000 / 0x010, converts fixed point with `ITOF0` /
   `MULi 1/128`, builds edge vectors and runs `CLIP` / `FMAND` / `FCAND` / `DIV` - most likely
   collision (line / sphere vs triangle). Found by disassembling with hctp-recomp's `vu1dis.py`.
+- **The other VU0 programs while driving** (2026-10-24, `PS2X_TRACE_VU0=1` per 5 s; code dumped with
+  `PS2X_VU0_DUMP=0c10`, disassembled with `tools/vudis.py`; all native now, `PS2X_VU0_VERIFY=1` 0 differ): 0x0CF8
+  sector box vs three plane sets (~240k calls), 0x0EB8 three 4x4 matrix products (~220k), 0x03A0 / 0x0020 above,
+  **0x0C10 sphere vs three plane sets** (19k calls, 190 ms interpreted - 10 us a call: vf1 = centre + radius in w,
+  matrices at vi15+24, vf31 = (1,1,1,1); vi1 / vi2 = per set the MAC sign flags of radius - distance /
+  distance + radius, read by FMAND 4 pairs after the FMAC), **0x0068** = the segment-vs-triangle program entered after
+  its fixed-point conversion (5.8k, 60 ms), **0x0E98** = the 0x0EB8 loop on the matrices at vi15 into vi15+12 (2.9k,
+  25 ms), **0x0E30** = vf1..vf12 stored to vi15+0..11, the last in the E bit's delay slot (2.9k, 8 ms). Together the
+  four were ~5% of the game thread while driving. 0x0CF8 / 0x0C10 are called through `FUN_0030C8D4` / `FUN_0030C8A8`,
+  the matrix programs through `FUN_0030C940` / `FUN_0030C900` (e.g. `FUN_002F7620`, which builds the camera's plane
+  matrices from `0x742AC0` into `0x520AD0` / `0x5208A0` / `0x520860`).
 - The **VU1** rendering microcode is not a static MPG packet: it is uploaded from `.text` each frame
   (6a). `game/vcs/vu1_uploads.txt` lists the uploads seen; `tools/vu1_recomp.py` compiles them.
 - Setup programs that never XGKICK (normal): 0x0148 (clear state), 0x0418 (lighting dispatch via
@@ -727,6 +738,24 @@ from a RAM dump and checked by the phase 2 recorder, 2026-10-24):
   every other frame; a few state packets in the `0x16EExxx`-`0x16EFxxx` render-context blocks (6i above) use VIF BASE.
 - Volume at city spot (-700, -500), per 10 s: 248k `FUN_002F7D58` CALLs, 106k `FUN_002F80A0` CALLs, 89k other CALLs,
   61k world REFs; ~1.29M draw program MSCALs among them.
+
+**The state flush** `FUN_002F8710` (decompiled with `tools/eedecomp.py`, 2026-10-24; native in
+`src/game/vcs_rsl_native.cpp`, byte-exact against the original). The dirty word `0x4882A0`, in the order written:
+- 0x1 render context `*0x4882A4` changed: `CALL context+0x10`, then each plug-in on the context's list (head
+  `context+0x114`, end `context+0xB0`, next `+0x64`) with a callback at `+0x48` is called (args at `+0x54` / `+0x58`);
+  0x2: `CALL *0x4882A8`; 0x4: `FUN_001CFAE0` -> UNPACK of 3 qwords; then the plug-ins' `+0x4C` callbacks (bit 0x1) or
+  `+0x50` (bit 0x10 alone); 0x11 unless 0x600 are both set: MSCAL 0x75 / 0x4A (the ones bits 0x400 / 0x200 do not
+  send themselves).
+- 0x2000: three CALLs from the table `0x742AB0[*0x4CD57C]`; 0x8: UNPACK V4-32 x5 -> VU 0x31 from `0x742AE0`;
+  0x1000: viewport `0x520920` -> 0x0C (4 qw, MSCAL 0x8F) and `0x520AC0` -> 0x41; 0x800: `0x5208E0` -> 0x08 (MSCAL
+  0x8F) and lights `0x5209A0` -> 0x3B (6 qw); 0x400: `0x520990` -> 0x20 and `0x5208A0` -> 0x04 (MSCAL 0x83); 0x200
+  (when `*0x4882B0 == 0`): the instance matrix `0x520860` -> 0x00 (MSCAL 0x3C), or a REF to `*0x4882B8` instead.
+- GS registers to the queue `0x729510` (`{value, register}` pairs, count `0x488308`; the draw sends them as a
+  `CNT` + `DIRECTHL` right after the flush): 0x80 FOG (6) `0x4882E0`, 0x100 FOGCOL (7) `0x4882E8`, 0x20 register
+  0x14 `0x4882F0`, 0x40 register 0x15 `0x4882F8`. The word is left with bit 31 only.
+- The buffer's free space is `0xE6670 - FUN_00476770(0x520F90)` (`FUN_00478628`); with too little the flush writes
+  through a null pointer (never seen). While driving ~9% of flushes have plug-in callbacks (skinned / effect
+  plug-ins) and ~1% bit 0x4; those still run the original.
 
 ## 7. Textures: `.XTX`
 

@@ -142,15 +142,66 @@ namespace
         storeRegs(r, ctx);
     }
 
-    // VU0 0x0EB8: three 4x4 matrix products. In: vf1..vf4 = vectors, vi15 = VU address; matrices at vi15+12,
-    // results to vi15+24 (12 quadwords).
-    void matrixTimes3(R5900Context *ctx, uint8_t *data, uint32_t size)
+    // VU0 0x0C10: a sphere against three plane sets (the sphere variant of boxClip). In: vf1 = centre (xyz) and
+    // radius (w), vi15 = VU address of the matrices (at vi15+24). Out: vi1 / vi2 = per set the sign flags of
+    // radius - distance / distance + radius (4 bits each, shifted in by 4 per set). 18.8k calls / 5 s while driving.
+    void sphereClip(R5900Context *ctx, uint8_t *data, uint32_t size)
     {
         Vu0Regs r;
         loadRegs(ctx, r);
-        r.vi[1] = static_cast<int16_t>(r.vi[15] + 12);                      // 0eb8
-        r.vi[2] = static_cast<int16_t>(r.vi[15] + 24);                      // 0ec0
-        r.vi[3] = 3;                                                        // 0ec8
+        r.vi[4] = static_cast<int16_t>(r.vi[15] + 24);                     // 0c10 IADDIU vi4, vi15, 24
+        store<0xFu>(r.vf[31], mulBc(r.vf[0], r.vf[0], 0));                 // 0c18 MULx vf31, vf0, vf0x | IADD vi1 = 0
+        r.vi[1] = 0;
+        store<0xFu>(r.vf[31], operand(vu1v::add(operand(load(r.vf[31])), splat(vu1fast::operand(r.vf[0][3]))))); // 0c20 ADDw vf31 (= 1) | vi2 = 0
+        r.vi[2] = 0;
+        r.vi[3] = 3;                                                        // 0c28
+        r.vi[5] = 240;                                                      // 0c30
+        do
+        {
+            lqi(r, 2, 4, data, size);                                       // 0c38..0c50
+            lqi(r, 3, 4, data, size);
+            lqi(r, 4, 4, data, size);
+            lqi(r, 5, 4, data, size);
+            r.vi[1] = static_cast<int16_t>(r.vi[1] << 4);                   // 0c58..0c70 IADD vi1, vi1, vi1 (x4)
+            store<0xFu>(r.acc, mulBc(r.vf[2], r.vf[1], 0));                 // 0c58 MULAx
+            store<0xFu>(r.acc, maddBc(r.acc, r.vf[3], r.vf[1], 1));         // 0c60 MADDAy
+            store<0xFu>(r.acc, maddBc(r.acc, r.vf[4], r.vf[1], 2));         // 0c68 MADDAz
+            store<0xFu>(r.vf[6], maddBc(r.acc, r.vf[5], r.vf[0], 3));       // 0c70 MADDw vf6 = distances
+            r.vi[2] = static_cast<int16_t>(r.vi[2] << 4);                   // 0c78..0c90 IADD vi2, vi2, vi2 (x4)
+            store<0xFu>(r.acc, mulBc(r.vf[31], r.vf[1], 3));                // 0c78 MULAw acc = radius
+            store<0xFu>(r.vf[7], fused<0xFu, true>(operand(load(r.acc)), operand(load(r.vf[6])), splat(vu1fast::operand(r.vf[0][3])))); // 0c80 MSUBw vf7
+            store<0xFu>(r.acc, mulBc(r.vf[6], r.vf[0], 3));                 // 0c98 MULAw acc = vf6
+            store<0xFu>(r.vf[8], maddBc(r.acc, r.vf[31], r.vf[1], 3));      // 0ca0 MADDw vf8 = vf6 + radius
+            r.vi[6] = static_cast<int16_t>(r.vi[5] & signFlags(r.vf[7]));   // 0ca0 FMAND: flags of 0c80 (4 pairs earlier)
+            r.vi[1] = static_cast<int16_t>(r.vi[1] | r.vi[6]);              // 0ca8 IOR
+            r.vi[3] = static_cast<int16_t>(r.vi[3] - 1);                    // 0cb0 ISUBIU
+            r.vi[6] = static_cast<int16_t>(r.vi[5] & signFlags(r.vf[8]));   // 0cc0 FMAND: flags of 0ca0
+            r.vi[2] = static_cast<int16_t>(r.vi[2] | r.vi[6]);              // 0cd0 IOR (delay slot of 0cc8 IBNE)
+        } while (r.vi[3] != 0);
+        storeRegs(r, ctx);
+    }
+
+    // VU0 0x0E30: vf1..vf12 stored to vi15+0 .. vi15+11 (the last in the E bit's delay slot)
+    void storeTwelve(R5900Context *ctx, uint8_t *data, uint32_t size)
+    {
+        const uint32_t base = static_cast<uint16_t>(ctx->vi[15]);
+        for (uint32_t n = 0; n < 12u; ++n)
+        {
+            float v[4];
+            _mm_storeu_ps(v, ctx->vu0_vf[1 + n]);
+            std::memcpy(data + (((base + n) * 16u) & (size - 1u)), v, 16);
+        }
+    }
+
+    // VU0 0x0EB8: three 4x4 matrix products. In: vf1..vf4 = vectors, vi15 = VU address; matrices at vi15+12,
+    // results to vi15+24 (12 quadwords). 0x0E98 runs the same loop on the matrices at vi15 into vi15+12.
+    void matrixTimes3From(R5900Context *ctx, uint8_t *data, uint32_t size, int16_t from, int16_t to)
+    {
+        Vu0Regs r;
+        loadRegs(ctx, r);
+        r.vi[1] = static_cast<int16_t>(r.vi[15] + from);                    // 0eb8 / 0e98
+        r.vi[2] = static_cast<int16_t>(r.vi[15] + to);                      // 0ec0 / 0ea0
+        r.vi[3] = 3;                                                        // 0ec8 / 0eb0 (delay slot of 0ea8 B)
         do
         {
             lqi(r, 5, 1, data, size);                                       // 0ed0..0ee8
@@ -173,6 +224,9 @@ namespace
         } while (r.vi[3] != 0);
         storeRegs(r, ctx);
     }
+
+    void matrixTimes3(R5900Context *ctx, uint8_t *data, uint32_t size) { matrixTimes3From(ctx, data, size, 12, 24); }
+    void matrixTimes3First(R5900Context *ctx, uint8_t *data, uint32_t size) { matrixTimes3From(ctx, data, size, 0, 12); }
 
     // ---- the collision overlay (.vutext MPG at 0x48055C -> VU0 0x000, 245 pairs; game-internals.md 6c) ----------
     // Two programs ran ~22% of the EE thread interpreted (2026-10-23): 0x020 line segment vs triangle and 0x3A0 sphere
@@ -335,12 +389,26 @@ namespace
 
     // VU0 0x020 (collision overlay): segment vf17 (start, w = ?) .. vf13 against the triangle vf14 / vf15 / vf16 (fixed
     // point, converted here). vi1 = 1 when it crosses, with the crossing in vf1 and the segment's direction in vf2.
+    void segmentTriangleFrom0068(CollisionVu &v, R5900Context *ctx);
+
     void segmentTriangle(R5900Context *ctx, uint8_t *, uint32_t)
     {
         CollisionVu v(ctx);
+        v.convertInputs();                                                  // 0020..0060
+        segmentTriangleFrom0068(v, ctx);
+    }
+
+    // VU0 0x068: the same test entered after the conversion (inputs already floats; 5.8k calls / 5 s while driving)
+    void segmentTriangleFloat(R5900Context *ctx, uint8_t *, uint32_t)
+    {
+        CollisionVu v(ctx);
+        segmentTriangleFrom0068(v, ctx);
+    }
+
+    void segmentTriangleFrom0068(CollisionVu &v, R5900Context *ctx)
+    {
         Vu0Regs &r = v.r;
         using CV = CollisionVu;
-        v.convertInputs();                                                  // 0020..0060
         store<0x7u>(r.vf[10], CV::mul(v.vf(17), v.vf(12)));                 // 0068 MUL vf10 | LOI 0.5
         v.i = 0.5f;
         store<0x7u>(r.vf[11], CV::mul(v.vf(17), v.vf(13)));                 // 0070 MUL vf11
@@ -569,6 +637,12 @@ namespace
                                       "VCS VU0 sphere vs triangle (0x3A0)");
             ps2RegisterVu0Native(0x0CF8u, 0x138u, 0x3679405981306074ull, &boxClip, "VCS VU0 sector box clip (0x0CF8)");
             ps2RegisterVu0Native(0x0EB8u, 0x0F0u, 0xEA4DCB2F62C1EC30ull, &matrixTimes3, "VCS VU0 3x matrix product (0x0EB8)");
+            // 2026-10-24: the rest that ran interpreted while driving (PS2X_TRACE_VU0; ~5% of the game thread)
+            ps2RegisterVu0NativeRange(0x0068u, 0x0000u, 0x7A8u, 0xBD552AA3D758E079ull, &segmentTriangleFloat,
+                                      "VCS VU0 segment vs triangle, float inputs (0x068)");
+            ps2RegisterVu0Native(0x0C10u, 0x0D8u, 0x29291AE3B92E1ED5ull, &sphereClip, "VCS VU0 sphere vs three plane sets (0x0C10)");
+            ps2RegisterVu0Native(0x0E98u, 0x110u, 0xD8B903EF47C24DF7ull, &matrixTimes3First, "VCS VU0 3x matrix product (0x0E98)");
+            ps2RegisterVu0Native(0x0E30u, 0x068u, 0x0EAEDF438E869B5Bull, &storeTwelve, "VCS VU0 store vf1..vf12 (0x0E30)");
         }
     } registrar;
 }

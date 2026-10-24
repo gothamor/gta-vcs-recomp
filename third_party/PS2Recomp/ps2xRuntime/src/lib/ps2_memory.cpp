@@ -1568,7 +1568,12 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     // [gta-recomp] Reuse a chain buffer from earlier transfers: VCS's per-frame VIF1 chain gathers
                     // several MB; a fresh vector each time cost reallocation copies and OS page frees (~5% of a frame).
                     // (the render worker hands them back through its own pool)
-                    std::vector<uint8_t> chainBuf = ps2_render_worker::enabled() ? ps2_render_worker::takeBuffer() : takeChainBuffer();
+                    // [gta-recomp] sized from the last chain (reserved once, not grown by reallocation)
+                    static size_t lastChainBytes = 0;
+                    const size_t wantBytes = channelBase == 0x10009000u ? lastChainBytes : 0u;
+                    std::vector<uint8_t> chainBuf = ps2_render_worker::enabled() ? ps2_render_worker::takeBuffer(wantBytes) : takeChainBuffer();
+                    if (chainBuf.capacity() < wantBytes)
+                        chainBuf.reserve(wantBytes + wantBytes / 4u);
 
                     auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
                     {
@@ -1914,6 +1919,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     chcr = (chcr & 0x0000FFFFu) | (lastTagUpper << 16);
                     m_ioRegisters[channelBase + 0x00] = chcr;
 
+                    if (channelBase == 0x10009000u) // [gta-recomp] the size the next VIF1 chain's buffer is taken / reserved for
+                        lastChainBytes = chainBuf.size();
                     if (!chainBuf.empty())
                     {
                         PendingTransfer pt;

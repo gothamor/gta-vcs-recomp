@@ -14,6 +14,7 @@
 #include "game/vcs_sound.h"
 #include "game/vcs_stream.h"
 #include "game/vcs_hud.h"
+#include "game/vcs_rsl_native.h"
 #include "game/vcs_rsl_world.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -642,6 +643,7 @@ namespace
         vcs::rsltrace::onFrameKick(rdram);          // VCS_TRACE_RSL (debug/rsl_trace.h)
         vcs::rslshadow::onFrameKick(rdram);         // VCS_RSL_SHADOW (debug/rsl_shadow.h)
         vcs::rslworld::onFrameKick();               // world / model draws from RSL calls (game/vcs_rsl_world.h)
+        vcs::rslnative::onFrameKick(rdram);         // native RSL emitters' verify (game/vcs_rsl_native.h)
         FUN_002723e8_0x2723e8(rdram, ctx, runtime);
     }
 
@@ -716,6 +718,7 @@ namespace
             runtime.replaceFunction(0x0023C188u, &traceCellFocus);
         }
         installCallCounters(runtime);
+        vcs::rslnative::install(runtime); // before the RSL tools: they wrap whatever the flush is then
         vcs::rsltrace::install(runtime);
         vcs::rslshadow::install(runtime);
         vcs::rslworld::install(runtime);

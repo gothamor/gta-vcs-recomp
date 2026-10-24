@@ -286,3 +286,13 @@ Model instances (`FUN_002F7D58` / `FUN_002F80A0`) use the world's mechanism, wit
   counts. Packets rebuilt every frame drop to the packet path by themselves (bytes changed three hits running).
 - On by default after the verify run (1,217,887 blocks, 0 differ), scenes and tour; worker -1.3 to -2.4 ms in the
   bench. `VCS_RSL_MODELS=0` keeps the packet path for models.
+
+## 2026-10-24 - Game thread: the profile's targets before draw-call replay
+
+The plan after phase 2 was to replay draws at the RSL draw call instead of building their packets. A drive profile
+with call chains showed the draw calls' own writes are a small part of the game thread; a reallocating chain copy
+(~10%), four VU0 programs still interpreted (~5%) and the state flush (2.3%) were larger and each could be made
+native or fixed with an exact check against the original. Those went first. Native guest functions follow the rules
+already used for VU0 programs: bit- / byte-exact against the original in a verify mode, a switch back, and the
+original runs whenever the native version would have to call other guest code (the flush's plug-in callbacks).
+Draw-call replay stays the way to remove the remaining copy and flush together.

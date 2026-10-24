@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -121,6 +122,26 @@ namespace vcs
                 generatedCache.emplace(host, generated);
                 return generated;
             };
+            // VCS_PROFILE_CALLERS=name[,name...]: for samples in host functions whose name contains one of these, the call
+            // stack (unwound up to the first generated function) - who calls memchr / memmove / the allocator
+            std::vector<std::string> callersOf;
+            if (const char *e = std::getenv("VCS_PROFILE_CALLERS"))
+                for (const char *p = e; *p;)
+                {
+                    const char *comma = std::strchr(p, ',');
+                    callersOf.emplace_back(p, comma ? comma : p + std::strlen(p));
+                    p = comma ? comma + 1 : p + std::strlen(p);
+                }
+            std::unordered_map<uintptr_t, bool> callerMatch; // host RIP -> its function is one of callersOf
+            auto symbolName = [](uintptr_t addr) -> std::string {
+                alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 256];
+                auto *sym = reinterpret_cast<SYMBOL_INFO *>(buffer);
+                sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+                sym->MaxNameLen = 255;
+                DWORD64 displacement = 0;
+                return SymFromAddr(GetCurrentProcess(), addr, &displacement, sym) ? std::string(sym->Name) : std::string("?");
+            };
+            std::map<std::vector<uintptr_t>, uint64_t> stacks; // frames (innermost first) -> samples
             std::unordered_map<uint32_t, uint64_t> hits;    // guest function -> samples
             std::unordered_map<uintptr_t, uint64_t> other;  // non-generated host RIP (page) -> samples
             uint64_t total = 0;
@@ -138,15 +159,58 @@ namespace vcs
                     if (SuspendThread(h) == static_cast<DWORD>(-1))
                         continue;
                     CONTEXT c{};
-                    c.ContextFlags = CONTEXT_CONTROL;
+                    c.ContextFlags = callersOf.empty() ? CONTEXT_CONTROL : CONTEXT_FULL;
                     const bool got = GetThreadContext(h, &c) != 0;
+                    const uintptr_t rip = c.Rip;
+                    auto it = std::upper_bound(map.begin(), map.end(), rip,
+                                               [](uintptr_t v, const HostFn &f) { return v < f.host; });
+                    auto inGenerated = [&](uintptr_t pc) {
+                        auto f = std::upper_bound(map.begin(), map.end(), pc, [](uintptr_t v, const HostFn &fn) { return v < fn.host; });
+                        return f != map.begin() && f != map.end() && pc - std::prev(f)->host < 0x100000 && isGenerated(std::prev(f)->host);
+                    };
+                    if (got && !callersOf.empty() && !inGenerated(rip))
+                    {
+                        auto m = callerMatch.find(rip);
+                        if (m == callerMatch.end())
+                        {
+                            const std::string name = symbolName(rip);
+                            bool match = false;
+                            for (const std::string &want : callersOf)
+                                match |= name.find(want) != std::string::npos;
+                            m = callerMatch.emplace(rip, match).first;
+                        }
+                        if (m->second) // unwind while the thread is still suspended
+                        {
+                            std::vector<uintptr_t> frames;
+                            CONTEXT u = c;
+                            for (int depth = 0; depth < 12; ++depth)
+                            {
+                                DWORD64 imageBase = 0;
+                                PRUNTIME_FUNCTION fe = RtlLookupFunctionEntry(u.Rip, &imageBase, nullptr);
+                                if (!fe)
+                                {
+                                    u.Rip = *reinterpret_cast<const DWORD64 *>(u.Rsp); // a leaf: the return address on top
+                                    u.Rsp += 8;
+                                }
+                                else
+                                {
+                                    PVOID handlerData = nullptr;
+                                    DWORD64 establisher = 0;
+                                    RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, u.Rip, fe, &u, &handlerData, &establisher, nullptr);
+                                }
+                                if (!u.Rip)
+                                    break;
+                                frames.push_back(u.Rip);
+                                if (inGenerated(u.Rip))
+                                    break;
+                            }
+                            ++stacks[frames];
+                        }
+                    }
                     ResumeThread(h);
                     if (!got)
                         continue;
                     ++total;
-                    const uintptr_t rip = c.Rip;
-                    auto it = std::upper_bound(map.begin(), map.end(), rip,
-                                               [](uintptr_t v, const HostFn &f) { return v < f.host; });
                     // Generated functions are at most a few hundred KB of host code each.
                     // (not past the last one: whatever the linker placed after it - e.g. compiled VU1 code - was
                     // counted as that function before)
@@ -241,6 +305,30 @@ namespace vcs
                     std::sort(lines.begin(), lines.end(), [](auto &a, auto &b) { return a.second > b.second; });
                     for (size_t i = 0; i < lines.size() && i < 25; ++i)
                         std::fprintf(stderr, "[profile]     %5.1f%%  line %s\n", 100.0 * lines[i].second / total, lines[i].first.c_str());
+                }
+                if (!stacks.empty())
+                {
+                    // by caller chain, names resolved now (a guest function by its address)
+                    std::unordered_map<std::string, uint64_t> byChain;
+                    for (const auto &[frames, count] : stacks)
+                    {
+                        std::string chain;
+                        for (uintptr_t pc : frames)
+                        {
+                            auto f = std::upper_bound(map.begin(), map.end(), pc, [](uintptr_t v, const HostFn &fn) { return v < fn.host; });
+                            const bool gen = f != map.begin() && f != map.end() && pc - std::prev(f)->host < 0x100000 && isGenerated(std::prev(f)->host);
+                            char guest[24];
+                            if (gen)
+                                std::snprintf(guest, sizeof(guest), "guest 0x%08x", std::prev(f)->guest);
+                            chain += (chain.empty() ? "" : " < ") + (gen ? std::string(guest) : symbolName(pc));
+                        }
+                        byChain[chain] += count;
+                    }
+                    std::vector<std::pair<std::string, uint64_t>> chains(byChain.begin(), byChain.end());
+                    std::sort(chains.begin(), chains.end(), [](auto &a, auto &b) { return a.second > b.second; });
+                    for (size_t i = 0; i < chains.size() && i < 25; ++i)
+                        std::fprintf(stderr, "[profile]     %5.1f%%  called from %s\n", 100.0 * chains[i].second / total, chains[i].first.c_str());
+                    stacks.clear();
                 }
                 std::fflush(stderr);
                 hits.clear();

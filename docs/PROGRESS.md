@@ -233,6 +233,12 @@ dropped on uploads (lazy render-target patching).
       an UNPACK wrote (found by the verify: V3 / write-protected w lanes). Verify: 1,217,887 blocks over a bench run,
       0 differ. Render worker (one bench run each): Fort Baxter 5.5 -> 4.2 ms, busy city spot 10.8 -> 9.2, drive
       15.8 -> 13.4. Scenes ok, tour classes unchanged. `VCS_RSL_MODELS=0` = packet path.
+- [x] **Game thread: chain copy, VU0, state flush** (2026-10-24, RSL_SUBMISSION.md "The game thread after phase 2"):
+      a caller-aware drive profile found the VIF1 chain copy reallocating every frame (pool fixed: ~10% -> ~5.7% of
+      the game thread), four VU0 programs still interpreted (0x0C10, 0x0068, 0x0E98, 0x0E30: native, `PS2X_VU0_VERIFY`
+      0 differ; ~5%), and the RSL state flush (native for flushes without plug-in callbacks, byte-exact over ~700k
+      flushes; 2.3% -> 1.3%). A/B, two alternating rounds: drive game thread 18.6 -> 17.8 ms, 45.8 -> 51.0 fps.
+      Scenes ok, tour classes unchanged. `VCS_RSL_NATIVE=0` = the original flush.
 - [x] **Packed draws** (2026-10-24, NATIVE_RENDERER.md "Draw sources"): the C++ reproductions' strips / fans recorded
       without the GS front end (`GS::submitPackedKick`), verified exact against the per-vertex recording (14M packets).
       Render worker at the busiest bench spot 14.5 -> 11.7 ms, AI drive 21.2 -> 18.2 ms (one bench run each).
@@ -461,6 +467,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_RSL_SHADOW_DUMP=n`, `VCS_RSL_SHADOW_FIND=1` | with `VCS_RSL_SHADOW`: n samples of draw state + VU memory (`rsl_shadow_NNN.bin`); where in guest RAM mismatching VU rows are |
 | `PS2X_CHAIN_CENSUS=1` | the VIF1 chain by tag location / id / data source: tags and quadwords per chain, every 5 s (`[chain]`) |
 | `VCS_PROFILE_GUEST_FILE=<path>` | with `VCS_PROFILE`: every guest function's samples per report window, appended (for sums by subsystem) |
+| `VCS_PROFILE_CALLERS=name[,name]` | with `VCS_PROFILE`: for samples in host functions whose name contains one of these, the unwound call chain up to the first guest function (`called from ...`) |
+| `VCS_RSL_NATIVE=0`, `VCS_RSL_NATIVE_VERIFY=1`, `VCS_RSL_NATIVE_LOG=1` | the original RSL state flush instead of the native one; the original runs and the native bytes are compared with it; counts every 10 s (`[rsl-native]`) |
 | `PS2X_HLE_PACKED=0`, `PS2X_HW_PACKED_VERIFY=1` | the C++ reproductions' strips / fans through the GS front end; check the packed recording against it per packet |
 | `PS2X_HLE_SETUP=0` | VU1 setup programs (matrices, slot routines, block copy) on the VU1 instead of natively |
 | `PS2X_HLE_DUMP_IMAGES=1` | write the code and data of the first 0x02c0 shine packet of each code image (`shine_<hash>_*.bin`) |

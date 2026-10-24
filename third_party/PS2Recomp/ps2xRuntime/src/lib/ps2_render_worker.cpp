@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <algorithm>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -219,13 +220,22 @@ namespace ps2_render_worker
         s.fenceWaitNs += nowNs() - start;
     }
 
-    std::vector<uint8_t> takeBuffer()
+    std::vector<uint8_t> takeBuffer(size_t want)
     {
         State &s = state();
         std::lock_guard<std::mutex> lock(s.poolMutex);
         if (s.pool.empty())
             return {};
-        std::vector<uint8_t> buffer = std::move(s.pool.back());
+        size_t pick = 0; // [gta-recomp] the smallest that fits, else the largest
+        for (size_t i = 1; i < s.pool.size(); ++i)
+        {
+            const size_t c = s.pool[i].capacity(), best = s.pool[pick].capacity();
+            const bool fits = c >= want, bestFits = best >= want;
+            if ((fits && (!bestFits || c < best)) || (!fits && !bestFits && c > best))
+                pick = i;
+        }
+        std::vector<uint8_t> buffer = std::move(s.pool[pick]);
+        s.pool[pick] = std::move(s.pool.back());
         s.pool.pop_back();
         buffer.clear();
         return buffer;
@@ -238,7 +248,15 @@ namespace ps2_render_worker
         State &s = state();
         std::lock_guard<std::mutex> lock(s.poolMutex);
         if (s.pool.size() < 8u)
+        {
             s.pool.push_back(std::move(buffer));
+            return;
+        }
+        // [gta-recomp] full: a larger buffer replaces the smallest (the chain buffers must not be the ones dropped)
+        auto smallest = std::min_element(s.pool.begin(), s.pool.end(),
+                                         [](const auto &a, const auto &b) { return a.capacity() < b.capacity(); });
+        if (smallest->capacity() < buffer.capacity())
+            *smallest = std::move(buffer);
     }
 
     void shutdown()
