@@ -209,6 +209,10 @@ dropped on uploads (lazy render-target patching).
 - [x] **Textures named by raster, render targets by role** (2026-10-24, FULLY_NATIVE.md step 3d): every texture made
       over the reference scenes and the drive named by the game's raster (RAM address) through the chain's upload REFs;
       targets named by the game (`gsHwSetTargetRole`), the reflection map at the window's resolution. Step 3 done.
+- [x] **Unchanged world / model blocks not copied** (2026-10-24, FULLY_NATIVE.md step 4a / 4b): guest RAM under the
+      OS's write watch; a block whose pages are unchanged since a confirmed copy is replayed from its recording without
+      being copied (2.4M decisions checked, 0 wrong). Chain copy per frame 4.6 -> 2.1 MB; drive 50 -> 54 fps, worker
+      -0.5 ms (A/B alternating). "Other call" packets not skipped yet (open). `VCS_RSL_SKIP=0` = copy everything.
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -483,6 +487,9 @@ dropped on uploads (lazy render-target patching).
 | `VCS_LOADING_NATIVE=0` | loading screens drawn into the PS2 frame buffer instead of the native layer |
 | `PS2X_HW_PATH2_PACKED=0` | PATH2 draw packets (Im2D, effect strips) through the GS front end vertex by vertex instead of recorded whole |
 | `PS2X_TRACE_PATH2_TAGS=1` | PATH2 (VIF DIRECT) packets by the shape of their first GIFtag, and the register sequence of A+D packets that draw, every 5 s (`[path2]`) |
+| `PS2X_WRITE_WATCH=0`, `PS2X_WRITE_WATCH_LOG=1` | guest RAM without the OS's write watch (no block can then be told unchanged); pages written per fold and the fold's cost, every 5 s |
+| `VCS_RSL_SKIP=0`, `VCS_RSL_SKIP_VERIFY=1`, `VCS_RSL_SKIP_KINDS=<mask>` | copy every marked block; decide skips but copy anyway and check each against the recording it would have replayed; which kinds may be skipped (bit 0 world, 1 model, 2 model-b, 3 other call; default 7) |
+| `VCS_RSL_MEASURE=1` | with `VCS_RSL_WORLD_LOG`: per chain the bytes copied, the marked blocks and the distinct ones |
 | `PS2X_HW_RT_LOG=1` | the render targets with their names (gsHwSetTargetRole), sizes and scales, every 5 s |
 | `PS2X_HW_REFLECTION_SCALE=0` | the reflection map stays 1x with "Match window" |
 | `VCS_RSL_RASTERS=0` | textures not named by raster (no upload REFs recorded) |

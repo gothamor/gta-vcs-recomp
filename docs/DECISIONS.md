@@ -296,3 +296,13 @@ native or fixed with an exact check against the original. Those went first. Nati
 already used for VU0 programs: bit- / byte-exact against the original in a verify mode, a switch back, and the
 original runs whenever the native version would have to call other guest code (the flush's plug-in callbacks).
 Draw-call replay stays the way to remove the remaining copy and flush together.
+
+## 2026-10-24 - Block validity by write watch, not by reading the bytes
+
+Step 4 (FULLY_NATIVE.md) needs to know at the frame kick whether a world / model block still holds the bytes its
+recording was made from, without copying or hashing it (the distinct blocks are ~85% of the marked bytes: a per-frame
+check by content would cost as much as the copy). Chosen: the OS's write watch on guest RAM, folded into per-page
+generations once per kick. Not page protection: the stream thread reads the disc straight into guest RAM, and a kernel
+write into a protected page fails instead of faulting. Not hooks on the game's streaming / instancing functions: every
+path that writes packet memory would have to be found and kept up. Exact by construction (any write to any of a
+block's pages makes it dirty), checked with a decide-copy-compare mode (2.4M decisions, 0 wrong).

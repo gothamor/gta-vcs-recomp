@@ -26,6 +26,11 @@ class PS2Memory;
 namespace ps2chain
 {
     constexpr uint32_t kReplaceWithMark = 0x80000000u;
+    // with kReplaceWithMark: copy none of the marked bytes - the MARK qword's length word is kSkippedLength, and after a
+    // CALL the walk goes on at its return address as if its packet had returned (docs/FULLY_NATIVE.md step 4: a block
+    // known unchanged is replayed from its recording)
+    constexpr uint32_t kSkipWithMark = 0x40000000u;
+    constexpr uint32_t kSkippedLength = 0x00FFFFFFu;
 
     using TagObserver = uint32_t (*)(uint32_t tagAddr, uint32_t id, uint32_t tagTarget, uint32_t dataAddr, uint32_t qwc, uint64_t vifCodes,
                                      uint32_t flatOffset, bool chainStart);

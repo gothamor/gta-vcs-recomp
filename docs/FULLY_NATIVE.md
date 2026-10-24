@@ -22,7 +22,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 1 | The last GS draws | S-M | done 2026-10-24 (3 render-target reads left for step 3) |
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
-| 4 | Draw-call replay (3D without building packets) | M-L | planned |
+| 4 | Draw-call replay (3D without building packets) | M-L | in progress: 4a, 4b done 2026-10-24 (no copy of unchanged blocks) |
 | 5 | An empty chain | M | planned |
 
 ### 1. The last GS draws
@@ -158,6 +158,42 @@ kept).
 
 Done when: world and model draws make no packets; verify mode against the packet path 0 differ; drive game thread
 measurably lower (A/B, alternating builds).
+
+**Sizing (2026-10-24, `VCS_RSL_MEASURE=1`, driving).** Per frame the chain copy is 4.6 MB, of which the marked world /
+model blocks are 2.9 MB (740 blocks) and the distinct ones 2.4 MB (470): checking each distinct block's bytes once a
+frame would read nearly as much as copying them. Validity without reading the bytes is the prerequisite - for skipping
+the copy now, and for draws made with no chain at all (step 5).
+
+**4a - write watch (done 2026-10-24).** Guest RAM is allocated with the OS's write watch (`runtime/ps2_write_watch.h`,
+Windows `MEM_WRITE_WATCH`): every write is noted - guest code, host threads, the kernel reading the disc into it (the
+stream thread does: page protection was ruled out for that reason) - at no cost until asked. At each VIF1 chain kick
+the written pages are folded into per-page generations: 0.18 ms per frame, ~470 of 8,192 pages written per frame. The
+RSL observer keeps, per marked block, the pages it is made of (a world REF's payload; a CALLed packet's tags and
+payloads) and their generations at its last copy: 84% of copied blocks were unchanged since their previous copy. Write
+watch costs guest writes nothing measurable (A/B, alternating: not slower).
+
+**4b - unchanged blocks not copied (done 2026-10-24).** At the kick a world or model block may go uncopied when its
+pages are unchanged since a copy the worker has confirmed its recording for (the worker hands confirmations - recording
+key, chain - to the game thread at the end of each chain; the game thread keeps per block the copy since which its
+pages are unchanged). The walker then writes only the MARK qword with the length word `kSkippedLength` and, after a
+CALL, goes on at its return address as if the packet had returned. The worker replays the block's recording by key;
+should it be unusable there (VIF mode / cycle differ), the block is rebuilt from guest RAM - unchanged by
+construction (a small chain walker for CALLed packets). Results:
+- Checked with `VCS_RSL_SKIP_VERIFY=1` (decide, copy anyway, compare the copy's hash with the recording the skip would
+  have replayed): 1.1M decisions on the drive, 1.27M over the reference scenes - 0 wrong.
+- Per frame while driving the chain copy fell from 4.6 MB to 2.1 MB (marked blocks 2.9 MB -> 0.37 MB); ~206k blocks
+  per 10 s replayed without a copy, none rebuilt from guest RAM.
+- A/B, same build, `VCS_RSL_SKIP=0` vs on, two alternating rounds: drive 50.1 / 50.4 -> 54.1 / 53.5 fps, render worker
+  9.1 -> 8.5 ms; the game thread unchanged (the copy saved is spent again on the fold and the snapshots' bookkeeping).
+  Reference scenes ok, tour unchanged.
+- **Open:** "other call" packets (FUN_002F80A0's shared state packet, the per-frame ones) are not skipped. Skipping them
+  lost state - VU1 programs ran again because stage tables were missing - and about a quarter of the skips decided for
+  them never reached the worker as skip marks: the walker and the observer's open-block tracking disagree about being
+  inside a marked packet for some of them. `VCS_RSL_SKIP_KINDS` (a bit per kind; default world, model, model-b) is the
+  switch for finding it.
+
+Still to do for step 4 as defined: the draw hooks replaying without writing their tags at all (the state flush and GS
+registers then as native items in chain order), which the skip's validity now allows.
 
 ### 5. An empty chain
 

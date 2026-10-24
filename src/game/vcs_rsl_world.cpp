@@ -6,8 +6,10 @@
 #include "runtime/ps2_chain_observer.h"
 #include "runtime/gs/gs_hw.h"
 #include "runtime/ps2_hle_survey.h"
+#include "runtime/ps2_write_watch.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -46,6 +48,8 @@ namespace vcs::rslworld
         {
             uint32_t id, addr, qwc; // the tag the draw call writes: REF addr qwc / CALL addr (qwc unused)
             Kind kind;
+            uint32_t units = 0; // step 4: a block copied without its bytes - its length (8-byte units) as last copied
+            bool wouldSkip = false; // VCS_RSL_SKIP_VERIFY: copied all the same, checked against the recording
         };
         std::vector<Draw> g_current, g_kicked; // this frame's draw calls / the frame whose chain is being copied
         size_t g_next = 0;                     // the next of g_kicked whose tag the chain should hold
@@ -59,12 +63,36 @@ namespace vcs::rslworld
         {
             std::vector<Draw> draws;
             std::vector<RasterRef> rasters; // by offset
+            uint64_t seq = 0;               // step 4: which kick (g_chainSeq)
         };
+        uint64_t g_chainSeq = 0; // game thread
+
+        // step 4: the worker's word that a block's recording matches a copy (recording key, the chain it was in) - handed
+        // over at the end of each chain, read by the game thread at the next kick
+        std::mutex g_confirmMutex;
+        std::vector<std::pair<uint64_t, uint64_t>> g_confirmPending;
+        thread_local std::vector<std::pair<uint64_t, uint64_t>> t_confirm;
+        std::atomic<uint64_t> g_skipped{0}, g_skipReplayed{0}, g_skipFallback{0};
+        std::atomic<uint64_t> g_skipVerifySame{0}, g_skipVerifyDiffer{0};
+        std::atomic<uint64_t> g_skipLost{0}, g_skipSeen{0}; // step 4: skip marks the worker saw / could not place
+        bool g_skipVerify = false;
         ChainTable g_building;
         std::mutex g_tablesMutex;
         std::map<const void *, std::shared_ptr<ChainTable>> g_tables;
         thread_local std::shared_ptr<ChainTable> t_table;
         thread_local const uint8_t *t_chain = nullptr; // the chain being processed (its copy's data)
+        // VCS_RSL_MEASURE=1 (step 4 sizing): per chain, the bytes of marked blocks, and of distinct ones
+        struct Measure
+        {
+            uint64_t chains = 0, chainBytes = 0, blocks = 0, blockBytes = 0, distinct = 0, distinctBytes = 0;
+        } g_measure;
+        thread_local std::unordered_map<uint64_t, uint32_t> t_seen;
+        // step 4: marked blocks copied, and those unchanged since their last copy (game thread; logged in report)
+        struct CleanStats
+        {
+            uint64_t blocks = 0, clean = 0, unseen = 0;
+        } g_cleanStats;
+        std::atomic<uint32_t> g_lastChainBytes{0};
 
         // the raster upload whose pixels are at `data` in the chain being processed (step 3d), if one is
         const RasterRef *rasterAt(const uint8_t *data, uint32_t bytes)
@@ -374,7 +402,115 @@ namespace vcs::rslworld
                 std::fprintf(stderr, "[rsl-world] verify: %llu recordings the same as the packet path, %llu differ\n",
                              (unsigned long long)g_verifySame, (unsigned long long)g_verifyDiffer);
             g_packets = g_verifySame = g_verifyDiffer = g_unmarked = g_rasterMarks = 0;
+            if (g_cleanStats.blocks) // (game thread counts; read here only for the log)
+            {
+                std::fprintf(stderr, "[rsl-world] write watch: %llu blocks copied, %llu (%.1f%%) unchanged since their last copy, %llu seen for the first time\n",
+                             (unsigned long long)g_cleanStats.blocks, (unsigned long long)g_cleanStats.clean,
+                             100.0 * g_cleanStats.clean / double(g_cleanStats.blocks), (unsigned long long)g_cleanStats.unseen);
+                g_cleanStats = CleanStats{};
+            }
+            if (g_skipVerify)
+                std::fprintf(stderr, "[rsl-world] skip verify: %llu blocks would have replayed their recording rightly, %llu wrongly\n",
+                             (unsigned long long)g_skipVerifySame.exchange(0), (unsigned long long)g_skipVerifyDiffer.exchange(0));
+            if (g_skipped.load())
+            {
+                std::fprintf(stderr, "[rsl-world] skip marks seen %llu, without a table entry %llu\n", (unsigned long long)g_skipSeen.exchange(0),
+                             (unsigned long long)g_skipLost.exchange(0));
+                std::fprintf(stderr, "[rsl-world] skipped (not copied): %llu blocks, %llu replayed, %llu from guest RAM\n",
+                             (unsigned long long)g_skipped.exchange(0), (unsigned long long)g_skipReplayed.exchange(0),
+                             (unsigned long long)g_skipFallback.exchange(0));
+            }
+            if (g_measure.chains)
+            {
+                const double c = double(g_measure.chains);
+                std::fprintf(stderr, "[rsl-world] per chain: %.0f KB copied, %.0f marked blocks (%.0f KB), %.0f distinct (%.0f KB)\n",
+                             g_measure.chainBytes / c / 1024.0, g_measure.blocks / c, g_measure.blockBytes / c / 1024.0, g_measure.distinct / c,
+                             g_measure.distinctBytes / c / 1024.0);
+                g_measure = Measure{};
+            }
             g_refusals.clear();
+        }
+
+        uint64_t recordingKey(Kind kind, uint32_t addr, uint32_t units)
+        {
+            return (uint64_t(kind) << 56) | (uint64_t(addr & kRamMask) << 24) | (units & 0xFFFFFFu);
+        }
+
+        // a CALLed packet flattened from guest RAM as the chain walker copies it (each tag's upper half, then its payload) up
+        // to the RET that returns from it - step 4's fallback for a skipped block whose recording cannot be used
+        bool flattenCall(const uint8_t *rdram, uint32_t target, std::vector<uint8_t> &out)
+        {
+            out.clear();
+            uint32_t tag = target & kRamMask, ret[2] = {}, depth = 0;
+            for (int n = 0; n < 65536; ++n)
+            {
+                if ((tag & 0xF0000000u) == 0x70000000u || tag + 16u > kRamMask + 1u)
+                    return false;
+                uint64_t lo;
+                std::memcpy(&lo, rdram + tag, 8);
+                out.insert(out.end(), rdram + tag + 8, rdram + tag + 16);
+                const uint32_t qwc = static_cast<uint32_t>(lo & 0xFFFFu), id = static_cast<uint32_t>((lo >> 28) & 7u);
+                const uint32_t addr = static_cast<uint32_t>(lo >> 32) & kRamMask;
+                const uint32_t after = tag + 16u;
+                const uint32_t data = (id == 0u || id == 3u || id == 4u) ? addr : after;
+                if (qwc)
+                {
+                    if ((data & 0xF0000000u) == 0x70000000u || (data & kRamMask) + qwc * 16u > kRamMask + 1u)
+                        return false;
+                    out.insert(out.end(), rdram + (data & kRamMask), rdram + (data & kRamMask) + qwc * 16u);
+                }
+                switch (id)
+                {
+                case 1: tag = after + qwc * 16u; break;                  // cnt
+                case 2: tag = addr; break;                               // next
+                case 3: case 4: tag = after; break;                      // ref, refs
+                case 5:                                                  // call
+                    if (depth >= 2u)
+                        return false;
+                    ret[depth++] = after + qwc * 16u;
+                    tag = addr;
+                    break;
+                case 6:                                                  // ret: from a nested call, or out of the packet
+                    if (depth == 0u)
+                        return true;
+                    tag = ret[--depth];
+                    break;
+                default: return false;                                   // refe / end inside a CALLed packet
+                }
+            }
+            return false;
+        }
+
+        uint32_t handleBlock(PS2Memory &memory, const Draw &d, uint64_t seq, const uint8_t *bytes, uint32_t size, uint32_t units);
+
+        // step 4: a block the walker copied no bytes of - its recording, or (cannot be used) its bytes from guest RAM, which
+        // by the game thread's write watch still hold what the recording was made from
+        void replaySkipped(PS2Memory &memory, const Draw &d, uint64_t seq)
+        {
+            const uint64_t key = recordingKey(d.kind, d.addr, d.units);
+            const auto it = g_recordings.find(key);
+            if (it != g_recordings.end())
+            {
+                Recording &rec = it->second;
+                if (!rec.ops.empty() && rec.replayable && rec.mode == memory.vif1_regs.mode && rec.cycle == memory.vif1_regs.cycle)
+                {
+                    replay(memory, rec);
+                    ++g_stats[d.kind].blocks;
+                    ++g_stats[d.kind].replayed;
+                    ++g_skipReplayed;
+                    t_confirm.push_back({key, seq});
+                    return;
+                }
+            }
+            ++g_skipFallback;
+            if (d.kind == World)
+            {
+                handleBlock(memory, d, seq, memory.getRDRAM() + (d.addr & kRamMask), d.units * 8u, d.units);
+                return;
+            }
+            thread_local std::vector<uint8_t> flat;
+            if (flattenCall(memory.getRDRAM(), d.addr, flat) && flat.size() == size_t(d.units) * 8u)
+                handleBlock(memory, d, seq, flat.data(), static_cast<uint32_t>(flat.size()), d.units);
         }
 
         // the MARK before a marked REF's payload / CALL's packet (the processing thread, in stream order); the marked
@@ -382,19 +518,49 @@ namespace vcs::rslworld
         uint32_t onMark(PS2Memory &memory, uint32_t imm, const uint8_t *next, uint32_t avail)
         {
             const ChainTable *table = t_table.get();
+            if (avail >= 4u) // step 4: skipped marks the worker cannot place (their block would be lost)
+            {
+                uint32_t w;
+                std::memcpy(&w, next, 4);
+                if ((w & 0x00FFFFFFu) == ps2chain::kSkippedLength && (!table || imm >= table->draws.size()))
+                    ++g_skipLost;
+            }
             if (!table || imm >= table->draws.size() || avail < 12u)
                 return 0u; // a MARK the game wrote itself
             const Draw &d = table->draws[imm];
             uint32_t units;
             std::memcpy(&units, next, 4);
             units &= 0x00FFFFFFu;
+            if (units == ps2chain::kSkippedLength) // step 4: no bytes copied
+            {
+                ++g_skipSeen;
+                replaySkipped(memory, d, table->seq);
+                report();
+                return 12u;
+            }
             const uint32_t size = units * 8u;
             if (!size || size > avail - 12u)
             {
                 ++g_unmarked; // a CALL whose RET the chain did not reach: the packet path runs on
                 return 0u;
             }
-            const uint8_t *bytes = next + 12u;
+            return 12u + handleBlock(memory, d, table->seq, next + 12u, size, units);
+        }
+
+        // a marked block's bytes: replayed from its recording, recorded, or processed by the packet path; returns size
+        uint32_t handleBlock(PS2Memory &memory, const Draw &d, uint64_t seq, const uint8_t *bytes, uint32_t size, uint32_t units)
+        {
+            static const bool measure = std::getenv("VCS_RSL_MEASURE") != nullptr;
+            if (measure)
+            {
+                ++g_measure.blocks;
+                g_measure.blockBytes += size;
+                if (t_seen.emplace((uint64_t(d.kind) << 56) | (uint64_t(d.addr & kRamMask) << 24) | units, size).second)
+                {
+                    ++g_measure.distinct;
+                    g_measure.distinctBytes += size;
+                }
+            }
             Stats &stats = g_stats[d.kind];
             ++stats.blocks;
             Recording &rec = g_recordings[(uint64_t(d.kind) << 56) | (uint64_t(d.addr & kRamMask) << 24) | units];
@@ -406,13 +572,25 @@ namespace vcs::rslworld
                 return 12u + size;
             }
             const uint64_t hash = hashBlock(bytes, size);
+            if (d.wouldSkip) // VCS_RSL_SKIP_VERIFY: the skip would have replayed the recording of these bytes?
+            {
+                const auto it = g_recordings.find(recordingKey(d.kind, d.addr, d.units));
+                const bool same = units == d.units && it != g_recordings.end() && it->second.hash == hash && !it->second.ops.empty();
+                ++(same ? g_skipVerifySame : g_skipVerifyDiffer);
+                static int logged = 0;
+                if (!same && logged++ < 10)
+                    std::fprintf(stderr, "[rsl-world] skip verify: %s block at 0x%08x would have replayed %s\n", kKindNames[d.kind], d.addr,
+                                 units != d.units ? "another length" : it == g_recordings.end() ? "no recording" : "a recording of other bytes");
+            }
             const bool valid = rec.hash == hash && !rec.ops.empty() && rec.mode == memory.vif1_regs.mode &&
                                rec.cycle == memory.vif1_regs.cycle;
+            const uint64_t key = (uint64_t(d.kind) << 56) | (uint64_t(d.addr & kRamMask) << 24) | units;
             if (valid && rec.replayable && !g_verify)
             {
                 replay(memory, rec);
                 rec.changes = 0;
                 ++stats.replayed;
+                t_confirm.push_back({key, seq}); // step 4: the recording matches this copy
             }
             else if (valid && rec.replayable && g_verify)
             {
@@ -443,9 +621,11 @@ namespace vcs::rslworld
                 rec.hash = hash;
                 record(memory, bytes, size, rec);
                 ++stats.recorded;
+                if (rec.replayable)
+                    t_confirm.push_back({key, seq});
             }
             report();
-            return 12u + size;
+            return size;
         }
 
         // a DIRECT's data on the processing thread: a raster upload's pixels tell the renderer whose they are (step 3d)
@@ -459,6 +639,119 @@ namespace vcs::rslworld
         }
 
         // ---- the game thread ----------------------------------------------------------------------------------------
+        // Step 4 (docs/FULLY_NATIVE.md): the guest pages a marked block is made of - a world REF's payload, a CALLed
+        // packet's tags and payloads - with their write-watch generations when it was last copied. Unchanged pages: the
+        // block holds the bytes it held then (runtime/ps2_write_watch.h).
+        struct PageSnapshot
+        {
+            std::vector<std::pair<uint32_t, uint32_t>> pages; // page, generation
+            bool usable = false;                                // only RAM pages, all seen
+            uint32_t units = 0;                                 // its length as copied (8-byte units)
+            uint64_t stableSince = 0;                           // the copy (g_chainSeq) since which its pages are unchanged
+        };
+        std::unordered_map<uint64_t, uint64_t> g_confirmed; // recording key -> latest chain the worker confirmed it in
+        bool g_skip = false;
+        std::unordered_map<uint64_t, PageSnapshot> g_snapshots;
+        struct OpenBlock
+        {
+            bool open = false;
+            uint64_t key = 0;
+            int depth = 0;
+            bool usable = true;
+            uint32_t units = 0; // bytes copied so far / 8
+            std::vector<uint32_t> pages;
+        } g_openBlock;
+
+        bool unchanged(const PageSnapshot &snap);
+
+        // step 4: may this block go uncopied? Its pages unchanged since a copy the worker confirmed its recording for.
+        // The fill-in for snapshotKey's Draw: its length as last copied.
+        bool skippable(uint64_t snapshotKey, Kind kind, uint32_t addr, uint32_t &units)
+        {
+            // VCS_RSL_SKIP_KINDS: a bit per Kind. Default world, model, model-b: skipping "other call" packets (FUN_002F80A0's
+            // shared state packet, the per-frame ones) lost state - the walker and trackOpenBlock disagree about being
+            // inside a marked packet for some of them (docs/FULLY_NATIVE.md step 4, open)
+            static const unsigned kinds = std::getenv("VCS_RSL_SKIP_KINDS") ? unsigned(std::strtoul(std::getenv("VCS_RSL_SKIP_KINDS"), nullptr, 0)) : 0x7u;
+            if (!g_skip || !((kinds >> kind) & 1u))
+                return false;
+            const auto it = g_snapshots.find(snapshotKey);
+            if (it == g_snapshots.end() || !unchanged(it->second))
+                return false;
+            const auto c = g_confirmed.find(recordingKey(kind, addr, it->second.units));
+            if (c == g_confirmed.end() || c->second < it->second.stableSince)
+                return false;
+            units = it->second.units;
+            return true;
+        }
+
+        uint64_t blockKey(Kind kind, uint32_t addr, uint32_t qwc)
+        {
+            return (uint64_t(kind) << 56) | (uint64_t(addr & kRamMask) << 24) | (qwc & 0xFFFFFFu);
+        }
+
+        void addPages(std::vector<uint32_t> &pages, bool &usable, uint32_t addr, uint32_t bytes)
+        {
+            if ((addr & 0xF0000000u) == 0x70000000u) // scratchpad: not watched
+            {
+                usable = false;
+                return;
+            }
+            addr &= kRamMask;
+            for (uint32_t p = addr >> ps2writewatch::kPageShift; bytes && p <= (addr + bytes - 1u) >> ps2writewatch::kPageShift; ++p)
+                pages.push_back(p);
+        }
+
+        // a marked block's page set complete: was it unchanged since its last copy? then remember this copy's
+        bool unchanged(const PageSnapshot &snap)
+        {
+            if (!snap.usable)
+                return false;
+            for (const auto &[page, gen] : snap.pages)
+                if (!ps2writewatch::unchangedSince(page, gen))
+                    return false;
+            return true;
+        }
+
+        void closeBlock(uint64_t key, std::vector<uint32_t> &pages, bool usable, uint32_t units)
+        {
+            ++g_cleanStats.blocks;
+            PageSnapshot &snap = g_snapshots[key];
+            const bool clean = unchanged(snap) && snap.units == units;
+            if (snap.usable)
+                g_cleanStats.clean += clean ? 1u : 0u;
+            else
+                ++g_cleanStats.unseen;
+            if (!clean)
+                snap.stableSince = g_chainSeq; // this copy is the first of the bytes it holds now
+            snap.units = units;
+            std::sort(pages.begin(), pages.end());
+            pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
+            snap.pages.clear();
+            for (uint32_t page : pages)
+                snap.pages.push_back({page, ps2writewatch::generation(page)});
+            snap.usable = usable && ps2writewatch::enabled();
+        }
+
+        // every tag of the chain, while a CALLed packet is open: its pages (the walker copies the tag's upper half and the
+        // payload); the matching RET closes it
+        void trackOpenBlock(uint32_t tagAddr, uint32_t id, uint32_t dataAddr, uint32_t qwc)
+        {
+            if (!g_openBlock.open)
+                return;
+            addPages(g_openBlock.pages, g_openBlock.usable, tagAddr, 16u);
+            if (dataAddr && qwc)
+                addPages(g_openBlock.pages, g_openBlock.usable, dataAddr, qwc * 16u);
+            g_openBlock.units += 1u + qwc * 2u; // the tag's upper half and its payload, as the walker copies them
+            if (id == 5u)
+                ++g_openBlock.depth;
+            else if (id == 6u && --g_openBlock.depth == 0)
+            {
+                g_openBlock.open = false;
+                closeBlock(g_openBlock.key, g_openBlock.pages, g_openBlock.usable, g_openBlock.units);
+            }
+            else if (id == 0u || id == 7u) // the chain ended inside it
+                g_openBlock.open = false;
+        }
         // before the original only (DECISIONS.md "Rule for hooks on recompiled functions")
         void worldHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
@@ -490,7 +783,19 @@ namespace vcs::rslworld
                          uint32_t flatOffset, bool chainStart)
         {
             if (chainStart)
+            {
                 g_building = ChainTable{};
+                g_building.seq = ++g_chainSeq;
+                g_openBlock.open = false;
+                std::lock_guard<std::mutex> lock(g_confirmMutex); // the worker's confirmations since the last kick
+                for (const auto &[key, seq] : g_confirmPending)
+                {
+                    uint64_t &c = g_confirmed[key];
+                    c = std::max(c, seq);
+                }
+                g_confirmPending.clear();
+            }
+            trackOpenBlock(tagAddr, id, dataAddr, qwc);
             tagAddr &= kRamMask;
             // a raster's pixels: a REF whose VIFcodes end in DIRECT / DIRECTHL of its own size (texture uploads,
             // FUN_003298D8: the header REF before it holds the GS registers and the IMAGE tag) - in the packet buffer or
@@ -514,7 +819,41 @@ namespace vcs::rslworld
                 if (g_world && qwc && want && want->id == 3u && (dataAddr & kRamMask) == want->addr && qwc == want->qwc)
                 {
                     ++g_next;
-                    return mark(*want);
+                    const uint64_t snapshotKey = blockKey(World, want->addr, qwc);
+                    uint32_t units = 0;
+                    if (!g_openBlock.open && skippable(snapshotKey, World, want->addr, units))
+                    {
+                        Draw d = *want;
+                        d.units = units;
+                        if (g_skipVerify)
+                            d.wouldSkip = true; // copied all the same (below), checked by the worker
+                        else if (const uint32_t m = mark(d))
+                        {
+                            ++g_skipped;
+                            return m | ps2chain::kSkipWithMark;
+                        }
+                        if (d.wouldSkip)
+                        {
+                            const uint32_t m = mark(d);
+                            if (m)
+                            {
+                                std::vector<uint32_t> pages;
+                                bool usable = true;
+                                addPages(pages, usable, dataAddr, qwc * 16u);
+                                closeBlock(snapshotKey, pages, usable, qwc * 2u);
+                            }
+                            return m;
+                        }
+                    }
+                    const uint32_t m = mark(*want);
+                    if (m && !g_openBlock.open)
+                    {
+                        std::vector<uint32_t> pages;
+                        bool usable = true;
+                        addPages(pages, usable, dataAddr, qwc * 16u);
+                        closeBlock(snapshotKey, pages, usable, qwc * 2u);
+                    }
+                    return m;
                 }
                 return 0u;
             }
@@ -527,12 +866,32 @@ namespace vcs::rslworld
                 d.kind = want->kind;
                 ++g_next;
             }
-            return mark(d);
+            uint32_t units = 0;
+            if (!g_openBlock.open && skippable(blockKey(d.kind, d.addr, 0u), d.kind, d.addr, units))
+            {
+                d.units = units;
+                if (g_skipVerify)
+                    d.wouldSkip = true; // copied all the same, checked by the worker
+                else if (const uint32_t m = mark(d))
+                {
+                    ++g_skipped;
+                    return m | ps2chain::kSkipWithMark; // the walker goes on after the CALL
+                }
+            }
+            const uint32_t m = mark(d);
+            if (m && !g_openBlock.open) // the walker marks a CALL outside a marked packet only
+            {
+                g_openBlock = OpenBlock{};
+                g_openBlock.open = true;
+                g_openBlock.key = blockKey(d.kind, d.addr, 0u);
+                g_openBlock.depth = 1;
+            }
+            return m;
         }
 
         void queued(const void *key, uint32_t sizeBytes)
         {
-            (void)sizeBytes;
+            g_lastChainBytes.store(sizeBytes, std::memory_order_relaxed);
             if (g_building.draws.empty() && g_building.rasters.empty())
                 return;
             auto table = std::make_shared<ChainTable>(std::move(g_building));
@@ -549,9 +908,18 @@ namespace vcs::rslworld
             {
                 t_table.reset();
                 t_chain = nullptr;
+                if (!t_confirm.empty())
+                {
+                    std::lock_guard<std::mutex> lock(g_confirmMutex);
+                    g_confirmPending.insert(g_confirmPending.end(), t_confirm.begin(), t_confirm.end());
+                    t_confirm.clear();
+                }
                 return;
             }
             t_chain = static_cast<const uint8_t *>(key);
+            t_seen.clear();
+            ++g_measure.chains;
+            g_measure.chainBytes += g_lastChainBytes.load(std::memory_order_relaxed);
             std::lock_guard<std::mutex> lock(g_tablesMutex);
             const auto it = g_tables.find(key);
             if (it == g_tables.end())
@@ -588,6 +956,9 @@ namespace vcs::rslworld
         if (!g_world && !g_models && !g_rasters)
             return;
         g_verify = std::getenv("VCS_RSL_WORLD_VERIFY") != nullptr;
+        // step 4: blocks known unchanged replayed without being copied (needs the write watch; never while verifying)
+        g_skip = !off("VCS_RSL_SKIP") && !g_verify && ps2writewatch::enabled();
+        g_skipVerify = g_skip && std::getenv("VCS_RSL_SKIP_VERIFY") != nullptr; // decide, copy anyway, compare
         g_log = g_verify || std::getenv("VCS_RSL_WORLD_LOG") != nullptr;
         ps2chain::addTagObserver(&observe);
         ps2chain::addChainObservers(&queued, &processing);

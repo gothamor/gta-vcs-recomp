@@ -13,6 +13,12 @@
 // hashing or vertex conversion for a recorded block. A recording is used only while the block's bytes hash the same
 // and the VIF mode / cycle match; a block that keeps changing goes through the packet path for a while.
 //
+// Step 4 (docs/FULLY_NATIVE.md): a world / model block whose guest pages are unchanged (runtime/ps2_write_watch.h) since
+// a copy the worker confirmed its recording for is not copied at all - the walker writes the MARK alone and the worker
+// replays the recording by key (or rebuilds the block from guest RAM, unchanged by construction). Textures are named by
+// raster here too (onDirect: where each upload's pixels are in the chain's copy). VCS_RSL_SKIP=0: copy every block;
+// VCS_RSL_SKIP_VERIFY=1: decide, copy anyway, compare; VCS_RSL_RASTERS=0: no raster names.
+//
 // VCS_RSL_WORLD=0 / VCS_RSL_MODELS=0: world blocks / CALLed packets through the packet path. VCS_RSL_WORLD_VERIFY=1:
 // every hit is processed by the packet path instead and recorded again, and the new recording compared with the
 // cached one. VCS_RSL_WORLD_LOG=1: counts every 10 s.

@@ -1,0 +1,28 @@
+// [gta-recomp] Which 4 KB pages of guest RAM were written, without reading them (docs/FULLY_NATIVE.md step 4): guest RAM
+// is allocated with the OS's write watch (Windows MEM_WRITE_WATCH: every write counts - guest code, host threads, the
+// kernel reading a file into it - and costs nothing until asked). fold() takes the pages written since the last fold and
+// bumps their generation; a page whose generation is unchanged holds the bytes it held then. Kept out of ps2_memory.h:
+// the generated code includes that one.
+//
+// PS2X_WRITE_WATCH=0: guest RAM allocated as before; enabled() false, every generation 0 (nothing can be told clean).
+// PS2X_WRITE_WATCH_LOG=1: pages written per fold and the fold's cost, every 5 s.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+namespace ps2writewatch
+{
+    constexpr uint32_t kPageShift = 12u;
+    constexpr uint32_t kPageSize = 1u << kPageShift;
+
+    uint8_t *allocate(size_t bytes); // guest RAM (zeroed); new[] when write watch is off or unavailable
+    void release(uint8_t *ram);
+
+    bool enabled();
+    // the pages written since the last fold get a new generation; returns how many. One thread at a time (the one that
+    // kicks the frame's chain).
+    uint32_t fold();
+    uint32_t generation(uint32_t page);                       // page = guest RAM offset >> kPageShift
+    bool unchangedSince(uint32_t page, uint32_t generation);  // false when write watch is off
+}

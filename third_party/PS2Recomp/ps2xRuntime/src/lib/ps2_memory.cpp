@@ -19,6 +19,7 @@
 #include <memory>
 #include "runtime/ps2_render_worker.h" // [gta-recomp]
 #include "runtime/ps2_chain_observer.h" // [gta-recomp]
+#include "runtime/ps2_write_watch.h"   // [gta-recomp]
 
 namespace
 {
@@ -433,7 +434,7 @@ PS2Memory::~PS2Memory()
 {
     if (m_rdram)
     {
-        delete[] m_rdram;
+        ps2writewatch::release(m_rdram); // [gta-recomp] runtime/ps2_write_watch.h
         m_rdram = nullptr;
     }
 
@@ -482,7 +483,7 @@ bool PS2Memory::initialize(size_t ramSize)
 {
     auto cleanup = [this]()
     {
-        delete[] m_rdram;
+        ps2writewatch::release(m_rdram); // [gta-recomp]
         delete[] m_scratchpad;
         delete[] iop_ram;
         delete[] m_gsVRAM;
@@ -522,8 +523,7 @@ bool PS2Memory::initialize(size_t ramSize)
     try
     {
         // Allocate main RAM
-        m_rdram = new uint8_t[ramSize];
-        std::memset(m_rdram, 0, ramSize);
+        m_rdram = ps2writewatch::allocate(ramSize); // [gta-recomp] zeroed; watched for writes (runtime/ps2_write_watch.h)
 
         // Allocate scratchpad
         m_scratchpad = new uint8_t[PS2_SCRATCHPAD_SIZE];
@@ -1640,6 +1640,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         channelBase == 0x10009000u || channelBase == 0x10008000u;
                     const bool transferTagData = isVifChannel && (chcr & 0x40u) != 0u;
 
+                    if (channelBase == 0x10009000u) // [gta-recomp] the pages written since the last chain (runtime/ps2_write_watch.h)
+                        ps2writewatch::fold();
                     int tagsProcessed = 0;
                     uint32_t lastTagUpper = (chcr >> 16) & 0xFFFFu;
                     // [gta-recomp] CALLed packets as segments of the flattened stream (runtime/ps2_hle_survey.h)
@@ -1792,11 +1794,23 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                                                           tagsProcessed == 1);
                         if (!transferTagData || openMark.open)
                             replace = 0u;
-                        if (replace && id == 3u && hasPayload)
-                            appendMark(replace, static_cast<uint32_t>(tagQwc) * 2u);
-                        if (hasPayload)
-                            appendData(dataAddr, tagQwc);
-                        if (replace && id == 5u && callPushed)
+                        const bool skip = (replace & ps2chain::kSkipWithMark) != 0u; // [gta-recomp] none of its bytes
+                        if (replace && skip && id == 3u && hasPayload)
+                            appendMark(replace, ps2chain::kSkippedLength);
+                        else
+                        {
+                            if (replace && id == 3u && hasPayload)
+                                appendMark(replace, static_cast<uint32_t>(tagQwc) * 2u);
+                            if (hasPayload)
+                                appendData(dataAddr, tagQwc);
+                        }
+                        if (replace && skip && id == 5u && callPushed)
+                        {
+                            appendMark(replace, ps2chain::kSkippedLength);
+                            --asp; // on at the return address, as if the CALLed packet had returned
+                            tagAddr = asp == 0u ? asr0 : asr1;
+                        }
+                        else if (replace && id == 5u && callPushed)
                         {
                             appendMark(replace, 0u); // the length when its RET comes
                             openMark = {true, chainBuf.size() - 12u, chainBuf.size(), asp - 1u};
