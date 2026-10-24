@@ -36,6 +36,9 @@ public:
     // [gta-recomp] For the hardware renderer: the whole texture of `state` (TEX0/TEXA/current CLUT) as
     // RGBA8 (PS2 values, 0x80 = 1.0), width x height = state.textureWidth x textureHeight.
     void DecodeTexture(const GSDrawState &state, std::vector<uint32_t> &out);
+    // [gta-recomp] The same from texels already fetched (raw values as a VRAM read returns them, width x height, row by
+    // row) - docs/FULLY_NATIVE.md step 3c: a texture decoded from the upload that wrote it
+    void DecodeTextureFromTexels(const GSDrawState &state, const std::vector<uint32_t> &texels, std::vector<uint32_t> &out);
     uint64_t ClutHash(const GSTex0Reg &tex0) const;
     // [gta-recomp] A CLUT load (TEX0.CLD rules as LoadClut) whose source pixels come from a linear rectangle - the data of
     // the upload that wrote them (rect: rectW x rectH pixels of 2 or 4 bytes from the CLUT buffer's origin) - instead of
@@ -62,6 +65,7 @@ private:
     void WritePixel(const GSDrawState &state, int x, int y, int z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog);
     uint32_t SampleTexture(const GSDrawState &state, float s, float t, float q, uint16_t u, uint16_t v);
     uint32_t LookupCLUT(const GSDrawState &state, uint8_t index, uint8_t cpsm, uint8_t csm, uint8_t csa, uint8_t sourcePsm);
+    uint32_t convertTexel(const GSDrawState &state, uint32_t raw); // [gta-recomp] DecodeTexture's per-texel step
 
     void PerformLocalToLocalTransfer();
     void PerformLocalToHostTransfer();

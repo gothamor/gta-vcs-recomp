@@ -1222,37 +1222,41 @@ void GSCpuBackend::DecodeTexture(const GSDrawState &state, std::vector<uint32_t>
     const int w = state.textureWidth, h = state.textureHeight;
     out.resize(static_cast<size_t>(w) * h);
     for (int y = 0; y < h; ++y)
-    {
         for (int x = 0; x < w; ++x)
-        {
-            u32 v = ReadTextureVramUnlocked(tex.psm, tex.tbp0, tex.tbw, x, y);
-            switch (tex.psm)
-            {
-            case GS_PSM_CT32:
-            case GS_PSM_Z32:
-            case GS_PSM_CT24:
-            case GS_PSM_Z24:
-                v = applyTexa(state.texa, tex.psm, v);
-                break;
-            case GS_PSM_CT16:
-            case GS_PSM_CT16S:
-            case GS_PSM_Z16:
-            case GS_PSM_Z16S:
-                v = applyTexa(state.texa, tex.psm, Rgba5551ToRgba8888(v));
-                break;
-            case GS_PSM_T8:
-            case GS_PSM_T8H:
-            case GS_PSM_T4:
-            case GS_PSM_T4HL:
-            case GS_PSM_T4HH:
-                v = LookupCLUT(state, static_cast<u8>(v), tex.cpsm, tex.csm, tex.csa, tex.psm);
-                break;
-            default:
-                v = 0xFFFF00FFu;
-                break;
-            }
-            out[static_cast<size_t>(y) * w + x] = v;
-        }
+            out[static_cast<size_t>(y) * w + x] = convertTexel(state, ReadTextureVramUnlocked(tex.psm, tex.tbp0, tex.tbw, x, y));
+}
+
+void GSCpuBackend::DecodeTextureFromTexels(const GSDrawState &state, const std::vector<uint32_t> &texels, std::vector<uint32_t> &out)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    out.resize(texels.size());
+    for (size_t i = 0; i < texels.size(); ++i)
+        out[i] = convertTexel(state, texels[i]);
+}
+
+uint32_t GSCpuBackend::convertTexel(const GSDrawState &state, uint32_t v)
+{
+    const auto &tex = state.context.tex0;
+    switch (tex.psm)
+    {
+    case GS_PSM_CT32:
+    case GS_PSM_Z32:
+    case GS_PSM_CT24:
+    case GS_PSM_Z24:
+        return applyTexa(state.texa, tex.psm, v);
+    case GS_PSM_CT16:
+    case GS_PSM_CT16S:
+    case GS_PSM_Z16:
+    case GS_PSM_Z16S:
+        return applyTexa(state.texa, tex.psm, Rgba5551ToRgba8888(v));
+    case GS_PSM_T8:
+    case GS_PSM_T8H:
+    case GS_PSM_T4:
+    case GS_PSM_T4HL:
+    case GS_PSM_T4HH:
+        return LookupCLUT(state, static_cast<u8>(v), tex.cpsm, tex.csm, tex.csa, tex.psm);
+    default:
+        return 0xFFFF00FFu;
     }
 }
 

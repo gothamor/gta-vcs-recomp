@@ -2490,6 +2490,107 @@ namespace
             ++m_texStateVersion;
         }
 
+        // [gta-recomp] docs/FULLY_NATIVE.md step 3c: a texture decoded on a cache miss from the queued upload that wrote it,
+        // not from CPU VRAM. Each texel is read at its own VRAM address (GSMem::PixelBits) out of the upload's pixels at
+        // theirs - the GS's own relation between the two formats, so a T8 texture the game sent as CT32 decodes too -
+        // then converted as DecodeTexture does (CLUT / TEXA). Used when one queued upload is the latest writer of every
+        // block the texture reads and holds every texel; otherwise VRAM as before. PS2X_HW_DECODE_FROM_UPLOAD=0: always
+        // VRAM. PS2X_HW_DECODE_VERIFY=1: the VRAM decode runs as well and every pixel is compared.
+        bool decodeFromQueuedUpload(const GSDrawState &d, std::vector<uint32_t> &out)
+        {
+            static const bool on = [] {
+                const char *e = std::getenv("PS2X_HW_DECODE_FROM_UPLOAD");
+                return !(e && e[0] == '0');
+            }();
+            static const bool verify = std::getenv("PS2X_HW_DECODE_VERIFY") != nullptr;
+            if (!on || m_pendingUploads.empty())
+                return false;
+            const GSTex0Reg &t = d.context.tex0;
+            const uint32_t w = d.textureWidth, h = d.textureHeight;
+            m_scratchRead.clear();
+            rectBlocks(t.psm, t.tbp0, t.tbw, 0u, 0u, w, h, m_scratchRead, nullptr);
+            const PendingUpload *source = soleQueuedWriter(m_scratchRead);
+            if (!source)
+                return false;
+            const GSTransferCommand &c = source->cmd;
+            const uint32_t ubits = static_cast<uint32_t>(transferBitsPerPixel(c.bitbltbuf.dpsm));
+            if (ubits != 32u && ubits != 16u && ubits != 8u && ubits != 4u)
+                return false;
+            // the upload's pixels by VRAM address (in units of its own pixels)
+            const uint32_t uw = c.trxreg.rrw, uh = c.trxreg.rrh;
+            uint32_t lo = ~0u, hi = 0u;
+            for (uint32_t pass = 0; pass < 2u; ++pass)
+            {
+                for (uint32_t v = 0; v < uh; ++v)
+                    for (uint32_t u = 0; u < uw; ++u)
+                    {
+                        uint32_t bit = 0, width = 0;
+                        if (!GSMem::PixelBits(c.bitbltbuf.dpsm, c.bitbltbuf.dbp, c.bitbltbuf.dbw, c.trxpos.dsax + u, c.trxpos.dsay + v, bit, width))
+                            return false;
+                        const uint32_t key = bit / ubits;
+                        if (pass == 0u)
+                        {
+                            lo = std::min(lo, key);
+                            hi = std::max(hi, key);
+                        }
+                        else
+                            m_scratchPixelAt[key - lo] = static_cast<int32_t>(v * uw + u);
+                    }
+                if (pass == 0u)
+                {
+                    if (lo > hi || hi - lo > (64u << 20) / 4u)
+                        return false;
+                    m_scratchPixelAt.assign(hi - lo + 1u, -1);
+                }
+            }
+            // each texel's bits out of the upload's pixel holding them
+            thread_local std::vector<uint32_t> texels;
+            texels.resize(static_cast<size_t>(w) * h);
+            const uint8_t *bytes = source->data.data();
+            const size_t dataBits = source->data.size() * 8u;
+            for (uint32_t y = 0; y < h; ++y)
+                for (uint32_t x = 0; x < w; ++x)
+                {
+                    uint32_t bit = 0, width = 0;
+                    if (!GSMem::PixelBits(t.psm, t.tbp0, t.tbw, x, y, bit, width) || width > 32u)
+                        return false;
+                    const uint32_t key = bit / ubits, within = bit % ubits;
+                    if (key < lo || key > hi || within + width > ubits || m_scratchPixelAt[key - lo] < 0)
+                        return false; // a texel the upload does not hold
+                    const size_t at = static_cast<size_t>(m_scratchPixelAt[key - lo]) * ubits + within;
+                    if (at + width > dataBits)
+                        return false;
+                    uint64_t word = 0;
+                    std::memcpy(&word, bytes + at / 8u, std::min<size_t>(8u, source->data.size() - at / 8u));
+                    texels[static_cast<size_t>(y) * w + x] = static_cast<uint32_t>((word >> (at % 8u)) & ((width >= 32u) ? 0xFFFFFFFFull : ((1ull << width) - 1ull)));
+                }
+            m_cpu.DecodeTextureFromTexels(d, texels, out);
+            ++m_decodeFromUpload;
+            if (c.bitbltbuf.dpsm != t.psm)
+                ++m_decodeCrossFormat;
+            if (verify)
+            {
+                std::vector<uint32_t> fromVram;
+                materializeRectKeepTransfer(t.psm, t.tbp0, t.tbw, 0u, 0u, w, h);
+                m_cpu.DecodeTexture(d, fromVram);
+                const bool same = fromVram == out;
+                ++(same ? m_decodeVerifySame : m_decodeVerifyDiffer);
+                if (!same && m_decodeVerifyDiffer <= 8u)
+                {
+                    size_t k = 0;
+                    while (k < out.size() && k < fromVram.size() && out[k] == fromVram[k])
+                        ++k;
+                    std::fprintf(stderr, "[gs-hw] texture from upload differs: tbp %u tbw %u psm %u %ux%u from upload dpsm %u %ux%u at (%u, %u); "
+                                         "first at texel %zu: %08x vs VRAM %08x\n", t.tbp0, t.tbw, t.psm, w, h, c.bitbltbuf.dpsm, uw, uh,
+                                 c.trxpos.dsax, c.trxpos.dsay, k, k < out.size() ? out[k] : 0u, k < fromVram.size() ? fromVram[k] : 0u);
+                }
+                if ((m_decodeVerifySame + m_decodeVerifyDiffer) % 500u == 0u)
+                    std::fprintf(stderr, "[gs-hw] textures from upload checked: %llu the same as from VRAM, %llu differ\n",
+                                 (unsigned long long)m_decodeVerifySame, (unsigned long long)m_decodeVerifyDiffer);
+            }
+            return true;
+        }
+
         // [gta-recomp] docs/FULLY_NATIVE.md step 3: a CLUT load reads its palette from the queued upload that wrote it - the
         // linear rectangle the game sent - instead of writing that upload (and every queued upload overlapping it) into
         // CPU VRAM to read it back. VCS uploads each texture's CLUT with the texture on every bind, so this was ~80% of
@@ -2513,21 +2614,7 @@ namespace
             const uint32_t w = csm2 ? (eightBit ? 256u : 16u) : (eightBit ? 16u : 8u), h = csm2 ? 1u : (eightBit ? 16u : 2u);
             m_scratchRead.clear();
             rectBlocks(tex0.cpsm, tex0.cbp, bw, x0, y0, w, h, m_scratchRead, nullptr);
-            const PendingUpload *source = nullptr;
-            for (uint16_t b : m_scratchRead)
-            {
-                const PendingUpload *latest = nullptr;
-                uint64_t latestId = 0;
-                for (uint64_t id : m_blockUploads[b])
-                    if (const PendingUpload *u = pendingById(id); u && (!latest || id > latestId))
-                    {
-                        latest = u;
-                        latestId = id;
-                    }
-                if (!latest || (source && latest != source))
-                    return false; // written before the queue, or by several queued uploads
-                source = latest;
-            }
+            const PendingUpload *source = soleQueuedWriter(m_scratchRead);
             if (!source)
                 return false;
             const GSTransferCommand &c = source->cmd;
@@ -2888,6 +2975,28 @@ namespace
             return u.done ? nullptr : &u;
         }
 
+        // [gta-recomp] The queued upload that is the latest writer of every one of these blocks, if one is (none: a block
+        // was written before the queue, or its latest writers differ)
+        const PendingUpload *soleQueuedWriter(const std::vector<uint16_t> &blocks)
+        {
+            const PendingUpload *source = nullptr;
+            for (uint16_t b : blocks)
+            {
+                const PendingUpload *latest = nullptr;
+                uint64_t latestId = 0;
+                for (uint64_t id : m_blockUploads[b])
+                    if (const PendingUpload *u = pendingById(id); u && (!latest || id > latestId))
+                    {
+                        latest = u;
+                        latestId = id;
+                    }
+                if (!latest || (source && latest != source))
+                    return nullptr;
+                source = latest;
+            }
+            return source;
+        }
+
         void retire(PendingUpload &u)
         {
             u.done = true;
@@ -3152,8 +3261,10 @@ namespace
                          (unsigned long long)m_lazyDeferred, (unsigned long long)m_lazyWritten, (unsigned long long)m_lazyDropped,
                          m_pendingUploads.size(), m_pendingBytes >> 10, (unsigned long long)m_lazyWhy[0], (unsigned long long)m_lazyWhy[1],
                          (unsigned long long)m_lazyWhy[2], (unsigned long long)m_lazyWhy[3]);
-            std::fprintf(stderr, "[upload] clut loads from the queued upload: %llu\n", (unsigned long long)m_clutFromUpload);
-            m_clutFromUpload = 0;
+            std::fprintf(stderr, "[upload] clut loads from the queued upload: %llu; textures decoded from it: %llu (%llu in another format); from VRAM: %llu\n",
+                         (unsigned long long)m_clutFromUpload, (unsigned long long)m_decodeFromUpload, (unsigned long long)m_decodeCrossFormat,
+                         (unsigned long long)m_decodeFromVram);
+            m_clutFromUpload = m_decodeFromUpload = m_decodeCrossFormat = m_decodeFromVram = 0;
             m_lazyDeferred = m_lazyWritten = m_lazyDropped = 0;
             for (uint64_t &w : m_lazyWhy)
                 w = 0;
@@ -3682,9 +3793,19 @@ namespace
             tc.key = key;
             tc.w = d.textureWidth;
             tc.h = d.textureHeight;
-            if (materializeRectKeepTransfer(t.psm, t.tbp0, t.tbw, 0u, 0u, d.textureWidth, d.textureHeight))
-                ++m_lazyWhy[1];
-            m_cpu.DecodeTexture(d, tc.pixels);
+            if (!decodeFromQueuedUpload(d, tc.pixels)) // [gta-recomp] step 3c
+            {
+                if (materializeRectKeepTransfer(t.psm, t.tbp0, t.tbw, 0u, 0u, d.textureWidth, d.textureHeight))
+                    ++m_lazyWhy[1];
+                m_cpu.DecodeTexture(d, tc.pixels);
+                ++m_decodeFromVram;
+                static const bool stats = std::getenv("PS2X_HW_UPSTATS") != nullptr;
+                static int logged = 0;
+                if (stats && logged++ < 12)
+                    std::fprintf(stderr, "[upload] texture from VRAM: tbp %u tbw %u psm %u %ux%u (%s)\n", t.tbp0, t.tbw, t.psm, d.textureWidth,
+                                 d.textureHeight, m_pendingUploads.empty() ? "nothing queued" : "not one queued upload's");
+
+            }
             f.cmds.push_back({CmdType::TexCreate, static_cast<uint32_t>(f.textures.size())});
             f.textures.push_back(std::move(tc));
             m_texLru[key] = m_frameIndex;
@@ -4023,6 +4144,9 @@ namespace
         size_t m_pendingBytes = 0;
         uint64_t m_lazyDeferred = 0, m_lazyWritten = 0, m_lazyDropped = 0;
         uint64_t m_clutFromUpload = 0, m_clutVerifySame = 0, m_clutVerifyDiffer = 0; // [gta-recomp] loadClutFromQueuedUpload
+        uint64_t m_decodeFromUpload = 0, m_decodeVerifySame = 0, m_decodeVerifyDiffer = 0; // [gta-recomp] decodeFromQueuedUpload
+        uint64_t m_decodeCrossFormat = 0, m_decodeFromVram = 0;
+        std::vector<int32_t> m_scratchPixelAt; // decodeFromQueuedUpload: upload pixel index by VRAM address
         uint64_t m_lazyWhy[4]{}; // what forced queued uploads out: clut load, texture decode, direct upload, other
         std::unordered_map<uint32_t, DepthInfo> m_depthBufs; // zbp -> format / width
 

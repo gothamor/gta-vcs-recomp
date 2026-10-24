@@ -21,7 +21,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 |---|---|---|---|
 | 1 | The last GS draws | S-M | done 2026-10-24 (3 render-target reads left for step 3) |
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
-| 3 | Textures and render targets without GS memory | L | in progress: 3a, 3b done 2026-10-24 (3c, 3d planned) |
+| 3 | Textures and render targets without GS memory | L | in progress: 3a-3c done 2026-10-24 (3d planned) |
 | 4 | Draw-call replay (3D without building packets) | M-L | planned |
 | 5 | An empty chain | M | planned |
 
@@ -82,9 +82,9 @@ Phases:
   copy goes only if the queued upload can point at the pixels where they arrive - the chain's copy, alive while the
   chain is processed, with the uploads still queued at its end copied then - which needs the image continuation to
   reach the GS without being re-tagged into a buffer of its own (a GS front-end entry point: a full rebuild).
-- **3c - textures decoded from the upload data**: the cache-miss decode reads the upload's linear data instead of
-  VRAM (T4 / T8 / CT32 / CT16, and the T8-uploaded-as-CT32 case, which needs the GS's swizzle relation between the
-  two formats). Then a normal frame needs no emulated VRAM for textures at all.
+- **3c - textures decoded from the upload data** (done 2026-10-24): the cache-miss decode reads the upload's data
+  instead of VRAM. A normal frame now needs no emulated VRAM for textures; the loading screens' art still goes
+  through it. Details below.
 - **3d - identity by raster, not by VRAM address**: textures keyed by the game's raster (source address + format +
   content) from the bind call, so draws made without packets (steps 4 and 5) can name their texture; render targets
   named by what they are (frame, bloom buffers, reflection map, radar) rather than by FBP, at the window's resolution
@@ -107,6 +107,19 @@ the queue's buffers are reused; the hash runs four lanes. Worker profile on the 
 (allocator and `memset` gone from the top, `memmove` 4.6% -> 3.7%). A/B against the 3a build, two alternating rounds:
 standing worker 3.7 -> 3.4 and ~4.3 -> 3.8 ms; the drive 10.6 -> 8.8 ms in one round, level in the other (route
 variance). Reference scenes ok, tour classes unchanged.
+
+**3c done 2026-10-24.** On a texture cache miss, `decodeFromQueuedUpload` takes the queued upload that is the latest
+writer of every block the texture reads (the CLUT's rule) and reads each texel's bits out of it at the texel's own VRAM
+address: `GSMem::PixelBits` gives a pixel's first bit and width in VRAM with the same swizzle tables as the reads and
+writes, the upload's pixels are indexed by theirs, so a texture read in another format than it was sent in (T8 sent as
+CT32) decodes the way the GS would. The texels then go through `DecodeTexture`'s own conversion (CLUT / TEXA,
+`GSCpuBackend::DecodeTextureFromTexels`). Checked with `PS2X_HW_DECODE_VERIFY=1` over the reference scenes: every one
+of ~4,100 decodes the same as from VRAM. Over the scenes 4,124 decodes came from uploads and 4 from VRAM - the loading
+screen's art (T8 512x512 at TBP 8960), whose upload arrives in pieces and is written directly; while driving none from
+VRAM, and 0-36 uploads a 5 s window written into it. No texture in these runs was read in another format than it was
+sent in, so that case is handled but not yet exercised. Reference scenes ok; tour unchanged (the known fall-through
+point at (-925, 1175) classed "water" this run - the same fall, landing in a water state). `PS2X_HW_DECODE_FROM_UPLOAD=0`
+= from VRAM.
 
 ### 4. Draw-call replay
 

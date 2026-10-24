@@ -552,6 +552,10 @@ namespace GSMem
     // Shares swizzle, VRAM wrapping, and lane extraction with the direct reads.
     u32 ReadTexture(TexturePageCache& cache, const u8* data, u32 psm, u32 bp, u32 bw, u32 x, u32 y);
 
+	// [gta-recomp] Where pixel (x, y) of a buffer at bp / bw in psm lives: its first bit in VRAM (wrapped at 4 MB) and its
+	// width in bits - the same addressing as the reads and writes. False for formats without a table.
+	bool PixelBits(u32 psm, u32 bp, u32 bw, u32 x, u32 y, u32& bit, u32& width);
+
 	void WriteCT32(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 value);
 	void WriteZ32(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 value);
 

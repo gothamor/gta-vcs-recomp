@@ -202,6 +202,10 @@ dropped on uploads (lazy render-target patching).
 - [x] **Streamed uploads cheaper** (2026-10-24, FULLY_NATIVE.md step 3b): PATH2 packets processed in place, packet / upload
       buffers reused, a four-lane upload hash; render worker busy on the drive ~59% -> ~50% of samples, standing worker
       -0.3 to -0.5 ms (A/B, alternating).
+- [x] **Textures decoded from their uploads** (2026-10-24, FULLY_NATIVE.md step 3c): a texture cache miss reads the
+      queued upload's data at each texel's VRAM address (`GSMem::PixelBits`) instead of emulated VRAM; ~4,100 decodes over
+      the reference scenes identical to VRAM's. Left in VRAM: the loading screen's art (its upload arrives in pieces).
+      `PS2X_HW_DECODE_FROM_UPLOAD=0` = from VRAM.
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -475,6 +479,7 @@ dropped on uploads (lazy render-target patching).
 | `VCS_LOADING_NATIVE=0` | loading screens drawn into the PS2 frame buffer instead of the native layer |
 | `PS2X_HW_PATH2_PACKED=0` | PATH2 draw packets (Im2D, effect strips) through the GS front end vertex by vertex instead of recorded whole |
 | `PS2X_TRACE_PATH2_TAGS=1` | PATH2 (VIF DIRECT) packets by the shape of their first GIFtag, and the register sequence of A+D packets that draw, every 5 s (`[path2]`) |
+| `PS2X_HW_DECODE_FROM_UPLOAD=0`, `PS2X_HW_DECODE_VERIFY=1` | textures decoded from emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] textures from upload`) |
 | `PS2X_HW_CLUT_FROM_UPLOAD=0`, `PS2X_HW_CLUT_VERIFY=1` | CLUT loads read emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] clut from upload`) |
 | `VCS_TRACE_IM2D_DELAY=s`, `VCS_TRACE_IM2D_STACK=1` | start the Im2D trace after s seconds (default 30); print the guest stack's return addresses per call |
 | `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier did not find (positions) |

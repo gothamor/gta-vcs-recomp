@@ -258,6 +258,35 @@ namespace GSMem
         }
     }
 
+    namespace // [gta-recomp] PixelBits
+    {
+        template <PixelStorageMode psm, typename Table>
+        void pixelBitsOf(const Table& table, u32 bp, u32 bw, u32 x, u32 y, u32& bit, u32& width)
+        {
+            const uint64_t bits = static_cast<uint64_t>(PixelStorageTraits<psm>::Address(table, bp, bw, x, y)) * UnpackedBitWidth(psm) +
+                             PixelStorageTraits<psm>::BitOffset();
+            bit = static_cast<u32>(bits % (static_cast<uint64_t>(MEMORY_SIZE) * 8u));
+            width = static_cast<u32>(BitsPerPixel(psm));
+        }
+    }
+
+    bool PixelBits(u32 psm, u32 bp, u32 bw, u32 x, u32 y, u32& bit, u32& width)
+    {
+        switch (static_cast<PixelStorageMode>(psm & 0x3Fu))
+        {
+        case C32: pixelBitsOf<C32>(PageTableC32, bp, bw, x, y, bit, width); return true;
+        case C24: pixelBitsOf<C24>(PageTableC32, bp, bw, x, y, bit, width); return true;
+        case C16: pixelBitsOf<C16>(PageTableC16, bp, bw, x, y, bit, width); return true;
+        case C16S: pixelBitsOf<C16S>(PageTableC16S, bp, bw, x, y, bit, width); return true;
+        case P8: pixelBitsOf<P8>(PageTableP8, bp, bw, x, y, bit, width); return true;
+        case P4: pixelBitsOf<P4>(PageTableP4, bp, bw, x, y, bit, width); return true;
+        case P8H: pixelBitsOf<P8H>(PageTableC32, bp, bw, x, y, bit, width); return true;
+        case P4HL: pixelBitsOf<P4HL>(PageTableC32, bp, bw, x, y, bit, width); return true;
+        case P4HH: pixelBitsOf<P4HH>(PageTableC32, bp, bw, x, y, bit, width); return true;
+        default: return false;
+        }
+    }
+
     void WriteCT32(u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 value)
     {
         PixelStorageTraits<C32>::Write(PageTableC32, data, bp, bw, x, y, value);
