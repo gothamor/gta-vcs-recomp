@@ -26,8 +26,7 @@ def step(title):
 
 
 def run_logged(cmd, log, what):
-    with open(log, "w", encoding="utf-8") as f:
-        code = subprocess.run(cmd, cwd=tc.ROOT, stdout=f, stderr=subprocess.STDOUT).returncode
+    code = tc.run_with_progress(cmd, log, "[recompile] " + what)
     if code != 0:
         print(tc.tail(log))
         tc.fail(f"{what} failed (full log: {os.path.relpath(log, tc.ROOT)})")

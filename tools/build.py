@@ -8,6 +8,9 @@
                                                 rebuilds), lto (ThinLTO), pgo (ThinLTO + profile-guided: trains first
                                                 when build/pgo/vcs.profdata is missing or with --train)
 
+Progress: every build step shows `[build] <target> done/total %, elapsed, ~time left` (Ninja's step count; redrawn in
+place on a terminal, a line per 5% / minute otherwise); CMake configure and the recompiler show their elapsed time.
+
 PGO training: an instrumented build in build/pgo-gen plays tools/bench.py (city spots, an AI drive) and the
 reference scenes' boot / flyover / cutscene (tools/scenes.py); the profiles go to build/pgo/vcs.profdata. A profile
 from older code still works: the functions that changed are optimised as without one.
@@ -106,7 +109,8 @@ def iop_tests(env):
         subprocess.check_call(["cmake", "-S", os.path.join(tc.ROOT, "third_party", "PS2Recomp", "ps2xIOP"), "-B", out,
                                "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_IOP_BUILD_TESTS=ON",
                                "-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl"], env=env)
-    subprocess.check_call(["cmake", "--build", out, "--target", "ps2_iop_spu2_tests"], env=env)
+    if not tc.cmake_build(env, "ps2_iop_spu2_tests", "build_iop_tests.log", build_dir=out):
+        return 1
     return subprocess.call([tc.exe(os.path.join(out, "ps2_iop_spu2_tests"))])
 
 

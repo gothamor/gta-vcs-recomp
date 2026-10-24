@@ -13,6 +13,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build")
@@ -75,6 +77,110 @@ def tail(path, lines=20):
             return "".join(f.readlines()[-lines:])
     except OSError:
         return ""
+
+
+# ---- progress ---------------------------------------------------------------------------------------------------
+def _duration(seconds):
+    seconds = int(seconds)
+    return "%dh%02dm" % (seconds // 3600, seconds // 60 % 60) if seconds >= 3600 else "%dm%02ds" % (seconds // 60, seconds % 60)
+
+
+class Progress:
+    """One status line for a long step: `[build] 1234/10512 11%  3m12s, ~24m left  compiling`.
+
+    On a terminal the line is redrawn in place every second (a timer keeps it moving while the tool is quiet, e.g.
+    a ThinLTO link); when stdout is a pipe or a file it prints a line at every 5% and at least once a minute.
+    Steps without a count (CMake configure, the recompiler) show the elapsed time only. Use as a context manager.
+    """
+
+    def __init__(self, label):
+        self.label = label
+        self.done = self.total = 0
+        self.note = ""
+        self.start = time.time()
+        self.tty = sys.stdout.isatty()
+        self.lock = threading.Lock()
+        self.shown = ""  # what the in-place line holds (a terminal)
+        self.last_print = self.start
+        self.last_pct = -5
+        self.stop = threading.Event()
+        self.timer = threading.Thread(target=self._tick, daemon=True)
+
+    def __enter__(self):
+        self.timer.start()
+        return self
+
+    def __exit__(self, kind, value, trace):
+        self.stop.set()
+        self.timer.join()
+        with self.lock:
+            self._clear()
+
+    def _text(self):
+        elapsed = time.time() - self.start
+        if self.total:
+            text = "%s %d/%d %d%%  %s" % (self.label, self.done, self.total, 100 * self.done // self.total, _duration(elapsed))
+            if 0 < self.done < self.total and elapsed > 10:
+                text += ", ~%s left" % _duration(elapsed * (self.total - self.done) / self.done)
+        else:
+            text = "%s %s" % (self.label, _duration(elapsed))
+        return text + ("  " + self.note if self.note else "")
+
+    def _clear(self):
+        if self.tty and self.shown:
+            sys.stdout.write("\r" + " " * len(self.shown) + "\r")
+            sys.stdout.flush()
+            self.shown = ""
+
+    def _draw(self, force=False):
+        now = time.time()
+        if self.tty:
+            text = self._text()
+            width = shutil.get_terminal_size((120, 20)).columns - 1
+            text = text[:width]
+            sys.stdout.write("\r" + text + " " * max(0, len(self.shown) - len(text)))
+            sys.stdout.flush()
+            self.shown = text
+            return
+        pct = 100 * self.done // self.total if self.total else -1
+        if force or pct >= self.last_pct + 5 or now - self.last_print >= 60:
+            print(self._text())
+            self.last_print = now
+            if pct >= 0:
+                self.last_pct = pct - pct % 5
+
+    def _tick(self):
+        while not self.stop.wait(1.0):
+            with self.lock:
+                self._draw()
+
+    def update(self, done=None, total=None, note=None):
+        with self.lock:
+            if done is not None:
+                self.done = done
+            if total is not None:
+                self.total = total
+            if note is not None:
+                self.note = note
+            self._draw()
+
+    def message(self, text):
+        """A line printed above the status line (errors, link steps)."""
+        with self.lock:
+            self._clear()
+            print(text, end="" if text.endswith("\n") else "\n")
+            self._draw()
+
+    def summary(self):
+        return "%s %s" % (self.label, _duration(time.time() - self.start)) + (" (%d steps)" % self.total if self.total else "")
+
+
+def run_with_progress(cmd, log, label, cwd=ROOT, env=None):
+    """Runs `cmd` with its output to `log` under an elapsed-time line; returns the exit code."""
+    with open(log, "w", encoding="utf-8") as f, Progress(label) as progress:
+        code = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
+    print(progress.summary())
+    return code
 
 
 # ---- compiler environment ---------------------------------------------------------------------------------------
@@ -159,27 +265,37 @@ def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
         cmd += ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
     print("[build] configuring " + os.path.relpath(build_dir, ROOT) + "".join(" %s=%s" % kv for kv in (defines or {}).items()))
     log = os.path.join(BUILD, "configure.log")
-    with open(log, "w", encoding="utf-8") as f:
-        if subprocess.run(cmd, cwd=ROOT, env=env, stdout=f, stderr=subprocess.STDOUT).returncode != 0:
-            print(tail(log, 30))
-            fail("CMake configure failed (full log: build/configure.log)")
+    if run_with_progress(cmd, log, "[build] configure", env=env) != 0:
+        print(tail(log, 30))
+        fail("CMake configure failed (full log: build/configure.log)")
 
 
 _INTERESTING = re.compile(r"error|FAILED|Linking|warning: unused")
 
 
+_NINJA_STEP = re.compile(r"^\[(\d+)/(\d+)\] (\S+)")
+
+
 def cmake_build(env, target, log_name, verbose=False, build_dir=BUILD_DIR):
-    """Builds `target`; prints errors and link steps (everything with verbose). False on failure."""
+    """Builds `target` under a progress line (Ninja's [done/total]); prints errors and link steps (everything with
+    verbose). False on failure."""
     log = os.path.join(BUILD, log_name)
     os.makedirs(BUILD, exist_ok=True)
     cmd = ["cmake", "--build", build_dir, "--target", target]
-    with open(log, "w", encoding="utf-8") as f:
+    with open(log, "w", encoding="utf-8") as f, Progress("[build] " + target) as progress:
         proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         for line in proc.stdout:
             f.write(line)
+            step = _NINJA_STEP.match(line)
+            if step:
+                verb = step.group(3)
+                progress.update(int(step.group(1)), int(step.group(2)),
+                                "linking" if verb == "Linking" else "compiling" if verb == "Building" else "")
             if verbose or (_INTERESTING.search(line) and "Wdeprecated" not in line):
-                print(line, end="")
+                progress.message(line)
         ok = proc.wait() == 0
-    if not ok:
+    if ok:
+        print(progress.summary() if progress.total else "[build] %s up to date" % target)
+    else:
         print(f"[build] {target} failed (full log: build/{log_name})")
     return ok
