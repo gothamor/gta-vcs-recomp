@@ -370,7 +370,8 @@ namespace ps2perf
             addLine(recording ? fmt("REC %s   [F4] stop   [F3] hide", csvName.c_str()) : std::string("[F4] record CSV   [F3] hide"),
                     recording ? rgba(245, 90, 90, 255) : dim);
 
-            // graph: one stacked bar per game frame, EE thread phases; frame time beyond the phases shows as the outline
+            // graph: one stacked bar per game frame, EE thread phases (they add up to the frame time); a red cap marks a
+            // frame past the scale
             const int gx = x + pad, gy = ty + pad / 2, gw = w - pad * 2;
             // scale: 0-67 ms, or 133 / 267 ms when the frames do not fit
             const float maxMs = win.p95 <= 60.0 ? 66.7f : win.p95 <= 125.0 ? 133.3f : 266.7f;
@@ -392,12 +393,13 @@ namespace ps2perf
                 if (s.frameMs > maxMs)
                     rect(bx, static_cast<float>(gy), std::max(barW - 0.5f, 1.0f), 3.0f, rgba(255, 60, 60, 255));
             }
+            // [gta-recomp] reference lines labelled in frame time (the 60 / 30 / 20 / 10 / 5 fps budgets)
             const struct { float ms; const char *label; Color c; } marks[] = {
-                {1000.0f / 60.0f, "60", rgba(120, 230, 120, 200)},
-                {1000.0f / 30.0f, "30", rgba(240, 210, 90, 200)},
-                {50.0f, "20", rgba(245, 100, 90, 200)},
-                {100.0f, "10", rgba(245, 100, 90, 200)},
-                {200.0f, "5", rgba(245, 100, 90, 200)},
+                {1000.0f / 60.0f, "16.7 ms", rgba(120, 230, 120, 200)},
+                {1000.0f / 30.0f, "33.3 ms", rgba(240, 210, 90, 200)},
+                {50.0f, "50 ms", rgba(245, 100, 90, 200)},
+                {100.0f, "100 ms", rgba(245, 100, 90, 200)},
+                {200.0f, "200 ms", rgba(245, 100, 90, 200)},
             };
             for (const auto &m : marks)
             {
@@ -405,7 +407,9 @@ namespace ps2perf
                     continue;
                 const int my = gy + graphH - static_cast<int>(m.ms / maxMs * graphH);
                 line(gx, my, gx + gw, my, m.c);
-                text(m.label, gx + gw - textWidth(m.label, fs * 3 / 4) - 2, my - fs * 3 / 4, fs * 3 / 4, m.c);
+                const int lw = textWidth(m.label, fs * 3 / 4); // backing so the label reads over the bars
+                rect(gx + gw - lw - 4, my - fs * 3 / 4, lw + 4, fs * 3 / 4, rgba(20, 20, 25, 220));
+                text(m.label, gx + gw - lw - 2, my - fs * 3 / 4, fs * 3 / 4, m.c);
             }
             // legend
             int lx = gx;
@@ -416,7 +420,7 @@ namespace ps2perf
                 text(kPhaseNames[p], lx + fs * 3 / 4, ly, fs * 3 / 4 + 1, dim);
                 lx += textWidth(kPhaseNames[p], fs * 3 / 4 + 1) + fs * 3 / 2;
             }
-            text(fmt("last %zu frames, ms per frame (0-%.0f), lines = fps", std::min(samples.size(), kGraphSamples), maxMs).c_str(), lx, ly, fs * 3 / 4 + 1, dim);
+            text(fmt("last %zu frames, frame time 0-%.0f ms", std::min(samples.size(), kGraphSamples), maxMs).c_str(), lx, ly, fs * 3 / 4 + 1, dim);
         }
     }
 
