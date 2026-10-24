@@ -231,12 +231,22 @@ Looked at and left (measured on the drive, uncapped):
   busiest draw function `FUN_002b8ed0` through scratchpad pointers held in registers; the scratchpad path behind the
   check is already inline (section 4).
 
+### 13. Draw items (FULLY_NATIVE.md step 4c, 2026-10-25)
+
+World / model draw calls became items (one tag in the chain each). Measured even: A/B, three alternating rounds,
+`--opt none`, uncapped - driving 110.5 -> 111.3 fps, chain submission 1.12 -> 1.02 ms, worker 4.38 -> 4.29 ms; standing
+within noise. The walker's share falls by about what making the items costs (`itemDraw` ~0.5% of the game thread):
+step 4b had already taken the copy savings. Where the render worker's time goes did not change: the replay's copies
+into VU memory are ~5% of its samples (~12% of its busy time while driving), `GS::submitNative`'s ring copy 3.4%.
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker
   and the RSL observer, the write-watch fold) and the render worker's first stage (6 ms: RSL replay copying recorded
-  unpacks into VU memory, the native draws' setup) - e.g. draws replayed without going through VU memory
-  (docs/FULLY_NATIVE.md step 4).
+  unpacks into VU memory - ~12% of its busy time while driving - and the native draws' setup). Step 5 of
+  docs/FULLY_NATIVE.md (state and textures as item ops) takes the chain's share down; the replay's VU-memory round
+  trip needs the native handlers to take their inputs from the recordings (as the world handler's mesh already does)
+  - with care for the fields an UNPACK leaves alone, which later packets read.
 - **Game thread** (guest code ~80% of it now, flat: the top function 2.3%): deeper codegen (guest registers kept in host
   registers across calls), `inflate_fast` natively for streaming bursts (zlib 1.2.2, game-internals.md 8).
 - GS stage: per-upload / per-CLUT-load bookkeeping; content-derived page generations (more texture-bind memo hits).

@@ -23,7 +23,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | M | planned |
+| 5 | An empty chain | L | planned in detail 2026-10-25 (5a-5g below) |
 
 ### 1. The last GS draws
 
@@ -245,6 +245,78 @@ VIF1 or the GS front end; the emulation stays as the switchable reference.
 
 Done when: in gameplay, cutscenes and driving the frame's chain is empty (or not kicked), pictures as the packet
 path's, tour and missions clean.
+
+**What is left in the chain (2026-10-25, after step 4c).** `VCS_RSL_CENSUS=1` (top-level tags by DMA id, first
+VIFcode and data region; items counted as one tag) and `VCS_TRACE_RSL=1` (bytes built per function per frame; it runs
+with items off, so the draws' own tags are charged to the flush there):
+
+| per frame | city spot (1325, -325), standing | AI drive |
+|---|---|---|
+| top-level tags / payload qwords | ~1,000-2,000 / 28-52k | ~1,000 / 29k |
+| items (world / model draws) | ~280 tags | 120-320 |
+| texture uploads: REF + DIRECTHL to raster data (model heap, cells) | ~310 tags, ~42k qwords | ~150, ~23k |
+| state: CNT / REF + FLUSHE (UNPACKs of matrices, constants; context packets) | ~800 tags, ~4k qwords | ~400, ~2k |
+| GS register packets: CNT + DIRECTHL | ~190 tags, ~3.2k qwords | ~110, ~2.8k |
+| standalone MSCALs (setup programs), CALLs (context / cached packets) | ~100 / ~125 | ~45 / ~56 |
+| 2D: CNT + DIRECT (Im2D) | ~54 tags, ~1.3k qwords | ~56, ~1.2k |
+
+Who writes them (bytes per frame, standing / driving): Im2D `FUN_002FB690` 41 / 185 KB (103 / 797 calls); the GS
+queue senders `FUN_002F7908` 25 / 21 KB and `FUN_002F7B30` 7.6 / 6.9 KB; texture binds `FUN_002F62B8` 19 / 44 KB and
+`FUN_002F6A78` 3 / 7 KB (their uploads through `FUN_003298D8`); the texture matrix `FUN_002F7090` 5.5 / 21 KB;
+`FUN_001CEF18` 2 / 16 KB; unidentified so far: `FUN_0040C430` (5 calls, 17 KB), `FUN_0032D480` (16 calls, 14 KB),
+`FUN_0040F6C8` (1-20 calls, up to 6.6 KB), `FUN_00266868` (7 calls, 3 KB), `FUN_002F3DD0`, `FUN_002A92C0`; immediate
+geometry `FUN_002F8250` (30 calls driving); the frame's camera packet (`FUN_002F53D8` / `FUN_002F9FA0`), VU1 code
+uploads (MPG REFs into `.text`) and the root lists' fixed tags.
+
+**The plan.** Each part the way step 4c went: a hook replaces the emitter when its effect can be stated exactly, the
+effect travels as an item op in chain order, a verify mode lets the original write its packets and compares, and a
+switch brings the packets back. Two rules learnt in 4c hold throughout:
+- **Copied packets.** The game copies packet ranges and sends the copies again on later frames: `FUN_00240ED8` a
+  sector's whole draw, `FUN_002409C8` each material's setup (texture bind + GS packet) - game-internals.md 6i. An
+  item tag inside such a range would be sent again without its item. Every emitter below stays packets while a cache
+  is being filled (`g_caching`, extended to `FUN_002409C8`'s material cache), or the cached block itself becomes a
+  recorded block whose replay the worker owns.
+- **Validity at the kick.** Anything an item takes from guest RAM by reference (a REF's payload, a raster, a CALLed
+  packet) is decided after the write watch's fold and copied there if it changed - never read later on the worker.
+
+Order (by what it removes, then risk):
+- **5a - state ops** (M). Item ops without a block: VU memory writes (an UNPACK's result: address, fields, data -
+  written as the recorder writes them), MSCAL of a setup program, GS register writes (A+D pairs, sent as the
+  DIRECTHL they replace). Sources: the GS queue senders (`FUN_002F7908`, `FUN_002F7B30`), the setters (`FUN_002F7090`,
+  `FUN_001CEF18`, `FUN_002F9FA0`, `FUN_002F9CE8`), the flush's CALL / REF cases (render-context packets, the table at
+  `0x742AB0`, the instance matrix REF) as item blocks with the 4c rules, and the camera packet. Removes the CNT / REF
+  FLUSHE, CNT DIRECTHL, CNT MSCAL and most CALL rows. Prerequisite for 5c (2D needs its GS state in order).
+- **5b - textures** (L). The biggest volume: an upload becomes an item op "raster R (RAM address, psm, size, mips,
+  CLUT) into VRAM slot (TBP, TBW)"; the raster's pages decide at the kick whether its bytes are copied (write watch,
+  as blocks) or known; the worker applies it as the upload it replaces - VRAM written where something still reads VRAM
+  (render targets sharing memory with textures: FBP 420's reflection map and bloom), else straight into the texture
+  cache keyed by raster (step 3d's names), so an unchanged raster is neither copied nor swizzled nor decoded again.
+  Checked against the VRAM path (`PS2X_HW_DECODE_VERIFY`-style, every texture a frame binds). This is also where
+  `FUN_002F62B8`'s per-bind CLUT re-uploads stop costing (game-internals.md 6i "Texture streaming").
+- **5c - 2D** (M). Im2D as items from `RwIm2DRenderPrimitive` (`FUN_002FBE08` / `FUN_002FBE68`) instead of
+  `FUN_002FB690`'s CNT + DIRECT: the primitive's vertices (the 16-byte Im2D format) and the GS state from 5a; the HUD
+  layer already draws them natively from the packets (NATIVE_RENDERER.md "HUD layer", "PATH2 packets recorded
+  whole"), so this moves where the draw comes from, checked vertex by vertex against the packet path
+  (`PS2X_HW_PACKED_VERIFY`'s comparison).
+- **5d - immediate geometry and effects** (M-L, unknown until read). Identify `FUN_0040C430`, `FUN_0032D480`,
+  `FUN_0040F6C8`, `FUN_00266868`, `FUN_002F3DD0`, `FUN_002A92C0`, `FUN_002F8250` (decompile: `tools/eedecomp.py` needs
+  a JDK 25 for the installed Ghidra since its last update; the recompiled code's disassembly comments work meanwhile).
+  Prebuilt blocks become item blocks (4c); per-frame vertices item data; their VU1 programs are native already.
+- **5e - frame structure** (S-M). VU1 code uploads as "code image" ops (the native handlers check code by generation
+  in VU1 code memory: the op keeps that memory as the upload would), the camera / root lists' fixed tags, the Z clear
+  (the zclear program's strips as one native clear by target role), the three render-target reads (the reflection
+  map's copies into FBP 420, the sky's self-copy) as native passes by role (step 3d).
+- **5f - flushes with plug-in callbacks** (M). ~15% of draws while driving keep their packets because the flush calls
+  guest plug-in code (skinned peds, vehicles). Read which plug-ins (render context list `+0x114`, game-internals.md
+  6i) and port their callbacks' packet output natively, or let the callback write and take its bytes into the item
+  at the next draw call (the 4c verify mode's way of reading what the original wrote).
+- **5g - no walk** (S). When a frame's chain holds only item tags and fixed tags, the kick hands the item list to the
+  worker without walking or copying the chain (the write watch's fold stays for the blocks' validity); the walker and
+  the VIF interpreter remain the reference path (`VCS_RSL_ITEMS=0`).
+
+Expected gains, honestly: the game thread's share of handing frames over (the walk, copy, fold and bookkeeping:
+~5% while driving) shrinks with every part; the render worker gains where an op replaces VIF parsing and VU-memory
+round trips (5a, 5b), and most from 5b (texture bytes). Each part is measured A/B as 4c was.
 
 ## Not "native" but part of "done"
 

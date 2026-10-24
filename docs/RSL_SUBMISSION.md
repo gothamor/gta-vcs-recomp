@@ -181,6 +181,9 @@ Planned (kept for reference):
 
 ### Phase 2 - RSL draws replace packet draws, one category at a time
 
+Done for world and model draws as **draw items** (2026-10-25, docs/FULLY_NATIVE.md step 4c): the draw call is replaced
+whole and posts its flush, GS registers and block in chain order through one tag. The plan below was the starting point.
+
 - Order by payoff: world sectors (most draws, static), rigid models / vehicles (incl. env map), skinned peds, 0x02c0
   re-draws.
 - Per category the hook replaces the packet building (full replacement is allowed by the hook rule) and posts the
