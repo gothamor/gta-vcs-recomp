@@ -12,6 +12,7 @@ detailed knowledge lives in `docs/`:
 | [docs/PS2RECOMP_PATCHES.md](docs/PS2RECOMP_PATCHES.md) | Every change to the vendored PS2Recomp runtime, with the reason |
 | [docs/NATIVE_RENDERER.md](docs/NATIVE_RENDERER.md) | The D3D11 renderer: layers, stages, HLE method |
 | [docs/SETTINGS_MENU_WIDESCREEN.md](docs/SETTINGS_MENU_WIDESCREEN.md) | Settings registry / menu, Hor+ widescreen |
+| [docs/FULLY_NATIVE.md](docs/FULLY_NATIVE.md) | The steps left until a normal frame is fully native, with their status - the working list |
 | [docs/RSL_SUBMISSION.md](docs/RSL_SUBMISSION.md) | Plan: render submission at the RSL level (milestone 7) - draws from the game's render calls instead of DMA packets |
 | [docs/DISC.md](docs/DISC.md), [docs/CONTROLS.md](docs/CONTROLS.md) | Disc layout; keyboard / gamepad mapping |
 

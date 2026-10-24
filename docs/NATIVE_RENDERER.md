@@ -548,6 +548,24 @@ TEXFLUSH) still take the front end; the GS registers and vertex queue are left a
 - `tools/bench.py`, one run each (same build, `PS2X_HLE_PACKED=0` vs default), render worker ms: city (1325, -325)
   14.5 -> 11.7, AI drive 21.2 -> 18.2 (41.3 -> 44.9 fps); the light spots (~2-3 ms) unchanged within noise.
 
+**PATH2 packets recorded whole (2026-10-24, docs/FULLY_NATIVE.md step 1).** The game's own 2D / effect packets take
+the same route: `GS::processGIFPacket` hands a PATH2 packet to `submitPackedKick` first, which now also takes
+- Im2D's packet - one PACKED tag, ST / RGBAQ / **XYZ2** (`0x512`: a 32-bit Z, fog from the FOG register), the shape of
+  every PATH2 packet that draws (game-internals.md 6f) - and
+- A+D vertex runs: `PRIM`, then only RGBAQ / ST / UV / XYZ2 / XYZ3 writes (the effect strips); a packet with any other
+  register goes to the front end untouched (nothing written before the check).
+Q starts at 1.0 at the tag, as for every GIFtag; the registers and vertex queue are left as the per-vertex path
+leaves them. PATH2 primitives are asked about by the **HUD classifier** with their GS vertices, as `Submit` does; and
+the classifier is now asked about PATH2 draws only, in both paths: a 3D triangle (PATH1) whose corners happened to land
+on HUD vertex positions had been taken into the HUD layer and squeezed (found at 16:9 by the check below).
+`PS2X_HW_PATH2_PACKED=0` = the front end.
+- Checked with `PS2X_HW_PACKED_VERIFY=1`, which now also compares whether each vertex went to the HUD layer: a city spot
+  at noon and night, 4:3: 3.9M packets exact; 16:9 with "Screen edges" HUD: 5.14M exact.
+- GS-path draws a frame: city spot 15.8 (noon) / 18.5 (night) -> 3.0; tour subset mean 3.0, max 3.0. Left: the three
+  draws that read render target 140 - the reflection map's two copies into FBP 420 and the depth-tested self-copy over
+  the sky (their packets set state before `PRIM`) - which wait for render targets outside GS memory (FULLY_NATIVE.md
+  step 3). Reference scenes ok, tour classes unchanged.
+
 ### Stage 8 - Enhancements (M each, optional order) - internal resolution done
 
 - Internal resolution: native draws render into the same scaled render targets as the GS path, so

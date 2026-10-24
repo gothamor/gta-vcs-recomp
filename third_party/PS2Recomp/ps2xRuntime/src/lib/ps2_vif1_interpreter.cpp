@@ -32,7 +32,10 @@ enum VIFCmd : uint8_t
 
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
+#include <map>
 #include <mutex>
+#include <string>
 #include <unordered_set>
 
 // [gta-recomp] PS2X_LOG_MPG=1 logs every distinct VU1 microcode upload once;
@@ -358,6 +361,51 @@ void PS2Memory::submitVif1DirectData(const uint8_t *data, uint32_t qwCount, bool
     if (qwCount == 0u)
         return;
 
+    { // [gta-recomp] PS2X_TRACE_PATH2_TAGS=1: DIRECT packets by the shape of their first GIFtag, every 5 s
+        static const bool trace = std::getenv("PS2X_TRACE_PATH2_TAGS") != nullptr;
+        if (trace)
+        {
+            static std::map<std::string, uint64_t> shapes;
+            static auto last = std::chrono::steady_clock::now();
+            uint64_t lo, hi;
+            std::memcpy(&lo, data, 8);
+            std::memcpy(&hi, data + 8, 8);
+            const uint32_t nloop = static_cast<uint32_t>(lo & 0x7FFFu), nreg = static_cast<uint32_t>((lo >> 60) & 0xFu);
+            const uint32_t flg = static_cast<uint32_t>((lo >> 58) & 3u);
+            const uint64_t bytes = flg == 0u ? 16ull + uint64_t(nloop) * (nreg ? nreg : 16u) * 16ull : 0ull;
+            char key[160];
+            std::snprintf(key, sizeof(key), "flg %u nreg %u regs %0*llx pre %u prim 0x%03llx %s%s", flg, nreg, int(nreg ? nreg : 16),
+                          (unsigned long long)(nreg ? hi & ((1ull << (4 * nreg)) - 1ull) : hi), unsigned((lo >> 46) & 1u),
+                          (unsigned long long)((lo >> 47) & 0x7FFu), bytes == qwCount * 16ull ? "one tag" : "more",
+                          ((lo >> 15) & 1u) ? "" : " no-eop");
+            ++shapes[key];
+            if (flg == 0u && nreg == 1u && (hi & 0xFu) == 0xEu) // A+D: the register sequence of one that draws (PRIM written)
+            {
+                std::string regs;
+                bool prim = false;
+                for (uint32_t i = 0; i < nloop && i < 24u && 16u + (i + 1u) * 16u <= qwCount * 16u; ++i)
+                {
+                    uint64_t value, addr;
+                    std::memcpy(&value, data + 16u + i * 16u, 8);
+                    std::memcpy(&addr, data + 24u + i * 16u, 8);
+                    char r[32];
+                    std::snprintf(r, sizeof(r), addr == 0u ? " PRIM=%llx" : " %llx", (unsigned long long)(addr == 0u ? value : addr & 0xFFu));
+                    regs += r;
+                    prim |= (addr & 0xFFu) == 0u;
+                }
+                if (prim)
+                    ++shapes["A+D drawing, nloop " + std::to_string(nloop) + ":" + regs];
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last > std::chrono::seconds(5))
+            {
+                last = now;
+                for (const auto &[k, n] : shapes)
+                    std::fprintf(stderr, "[path2] %8llu  %s\n", (unsigned long long)n, k.c_str());
+                shapes.clear();
+            }
+        }
+    }
     submitGifPacket(GifPathId::Path2, data, qwCount * 16u, true, directHl);
     const uint32_t pendingImageQw = pendingGifImageQwc(data, qwCount * 16u);
     if (pendingImageQw != 0u)

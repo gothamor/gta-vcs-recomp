@@ -2125,14 +2125,15 @@ namespace
             if (!handled)
                 return;
             const Frame &a = *packed, &b = *perVertex;
+            // [gta-recomp] each vertex with its state and whether it went to the HUD layer (PATH2 packets are classified)
             const auto expand = [](const Frame &f) {
-                std::vector<std::pair<HwState, HwVertex>> out;
+                std::vector<std::tuple<HwState, HwVertex, bool>> out;
                 for (const Cmd &c : f.cmds)
                     if (c.type == CmdType::Draw || c.type == CmdType::HudDraw)
                     {
                         const DrawCmd &d = f.draws[c.index];
                         for (uint32_t k = 0; k < d.count; ++k)
-                            out.push_back({d.s, f.vertices[d.first + k]});
+                            out.push_back({d.s, f.vertices[d.first + k], c.type == CmdType::HudDraw});
                     }
                 return out;
             };
@@ -2142,15 +2143,32 @@ namespace
             const auto ea = expand(a), eb = expand(b);
             bool same = ea.size() == eb.size();
             for (size_t k = 0; same && k < ea.size(); ++k)
-                same = std::memcmp(&ea[k].first, &eb[k].first, sizeof(HwState)) == 0 &&
-                       std::memcmp(&ea[k].second, &eb[k].second, sizeof(HwVertex)) == 0;
+                same = std::memcmp(&std::get<0>(ea[k]), &std::get<0>(eb[k]), sizeof(HwState)) == 0 &&
+                       std::memcmp(&std::get<1>(ea[k]), &std::get<1>(eb[k]), sizeof(HwVertex)) == 0 &&
+                       std::get<2>(ea[k]) == std::get<2>(eb[k]);
             ++m_packedCheck.packets;
             (same ? m_packedCheck.exact : m_packedCheck.bad) += 1;
             if (same && drawCmds(a) != drawCmds(b)) // the same vertices and states, split into more draw calls
                 ++m_packedCheck.split;
             if (!same && m_packedCheck.bad <= 8)
-                std::fprintf(stderr, "[gs-hw] packed draw differs: %zu / %zu vertices, %zu / %zu draw commands (prim %u, %u vertices)\n",
-                             ea.size(), eb.size(), static_cast<size_t>(drawCmds(a)), static_cast<size_t>(drawCmds(b)), type, count);
+            {
+                std::fprintf(stderr, "[gs-hw] packed draw differs: %zu / %zu vertices, %zu / %zu draw commands (prim %u, %u vertices, path %u)",
+                             ea.size(), eb.size(), static_cast<size_t>(drawCmds(a)), static_cast<size_t>(drawCmds(b)), type, count, gsDrawSourcePath(gsCurrentDrawSource()));
+                for (size_t k = 0; k < std::min(ea.size(), eb.size()); ++k)
+                {
+                    const bool st = std::memcmp(&std::get<0>(ea[k]), &std::get<0>(eb[k]), sizeof(HwState)) != 0;
+                    const bool vx = std::memcmp(&std::get<1>(ea[k]), &std::get<1>(eb[k]), sizeof(HwVertex)) != 0;
+                    const bool hud = std::get<2>(ea[k]) != std::get<2>(eb[k]);
+                    if (!st && !vx && !hud)
+                        continue;
+                    std::fprintf(stderr, ": vertex %zu differs in%s%s%s, packed (%.3f, %.3f) hud %d, per vertex (%.3f, %.3f) hud %d", k,
+                                 st ? " state" : "", vx ? " vertex" : "", hud ? " HUD layer" : "", std::get<1>(ea[k]).x,
+                                 std::get<1>(ea[k]).y, int(std::get<2>(ea[k])), std::get<1>(eb[k]).x, std::get<1>(eb[k]).y,
+                                 int(std::get<2>(eb[k])));
+                    break;
+                }
+                std::fprintf(stderr, "\n");
+            }
             if (m_packedCheck.packets % 20000u == 0u)
                 std::fprintf(stderr, "[gs-hw] packed draws checked: %llu packets, %llu exact (%llu split differently), %llu differ\n",
                              (unsigned long long)m_packedCheck.packets, (unsigned long long)m_packedCheck.exact,
@@ -2177,6 +2195,12 @@ namespace
             for (uint32_t i = 0; i < count; ++i)
                 hv[i] = hwVertex(state, vertices[i], ofx, ofy, zs);
             const uint32_t source = gsCurrentDrawSource() | kGsDrawSourcePacked;
+            // [gta-recomp] PATH2 (the game's Im2D: HUD, text, menus, sprites) is asked about by the HUD classifier, with each
+            // primitive's GS vertices as the front end's Submit gives them; the VU1 reproductions' 3D packets are never HUD
+            const bool classify = gsDrawSourcePath(source) == 2u;
+            GSPrimitiveBatch prim{};
+            prim.state = state;
+            prim.vertexCount = 3;
             bool any = false;
             for (uint32_t i = 2; i < count; ++i)
             {
@@ -2187,7 +2211,13 @@ namespace
                 const uint32_t a = type == GS_PRIM_TRIFAN ? 0u : i - 2u;
                 HwVertex out[3] = {hv[a], hv[i - 1u], hv[i]};
                 any = true;
-                recordPrimitive(s, out, 3u, nullptr, ofx, ofy, source, false);
+                if (classify)
+                {
+                    prim.vertices[0] = vertices[a];
+                    prim.vertices[1] = vertices[i - 1u];
+                    prim.vertices[2] = vertices[i];
+                }
+                recordPrimitive(s, out, 3u, classify ? &prim : nullptr, ofx, ofy, source, false);
             }
             if (any)
             {
@@ -2249,7 +2279,9 @@ namespace
             if ((wide || classify) && s.fbw == 10u)
             {
                 uint8_t anchor = GSHwAnchorNone;
-                if (classify && batch)
+                // [gta-recomp] only PATH2 (the game's Im2D) is HUD: a 3D triangle whose corners happen to land on HUD vertex
+                // positions was taken into the HUD layer and squeezed (seen at 16:9 with the per-vertex path)
+                if (classify && batch && gsDrawSourcePath(source) == 2u)
                 {
                     float xy[2 * 8];
                     const uint32_t count = std::min<uint32_t>(batch->vertexCount, 8u);

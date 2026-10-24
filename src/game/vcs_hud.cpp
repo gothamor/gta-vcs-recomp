@@ -55,6 +55,11 @@ namespace vcs
         bool g_inMenu = false;   // the frontend's draw (FUN_003b53f8) to the frame kick; game thread
         constexpr uint32_t kMenuDraw = 0x003B53F8u; // the frontend / pause menu's draw, called from FUN_0021f7d8
         PS2Runtime::RecompiledFunction g_origMenuDraw = nullptr;
+        // the loading screen (FUN_0021E170, GTA's LoadingScreen: splash, text, progress bar, its own frame) to the frame
+        // kick; laid out like a menu (game-internals.md 6f)
+        constexpr uint32_t kLoadingScreen = 0x0021E170u;
+        bool g_inLoading = false; // game thread
+        PS2Runtime::RecompiledFunction g_origLoadingScreen = nullptr;
         bool g_zTest = true;     // RenderWare's ZTESTENABLE as the game last set it (off: the GS's ZTST ALWAYS)
 
         // one window for all trace lines: from 30 s after the hooks went in, VCS_TRACE_IM2D lines in total
@@ -149,13 +154,13 @@ namespace vcs
 
         void capture(uint8_t *rdram, R5900Context *ctx)
         {
-            if (!(g_inHud || g_inMenu) || !g_anchoring.load(std::memory_order_relaxed) || g_prims.size() >= 8192u)
+            if (!(g_inHud || g_inMenu || g_inLoading) || !g_anchoring.load(std::memory_order_relaxed) || g_prims.size() >= 8192u)
                 return;
             const uint32_t verts = GPR_U32(ctx, 5) & 0x01FFFFFFu;
             const uint32_t n = GPR_U32(ctx, 6);
             if (n == 0u || n > 1024u || verts + n * 16u > 0x02000000u)
                 return;
-            Prim p{1e9f, 1e9f, -1e9f, -1e9f, static_cast<uint32_t>(g_primKeys.size()), n, g_inMenu};
+            Prim p{1e9f, 1e9f, -1e9f, -1e9f, static_cast<uint32_t>(g_primKeys.size()), n, g_inMenu || g_inLoading};
             for (uint32_t i = 0; i < n; ++i)
             {
                 int16_t xy[2];
@@ -325,6 +330,14 @@ namespace vcs
             g_inMenu = true;
             g_origMenuDraw(rdram, ctx, runtime);
         }
+
+        void loadingScreen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (traceNow())
+                std::fprintf(stderr, "[im2d] --- loading screen (%08x)\n", kLoadingScreen);
+            g_inLoading = true;
+            g_origLoadingScreen(rdram, ctx, runtime);
+        }
     }
 
     void onFrameKick()
@@ -333,6 +346,7 @@ namespace vcs
             std::fprintf(stderr, "[im2d] --- frame kick\n");
         g_inHud = false;
         g_inMenu = false;
+        g_inLoading = false;
         if (g_anchoring.load(std::memory_order_relaxed))
             resolveAnchors(); // the display list goes to the GS from here on
     }
@@ -375,6 +389,10 @@ namespace vcs
             g_origMenuDraw = runtime.lookupFunction(kMenuDraw);
             if (g_origMenuDraw && !(menus && menus[0] == '0'))
                 runtime.replaceFunction(kMenuDraw, &menuDraw);
+            const char *loading = std::getenv("VCS_LOADING_NATIVE"); // 0: loading screens drawn into the frame buffer
+            g_origLoadingScreen = runtime.lookupFunction(kLoadingScreen);
+            if (g_origLoadingScreen && !(loading && loading[0] == '0'))
+                runtime.replaceFunction(kLoadingScreen, &loadingScreen);
             const char *native = std::getenv("VCS_HUD_NATIVE");
             g_layer = !(native && native[0] == '0');
             g_hooked = true;

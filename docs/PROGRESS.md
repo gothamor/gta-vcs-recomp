@@ -189,7 +189,11 @@ dropped on uploads (lazy render-target patching).
         layout and colours (scenes at 16:9 1080p against `VCS_MENU_NATIVE=0`: static scenes the same but the pause
         map, which differs by its sharper text). HUD placement default stays "Keep 4:3"; "Screen edges" is the menu
         choice Display > HUD (user's decision).
-  - [ ] Loading screens and the title menu over the flyover: not looked at yet (loading unchanged).
+  - [x] **Loading screens** in the native layer (2026-10-24; FULLY_NATIVE.md step 2): `LoadingScreen` (FUN_0021E170)
+        opens a context like the menu's (centred, full-width pieces stretched) to its frame kick. Static `loading`
+        scene 1.12 against the reference (ok); at 1080p the progress bar and its shadow draw at the output's
+        resolution instead of a scaled-up 640x448 frame. `VCS_LOADING_NATIVE=0` = into the frame buffer. There is no
+        title menu (game-internals.md 6f: the game boots into the opening sequence; the frontend is the pause menu).
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -460,6 +464,9 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_FRAME=WxH` | the native frame's size whatever the window (tests) |
 | `PS2X_HW_DUMP_ALLVERTS=1` | the F12 draw log prints every vertex of every draw |
 | `VCS_MENU_NATIVE=0` | menus drawn into the PS2 frame buffer instead of the native layer |
+| `VCS_LOADING_NATIVE=0` | loading screens drawn into the PS2 frame buffer instead of the native layer |
+| `PS2X_HW_PATH2_PACKED=0` | PATH2 draw packets (Im2D, effect strips) through the GS front end vertex by vertex instead of recorded whole |
+| `PS2X_TRACE_PATH2_TAGS=1` | PATH2 (VIF DIRECT) packets by the shape of their first GIFtag, and the register sequence of A+D packets that draw, every 5 s (`[path2]`) |
 | `VCS_TRACE_IM2D_DELAY=s`, `VCS_TRACE_IM2D_STACK=1` | start the Im2D trace after s seconds (default 30); print the guest stack's return addresses per call |
 | `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier did not find (positions) |
 | `PS2X_HW_OUTPUT=WxH` | the renderer's output size whatever the window (full-screen sizes in test runs; with `PS2X_CAPTURE_SIZE`) |

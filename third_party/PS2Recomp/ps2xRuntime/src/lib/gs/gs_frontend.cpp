@@ -715,6 +715,16 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
     if (tryProcessNativeImageUploadPacket(data, sizeBytes))
         return;
 
+    // [gta-recomp] PATH2 Im2D packets (one PACKED ST / RGBAQ / XYZ2 tag: every PATH2 packet VCS draws with) recorded whole,
+    // without the vertex-by-vertex front end, as the C++ reproductions' packets are (NATIVE_RENDERER.md "Packed draws").
+    // PS2X_HW_PATH2_PACKED=0: through the front end.
+    static const bool path2Packed = [] {
+        const char *e = std::getenv("PS2X_HW_PATH2_PACKED");
+        return !(e && e[0] == '0');
+    }();
+    if (path2Packed && (g_currentGifPath & 3u) == 2u && submitPackedKick(data, sizeBytes))
+        return;
+
     PS2_IF_AGRESSIVE_LOGS({
         const uint32_t packetIndex = s_debugGifPacketCount.fetch_add(1, std::memory_order_relaxed);
         if (packetIndex < 48u)
@@ -859,83 +869,155 @@ bool GS::submitPackedKick(const uint8_t *data, uint32_t sizeBytes) // [gta-recom
     const uint8_t flg = static_cast<uint8_t>((tagLo >> 58) & 0x3u);
     const uint32_t nreg = static_cast<uint32_t>((tagLo >> 60) & 0xFu);
     const bool pre = ((tagLo >> 46) & 1u) != 0u;
-    const uint64_t prim = (tagLo >> 47) & 0x7FFu;
-    const uint32_t type = static_cast<uint32_t>(prim & 7u);
-    // ST (2), RGBAQ (1), XYZF2 (4); one tag filling the packet
-    if (flg != GIF_FMT_PACKED || !pre || nreg != 3u || (tagHi & 0xFFFu) != 0x412u || sizeBytes != 16u + nloop * 48u ||
-        (type != GS_PRIM_TRIANGLE && type != GS_PRIM_TRISTRIP && type != GS_PRIM_TRIFAN))
-        return false;
+    const uint32_t regs = static_cast<uint32_t>(tagHi & 0xFFFu);
     thread_local std::vector<GSVertex> vertices;
     thread_local std::vector<uint8_t> kicks;
-    vertices.resize(nloop);
-    kicks.resize(nloop);
-    // as writeRegisterPacked does it, Q from 1.0 at the tag
+    vertices.clear();
+    kicks.clear();
     float s = m_curS, t = m_curT, q = 1.0f;
     uint8_t r = m_curR, g = m_curG, b = m_curB, a = m_curA;
-    for (uint32_t i = 0; i < nloop; ++i)
+    uint16_t u = m_curU, v = m_curV;
+    uint64_t prim = 0;
+    auto isTriangles = [](uint64_t p) {
+        const uint32_t type = static_cast<uint32_t>(p & 7u);
+        return type == GS_PRIM_TRIANGLE || type == GS_PRIM_TRISTRIP || type == GS_PRIM_TRIFAN;
+    };
+    // ST (2), RGBAQ (1), XYZF2 (4) - the C++ reproductions - or XYZ2 (5) - the game's Im2D packets (PATH2, FUN_002FB690);
+    // one tag filling the packet
+    const bool xyz2 = regs == 0x512u;
+    if (flg == GIF_FMT_PACKED && pre && nreg == 3u && (regs == 0x412u || xyz2) && sizeBytes == 16u + nloop * 48u &&
+        isTriangles((tagLo >> 47) & 0x7FFu))
     {
-        const uint8_t *p = data + 16u + i * 48u;
-        const uint64_t stLo = loadLE64(p), stHi = loadLE64(p + 8), cLo = loadLE64(p + 16), cHi = loadLE64(p + 24);
-        const uint64_t xLo = loadLE64(p + 32), xHi = loadLE64(p + 40);
-        const uint32_t sBits = static_cast<uint32_t>(stLo), tBits = static_cast<uint32_t>(stLo >> 32), qBits = static_cast<uint32_t>(stHi);
-        std::memcpy(&s, &sBits, 4);
-        std::memcpy(&t, &tBits, 4);
-        std::memcpy(&q, &qBits, 4);
-        if (q == 0.0f)
-            q = 1.0f;
-        r = static_cast<uint8_t>(cLo & 0xFF);
-        g = static_cast<uint8_t>((cLo >> 32) & 0xFF);
-        b = static_cast<uint8_t>(cHi & 0xFF);
-        a = static_cast<uint8_t>((cHi >> 32) & 0xFF);
-        GSVertex &v = vertices[i];
-        v = GSVertex{};
-        v.x = static_cast<float>(static_cast<uint16_t>(xLo & 0xFFFF)) / 16.0f;
-        v.y = static_cast<float>(static_cast<uint16_t>((xLo >> 32) & 0xFFFF)) / 16.0f;
-        v.z = static_cast<float>(static_cast<uint32_t>((xHi >> 4) & 0xFFFFFF));
-        v.r = r;
-        v.g = g;
-        v.b = b;
-        v.a = a;
-        v.q = q;
-        v.s = s;
-        v.t = t;
-        v.u = m_curU;
-        v.v = m_curV;
-        v.fog = static_cast<uint8_t>((xHi >> 36) & 0xFF);
-        kicks[i] = ((xHi >> 47) & 1u) ? 0u : 1u;
+        prim = (tagLo >> 47) & 0x7FFu;
+        vertices.resize(nloop);
+        kicks.resize(nloop);
+        // as writeRegisterPacked does it, Q from 1.0 at the tag
+        for (uint32_t i = 0; i < nloop; ++i)
+        {
+            const uint8_t *p = data + 16u + i * 48u;
+            const uint64_t stLo = loadLE64(p), stHi = loadLE64(p + 8), cLo = loadLE64(p + 16), cHi = loadLE64(p + 24);
+            const uint64_t xLo = loadLE64(p + 32), xHi = loadLE64(p + 40);
+            const uint32_t sBits = static_cast<uint32_t>(stLo), tBits = static_cast<uint32_t>(stLo >> 32), qBits = static_cast<uint32_t>(stHi);
+            std::memcpy(&s, &sBits, 4);
+            std::memcpy(&t, &tBits, 4);
+            std::memcpy(&q, &qBits, 4);
+            if (q == 0.0f)
+                q = 1.0f;
+            r = static_cast<uint8_t>(cLo & 0xFF);
+            g = static_cast<uint8_t>((cLo >> 32) & 0xFF);
+            b = static_cast<uint8_t>(cHi & 0xFF);
+            a = static_cast<uint8_t>((cHi >> 32) & 0xFF);
+            GSVertex &vx = vertices[i];
+            vx = GSVertex{};
+            vx.x = static_cast<float>(static_cast<uint16_t>(xLo & 0xFFFF)) / 16.0f;
+            vx.y = static_cast<float>(static_cast<uint16_t>((xLo >> 32) & 0xFFFF)) / 16.0f;
+            // XYZF2: Z in bits 4..27, F in 36..43; XYZ2: a 32-bit Z, fog from the FOG register (writeRegisterPacked)
+            vx.z = xyz2 ? static_cast<float>(static_cast<uint32_t>(xHi)) : static_cast<float>(static_cast<uint32_t>((xHi >> 4) & 0xFFFFFF));
+            vx.r = r;
+            vx.g = g;
+            vx.b = b;
+            vx.a = a;
+            vx.q = q;
+            vx.s = s;
+            vx.t = t;
+            vx.u = u;
+            vx.v = v;
+            vx.fog = xyz2 ? m_curFog : static_cast<uint8_t>((xHi >> 36) & 0xFF);
+            kicks[i] = ((xHi >> 47) & 1u) ? 0u : 1u;
+        }
     }
+    // A+D: PRIM, then vertices as register writes - RGBAQ / ST / UV, then XYZ2 (kick) or XYZ3 (no kick); the game's own
+    // full-screen effect strips (PATH2). Any other register: the front end takes the packet.
+    else if (flg == GIF_FMT_PACKED && nreg == 1u && (regs & 0xFu) == 0xEu && nloop >= 2u && sizeBytes == 16u + nloop * 16u &&
+             (loadLE64(data + 24) & 0xFFu) == GS_REG_PRIM && isTriangles(loadLE64(data + 16) & 0x7FFu))
+    {
+        prim = loadLE64(data + 16) & 0x7FFu; // (Q starts at 1.0 at the tag, as for any GIFtag)
+        for (uint32_t i = 1; i < nloop; ++i)
+        {
+            const uint64_t value = loadLE64(data + 16u + i * 16u);
+            const uint32_t reg = static_cast<uint32_t>(loadLE64(data + 24u + i * 16u) & 0xFFu);
+            if (reg == GS_REG_RGBAQ) // as writeRegister
+            {
+                r = static_cast<uint8_t>(value & 0xFF);
+                g = static_cast<uint8_t>((value >> 8) & 0xFF);
+                b = static_cast<uint8_t>((value >> 16) & 0xFF);
+                a = static_cast<uint8_t>((value >> 24) & 0xFF);
+                const uint32_t qBits = static_cast<uint32_t>(value >> 32);
+                std::memcpy(&q, &qBits, 4);
+                if (q == 0.0f)
+                    q = 1.0f;
+            }
+            else if (reg == GS_REG_ST)
+            {
+                const uint32_t sBits = static_cast<uint32_t>(value), tBits = static_cast<uint32_t>(value >> 32);
+                std::memcpy(&s, &sBits, 4);
+                std::memcpy(&t, &tBits, 4);
+            }
+            else if (reg == GS_REG_UV)
+            {
+                u = static_cast<uint16_t>(value & 0x3FFFu);
+                v = static_cast<uint16_t>((value >> 16) & 0x3FFFu);
+            }
+            else if (reg == GS_REG_XYZ2 || reg == GS_REG_XYZ3)
+            {
+                GSVertex vx{};
+                vx.x = static_cast<float>(value & 0xFFFF) / 16.0f;
+                vx.y = static_cast<float>((value >> 16) & 0xFFFF) / 16.0f;
+                vx.z = static_cast<double>((value >> 32) & 0xFFFFFFFF);
+                vx.r = r;
+                vx.g = g;
+                vx.b = b;
+                vx.a = a;
+                vx.q = q;
+                vx.s = s;
+                vx.t = t;
+                vx.u = u;
+                vx.v = v;
+                vx.fog = m_curFog;
+                vertices.push_back(vx);
+                kicks.push_back(reg == GS_REG_XYZ2 ? 1u : 0u);
+            }
+            else
+                return false; // nothing written yet
+        }
+        if (vertices.empty())
+            return false;
+    }
+    else
+        return false;
+    const uint32_t count = static_cast<uint32_t>(vertices.size());
+    const uint32_t type = static_cast<uint32_t>(prim & 7u);
     writeRegisterUnlocked(GS_REG_PRIM, prim);
     const GSPrimitiveBatch batch = buildDrawBatch(0);
-    if (!m_backend->SubmitPacked(batch.state, vertices.data(), kicks.data(), nloop))
+    if (!m_backend->SubmitPacked(batch.state, vertices.data(), kicks.data(), count))
         return false; // processGIFPacket writes PRIM again
     updatePreferredDisplaySourceForDraw(batch);
-    // the registers and the vertex queue as nloop vertex kicks leave them
-    m_curQ = nloop ? q : 1.0f;
-    if (nloop)
-    {
-        m_curS = s;
-        m_curT = t;
-        m_curR = r;
-        m_curG = g;
-        m_curB = b;
-        m_curA = a;
-    }
-    m_vtxIndex += static_cast<int>(nloop);
+    // the registers and the vertex queue as the vertex kicks leave them (attributes written after the last vertex too)
+    m_curQ = q;
+    m_curS = s;
+    m_curT = t;
+    m_curU = u;
+    m_curV = v;
+    m_curR = r;
+    m_curG = g;
+    m_curB = b;
+    m_curA = a;
+    m_vtxIndex += static_cast<int>(count);
     if (type == GS_PRIM_TRIANGLE)
     {
-        m_vtxCount = static_cast<int>(nloop % 3u);
+        m_vtxCount = static_cast<int>(count % 3u);
         for (int i = 0; i < m_vtxCount; ++i)
-            m_vtxQueue[i] = vertices[nloop - static_cast<uint32_t>(m_vtxCount) + static_cast<uint32_t>(i)];
+            m_vtxQueue[i] = vertices[count - static_cast<uint32_t>(m_vtxCount) + static_cast<uint32_t>(i)];
     }
     else
     {
-        m_vtxCount = static_cast<int>(std::min<uint32_t>(nloop, 2u));
-        if (nloop == 1u)
+        m_vtxCount = static_cast<int>(std::min<uint32_t>(count, 2u));
+        if (count == 1u)
             m_vtxQueue[0] = vertices[0];
-        else if (nloop >= 2u)
+        else if (count >= 2u)
         {
-            m_vtxQueue[0] = type == GS_PRIM_TRIFAN ? vertices[0] : vertices[nloop - 2u];
-            m_vtxQueue[1] = vertices[nloop - 1u];
+            m_vtxQueue[0] = type == GS_PRIM_TRIFAN ? vertices[0] : vertices[count - 2u];
+            m_vtxQueue[1] = vertices[count - 1u];
         }
     }
     return true;

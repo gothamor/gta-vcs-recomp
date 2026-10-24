@@ -508,6 +508,28 @@ screen: left edge when its middle is left of 280 and it starts before 160, right
 and it ends after 480, the middle otherwise; full-width draws (fades, letterbox bars) stretch. At the frame kick the
 whole-pixel positions of its vertices go to the renderer, which finds each GS primitive's element by them.
 
+**What reaches the GS as PATH2** (2026-10-24, `PS2X_TRACE_PATH2_TAGS=1`, decompiled with `tools/eedecomp.py`):
+- **Im2D's packet** (`FUN_002FB690`, called through `FUN_002FB9D0`): `CNT` (3n + 1 qwords) with `DIRECT 3n + 1`, one
+  PACKED GIFtag - NLOOP n, EOP, PRE with the RenderWare primitive as PRIM (`0x5D` fan / `0x5B` triangles / `0x4D`
+  untextured fan / `0x25C` context-2 strip ...), NREG 3, REGS `0x512` = ST, RGBAQ, XYZ2 - then per vertex ST (u, v
+  from the u16 fractions, Q 1.0), RGBAQ (the bytes, halved when `*0x488370`) and XYZ2 (x + 0x6C0 / y + 0x720 in
+  1/16 pixel, minus 8: the half-pixel bias; z 32-bit). Every PATH2 packet that draws in normal play has this shape
+  except a few effect strips.
+- **Effect strips** in A+D packets: `PRIM`, then per vertex `UV` / `RGBAQ` / `XYZ2` register writes (the full-screen
+  flat quads, 20 strips of 6 vertices; the reflection map's copies of FBP 140 into FBP 420, context 2, `PRIM 0x35C`
+  with UV). Packets that set other registers before their `PRIM` (TEX0, ALPHA, TEST, ...) are state.
+- The rest of PATH2 is A+D register setting and texture uploads (IMAGE).
+
+**Frames outside gameplay** (2026-10-24): `FUN_0021ED88` is the main loop around `FUN_0021E950`, the per-frame
+function (`FUN_0021CE80` begins the 3D frame - camera, clear, sky via `FUN_0018DDC0`; then the world, the 2D pass
+`FUN_0021F348`, the menu `FUN_0021F7D8` -> `FUN_003B53F8`, and `FUN_0021DAD8(1)` ends the frame). **`FUN_0021E170`
+is `LoadingScreen`**: its own frame - `FUN_0021CD20` begins it (clear), the splash full-screen through the sprite
+routine `FUN_003DFF20` (raster from `FUN_0021DBF0`), the loading texts (`*0x486E64` 1..3), the progress bar
+(`FUN_0021DFB0`, steps of 1/18 or 1/11) - and `FUN_0021DAD8(0)` ends it (kicked through `FUN_002723E8` like every
+frame). It is called from many load paths (`0x346BAC`, `0x3C817C`, `0x45F3E4`, `0x46FE98`, `FUN_0021E950` when a game
+is being loaded). **There is no title menu**: with an empty card the game goes from the loading screens straight into
+the opening sequence (the reference scenes' "flyover"), where Start does nothing; the frontend menu is the pause menu.
+
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 
 From `PS2X_HW_DUMP` / F12 with `PS2X_HW_DUMP_BATCHES=4` at the hospital (-884, -470), noon and 20:00; the draw
