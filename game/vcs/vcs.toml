@@ -738,6 +738,11 @@ skip = [
 "0x46e238" = "0x10001010"
 "0x46e29c" = "0x10001010"
 
+[patches]
+instructions = [
+  { address = "0x001F2158", value = "0x3C013A83" },
+]
+
 [[jump_tables.table]]
 address = "0x4c2ab0"
 entries = [

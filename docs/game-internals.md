@@ -135,8 +135,17 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   the player runs at 4.7 m/s up to 1/100 s steps, then 1.4 m/s at 1/110, 1.0 at 1/120, 0.5 at 1/240 (per-frame
   movement shrinks with the step squared); with the game's own 0.5 floor at 1/110 he runs 5.15 m/s (= 4.7 x 0.5 /
   0.4545, the step just too long). Code was written for steps >= 0.5 (VC's minimum was 0.01; VCS raised it) - not
-  found yet. Independent timing therefore keeps the 0.5 floor and caps at 100 fps (`VCS_MIN_STEP` lowers the floor
-  for experiments).
+  found yet. Independent timing therefore kept the 0.5 floor and capped at 100 fps until 2026-10-25 (below).
+- **Found (2026-10-25): FUN_001f1d38 (ped animation movement)** turns the frame's animation root displacement into the
+  ped's target velocity at +0x794 / +0x798 (FUN_001f25f0 then eases the move speed +0x140 towards it):
+  `if (ms_fTimeStep < 0.5) v *= 0.5; else v *= 1.0 / ms_fTimeStep;` (0x1f2154 - 0x1f21c0, the 0.5 loaded once by
+  `lui $at, 0x3F00` at 0x1f2158). The `< 0.5` branch never runs on the PS2 and is wrong - `* 0.5` where `/ step` is
+  2 or more - so below the floor the ped got ~a quarter of its velocity. At 1/110 s (`VCS_TIMESTEP` feeds 9 / 10 ms
+  frames, steps 0.45 / 0.5) the speed alternated 0.021 / 0.083 units - found with a write watch on the player's move
+  speed (`VCS_WATCH`, writers by return address), then on +0x794. Patched (game/vcs/overrides.toml: the constant
+  becomes 0.001, so every real step takes the `/ step` path); steps >= 0.5 are unchanged. Audit afterwards: run /
+  drive / fall at 1/144 - 1/240 as at 1/30 - 1/100, sprint -5% / -11% at 1/200 / 1/240. Independent timing's ceiling
+  is now 240 fps (step floor 50/240, `vcs_framerate.cpp` kMaxFps).
 - **Audit results in the supported range** (`tools/framerate_audit.py`, steps 1/15 .. 1/100, per simulated second,
   2026-10-24): game clock exact (1/15 gets 60 ms a frame: the +60 ms cap, below ~17 fps the game slows, as on the
   PS2); car acceleration the same within 3% (speed at 2 / 3 / 4 s, distance in 4 s); running / sprinting the same

@@ -341,7 +341,8 @@ dropped on uploads (lazy render-target patching).
       compare and the scratchpad inline (game thread ~2x faster), lean pc and `__restrict ctx` in the recompiler, the EE
       clock no longer holding the game at ~100 fps, the flip's CSR read without the render-worker fence, the main loop
       unpaced for an unlimited cap. Uncapped (`--opt none`): Fort Baxter 111 -> 209 fps, city spots 118-166 -> 135-331,
-      AI drive 95 -> 126 fps. Next: the render worker (7-8 ms busy city / driving), the 100 fps step floor.
+      AI drive 95 -> 126 fps. Then the ped-movement bug below step 0.5 patched: independent timing goes up to 240
+      fps (was 100). At the user-facing settings: Fort Baxter 170 fps, city 149-239, drive 136. Next: the render worker.
 - [ ] Frame-rate independence, phases 3-4. Done: falling / jumping explained (Euler integration error, <= 6%, not a
       bug - game-internals.md 4); real-time pacing checked (game clock = wall clock at caps 60 / 100 / refresh,
       presents at the cap). HUD / radar flashing at the original rate above 30 fps (2D pass on a 30 Hz frame counter). Left: the four
@@ -441,7 +442,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_SPU2_TRACE=<file>` | every SPU2 register write and DMA to `<file>.<n>` per SPU2 instance (0 = the emulated IOP's) |
 | `PS2X_RPC_RECORD=<file>`, `PS2X_RPC_RECORD_SIDS=<hex,...>` | record RPC calls with their IOP time (tools/soundcheck.py) |
 | `VCS_SOUND_REPLAY=<record>`, `VCS_SOUND_REPLAY_OUT=<wav>` | replay recorded sound calls into the native driver, write its output, exit |
-| `VCS_MIN_STEP=x` | independent timing's step floor (0.5, the game's; lower lifts the 100 fps cap - breaks ped movement) |
+| `VCS_MIN_STEP=x` | independent timing's step floor (default 50/240: the 240 fps ceiling; lower makes an unlimited cap unlimited) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
 | `VCS_PERF_OVERLAY=0\|1` | the perf overlay setting for one run |
 | `VCS_PROFILE=s` | sampling profiler (guest functions + host symbols) |
@@ -449,6 +450,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_VIF_UNPACK_FAST=0\|verify` | VIF1 UNPACK general loop only / both, compared |
 | `PS2X_GS_RECT_VERIFY=1` | every 64th rect upload also written pixel by pixel and compared |
 | `PS2X_HW_LAZY_INDEX=0` | lazy uploads to write found by rescanning the queue (the old way) |
+| `VCS_SKIN_VERIFY=1` | native ped skinning (SSE) checked against the scalar reference, a line every 16k packets |
 | `VCS_EE_CHARGE_SHIFT=<n>` | frame-rate independent timing charges guest work 1/2^n of its estimated EE cycles (default 2; 0 = as original timing) |
 | `VCS_CSR_FENCE=1` | the flip's GS CSR read (0x370714) waits for the render worker as other CSR reads do |
 | `PS2X_RECOMP_FULL_PC=1`, `PS2X_RECOMP_NO_RESTRICT=1` | when running the recompiler: a `ctx->pc` store before every load / store and branch as before; generated functions without `__restrict ctx` |
@@ -517,7 +519,7 @@ dropped on uploads (lazy render-target patching).
 | `VCS_RSL_SHADOW_DUMP=n`, `VCS_RSL_SHADOW_FIND=1` | with `VCS_RSL_SHADOW`: n samples of draw state + VU memory (`rsl_shadow_NNN.bin`); where in guest RAM mismatching VU rows are |
 | `PS2X_CHAIN_CENSUS=1` | the VIF1 chain by tag location / id / data source: tags and quadwords per chain, every 5 s (`[chain]`) |
 | `VCS_PROFILE_GUEST_FILE=<path>` | with `VCS_PROFILE`: every guest function's samples per report window, appended (for sums by subsystem) |
-| `VCS_PROFILE_CALLERS=name[,name]` | with `VCS_PROFILE`: for samples in host functions whose name contains one of these, the unwound call chain up to the first guest function (`called from ...`) |
+| `VCS_PROFILE_CALLERS=name[,name]` | with `VCS_PROFILE`: for samples in host functions whose name contains one of these, the unwound call chain up to the first guest function (`called from <sampled function> < <caller> ...`; an unwind fault ends the chain, not the process) |
 | `VCS_RSL_NATIVE=0`, `VCS_RSL_NATIVE_VERIFY=1`, `VCS_RSL_NATIVE_LOG=1` | the original RSL state flush instead of the native one; the original runs and the native bytes are compared with it; counts every 10 s (`[rsl-native]`) |
 | `PS2X_HLE_PACKED=0`, `PS2X_HW_PACKED_VERIFY=1` | the C++ reproductions' strips / fans through the GS front end; check the packed recording against it per packet |
 | `PS2X_HLE_SETUP=0` | VU1 setup programs (matrices, slot routines, block copy) on the VU1 instead of natively |

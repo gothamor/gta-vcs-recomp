@@ -12,7 +12,8 @@
 // Independent timing:
 // - the tick count CTimer reads is the host clock (147.456 MHz units) - or exactly 1/N s per frame with
 //   VCS_TIMESTEP=<N> (tests: behaviour per simulated second at any step, game unpaced);
-// - CTimer's minimum step of 0.5 (1/100 s) is lifted to 0.05: above 100 fps the clamped step ran the game fast;
+// - CTimer's minimum step of 0.5 (1/100 s) is lifted to 50/240 (kMaxFps): above 100 fps the clamped step ran the
+//   game fast (the ped movement that broke below 0.5 is patched - minStep below);
 // - the limiter's VBlank wait paces on the host clock to the frame-rate cap instead, brings the emulated clock up to
 //   real time (VBlank events, timers and the IOP follow it) and presents the frame (runtime/ps2_present.h).
 #include "game/vcs_framerate.h"
@@ -55,14 +56,20 @@ namespace vcs
 
         constexpr uint64_t kBusHz = 147456000ull;     // the tick rate (CTimer: ms = ticks / 147456)
         constexpr double kEeCyclesPerNs = 0.294912;   // EE clock 294.912 MHz
-        // Independent timing's floor for the step: the game's own 0.5 by default. Below it the game breaks (the player
-        // runs at a fifth of the speed at 1/120 s - the audit, game-internals.md 4), so frame rates are capped at
-        // kMaxFps; VCS_MIN_STEP=<x> lowers the floor for experiments (with an unlimited cap and VCS_TIMESTEP).
+        // Independent timing's frame-rate ceiling and the step floor that goes with it (CTimer's step: 1.0 = 1/50 s).
+        // The game floors the step at 0.5 (100 fps); below that peds ran at a quarter of their speed - FUN_001f1d38
+        // turned animation movement into a velocity with `* 0.5` instead of `/ step` there, a branch dead on the PS2
+        // (patched in game/vcs/overrides.toml, 2026-10-25). With that fixed the audit (tools/framerate_audit.py) runs,
+        // sprints, drives and falls at 1/144 - 1/240 s as at 1/30 - 1/100 (sprint -5% / -11% at 1/200 / 1/240), so the
+        // ceiling is 240 fps (it was 100). Faster frames get the floor (the game runs a little fast). VCS_MIN_STEP=<x>
+        // lowers the floor further for experiments (then an unlimited cap is unlimited).
+        constexpr double kMaxFps = 240.0;
+        constexpr float kDefaultMinStep = static_cast<float>(50.0 / kMaxFps);
         float minStep()
         {
             static const float step = [] {
                 const char *v = std::getenv("VCS_MIN_STEP");
-                return v && *v ? static_cast<float>(std::atof(v)) : 0.5f;
+                return v && *v ? static_cast<float>(std::atof(v)) : kDefaultMinStep;
             }();
             return step;
         }
@@ -83,15 +90,13 @@ namespace vcs
                 std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
         }
 
-        constexpr double kMaxFps = 100.0; // steps below the game's 0.5 minimum break it (minStep)
-
         // the cap in frames per second: display refresh and unlimited included, at most kMaxFps unless the floor is
         // lowered (then unlimited is unlimited)
         double effectiveFps()
         {
             const int cap = g_cap.load(std::memory_order_relaxed);
             double fps = cap == kCapRefresh ? platform::displayRefreshHz() : cap == kCapUnlimited ? 0.0 : cap;
-            const double limit = minStep() < 0.5f ? 0.0 : kMaxFps;
+            const double limit = minStep() < kDefaultMinStep ? 0.0 : kMaxFps;
             if (limit > 0.0 && (fps <= 0.0 || fps > limit))
                 fps = limit;
             return fps;

@@ -238,11 +238,18 @@ namespace
         s.section = "Frame rate";
         s.label = "Frame rate cap";
         s.help = "30 is the original. With original timing anything above 30 runs at 60 (the VBlank allows no more); "
-                 "with frame-rate independent timing the game runs up to the cap - at most 100 for now (the game's "
-                 "physics was made for steps of 1/100 s or longer; faster rates are being worked on).";
+                 "with frame-rate independent timing the game runs up to the cap - at most 240 (above that the game's "
+                 "shortest time step makes it run slightly fast).";
         s.type = Type::Choice;
-        s.choices = {{"30 (original)", 30}, {"60", 60}, {"100", 100}, {"Display refresh (up to 100)", vcs::kCapRefresh},
-                     {"Unlimited (up to 100)", vcs::kCapUnlimited}};
+        s.choices = {{"30 (original)", 30},
+                     {"60", 60},
+                     {"100", 100},
+                     {"120", 120},
+                     {"144", 144},
+                     {"165", 165},
+                     {"240", 240},
+                     {"Display refresh (up to 240)", vcs::kCapRefresh},
+                     {"Unlimited (up to 240)", vcs::kCapUnlimited}};
         s.defaultValue = 30;
         s.env = "VCS_FPS";
         s.onChange = [](int v) { vcs::setFrameCap(v); };

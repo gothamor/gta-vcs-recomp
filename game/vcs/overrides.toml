@@ -33,3 +33,15 @@ stubs = [
   "sceCdGetDiskType@0x0044EFA8", # sceCdGetDiskType2
   "sceCdDiskReady@0x0044EB48",   # sceCdDiskReady_old
 ]
+
+# Instruction patches (address -> replacement word), applied by the recompiler.
+#
+# FUN_001f1d38 (ped animation movement) turns the frame's animation root displacement into the ped's target velocity
+# (+0x794): `if (ms_fTimeStep < 0.5) delta *= 0.5; else delta *= 1 / ms_fTimeStep;` - the `< 0.5` branch is dead on the
+# PS2 (CTimer floors the step at 0.5) and wrong (0.5 where 1/step >= 2): below the floor peds ran at a quarter speed,
+# which capped frame-rate independent timing at 100 fps. The 0.5 is loaded once for the compare and the multiply
+# (`lui $at, 0x3F00` at 0x1F2158); 0.001 instead sends every real step down the 1 / step path, and a zero step still
+# gets a finite (near-zero) velocity. Steps >= 0.5 run exactly as before. (game-internals.md 4, docs/PERFORMANCE.md)
+[[patches]]
+address = "0x001F2158"
+value = "0x3C013A83"

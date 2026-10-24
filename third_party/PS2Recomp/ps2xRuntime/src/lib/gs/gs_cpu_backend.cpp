@@ -1265,10 +1265,20 @@ uint64_t GSCpuBackend::ClutHash(const GSTex0Reg &tex0) const
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_clutHashDirty) // [gta-recomp] hashing 512 entries per paletted draw was ~17% of the frame
     {
-        uint64_t h = 1469598103934665603ull;
-        for (uint16_t e : m_clut)
-            h = (h ^ e) * 1099511628211ull;
-        m_clutHashCache = h;
+        // [gta-recomp] 8 bytes at a time in four independent lanes: VCS loads a CLUT before nearly every draw, so this
+        // ran per draw - the one-entry-at-a-time FNV chain was ~5% of the render worker in the city
+        uint64_t h[4] = {0x9E3779B97F4A7C15ull, 0xC2B2AE3D27D4EB4Full, 0x165667B19E3779F9ull, 0x27D4EB2F165667C5ull};
+        const uint8_t *bytes = reinterpret_cast<const uint8_t *>(m_clut.data());
+        static_assert(sizeof(m_clut) % 32u == 0u);
+        for (size_t i = 0; i < sizeof(m_clut); i += 32u)
+            for (int l = 0; l < 4; ++l)
+            {
+                uint64_t v;
+                std::memcpy(&v, bytes + i + l * 8u, 8);
+                h[l] = (h[l] ^ (v * 0xBF58476D1CE4E5B9ull)) * 0x94D049BB133111EBull;
+                h[l] ^= h[l] >> 29;
+            }
+        m_clutHashCache = ((h[0] * 31u + h[1]) * 31u + h[2]) * 31u + h[3];
         m_clutHashDirty = false;
     }
     return m_clutHashCache ^ (uint64_t(tex0.cpsm) << 56) ^ (uint64_t(tex0.csa) << 48) ^ (uint64_t(tex0.csm) << 40);

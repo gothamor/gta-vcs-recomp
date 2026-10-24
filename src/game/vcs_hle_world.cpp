@@ -18,6 +18,7 @@
 #include "game/vcs_hle_world.h"
 
 #include <algorithm>
+#include <immintrin.h>
 #include <chrono>
 #include <cfenv>
 #include <cmath>
@@ -253,8 +254,8 @@ namespace
         return lp.count != 0u && lp.count <= 256u;
     }
 
-    // stage 0x5a5 (0x2d28): 4-bone skinning, in the VU's operation order
-    void skin(const uint8_t *vu, LitPacket &lp)
+    // stage 0x5a5 (0x2d28): 4-bone skinning, in the VU's operation order (the scalar reference for skin below)
+    void skinScalar(const uint8_t *vu, LitPacket &lp)
     {
         const uint32_t mask = static_cast<uint32_t>(loadI(vu, 0xA8).v[1]);
         const Vec4 scale = loadF(vu, 42), offset = loadF(vu, 43);
@@ -298,6 +299,71 @@ namespace
                 acc = acc + t[2][k] * w.v[2];
                 lp.pos[i][k] = acc + t[3][k] * w.v[3];
             }
+        }
+    }
+
+    // skinScalar with the x / y / z components in SSE lanes: each lane does the scalar code's multiplies and adds in the
+    // same order (no FMA), so the results are bit-identical; ~3x faster (it was ~10% of the render worker driving).
+    // VCS_SKIN_VERIFY=1: both, compared.
+    void skin(const uint8_t *vu, LitPacket &lp)
+    {
+        static const bool verify = std::getenv("VCS_SKIN_VERIFY") != nullptr;
+        const uint32_t mask = static_cast<uint32_t>(loadI(vu, 0xA8).v[1]);
+        auto q = [vu](uint32_t at) { return _mm_loadu_ps(reinterpret_cast<const float *>(vu + (at & (kQwords - 1u)) * 16u)); };
+        auto qi = [vu](uint32_t at) { return _mm_loadu_si128(reinterpret_cast<const __m128i *>(vu + (at & (kQwords - 1u)) * 16u)); };
+        const __m128 scale = q(42), offset = q(43), one = _mm_set1_ps(1.0f);
+        const __m128 inv128 = _mm_set1_ps(bitsToFloat(0x3C000000u));
+        const __m128 offsetTimesOne = _mm_mul_ps(offset, one);
+        for (uint32_t i = 0; i < lp.count; ++i)
+        {
+            const __m128 pi = _mm_cvtepi32_ps(qi(lp.posBase + i)), ni = _mm_cvtepi32_ps(qi(lp.nrmBase + i));
+            const IVec4 wi = loadI(vu, lp.wBase + i);
+            const __m128 w = q(lp.wBase + i);
+            const __m128 p = _mm_add_ps(_mm_mul_ps(pi, scale), offsetTimesOne);
+            const __m128 n = _mm_mul_ps(ni, inv128);
+            const __m128 p0 = _mm_shuffle_ps(p, p, 0x00), p1 = _mm_shuffle_ps(p, p, 0x55), p2 = _mm_shuffle_ps(p, p, 0xAA);
+            __m128 t[4], b0[3];
+            for (int bone = 0; bone < 4; ++bone)
+            {
+                const uint32_t at = 0xA9u + (static_cast<uint32_t>(wi.v[bone]) & mask);
+                const __m128 r0 = q(at), r1 = q(at + 1), r2 = q(at + 2), r3 = q(at + 3);
+                if (bone == 0)
+                {
+                    b0[0] = r0;
+                    b0[1] = r1;
+                    b0[2] = r2;
+                }
+                __m128 acc = _mm_mul_ps(r0, p0);
+                acc = _mm_add_ps(acc, _mm_mul_ps(r1, p1));
+                acc = _mm_add_ps(acc, _mm_mul_ps(r2, p2));
+                t[bone] = _mm_add_ps(acc, _mm_mul_ps(r3, one));
+            }
+            __m128 nr = _mm_mul_ps(b0[0], _mm_shuffle_ps(n, n, 0x00));
+            nr = _mm_add_ps(nr, _mm_mul_ps(b0[1], _mm_shuffle_ps(n, n, 0x55)));
+            nr = _mm_add_ps(nr, _mm_mul_ps(b0[2], _mm_shuffle_ps(n, n, 0xAA)));
+            __m128 ps = _mm_mul_ps(t[0], _mm_shuffle_ps(w, w, 0x00));
+            ps = _mm_add_ps(ps, _mm_mul_ps(t[1], _mm_shuffle_ps(w, w, 0x55)));
+            ps = _mm_add_ps(ps, _mm_mul_ps(t[2], _mm_shuffle_ps(w, w, 0xAA)));
+            ps = _mm_add_ps(ps, _mm_mul_ps(t[3], _mm_shuffle_ps(w, w, 0xFF)));
+            alignas(16) float nOut[4], pOut[4];
+            _mm_store_ps(nOut, nr);
+            _mm_store_ps(pOut, ps);
+            std::memcpy(lp.nrm[i], nOut, 12);
+            std::memcpy(lp.pos[i], pOut, 12);
+        }
+        if (verify)
+        {
+            static LitPacket ref;
+            static uint64_t checked = 0, wrong = 0;
+            ref.posBase = lp.posBase, ref.nrmBase = lp.nrmBase, ref.wBase = lp.wBase, ref.count = lp.count;
+            skinScalar(vu, ref);
+            ++checked;
+            if (std::memcmp(ref.pos, lp.pos, sizeof(float) * 3u * lp.count) != 0 ||
+                std::memcmp(ref.nrm, lp.nrm, sizeof(float) * 3u * lp.count) != 0)
+                ++wrong;
+            if ((checked & 0x3FFFu) == 0u)
+                std::fprintf(stderr, "[skin] verify: %llu packets, %llu differ\n", static_cast<unsigned long long>(checked),
+                             static_cast<unsigned long long>(wrong));
         }
     }
 

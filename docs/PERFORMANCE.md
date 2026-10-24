@@ -89,11 +89,33 @@ Fort Baxter 5.3 -> 4.4 ms, city a few percent. `PS2X_RECOMP_NO_RESTRICT=1` (reco
 Uncapped after 1-4 (`--opt none`): Fort Baxter 209 fps (game 4.2 ms), city 331 / 202 / 135 / 232, AI drive 126 fps
 (game 5.6 ms, worker 8.0 ms). The render worker is now the limit at the busy city spot (7.4 ms) and on the drive.
 
+### 5. Past 100 fps: the ped-movement step bug (2026-10-25)
+
+Frame-rate independent timing was capped at 100 fps because below CTimer's 0.5 step (1/100 s) peds ran at a quarter
+speed. Write watches on the player's move speed at 1/100 vs 1/110 s steps traced it to one branch in FUN_001f1d38
+that the PS2 never takes (game-internals.md 4); one instruction patch fixes it without changing steps >= 0.5. The audit
+matches 1/30 - 1/100 up to 1/240 s, so the ceiling is now 240 fps: caps 120 / 144 / 165 / 240 added, display refresh
+and unlimited go up to 240 (DECISIONS.md 2026-10-25). Also fixed on the way: `tools/gamectl.py` closes its sockets
+without TIME_WAIT (the audit at 200+ fps ran out of ports) and the rig kills the game with its launcher when it does
+not quit.
+
+### 6. Render worker, first pass (2026-10-25)
+
+Now the limit at busy spots (the game thread waits on it ~400 ms a second at city 1325,-325). Done: ped skinning in SSE
+lanes (same operation order, bit-identical - `VCS_SKIN_VERIFY=1` checked 850k packets), recorded unpacks copied in one
+`memcpy` / one blend per qword, the CLUT hash in four lanes (VCS loads a CLUT before nearly every draw). City 1325,-325
+worker 7.4 -> 6.7 ms, drive 8.0 -> 7.1 ms. What the worker spends its time on there (inclusive profile): native draws
+from VU1 programs ~55% (of which the packed draws' recording ~25%), GIF data (texture / CLUT uploads: ~1,070 uploads
+and ~930 CLUT loads a frame, nearly all overwritten before use) ~30%, the chain / replay ~15%.
+
+Uncapped at the user-facing settings (independent timing, unlimited = up to 240, `--opt none`): Fort Baxter 170 fps,
+city 149 / 192 / 205 / 239 (at the ceiling), AI drive 136 fps.
+
 ## Next
 
-- **Render worker** (7-8 ms at city 1325,-325 and driving): profile, then the biggest items.
-- **The 100 fps cap** of frame-rate independent timing: CTimer's 0.5 minimum step (1/100 s) - below it ped movement
-  breaks (game-internals.md 4, DECISIONS.md 2026-10-24). Running past 100 fps needs what breaks below the floor fixed.
+- **Render worker** (6.7 ms at city 1325,-325, 7.1 driving): per-upload / per-CLUT-load bookkeeping, texture binding
+  misses, packed-draw recording; or a second worker thread (VU1 / native draws vs the HW backend).
+- Playtest missions above 100 fps; sprint at 1/240 s (-11%).
 - **Game thread**: the per-call cost of guest functions (Win64 prologues save 8 GPRs + 6 XMM registers per call);
   `inflate_fast` natively (zlib 1.2.2, game-internals.md 8) for streaming; the VIF1 chain copy; the IOP / SPU2 mixing.
 - PGO retrain after the codegen changes (`--opt pgo --train`) for release numbers.

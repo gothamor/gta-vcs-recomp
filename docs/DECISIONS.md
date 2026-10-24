@@ -223,6 +223,16 @@ The user's choices on the roadmap's open questions:
 - Calls between recompiled functions got an inline fast path in the runtime header rather than a recompiler change:
   same effect on every call site, no regenerated code, and `PS2X_FAST_DISPATCH=0` switches it off.
 
+## 2026-10-25 - Independent timing up to 240 fps; the ped-movement branch below step 0.5 patched
+- Found what broke below the 0.5 step (docs/PERFORMANCE.md 5, game-internals.md 4): FUN_001f1d38 turns a ped's
+  animation movement into a velocity with `* 0.5` instead of `/ step` when the step is under 0.5 - a branch the PS2
+  never takes (CTimer floors the step). One instruction patch (game/vcs/overrides.toml: the constant it compares with
+  becomes 0.001) sends every real step down the `/ step` path; steps of 0.5 or more run exactly as before.
+- The audit then matches 1/30 - 1/100 at 1/144, 1/200 and 1/240 (running, driving, falling; sprint -5% / -11% at
+  1/200 / 1/240), so independent timing's ceiling goes from 100 to 240 fps (step floor 50/240). Caps offered: 30 / 60
+  / 100 / 120 / 144 / 165 / 240 / display refresh / unlimited (both up to 240). Missions above 100 fps are not
+  playtested yet; the four frame-counter blinkers outside the 2D pass blink faster as before.
+
 ## 2026-10-24 - Independent timing capped at 100 fps for now
 - VCS clamps its time step to at least 0.5 (1/100 s; Vice City used 0.01). With the clamp lifted, the frame-rate
   audit shows the player running at a fifth of the speed at 1/120 s - code somewhere assumes steps of 0.5 or more.

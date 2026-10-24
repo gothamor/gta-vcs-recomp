@@ -285,7 +285,11 @@ class Game:
         try:
             self.proc.wait(timeout=30)
         except Exception:
-            self.proc.kill()
+            # the game (a child of tools/run.py) too: killing only run.py left a hung game holding the control port
+            if tc.IS_WINDOWS:
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(self.proc.pid)], capture_output=True)
+            else:
+                self.proc.kill()
 
 
 def main():

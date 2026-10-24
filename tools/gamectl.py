@@ -17,6 +17,7 @@ stick, F3 perf overlay).
 import argparse
 import os
 import socket
+import struct
 import sys
 import time
 
@@ -26,6 +27,9 @@ DEFAULT_PORT = int(os.environ.get("PS2X_CONTROL_PORT", "47615"))
 def send(command, port=DEFAULT_PORT, timeout=70.0):
     """Sends one command line; returns the reply line. Raises OSError when no game is listening."""
     with socket.create_connection(("127.0.0.1", port), timeout=timeout) as s:
+        # closed without TIME_WAIT: a tool polling every frame (tools/framerate_audit.py at 200+ fps) otherwise ran
+        # Windows out of ephemeral ports ("Only one usage of each socket address")
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         s.sendall((command + "\n").encode("utf-8"))
         data = b""
         while not data.endswith(b"\n"):

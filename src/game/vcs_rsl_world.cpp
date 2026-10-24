@@ -9,6 +9,7 @@
 #include "runtime/ps2_write_watch.h"
 
 #include <algorithm>
+#include <immintrin.h>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -295,14 +296,23 @@ namespace vcs::rslworld
                 else
                 {
                     const uint32_t at = op.topRelative ? (op.vuAddr + memory.vif1_regs.tops) & 0x3FFu : op.vuAddr;
-                    if (op.lanes == 0xFu)
+                    // one copy when the run does not wrap around VU memory; masked lanes as one blend per qword
+                    if (op.lanes == 0xFu && (at & 0x3FFu) + op.qwords <= 0x400u)
+                        std::memcpy(vu + (at & 0x3FFu) * 16u, op.data.data(), op.qwords * 16u);
+                    else if (op.lanes == 0xFu)
                         for (uint32_t i = 0; i < op.qwords; ++i)
                             std::memcpy(vu + ((at + i) & 0x3FFu) * 16u, op.data.data() + i * 16u, 16);
                     else
+                    {
+                        const __m128i keep = _mm_setr_epi32((op.lanes & 1u) ? 0 : -1, (op.lanes & 2u) ? 0 : -1,
+                                                            (op.lanes & 4u) ? 0 : -1, (op.lanes & 8u) ? 0 : -1);
                         for (uint32_t i = 0; i < op.qwords; ++i)
-                            for (uint32_t f = 0; f < 4u; ++f)
-                                if ((op.lanes >> f) & 1u)
-                                    std::memcpy(vu + ((at + i) & 0x3FFu) * 16u + f * 4u, op.data.data() + i * 16u + f * 4u, 4);
+                        {
+                            auto *dst = reinterpret_cast<__m128i *>(vu + ((at + i) & 0x3FFu) * 16u);
+                            const __m128i src = _mm_loadu_si128(reinterpret_cast<const __m128i *>(op.data.data() + i * 16u));
+                            _mm_storeu_si128(dst, _mm_or_si128(_mm_and_si128(keep, _mm_loadu_si128(dst)), _mm_andnot_si128(keep, src)));
+                        }
+                    }
                 }
             }
             if (rec.setsMask)

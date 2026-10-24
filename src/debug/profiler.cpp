@@ -26,6 +26,39 @@ namespace vcs
 #if defined(_WIN32)
     namespace
     {
+        // up to n return addresses of a suspended thread's stack from its context. A fault while unwinding (a thread
+        // caught where its unwind data does not describe the stack yet) ends the walk instead of the process.
+        int unwindFrames(CONTEXT u, uintptr_t *out, int n)
+        {
+            int count = 0;
+            __try
+            {
+                for (; count < n;)
+                {
+                    DWORD64 imageBase = 0;
+                    PRUNTIME_FUNCTION fe = RtlLookupFunctionEntry(u.Rip, &imageBase, nullptr);
+                    if (!fe)
+                    {
+                        u.Rip = *reinterpret_cast<const DWORD64 *>(u.Rsp); // a leaf: the return address on top
+                        u.Rsp += 8;
+                    }
+                    else
+                    {
+                        PVOID handlerData = nullptr;
+                        DWORD64 establisher = 0;
+                        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, u.Rip, fe, &u, &handlerData, &establisher, nullptr);
+                    }
+                    if (!u.Rip)
+                        break;
+                    out[count++] = static_cast<uintptr_t>(u.Rip);
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+            return count;
+        }
+
         struct HostFn
         {
             uintptr_t host;
@@ -181,27 +214,13 @@ namespace vcs
                         }
                         if (m->second) // unwind while the thread is still suspended
                         {
-                            std::vector<uintptr_t> frames;
-                            CONTEXT u = c;
-                            for (int depth = 0; depth < 12; ++depth)
+                            uintptr_t raw[12];
+                            const int n = unwindFrames(c, raw, 12);
+                            std::vector<uintptr_t> frames{rip}; // the sampled function first, then its callers
+                            for (int i = 0; i < n; ++i)
                             {
-                                DWORD64 imageBase = 0;
-                                PRUNTIME_FUNCTION fe = RtlLookupFunctionEntry(u.Rip, &imageBase, nullptr);
-                                if (!fe)
-                                {
-                                    u.Rip = *reinterpret_cast<const DWORD64 *>(u.Rsp); // a leaf: the return address on top
-                                    u.Rsp += 8;
-                                }
-                                else
-                                {
-                                    PVOID handlerData = nullptr;
-                                    DWORD64 establisher = 0;
-                                    RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, u.Rip, fe, &u, &handlerData, &establisher, nullptr);
-                                }
-                                if (!u.Rip)
-                                    break;
-                                frames.push_back(u.Rip);
-                                if (inGenerated(u.Rip))
+                                frames.push_back(raw[i]);
+                                if (inGenerated(raw[i]))
                                     break;
                             }
                             ++stacks[frames];
@@ -326,7 +345,7 @@ namespace vcs
                     }
                     std::vector<std::pair<std::string, uint64_t>> chains(byChain.begin(), byChain.end());
                     std::sort(chains.begin(), chains.end(), [](auto &a, auto &b) { return a.second > b.second; });
-                    for (size_t i = 0; i < chains.size() && i < 25; ++i)
+                    for (size_t i = 0; i < chains.size() && i < 80; ++i)
                         std::fprintf(stderr, "[profile]     %5.1f%%  called from %s\n", 100.0 * chains[i].second / total, chains[i].first.c_str());
                     stacks.clear();
                 }
