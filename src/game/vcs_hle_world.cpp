@@ -778,7 +778,8 @@ namespace
             return resident;
         const uint64_t h = fnv(code, 0x30, 0x2700, 0xCBF29CE484222325ull);
         checkedGeneration = generation;
-        resident = h == 0x11DD6EA54A3E572Aull;
+        // the others as for the shine (isShine): dead code at 0x1030, routines 0x0a88-0x0c10 / 0x0ef0-0x1020 not called
+        resident = h == 0x11DD6EA54A3E572Aull || h == 0x7FC9DC945B1455C2ull || h == 0x31D4C8CA7625A4EFull;
         static int logged = 0;
         if (!resident && logged++ < 4)
             std::fprintf(stderr, "[hle] re-draw code hash %016llx (not the reproduced one): 0x02c0 runs on the VU1\n",
@@ -809,53 +810,68 @@ namespace
                 std::memcpy(vu + (q & (kQwords - 1u)) * 16u + k * 4u, &v.v[k], 4);
     }
 
-    // 0x02c0's setup: matrices 0-3, 24-27, 28-31 and qword 33 written into vu
-    void redrawSetup(uint8_t *vu, uint32_t top)
+    // 0x04d8 (vi01..04 = a, b, p, out): out = b x a, out + 4 = p x out (rows; ACC = b0 r.x + b1 r.y + b2 r.z; + b3 r.w).
+    // Everything is read from memory first, as the routine loads it.
+    void setupMatrices(uint8_t *vu, uint32_t a, uint32_t b, uint32_t p, uint32_t out)
     {
-        Vec4 a[4];
-        for (uint32_t i = 0; i < 4; ++i)
-        {
-            a[i] = loadF(vu, top + i);
-            storeF(vu, i, a[i]);
-        }
-        const auto mul = [](const Vec4 b[4], const Vec4 &r) { // 0x04d8: ACC = b0 r.x + b1 r.y + b2 r.z; + b3 r.w
+        const auto mul = [](const Vec4 m[4], const Vec4 &r) { // with the VU's edge cases (0x0478's inputs reach them)
             Vec4 o;
             for (int c = 0; c < 4; ++c)
             {
-                float acc = b[0].v[c] * r.v[0];
-                acc = acc + b[1].v[c] * r.v[1];
-                acc = acc + b[2].v[c] * r.v[2];
-                o.v[c] = acc + b[3].v[c] * r.v[3];
+                float acc = vcsvu::vuMul(m[0].v[c], r.v[0]);
+                acc = vcsvu::vuMadd(acc, m[1].v[c], r.v[1]);
+                acc = vcsvu::vuMadd(acc, m[2].v[c], r.v[2]);
+                o.v[c] = vcsvu::vuMadd(acc, m[3].v[c], r.v[3]);
             }
             return o;
         };
-        const Vec4 view[4] = {loadF(vu, 16), loadF(vu, 17), loadF(vu, 18), loadF(vu, 19)};
-        const Vec4 port[4] = {loadF(vu, 12), loadF(vu, 13), loadF(vu, 14), loadF(vu, 15)};
-        Vec4 clip[4];
+        Vec4 ar[4], br[4], pr[4], o1[4];
         for (uint32_t i = 0; i < 4; ++i)
         {
-            clip[i] = mul(view, a[i]);
-            storeF(vu, 24 + i, clip[i]);
+            ar[i] = loadF(vu, a + i);
+            br[i] = loadF(vu, b + i);
+            pr[i] = loadF(vu, p + i);
         }
         for (uint32_t i = 0; i < 4; ++i)
-            storeF(vu, 28 + i, mul(port, clip[i]));
-        // 0x0640: the rotation transposed (ADDx from vf00: 0 + a), camera (32) minus the translation, rotated
+            o1[i] = mul(br, ar[i]);
+        for (uint32_t i = 0; i < 4; ++i)
+            storeF(vu, out + i, o1[i]);
+        for (uint32_t i = 0; i < 4; ++i)
+            storeF(vu, out + 4 + i, mul(pr, o1[i]));
+    }
+
+    // slot routine 0xc8 (byte 0x0640): the camera (32) in object space - the rotation (0-2) transposed (ADDx from vf00:
+    // 0 + a), times the camera minus the translation (3) - into 33.xyz
+    void setupCamera(uint8_t *vu)
+    {
+        Vec4 a[4];
+        for (uint32_t i = 0; i < 4; ++i)
+            a[i] = loadF(vu, i);
         Vec4 rt[3];
         for (int r = 0; r < 3; ++r)
             for (int k = 0; k < 3; ++k)
-                rt[r].v[k] = 0.0f + a[k].v[r];
+                rt[r].v[k] = vcsvu::vuAdd(0.0f, a[k].v[r]);
         const Vec4 cam = loadF(vu, 32);
         float d[3];
         for (int k = 0; k < 3; ++k)
-            d[k] = cam.v[k] - a[3].v[k];
+            d[k] = vcsvu::vuSub(cam.v[k], a[3].v[k]);
         Vec4 o = loadF(vu, 33);
-        for (int k = 0; k < 3; ++k)
+        for (int k = 0; k < 3; ++k) // with the VU's edge cases (0x0418 reaches them)
         {
-            float acc = rt[0].v[k] * d[0];
-            acc = acc + rt[1].v[k] * d[1];
-            o.v[k] = acc + rt[2].v[k] * d[2];
+            float acc = vcsvu::vuMul(rt[0].v[k], d[0]);
+            acc = vcsvu::vuMadd(acc, rt[1].v[k], d[1]);
+            o.v[k] = vcsvu::vuMadd(acc, rt[2].v[k], d[2]);
         }
         storeF(vu, 33, o, 0x7u);
+    }
+
+    // 0x02c0's setup: matrices 0-3, 24-27, 28-31 and qword 33 written into vu
+    void redrawSetup(uint8_t *vu, uint32_t top)
+    {
+        for (uint32_t i = 0; i < 4; ++i)
+            storeF(vu, i, loadF(vu, top + i));
+        setupMatrices(vu, 0, 16, 12, 24);
+        setupCamera(vu);
     }
 
     // after redrawSetup: the program's VU memory writes and the GIF packets it kicks, for the code image 0x02c0 runs
@@ -1098,7 +1114,27 @@ namespace
         if (c.codeGeneration != checkedGeneration)
         {
             checkedGeneration = c.codeGeneration;
-            resident = fnv(c.vuCode, 0x30, 0x2B20, 0xCBF29CE484222325ull) == 0x1A8EDFFDDC5C7665ull; // through 0x546's end
+            const uint64_t h = fnv(c.vuCode, 0x30, 0x2B20, 0xCBF29CE484222325ull);
+            // through 0x546's end; the second differs only in dead code after a JR's delay slot (0x1030), the third also in
+            // routines 0x0a88-0x0c10 / 0x0ef0-0x1020 that the shine never calls (52.x is 0xde or 0xe9; game-internals.md 6d)
+            resident = h == 0x1A8EDFFDDC5C7665ull || h == 0xDA70874B890E508Dull || h == 0x97EECB5DAE739E9Cull;
+            // PS2X_HLE_DUMP_IMAGES=1: the code and data of the first shine packet of each code image (shine_<hash>_*.bin)
+            static const bool dump = std::getenv("PS2X_HLE_DUMP_IMAGES") != nullptr;
+            static std::vector<uint64_t> seen;
+            if (dump && std::find(seen.begin(), seen.end(), h) == seen.end())
+            {
+                seen.push_back(h);
+                char name[64];
+                for (int k = 0; k < 2; ++k)
+                {
+                    std::snprintf(name, sizeof(name), "shine_%016llx_%s.bin", (unsigned long long)h, k ? "data" : "code");
+                    if (FILE *f = std::fopen(name, "wb"))
+                    {
+                        std::fwrite(k ? c.vuData : c.vuCode, 1, 16384, f);
+                        std::fclose(f);
+                    }
+                }
+            }
         }
         return resident;
     }
@@ -1302,10 +1338,19 @@ namespace
         return false;
     }
 
+    bool isSetupProgram(const ps2hle::MscalContext &c);
+    void setupPredict(const ps2hle::MscalContext &c);
+    bool setupCompare(const ps2hle::MscalContext &c);
+
     bool predict(const ps2hle::MscalContext &c)
     {
         g_pred.decision = Decision::None;
         g_pred.litLanes = false;
+        if (isSetupProgram(c))
+        {
+            setupPredict(c);
+            return false;
+        }
         if (c.startPc == 0x30u && isLitPipeline(c.vuCode, c.vuData, c.codeGeneration))
             return predictLit(c);
         if (c.startPc == 0x30u && isEnvPipeline(c.vuCode, c.vuData, c.codeGeneration))
@@ -1575,6 +1620,8 @@ namespace
 
     void after(const ps2hle::MscalContext &c)
     {
+        if (setupCompare(c))
+            return;
         if (g_redraw.active)
         {
             redrawCompare(c);
@@ -2144,6 +2191,269 @@ namespace
         return true;
     }
 
+    // ---- VU1 setup programs (game-internals.md 6d "Setup programs"): matrices and the slot routines, no primitives ----
+    // Every routine is tied to a hash of the code it was read from (build/analysis/vu1setup, vu1other), checked again
+    // only after VU1 code memory changed: the code from 0x2700 on is swapped per pass, so a slot number names different
+    // routines in different images.
+    struct CodeCheck
+    {
+        uint32_t from, to;
+        uint64_t hash;
+        uint64_t generation = ~0ull;
+        bool resident = false;
+
+        bool operator()(const uint8_t *code, uint64_t gen)
+        {
+            if (gen != generation)
+            {
+                generation = gen;
+                resident = fnv(code, from, to, 0xCBF29CE484222325ull) == hash;
+            }
+            return resident;
+        }
+    };
+    CodeCheck g_setupLowCode{0x178, 0x6D0, 0xA71EA6178FAB1136ull}; // the end kick, the programs, 0x04d8, slots 0x3a / 0xc8
+    CodeCheck g_setupProg0000{0x000, 0x030, 0x89A9D4EDC27681D3ull}; // 42 / 43 from TOP
+    CodeCheck g_setupProg0148{0x148, 0x178, 0x925A26D982D7E809ull}; // qword 58 = the empty tag
+    CodeCheck g_setupProg2b50{0x2B50, 0x2BE8, 0x148C06E22739B651ull}; // block copy (bone matrices)
+    CodeCheck g_setupLights{0x2700, 0x27F8, 0xC2C454BBB9E593A8ull};   // slot 0x4e0 of the lit image: lights to object space
+    CodeCheck g_setupEnv{0x2BF0, 0x2CE8, 0x5A782EA0596BC8B4ull};      // slot 0x57e of the lit image: env matrix
+
+    // ERLENG + MUL.xyz: rows 0-2 of the object matrix with their xyz scaled to length 1 (w as is); rl = the last row's
+    // reciprocal length (it stays in P)
+    void normalisedRows(const uint8_t *vu, Vec4 r[3], float &rl)
+    {
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            r[i] = loadF(vu, i);
+            const float x = vcsvu::vuOperand(r[i].v[0]), y = vcsvu::vuOperand(r[i].v[1]), z = vcsvu::vuOperand(r[i].v[2]);
+            const float len = std::sqrt(x * x + y * y + z * z);
+            rl = len != 0.0f ? 1.0f / len : len;
+            for (int k = 0; k < 3; ++k)
+                r[i].v[k] = vcsvu::vuMul(r[i].v[k], rl);
+        }
+    }
+
+    // byte 0x2700 (lit image), vi01 = P: P+9..11 = the light directions P+0..2 in object space (row i: ACC = L0 r.x +
+    // L1 r.y + L2 r.z, all four lanes)
+    void setupLights(uint8_t *vu, uint32_t p)
+    {
+        Vec4 r[3];
+        float rl;
+        normalisedRows(vu, r, rl);
+        const Vec4 l[3] = {loadF(vu, p), loadF(vu, p + 1u), loadF(vu, p + 2u)};
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            Vec4 o;
+            for (int c = 0; c < 4; ++c)
+            {
+                float acc = vcsvu::vuMul(l[0].v[c], r[i].v[0]);
+                acc = vcsvu::vuMadd(acc, l[1].v[c], r[i].v[1]);
+                o.v[c] = vcsvu::vuMadd(acc, l[2].v[c], r[i].v[2]);
+            }
+            storeF(vu, p + 9u + i, o);
+        }
+    }
+
+    // byte 0x2bf0 (lit image), vi01 = A: A+5..7 .xy = rows A+2..4 (x / y) . normalised row i; the routine stores whole
+    // qwords - .z of A+7 is the last ERLENG, the other z / w lanes are stale registers (left as they are here; the env
+    // pass reads x / y)
+    void setupEnv(uint8_t *vu, uint32_t a, std::vector<std::pair<uint32_t, uint32_t>> *staleLanes)
+    {
+        Vec4 r[3];
+        float rl;
+        normalisedRows(vu, r, rl);
+        const Vec4 m[3] = {loadF(vu, a + 2u), loadF(vu, a + 3u), loadF(vu, a + 4u)};
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            Vec4 o = loadF(vu, a + 5u + i);
+            for (int c = 0; c < 2; ++c)
+            {
+                float acc = vcsvu::vuMul(m[0].v[c], r[i].v[0]);
+                acc = vcsvu::vuMadd(acc, m[1].v[c], r[i].v[1]);
+                o.v[c] = vcsvu::vuMadd(acc, m[2].v[c], r[i].v[2]);
+            }
+            if (i == 2u)
+                o.v[2] = rl;
+            storeF(vu, a + 5u + i, o, i == 2u ? 0x7u : 0x3u);
+            if (staleLanes)
+                staleLanes->push_back({(a + 5u + i) & (kQwords - 1u), i == 2u ? 0x8u : 0xCu});
+        }
+    }
+
+    // the four slot routines of qwords 34-37 (routine in lane `lane`, vi01 = .y)
+    bool setupSlotsKnown(const ps2hle::MscalContext &c, int lane)
+    {
+        for (uint32_t q = 34; q <= 37; ++q)
+        {
+            const uint32_t r = static_cast<uint32_t>(loadI(c.vuData, q).v[lane]) & 0xFFFFu;
+            if (r == 0x4E0u ? !g_setupLights(c.vuCode, c.codeGeneration)
+                            : r == 0x57Eu ? !g_setupEnv(c.vuCode, c.codeGeneration) : (r != 0x3Au && r != 0xC8u))
+                return false;
+        }
+        return true;
+    }
+
+    void setupSlots(uint8_t *vu, int lane, std::vector<std::pair<uint32_t, uint32_t>> *staleLanes)
+    {
+        for (uint32_t q = 34; q <= 37; ++q)
+        {
+            const IVec4 slot = loadI(vu, q);
+            const uint32_t r = static_cast<uint32_t>(slot.v[lane]) & 0xFFFFu, arg = static_cast<uint32_t>(slot.v[1]) & 0x3FFu;
+            if (r == 0xC8u)
+                setupCamera(vu);
+            else if (r == 0x4E0u)
+                setupLights(vu, arg);
+            else if (r == 0x57Eu)
+                setupEnv(vu, arg, staleLanes);
+        }
+    }
+
+    bool isSetupProgram(const ps2hle::MscalContext &c)
+    {
+        const uint32_t pc = c.startPc;
+        if (pc == 0x148u)
+            return g_setupProg0148(c.vuCode, c.codeGeneration);
+        if (pc == 0x2B50u)
+        {
+            if (!g_setupProg2b50(c.vuCode, c.codeGeneration))
+                return false;
+            const uint32_t count = static_cast<uint32_t>(loadI(c.vuData, c.top & 0x3FFu).v[0]) & 0xFFFFu;
+            return count != 0u && count <= 255u; // 0 would loop until the 16-bit counter wraps
+        }
+        if (pc != 0x000u && pc != 0x1E0u && pc != 0x250u && pc != 0x3A8u && pc != 0x418u && pc != 0x478u)
+            return false;
+        if (!g_setupLowCode(c.vuCode, c.codeGeneration) || (pc == 0x000u && !g_setupProg0000(c.vuCode, c.codeGeneration)))
+            return false;
+        // the end kick (0x0178) sends qword 58: reproduced as nothing when it is the empty tag
+        if ((pc == 0x000u || pc == 0x1E0u || pc == 0x250u || pc == 0x3A8u) && (loadI(c.vuData, 58).v[0] & 0x7FFF) != 0)
+            return false;
+        if (pc == 0x1E0u || pc == 0x250u)
+            return setupSlotsKnown(c, 0);
+        if (pc == 0x3A8u || pc == 0x418u)
+            return setupSlotsKnown(c, 3);
+        return true;
+    }
+
+    // the program's VU memory writes (its only effect besides the empty kick); staleLanes (optional): (qword, lane mask)
+    // the VU writes from registers left by earlier programs - not reproduced
+    void runSetupProgram(uint8_t *vu, uint32_t startPc, uint32_t top, std::vector<std::pair<uint32_t, uint32_t>> *staleLanes = nullptr)
+    {
+        top &= 0x3FFu;
+        switch (startPc)
+        {
+        case 0x000u: // 42 / 43 (position scale / offset) from TOP
+            storeF(vu, 42, loadF(vu, top));
+            storeF(vu, 43, loadF(vu, top + 1u));
+            break;
+        case 0x148u: // qword 58 = (0, 0, 0, 0) with x = 0x8000: the empty GIF tag the kicks send
+        {
+            const int32_t tag[4] = {0x8000, 0, 0, 0};
+            std::memcpy(vu + 58u * 16u, tag, 16);
+            break;
+        }
+        case 0x2B50u: // the header at TOP to header.z, then 4 * header.x qwords after it
+        {
+            const IVec4 h = loadI(vu, top);
+            const uint32_t count = static_cast<uint32_t>(h.v[0]) & 0xFFFFu;
+            uint32_t dst = static_cast<uint32_t>(h.v[2]) & 0xFFFFu;
+            std::memmove(vu + (dst & (kQwords - 1u)) * 16u, vu + top * 16u, 16);
+            for (uint32_t b = 0; b < count; ++b) // four loads, then four stores
+            {
+                uint8_t block[64];
+                for (uint32_t i = 0; i < 4; ++i)
+                    std::memcpy(block + i * 16u, vu + ((top + 1u + b * 4u + i) & (kQwords - 1u)) * 16u, 16);
+                for (uint32_t i = 0; i < 4; ++i)
+                    std::memcpy(vu + ((dst + 1u + b * 4u + i) & (kQwords - 1u)) * 16u, block + i * 16u, 16);
+            }
+            break;
+        }
+        case 0x1E0u: // object matrix at TOP -> 0-3, clip / window matrices, the .x slots
+            for (uint32_t i = 0; i < 4; ++i)
+                storeF(vu, i, loadF(vu, top + i));
+            setupMatrices(vu, 0, 16, 12, 24);
+            setupSlots(vu, 0, staleLanes);
+            break;
+        case 0x250u:
+            setupSlots(vu, 0, staleLanes);
+            break;
+        case 0x3A8u:
+            setupSlots(vu, 3, staleLanes);
+            break;
+        case 0x418u: // the .w slots, then 0x0478
+            setupSlots(vu, 3, staleLanes);
+            [[fallthrough]];
+        case 0x478u:
+            setupMatrices(vu, 4, 8, 12, 16);
+            setupMatrices(vu, 0, 16, 12, 24);
+            break;
+        }
+    }
+
+    struct SetupStats
+    {
+        uint64_t native = 0;
+        uint64_t exact = 0, memBad = 0, kicksBad = 0; // verify
+        bool active = false;
+        std::vector<uint8_t> expected;
+        std::vector<std::pair<uint32_t, uint32_t>> staleLanes; // not compared
+    } g_setup;
+
+    // verify: the whole VU memory after the VU's run against the reproduction's, and only empty kicks
+    void setupPredict(const ps2hle::MscalContext &c)
+    {
+        g_setup.expected.assign(c.vuData, c.vuData + kQwords * 16u);
+        g_setup.staleLanes.clear();
+        runSetupProgram(g_setup.expected.data(), c.startPc, c.top, &g_setup.staleLanes);
+        g_setup.active = true;
+        g_pred.vuKicks.clear();
+        ps2vu1tap::g_kicks = &g_pred.vuKicks;
+    }
+
+    bool setupCompare(const ps2hle::MscalContext &c)
+    {
+        if (!g_setup.active)
+            return false;
+        g_setup.active = false;
+        ps2vu1tap::g_kicks = nullptr;
+        bool kicksOk = true;
+        for (const auto &k : g_pred.vuKicks)
+        {
+            uint32_t t0 = 0;
+            std::memcpy(&t0, k.data(), 4);
+            kicksOk = kicksOk && k.size() == 16u && (t0 & 0x7FFFu) == 0u;
+        }
+        for (const auto &[q, lanes] : g_setup.staleLanes) // the VU's stale register lanes count as reproduced
+            for (int k = 0; k < 4; ++k)
+                if (lanes & (1u << k))
+                    std::memcpy(g_setup.expected.data() + q * 16u + k * 4u, c.vuData + q * 16u + k * 4u, 4);
+        uint32_t firstBad = kQwords, bad = 0;
+        for (uint32_t q = 0; q < kQwords; ++q)
+            if (std::memcmp(g_setup.expected.data() + q * 16u, c.vuData + q * 16u, 16) != 0)
+            {
+                firstBad = std::min(firstBad, q);
+                ++bad;
+            }
+        if (kicksOk && bad == 0u)
+            ++g_setup.exact;
+        else
+        {
+            (kicksOk ? g_setup.memBad : g_setup.kicksBad) += 1;
+            static int logged = 0;
+            if (logged++ < 12)
+                std::fprintf(stderr, "[hle-verify] setup 0x%04x differs: kicks %s (%zu), %u qwords off from %u\n", c.startPc,
+                             kicksOk ? "ok" : "off", g_pred.vuKicks.size(), bad, firstBad);
+        }
+        static auto reportAt = std::chrono::steady_clock::now();
+        if (std::chrono::steady_clock::now() - reportAt >= std::chrono::seconds(10))
+        {
+            reportAt = std::chrono::steady_clock::now();
+            std::fprintf(stderr, "[hle-verify] setup programs: %llu exact, %llu memory off, %llu kicks off\n",
+                         (unsigned long long)g_setup.exact, (unsigned long long)g_setup.memBad, (unsigned long long)g_setup.kicksBad);
+        }
+        return true;
+    }
+
     bool beforeNative(const ps2hle::MscalContext &c)
     {
         const int rounding = std::fegetround();
@@ -2153,8 +2463,15 @@ namespace
         bool handled = false;
         static const bool env = !(std::getenv("PS2X_HLE_ENV") && *std::getenv("PS2X_HLE_ENV") == '0');
         static const bool redraw = !(std::getenv("PS2X_HLE_REDRAW") && *std::getenv("PS2X_HLE_REDRAW") == '0');
+        static const bool setup = !(std::getenv("PS2X_HLE_SETUP") && *std::getenv("PS2X_HLE_SETUP") == '0');
         uint32_t shineP = 0, shineQ = 0;
-        if (redraw && c.startPc == 0x2C0u && ps2hle::gs() && isShine(c, shineP, shineQ))
+        if (setup && isSetupProgram(c))
+        {
+            runSetupProgram(c.vuData, c.startPc, c.top);
+            ++g_setup.native;
+            handled = true;
+        }
+        else if (redraw && c.startPc == 0x2C0u && ps2hle::gs() && isShine(c, shineP, shineQ))
             handled = drawNativeShine(c, shineP, shineQ);
         else if (redraw && c.startPc == 0x2C0u && ps2hle::gs() && isRedraw(c))
             handled = drawNativeRedraw(c);

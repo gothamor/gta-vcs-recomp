@@ -214,8 +214,14 @@ dropped on uploads (lazy render-target patching).
       0 in the tour subset and 12 missions.
 - [x] **VU1 XGKICKs went to the GS twice** (found with the counter; PS2RECOMP_PATCHES.md): `PS2X_HLE=0` scenes drew
       ~2x the vertices (cutscene 220,848 -> 122,823). Default path unchanged (scenes 0.00 static).
-- [ ] VU1 setup programs (0x01e0, 0x0250, 0x03a8, 0x0418, 0x0478: ~330 runs a frame, no primitives) and clipped
-      environment-pass packets still run on the VU1.
+- [x] **VU1 setup programs natively** (2026-10-24, game-internals.md 6d "Setup programs"): 0x0000, 0x0148, 0x01e0,
+      0x0250, 0x03a8, 0x0418, 0x0478, 0x2b50 and the slot routines 0xc8 / lit 0x4e0 / lit 0x57e, each tied to a hash of
+      its code; verify exact against the whole VU memory (reference scenes 434,692, PHI_A1 217,489, a city spot
+      80,557). Two more 0x02c0 code images accepted (they differ only in code the shine never runs). VU1 programs a
+      frame: cutscene 195 -> 4, gameplay 86 -> 4, tour subset mean 104.6 -> 3.4 (worker 8.76 -> 8.05 ms); no VU1
+      draws anywhere in the tour subset or the 12 missions. `PS2X_HLE_SETUP=0` = VU1.
+- [ ] Left on the VU1: 3-4 programs a frame of a second low code image (the per-frame Z clear: 0x0000 / 0x0200 with
+      20 kicks, 0x0250, 0x0400) and clipped environment-pass packets (table 0x13, ~63 in two minutes).
 - [ ] Rigid / skinned lit models still use GPU clipping for their clipped packets (no wrong picture seen yet; same
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
@@ -422,6 +428,8 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_HUD_LOG=1` | the renderer's HUD layers (per frame buffer, stale or not) and the output size, every 2 s |
 | `VCS_TRACE_IM2D=n`, `VCS_TRACE_IM2D_MARKERS=1..5` | log n Im2D calls (caller, primitive, vertices) / the 2D pass's calls, from 30 s on |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
+| `PS2X_HLE_SETUP=0` | VU1 setup programs (matrices, slot routines, block copy) on the VU1 instead of natively |
+| `PS2X_HLE_DUMP_IMAGES=1` | write the code and data of the first 0x02c0 shine packet of each code image (`shine_<hash>_*.bin`) |
 | `PS2X_HW_DRAW_SOURCES=1`, rig `gsdraws [reset]` | draws still made from GS primitives by kind and source, per frame (logged every 5 s / on request); totals always in the perf line (`gs_draws` ...) |
 | `PS2X_CLIP_DUMP=dir[,n]` | with `PS2X_HLE_VERIFY=1`: write n clipped packets (VU memory + the VU's kicks) for offline checks |
 | `PS2X_HW_LAZY_UPLOADS=0`, `PS2X_HW_UPSTATS=1` | write texture uploads immediately / upload stats |

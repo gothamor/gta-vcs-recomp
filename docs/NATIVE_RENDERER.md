@@ -516,10 +516,12 @@ First survey (2026-10-24: reference scenes, the tour subset, 12 missions 6-94), 
 | PATH3 | 0 | 0 | 0 |
 | native / HUD layer / post | 237 / 18 / 16 | | |
 
-- The VU1 draws were 0x02c0 entry 0x0d (shine) packets that cross the guard band or are culled: reproduced since
-  (game-internals.md 6d), so **no VU1 draws** in the tour subset or the missions. Left on the VU1: clipped
-  environment-pass packets (table 0x13, ~63 in two minutes) and the **setup programs** (0x01e0, 0x0250, 0x03a8,
-  0x0418, 0x0478 ...: matrices and per-batch tables, no primitives) - ~330 runs a frame in the flyover / cutscene.
+- The VU1 draws were 0x02c0 entry 0x0d (shine) packets that cross the guard band or are culled, or that use one of
+  two more code images: reproduced / accepted since (game-internals.md 6d), so **no VU1 draws** in the tour subset or
+  the missions. The **setup programs** (matrices, per-batch tables, bone copies; ~330 runs a frame in the cutscene)
+  are native too: VU1 programs a frame 195 -> 4 (cutscene), 86 -> 4 (gameplay), tour subset mean 104.6 -> 3.4,
+  worker 8.76 -> 8.05 ms. Left on the VU1: 3-4 programs a frame of a second low code image (the per-frame Z clear)
+  and clipped environment-pass packets (table 0x13, ~63 in two minutes).
 - PATH2 (VIF DIRECT, the game's 2D / effect packets): the reflection map built in FBP 420 (a 128x128 sample of FBP
   140 plus a sun sprite), coronas / light sprites, and the full-screen effect draws not taken by the native post
   passes (colour-filter quads, the depth-tested self-copy over the sky, fades). Flat full-screen draws are resolution

@@ -372,9 +372,29 @@ among them 9,629 clipped and 26,518 culled shines.
 - 0x0250: the slot part of 0x01e0 alone, then the kick. 0x03a8: the slots from the .w lanes, then the kick.
 - 0x0418: the .w slots, then falls into 0x0478 and ends without a kick. 0x0478: 0x04d8 (4, 8, 12, 16), then
   0x04d8 (0, 16, 12, 24).
-- 0x0200 / 0x0400 start inside those (stale vf01-03) and draw at boot only (the Z clear into FBP 280).
-About 330 runs a frame in the flyover and cutscenes (`PS2X_TRACE_VU1=1`: 0x01e0 30k, 0x03a8 12.6k, 0x0478 9.3k,
-0x0250 5.3k, 0x0418 1.5k per 5 s).
+- 0x0000 (same image): 42 / 43 (position scale / offset) from TOP, then the end kick. 0x0148: qword 58 = the empty
+  tag (0x8000, 0, 0, 0). 0x2b50 (lit image): a block copy - the header at TOP to header.z, then 4 x header.x qwords
+  after it (the bone matrices), four loads then four stores per step.
+- Slot routines of the lit image (code at 0x2700+, so per image): **0x4e0** (byte 0x2700, vi01 = P = 0x9c) the light
+  directions P+0..2 into object space: rows 0-2 normalised (ERLENG, MUL.xyz), P+9+i = L0 r.x + L1 r.y + L2 r.z (all
+  lanes); **0x57e** (byte 0x2bf0, vi01 = A = 0xa8) the env matrix: A+5+i .xy = rows A+2..4 . normalised row i, stored
+  as whole qwords - A+7.z is the last ERLENG, the other z / w lanes are stale registers (the env pass reads x / y).
+- 0x0200 / 0x0400 / another 0x0000 / 0x0250 belong to a second low image (different code before 0x0178): about 2 runs
+  a frame each, 0x0000 and 0x0200 with 20 kicks per run (the Z clear into FBP 280, which the renderer turns into
+  depth fills). Not reproduced.
+About 330 runs a frame in the flyover and cutscenes before (`PS2X_TRACE_VU1=1`: 0x01e0 30k, 0x03a8 12.6k, 0x0478
+9.3k, 0x0250 5.3k, 0x0418 1.5k per 5 s). **Reproduced (2026-10-24)**, each routine tied to a hash of its code
+(`CodeCheck` in vcs_hle_world.cpp), checked with `PS2X_HLE_VERIFY=1` against the whole VU memory after the VU's run
+(stale lanes excepted): reference scenes 434,692, PHI_A1 217,489, a city spot 80,557 - all exact. The matrix and
+camera routines need the VU's float edge cases (0x0478 / 0x0418 reach denormal or huge inputs: `vuMul` / `vuMadd` /
+`vuAdd` / `vuSub`). Left on the VU1: 3-4 programs a frame (the second low image). `PS2X_HLE_SETUP=0` = VU1.
+
+**0x02c0 code images.** Three images with the shine / re-draw stage routines are seen (PS2X_HLE_DUMP_IMAGES=1 writes
+the first shine packet of each: build/analysis/shine): hash (0x30..0x2b20) 1a8edffd (the one reproduced first),
+da70874b (differs only at 0x1030 - dead code after a JR's delay slot) and 97eecb5d (also in 0x0a88-0x0c10 and
+0x0ef0-0x1020, alternative transform / clip-test routines the stage table never calls: the shine and re-draw enter
+through 52.x = 0xde / 0xe9 only). The second and third were seen in the city (e.g. (-675, -75)) and fell back to the
+VU1 until accepted; verify there: 85,413 re-draws exact.
 
 All of these are reproduced in `vcs_hle_world.cpp` (floatKicks / shineKicks) with the VU memory they write, and
 checked against the VU's kicks and memory (174,110 packets over the reference scenes, MAR_A1 / GON_C3 / a drive

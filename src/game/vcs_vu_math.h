@@ -142,6 +142,16 @@ namespace vcsvu
         return vuOperand(a * b);
     }
 
+    inline float vuAdd(float a, float b) // ADD (vu1fast::plainResult)
+    {
+        return vuOperand(vuOperand(a) + vuOperand(b));
+    }
+
+    inline float vuSub(float a, float b) // SUB
+    {
+        return vuOperand(vuOperand(a) - vuOperand(b));
+    }
+
     inline float vuMadd(float acc, float a, float b) // MADD / MADDA: acc + a * b
     {
         a = vuOperand(a);
