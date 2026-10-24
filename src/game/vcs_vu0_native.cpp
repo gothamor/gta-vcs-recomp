@@ -20,20 +20,35 @@ namespace
     using vu1v::splat;
     using vu1v::store;
 
+    // The program's view of VU0's registers. [gta-recomp] VF and ACC are the context's own (`__m128 vu0_vf[32]` has
+    // this layout), worked on in place: copying the whole register file in and out was ~1 KB per call at ~3,100 calls
+    // a frame. VF0 reads (0, 0, 0, 1) during the call and the context's own VF0 is put back after, as the copy left it
+    // (writes to VF0 were never stored); VI is copied (VI0 reads 0; VI1..15 stored back by storeRegs).
     struct Vu0Regs
     {
-        float vf[32][4];
-        float acc[4];
-        int16_t vi[16];
+        float (*vf)[4] = nullptr;
+        float *acc = nullptr;
+        int16_t vi[16] = {};
+        R5900Context *ctx = nullptr;
+        __m128 savedVf0 = _mm_setzero_ps();
+
+        Vu0Regs() = default;
+        Vu0Regs(const Vu0Regs &) = delete;
+        Vu0Regs &operator=(const Vu0Regs &) = delete;
+        ~Vu0Regs()
+        {
+            if (ctx)
+                ctx->vu0_vf[0] = savedVf0;
+        }
     };
 
-    void loadRegs(const R5900Context *ctx, Vu0Regs &r)
+    void loadRegs(R5900Context *ctx, Vu0Regs &r)
     {
-        for (int i = 0; i < 32; ++i)
-            _mm_storeu_ps(r.vf[i], ctx->vu0_vf[i]);
-        r.vf[0][0] = r.vf[0][1] = r.vf[0][2] = 0.0f; // as copyVu0ContextToState
-        r.vf[0][3] = 1.0f;
-        _mm_storeu_ps(r.acc, ctx->vu0_acc);
+        r.ctx = ctx;
+        r.savedVf0 = ctx->vu0_vf[0];
+        ctx->vu0_vf[0] = _mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f); // as copyVu0ContextToState
+        r.vf = reinterpret_cast<float (*)[4]>(ctx->vu0_vf);
+        r.acc = reinterpret_cast<float *>(&ctx->vu0_acc);
         for (int i = 0; i < 16; ++i)
             r.vi[i] = static_cast<int16_t>(ctx->vi[i]);
         r.vi[0] = 0;
@@ -41,10 +56,7 @@ namespace
 
     void storeRegs(const Vu0Regs &r, R5900Context *ctx)
     {
-        for (int i = 1; i < 32; ++i)
-            ctx->vu0_vf[i] = _mm_loadu_ps(r.vf[i]);
-        ctx->vu0_acc = _mm_loadu_ps(r.acc);
-        for (int i = 1; i < 16; ++i)
+        for (int i = 1; i < 16; ++i) // (VF / ACC were written in place)
             ctx->vi[i] = static_cast<uint16_t>(r.vi[i]);
     }
 
@@ -241,7 +253,7 @@ namespace
         float q, i;
         uint32_t clip;
 
-        explicit CollisionVu(const R5900Context *ctx) : q(ctx->vu0_q), i(ctx->vu0_i), clip(ctx->vu0_clip_flags) { loadRegs(ctx, r); }
+        explicit CollisionVu(R5900Context *ctx) : q(ctx->vu0_q), i(ctx->vu0_i), clip(ctx->vu0_clip_flags) { loadRegs(ctx, r); }
         void finish(R5900Context *ctx) const
         {
             storeRegs(r, ctx);

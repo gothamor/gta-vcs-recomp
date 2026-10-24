@@ -170,6 +170,14 @@ Scenes unchanged.
 - The sampling profiler counted a host sample as guest code when it fell within 1 MB after a generated function; it now
   uses each generated function's own symbol size (ThinLTO / PGO builds interleave runtime and generated functions).
 
+### 11. VU0 natives on the context's registers (2026-10-25)
+
+The VU0 natives (~3,100 calls a frame driving: box clip, 3x matrix product, sphere / segment vs triangle) copied the
+whole VU0 register file in and out per call; they now work on the context's VF / ACC in place (VF0 reads (0, 0, 0, 1)
+during the call, the context's own VF0 put back after, as the copy left it). `PS2X_VU0_VERIFY=1`: millions of runs of
+each against the interpreter, 0 differed. Their share of the game thread 6.75 -> 6.4% (smaller than the copy's size
+suggested).
+
 ## Next
 
 - **Game thread** (4-6 ms; the limit again): the per-call cost of guest functions (Win64 prologues save 8 GPRs + 6 XMM
