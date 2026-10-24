@@ -329,6 +329,11 @@ dropped on uploads (lazy render-target patching).
       through the strongest skid the native output equals the reference within ~1% loudness per quarter second.
       Same at the original 30 fps timing. Not reproduced as a native-driver difference; open until the user compares
       by ear with `VCS_NATIVE_SOUND=0`. (The scripted turns ran partly on sand, where GTA plays no screech.)
+      2026-10-24, the user (comparing with the original): no tyre screech on a bike at speed with R1 held while
+      turning, with native and emulated sound alike. On the airport runway the game does request the screech
+      (sound 260, volume 25-36, pitch 16-18k, held through the skid; game-internals.md 9a) and the SPU2 plays it
+      (voice output peak ~4000 against ~8300 for the engine; replay = live output). Open: whether it is quieter
+      than on the original - a clip went to the user to judge.
       Mapping tools: `tools/irxdis.py --map / --decompile`
       (headless Ghidra), `tools/mipsdis.py` (MIPS I, standard library).
 - [x] Step 3 (2026-10-24): no emulated IOP in the normal run - no IRX module loaded or run, no IOP time emulated
@@ -372,6 +377,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_MOVIE_LOG=1` | movie playback: sound pushed / queued / played vs the pictures, every second |
 | `VCS_NATIVE_STREAM=0`, `VCS_STREAM_LOG=1` | disc streaming through the IOP (the reference); native read stats every 5 s |
 | `VCS_NATIVE_SOUND=0` | sound through the emulated IOP's CDSTREAM / LIBSD (the reference) |
+| `VCS_SKID_LOG=1` | the skid-sound function's inputs for the player's vehicle (type, drive type, speed, wheel states, surface) |
+| `PS2X_SPU2_VOICE_LOG=1` | SPU2 key-ons (address, pitch, ADSR, volume) and every sounding voice's address / envelope / output peak each 0.1 s |
 | `PS2X_IOP=0\|1` | emulated IOP off / on (default: off when streaming and sound are native) |
 | `PS2X_SPU2_TRACE=<file>` | every SPU2 register write and DMA to `<file>.<n>` per SPU2 instance (0 = the emulated IOP's) |
 | `PS2X_RPC_RECORD=<file>`, `PS2X_RPC_RECORD_SIDS=<hex,...>` | record RPC calls with their IOP time (tools/soundcheck.py) |

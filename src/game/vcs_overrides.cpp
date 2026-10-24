@@ -639,8 +639,53 @@ namespace
         FUN_002723e8_0x2723e8(rdram, ctx, runtime);
     }
 
+    // VCS_SKID_LOG=1: cAudioManager::ProcessVehicleSkidding (FUN_001BA600, a1 = cVehicleParams) inputs for vehicles
+    // with a wheel not in the normal state
+    void logSkidding(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const auto rd32 = [&](uint32_t a) { uint32_t v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
+        const auto rdf = [&](uint32_t a) { float v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
+        const uint32_t p = GPR_U32(ctx, 5);
+        const uint32_t type = rd32(p), veh = rd32(p + 0xC), trans = rd32(p + 0x10);
+        const bool two = type == 6 || type == 8;
+        const uint32_t base = two ? 0x668u : 0x7FCu, wheels = two ? 2u : 4u;
+        uint32_t states = 0;
+        for (uint32_t i = 0; i < wheels; ++i)
+            states = states * 10u + rd32(veh + base + 8u + i * 4u);
+        static int logged = 0, calls = 0;
+        const uint32_t mine = rd32(rd32(0x004E4910u) + 0x450u); // the player's vehicle
+        if (veh && veh == mine && (states || calls++ % 60 == 0) && logged++ < 2000)
+            std::fprintf(stderr, "[skid] type %u veh %08x dist %.1f trans %08x drive '%c'(0x%02x) vel %.3f ground %u f %.3f states %0*u"
+                                 " surface %u maxvel %.3f turnz %.3f this+4c %.1f\n",
+                         type, veh, rdf(p + 8), trans, rdram[(trans + 0x5C) & 0x01FFFFFFu] >= 32 ? rdram[(trans + 0x5C) & 0x01FFFFFFu] : '?',
+                         rdram[(trans + 0x5C) & 0x01FFFFFFu], rdf(p + 0x18), rdram[(veh + base) & 0x01FFFFFFu], rdf(veh + base + 4u),
+                         static_cast<int>(wheels), states, rdram[(veh + 0x137) & 0x01FFFFFFu], rdf(trans + 0x50), rdf(veh + 0x78),
+                         rdf(GPR_U32(ctx, 4) + 0x4C));
+        FUN_001ba600_0x1ba600(rdram, ctx, runtime);
+    }
+
+    // the per-wheel skid values (FUN_001BAB18 non-driven, FUN_001BA9A8 driven; a1 vehicle, a2 wheel state, a3 transmission)
+    template <void (*Original)(uint8_t *, R5900Context *, PS2Runtime *), char Kind>
+    void logWheelSkid(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const auto rd32 = [&](uint32_t a) { uint32_t v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
+        const auto rdf = [&](uint32_t a) { float v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
+        const uint32_t veh = GPR_U32(ctx, 5);
+        static int logged = 0;
+        if (veh == rd32(rd32(0x004E4910u) + 0x450u) && logged++ < 400)
+            std::fprintf(stderr, "[skid] %c state %u f12 %.3f f13 %.3f maxvel %.3f turnz %.3f\n", Kind, GPR_U32(ctx, 6), ctx->f[12],
+                         ctx->f[13], rdf(GPR_U32(ctx, 7) + 0x50), rdf(veh + 0x78));
+        Original(rdram, ctx, runtime);
+    }
+
     void applyVcs(PS2Runtime &runtime)
     {
+        if (std::getenv("VCS_SKID_LOG"))
+        {
+            runtime.replaceFunction(0x001BA600u, &logSkidding);
+            runtime.replaceFunction(0x001BAB18u, &logWheelSkid<FUN_001bab18_0x1bab18, 'N'>);
+            runtime.replaceFunction(0x001BA9A8u, &logWheelSkid<FUN_001ba9a8_0x1ba9a8, 'D'>);
+        }
         runtime.replaceFunction(0x002723E8u, &markFrameKick);
         vcs::installDisplayHooks(runtime); // widescreen (settings menu)
         vcs::installHudHooks(runtime);     // 2D at the RenderWare level

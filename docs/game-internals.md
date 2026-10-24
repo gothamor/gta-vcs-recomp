@@ -690,6 +690,19 @@ below are module offsets (CDSTREAM loads at IOP 0x1D600 on the emulated IOP); "d
   envelope (`index | core << 1` for libsd's `core | index << 1`) made the bike's engine restart every frame (a short
   sample looping fast, sometimes silence at speed) and cars play rev samples while slowing (found 2026-10-24 by the
   user; 676 key-ons vs the IOP's 156 over the same ride, 91 back-to-back restarts vs 0).
+- **Vehicle skid sounds: `FUN_001BA600`** (cAudioManager::ProcessVehicleSkidding; found 2026-10-24 through the float
+  constants 13000.0 / 35000.0 of the pitch formula; a1 = cVehicleParams: +0 type, +8 squared distance, +0xC vehicle,
+  +0x10 transmission, +0x18 speed along the vehicle's forward axis). Vehicle types 0 / 9 have four wheels (count of
+  wheels on the ground +0x7FC, gas pedal +0x800, wheel states +0x804), 6 / 8 (bikes) two (+0x668 / +0x66C / +0x670);
+  wheel states 0 normal, 1 spinning, 2 skidding, 3 locked. Per wheel: drive type (transmission +0x5C, 'F' / 'R' /
+  '4') picks `FUN_001BA9A8` for driven wheels (spinning: (gas - 0.4) x 1.667; locked / skidding: max of that and
+  |speed| / max velocity (transmission +0x50)) or `FUN_001BAB18` for the others (skidding only), both raised to
+  |turn speed z| x 20 (vehicle +0x78), capped at 1. The largest x 55 is the volume before distance (40 m). Sound by
+  the surface under the vehicle (+0x137 - 2, jump table 0x4A7EA0): grass / hedge sound 239 (a hiss) at
+  35000 + 13000 x skid, 1/4 volume; gravel / sand sound 175 at 5000 + 3000 x skid; everything else (tarmac) **sound
+  260, the screech, at 11000 + 5000 x skid, +2000 for bikes**. A bike at 120 km/h held on R1 and turned: front wheel
+  skidding, rear locked, screech at volume ~36 (gas held) / ~25 (gas off), pitch 16,000-18,000, as long as the skid
+  lasts (`VCS_SKID_LOG=1` logs the inputs for the player's vehicle).
 - **Init** (0x3B10): `sceSdInit(0)`, SPDIF mode 0x800, main volumes 0 then 0x3FFF, a 128 KB IOP buffer, then every
   bank's `\AUDIO\SET<b/10>\SFX<b>_PS.SDT` read into one sound table: **12 bytes per sound** - offset in the bank's
   .RAW, bytes, sample rate - indexed from bank b's first sound (68 constants written by 0x3B10 to data 0x9FC0; last

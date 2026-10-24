@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <vector>
@@ -67,6 +68,7 @@ namespace ps2x::iop::detail
             enum class Phase : uint8_t { Off, Attack, Decay, Sustain, Release } phase = Phase::Off;
             int32_t level = 0;
             uint32_t envCounter = 0;
+            int32_t dbgPeak = 0, dbgSamplePeak = 0; // PS2X_SPU2_VOICE_LOG
         };
 
         struct Core
@@ -127,6 +129,8 @@ namespace ps2x::iop::detail
         // PS2X_SPU2_TRACE=<file>: every register write and DMA of this instance to <file>.<n> (n = instances made
         // before it) - the emulated IOP's and a native driver's SPU2 compared write for write (tools/soundcheck.py)
         std::FILE *m_trace = nullptr;
+        bool m_voiceLog = std::getenv("PS2X_SPU2_VOICE_LOG") != nullptr; // key-ons and sounding voices every 0.1 s
+        void reportVoices();
         uint32_t m_instance = 0;
     };
 }

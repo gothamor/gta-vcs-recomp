@@ -398,7 +398,27 @@ namespace ps2x::iop::detail
             v.envCounter = 0;
             c.endx &= ~(1u << i);
             decodeBlock(c, coreIndex, v);
+            if (m_voiceLog)
+                std::fprintf(stderr, "[spu2-voice] %llu KON %u:%u ssa %05x pitch %04x adsr %04x/%04x vol %04x/%04x header %04x\n",
+                             static_cast<unsigned long long>(m_nextSampleCycle / kCyclesPerSample), coreIndex, i, v.ssa, v.pitch,
+                             v.adsr1, v.adsr2, v.volL, v.volR, m_ram[v.ssa & kAddrMask]);
         }
+    }
+
+    // PS2X_SPU2_VOICE_LOG=1: every 0.1 s, each sounding voice's address, envelope and output peaks since the last report
+    void IopSpu2::reportVoices()
+    {
+        for (uint32_t ci = 0; ci < 2; ++ci)
+            for (uint32_t vi = 0; vi < 24; ++vi)
+            {
+                Voice &v = m_cores[ci].voices[vi];
+                if (v.phase == Voice::Phase::Off && v.dbgPeak == 0)
+                    continue;
+                std::fprintf(stderr, "[spu2-voice] %llu %u:%u phase %d nax %05x lsa %05x env %d sample peak %d out peak %d vol %04x/%04x\n",
+                             static_cast<unsigned long long>(m_nextSampleCycle / kCyclesPerSample), ci, vi, static_cast<int>(v.phase),
+                             v.nax, v.lsa, v.level, v.dbgSamplePeak, v.dbgPeak, v.volL, v.volR);
+                v.dbgPeak = v.dbgSamplePeak = 0;
+            }
     }
 
     void IopSpu2::keyOff(Core &c, uint32_t mask)
@@ -656,6 +676,11 @@ namespace ps2x::iop::detail
                 const int32_t s = voiceSample(c, ci, vi);
                 const int32_t l = (s * fixedVolume(v.volL, v.curVolL)) >> 15;
                 const int32_t r = (s * fixedVolume(v.volR, v.curVolR)) >> 15;
+                if (m_voiceLog)
+                {
+                    v.dbgPeak = std::max<int32_t>(v.dbgPeak, std::max(std::abs(l), std::abs(r)));
+                    v.dbgSamplePeak = std::max<int32_t>(v.dbgSamplePeak, std::abs(s));
+                }
                 const uint32_t bit = 1u << vi;
                 if (c.vmixL & bit)
                     dryL += l;
@@ -780,6 +805,8 @@ namespace ps2x::iop::detail
             m_stats.peak = std::max<int32_t>(m_stats.peak, std::max(std::abs(l), std::abs(r)));
             if ((++m_stats.frames % (48000u * 5u)) == 0u)
                 reportStats();
+            if (m_voiceLog && (m_nextSampleCycle / kCyclesPerSample) % 4800u == 0u)
+                reportVoices();
             m_outBuffer.push_back(l);
             m_outBuffer.push_back(r);
             m_nextSampleCycle += kCyclesPerSample;
