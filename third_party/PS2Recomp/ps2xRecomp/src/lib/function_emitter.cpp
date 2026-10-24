@@ -157,7 +157,7 @@ namespace ps2recomp
         // [gta-recomp] ctx as __restrict: the guest's RAM (rdram, a uint8_t*) never holds the register file, and every
         // runtime call that touches the context is handed ctx - so the compiler may keep guest registers in host
         // registers across guest stores instead of reloading them after each one. PS2X_RECOMP_NO_RESTRICT=1: off.
-        ss << "void " << sanitizedName << "(uint8_t* rdram, R5900Context* " << (restrictCtxEnabled() ? "__restrict " : "")
+        ss << "PS2_GUEST_CC void " << sanitizedName << "(uint8_t* rdram, R5900Context* " << (restrictCtxEnabled() ? "__restrict " : "")
            << "ctx, PS2Runtime *runtime) {\n";
         ss << "#ifdef PS2_FUNCTION_LOG_TRACKER\n";
         ss << "    PS_LOG_ENTRY(\"" << sanitizedName << "\");\n";

@@ -63,7 +63,7 @@ namespace
         return reinterpret_cast<const char *>(rdram + (address & 0x01FFFFFFu));
     }
 
-    void traceOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t nameAddr = GPR_U32(ctx, 4);
         if (std::strstr(guestString(rdram, nameAddr), "LVZ"))
@@ -87,7 +87,7 @@ namespace
                      static_cast<int32_t>(GPR_U32(ctx, 2)), ra);
     }
 
-    void traceRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         std::fprintf(stderr, "[file] read handle %d buf=0x%08x size=0x%x (ra=0x%08x)\n",
                      static_cast<int32_t>(GPR_U32(ctx, 4)), GPR_U32(ctx, 5), GPR_U32(ctx, 6), GPR_U32(ctx, 31));
@@ -103,7 +103,7 @@ namespace
                      rdram[buf + 6], rdram[buf + 7]);
     }
 
-    void traceInflate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceInflate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         // FUN_0021FA38(dst, src, dstCapacity, ?) - zlib inflate of e.g. GAME.DTZ
         const uint32_t src = GPR_U32(ctx, 5) & 0x01FFFFFFu;
@@ -117,7 +117,7 @@ namespace
         FUN_0021fa38_0x21fa38(rdram, ctx, runtime);
     }
 
-    void traceRelocate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceRelocate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         // FUN_00324A50(header{'GTAG',1,..}, image, flag): relocates a loaded GTAG memory image.
         const uint32_t image = GPR_U32(ctx, 5) & 0x01FFFFFFu;
@@ -137,7 +137,7 @@ namespace
         FUN_00324a50_0x324a50(rdram, ctx, runtime);
     }
 
-    void traceInflateEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceInflateEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         // inflateEnd(z_stream *strm): strm->next_out (+0x0C) / total_out (+0x14)
         const uint32_t strm = GPR_U32(ctx, 4) & 0x01FFFFFFu;
@@ -160,7 +160,7 @@ namespace
         FUN_00265208_0x265208(rdram, ctx, runtime);
     }
 
-    void returnZero(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void returnZero(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         (void)rdram;
         (void)runtime;
@@ -170,7 +170,7 @@ namespace
 
     // abort() (0x4604F0 -> exit(1)): the game hit a fatal check. Log a heuristic guest
     // backtrace: stack words that point just past a jal/jalr in .text.
-    void traceAbort(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceAbort(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         std::fprintf(stderr, "[vcs] abort()/_Exit pc=0x%08x called from ra=0x%08x sp=0x%08x a0=0x%08x\n[vcs] backtrace:",
                      ctx->pc, GPR_U32(ctx, 31), GPR_U32(ctx, 29), GPR_U32(ctx, 4));
@@ -198,7 +198,7 @@ namespace
     }
 
     // VCS_TRACE_DELAY=1: DelayThread(usec) (0x468318, SetTimerAlarm + WaitSema) with host time between calls.
-    void traceDelay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceDelay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static auto last = std::chrono::steady_clock::now();
         static int count = 0;
@@ -211,7 +211,7 @@ namespace
     }
 
     // VCS_TRACE_SOUND=1: the EE sound driver's RPC commands (FUN_0010E970(cmd, arg) -> client 0x4D3D40, sid 0x65686579)
-    void traceSoundCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceSoundCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static int count = 0;
         const uint32_t cmd = GPR_U32(ctx, 4);
@@ -226,7 +226,7 @@ namespace
         FUN_0010e970_0x10e970(rdram, ctx, runtime);
     }
 
-    void traceSoundInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceSoundInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         uint32_t flag = 0;
         std::memcpy(&flag, rdram + 0x00481900u, 4);
@@ -235,7 +235,7 @@ namespace
     }
 
     // Level loader FUN_0023BAF0(level, ...): reads <level>.LVZ, stores the WRLD image at level+0x1C
-    void traceLevelLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceLevelLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         std::fprintf(stderr, "[level] load level=0x%08x a1=0x%08x a2=0x%08x ra=0x%08x\n", GPR_U32(ctx, 4), GPR_U32(ctx, 5),
                      GPR_U32(ctx, 6), GPR_U32(ctx, 31));
@@ -253,7 +253,7 @@ namespace
     uint32_t g_countedN = 0;
 
     template <int I>
-    void countCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void countCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         ++g_counted[I].calls;
         static auto last = std::chrono::steady_clock::now();
@@ -305,7 +305,7 @@ namespace
 
     // VCS_TRACE_DMASEND=1: sceDmaSend(channel, tag) callers (ra) with counts, every 5 s.
     PS2Runtime::RecompiledFunction g_origDmaSend = nullptr;
-    void traceDmaSend(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceDmaSend(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static std::map<std::pair<uint32_t, uint32_t>, uint64_t> counts;
         static auto last = std::chrono::steady_clock::now();
@@ -329,7 +329,7 @@ namespace
         std::memcpy(&f, rdram + (address & 0x01FFFFFFu), 4);
         return f;
     }
-    void traceSphereVisible(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceSphereVisible(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t cam = GPR_U32(ctx, 4), center = GPR_U32(ctx, 5), mat = GPR_U32(ctx, 6);
         const float radius = ctx->f[12];
@@ -365,7 +365,7 @@ namespace
 
     // VCS_TRACE_BOXCLIP=1: FUN_0030C8D4(prog, box*, out0*, out1*) = CTC2 CMSAR0; LQC2 vf1,vf2; VCALLMSR; CFC2 vi1,vi2.
     // The sector visibility test (FUN_002F7528) culls unless the low 6 bits come back 0x3F.
-    void traceBoxClip(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceBoxClip(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t prog = GPR_U32(ctx, 4), box = GPR_U32(ctx, 5), out0 = GPR_U32(ctx, 6), out1 = GPR_U32(ctx, 7);
         static bool dumped = false;
@@ -440,7 +440,7 @@ namespace
         }
     }
 
-    void testSaveOnPadRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void testSaveOnPadRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static const auto start = std::chrono::steady_clock::now();
         static const char *saveEnv = std::getenv("VCS_TEST_SAVE");
@@ -494,13 +494,13 @@ namespace
     // VCS_TRACE_TELEPORT: FUN_0020b3d8(ped, CVector *pos) is the ped teleport (remove, set position, reset, add);
     // log who calls it (it is reached through a vtable) and where to.
     uint32_t g_currentScript = 0; // CRunningScript being interpreted (FUN_002560d8 ProcessOneCommand), game thread
-    void traceScriptCommand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceScriptCommand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_currentScript = GPR_U32(ctx, 4);
         FUN_002560d8_0x2560d8(rdram, ctx, runtime);
     }
 
-    void traceTeleport(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceTeleport(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         float pos[3];
         std::memcpy(pos, rdram + (GPR_U32(ctx, 5) & 0x01FFFFFFu), sizeof(pos));
@@ -517,7 +517,7 @@ namespace
     }
 
     uint64_t g_sectorCalls = 0; // FUN_00240ED8 calls, for VCS_TRACE_CELL
-    void traceSector(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceSector(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         ++g_sectorCalls;
         static uint64_t calls = 0, noSector = 0, noIndex = 0, notLoaded = 0, loaded = 0;
@@ -562,7 +562,7 @@ namespace
     // VCS_TRACE_CELL=1: the world is drawn relative to the "current" hex cell (*(level+0x248): grid x at +8, y at
     // +0xC; FUN_00241F00 turns it into a world origin). Logs that cell every 2 s from the sector walk
     // FUN_0023E748, and the focus position each time FUN_0023C188(level, pos) re-evaluates it.
-    void traceCellWalk(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceCellWalk(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static auto last = std::chrono::steady_clock::now();
         const auto rd32 = [&](uint32_t a) { uint32_t v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
@@ -595,7 +595,7 @@ namespace
             walks = emptyWalks = skippedGrid = 0;
         }
     }
-    void traceCellFocus(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void traceCellFocus(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t pos = GPR_U32(ctx, 5);
         const float x = guestFloat(rdram, pos), y = guestFloat(rdram, pos + 4), z = guestFloat(rdram, pos + 8);
@@ -608,7 +608,7 @@ namespace
     // VCS_TRACE_PACKETS=1: FUN_00476770(buffer) returns the bytes used in the current half of a double-buffered DMA
     // packet buffer (halves of 0xE6670). Draw code skips work once fewer than ~0x12C00 bytes are left; log the
     // peak use and how often that limit was reached, every 2 s.
-    void tracePacketUse(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void tracePacketUse(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static std::map<uint32_t, uint32_t> peak;
         static uint64_t calls = 0, nearFull = 0;
@@ -634,7 +634,7 @@ namespace
 
     // Game frame boundary for the perf overlay (runtime/ps2_perf.h): FUN_002723E8 kicks the frame's VIF1 display
     // list (D1_CHCR = 0x145 at 0x27245C), once per rendered frame.
-    void markFrameKick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void markFrameKick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         ps2perf::markGameFrame();
         vcs::applyDisplay(rdram); // widescreen preference / aspect (settings menu)
@@ -649,7 +649,7 @@ namespace
 
     // VCS_SKID_LOG=1: cAudioManager::ProcessVehicleSkidding (FUN_001BA600, a1 = cVehicleParams) inputs for vehicles
     // with a wheel not in the normal state
-    void logSkidding(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void logSkidding(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const auto rd32 = [&](uint32_t a) { uint32_t v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
         const auto rdf = [&](uint32_t a) { float v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
@@ -673,8 +673,8 @@ namespace
     }
 
     // the per-wheel skid values (FUN_001BAB18 non-driven, FUN_001BA9A8 driven; a1 vehicle, a2 wheel state, a3 transmission)
-    template <void (*Original)(uint8_t *, R5900Context *, PS2Runtime *), char Kind>
-    void logWheelSkid(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    template <PS2Runtime::RecompiledFunction Original, char Kind>
+    PS2_GUEST_CC void logWheelSkid(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const auto rd32 = [&](uint32_t a) { uint32_t v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
         const auto rdf = [&](uint32_t a) { float v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
@@ -731,13 +731,19 @@ namespace
         if (std::getenv("VCS_TRACE_BOXCLIP"))
             runtime.replaceFunction(0x0030C8D4u, &traceBoxClip);
         if (std::getenv("VCS_EXPERIMENT_NOCLIP")) // timing experiment only: every sector box "fully inside"
-            runtime.replaceFunction(0x0030C8D4u, [](uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
-                                    {
-                                        const uint32_t v = 0x3Fu;
-                                        std::memcpy(rdram + (GPR_U32(ctx, 6) & 0x01FFFFFFu), &v, 4);
-                                        std::memcpy(rdram + (GPR_U32(ctx, 7) & 0x01FFFFFFu), &v, 4);
-                                        ctx->pc = GPR_U32(ctx, 31);
-                                    });
+        {
+            struct AllInside // (a named function: lambdas convert only to the platform's calling convention)
+            {
+                static PS2_GUEST_CC void function(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+                {
+                    const uint32_t v = 0x3Fu;
+                    std::memcpy(rdram + (GPR_U32(ctx, 6) & 0x01FFFFFFu), &v, 4);
+                    std::memcpy(rdram + (GPR_U32(ctx, 7) & 0x01FFFFFFu), &v, 4);
+                    ctx->pc = GPR_U32(ctx, 31);
+                }
+            };
+            runtime.replaceFunction(0x0030C8D4u, &AllInside::function);
+        }
         if (std::getenv("VCS_TRACE_VISIBLE"))
             runtime.replaceFunction(0x003816F8u, &traceSphereVisible);
         if (std::getenv("VCS_TRACE_DMASEND"))

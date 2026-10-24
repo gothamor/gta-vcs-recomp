@@ -1258,7 +1258,7 @@ namespace ps2recomp
                 {
                     std::string generatedName = m_codeGenerator->getFunctionName(function.start);
                     std::stringstream stub;
-                    stub << "void " << generatedName
+                    stub << "PS2_GUEST_CC void " << generatedName // [gta-recomp] ps2_guest_cc.h
                          << "(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runtime) {\n";
                     stub << "#ifdef _DEBUG\n";
                     stub << "    PS_LOG_ENTRY(\"" << generatedName << "\");\n";
@@ -1827,7 +1827,7 @@ namespace ps2recomp
                     continue;
                 }
 
-                ss << "void " << generatedName << "(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime);\n";
+                ss << "PS2_GUEST_CC void " << generatedName << "(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime);\n";
             }
 
             // ss << "\n} // namespace stubs\n";
@@ -1858,6 +1858,7 @@ namespace ps2recomp
 
             ss << "#ifndef PS2_RECOMPILED_FUNCTIONS_H\n";
             ss << "#define PS2_RECOMPILED_FUNCTIONS_H\n\n";
+            ss << "#include \"ps2_guest_cc.h\" // [gta-recomp] PS2_GUEST_CC\n";
 
             ss << "#include <cstdint>\n\n";
             ss << "struct R5900Context;\n";
@@ -1872,7 +1873,7 @@ namespace ps2recomp
 
                 std::string finalName = m_codeGenerator->getFunctionName(function.start);
 
-                ss << "void " << finalName << "(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runtime);\n";
+                ss << "PS2_GUEST_CC void " << finalName << "(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runtime);\n";
             }
 
             ss << "\n#endif // PS2_RECOMPILED_FUNCTIONS_H\n";

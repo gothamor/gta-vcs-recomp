@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <functional>
 
+#include "ps2_guest_cc.h"
+
 class PS2Runtime;
 struct R5900Context;
 
@@ -18,7 +20,7 @@ namespace vcs::rig
     void install(PS2Runtime &runtime);
 
     // Game thread, once per game frame (the frame-kick hook): runs queued jobs, holds the game while paused.
-    void onGameFrame(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    PS2_GUEST_CC void onGameFrame(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
 
     // Queue work for the game thread's next frame kick.
     void runOnGameThread(std::function<void(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)> job);

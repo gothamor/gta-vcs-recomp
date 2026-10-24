@@ -130,7 +130,7 @@ namespace vcs
         void writeF(uint8_t *rdram, uint32_t address, float f) { std::memcpy(rdram + (address & 0x01FFFFFFu), &f, 4); }
 
         // replaces FUN_00317ac8 (a leaf: lw / addiu / sw / jr)
-        void countVBlank(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+        PS2_GUEST_CC void countVBlank(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
         {
             const uint32_t at = GPR_U32(ctx, 4) + 4u;
             const bool sixty = !independent() && g_cap.load(std::memory_order_relaxed) != 30;
@@ -139,7 +139,7 @@ namespace vcs
         }
 
         // FUN_00451c00 (independent timing): the tick count from the host clock, continuing CTimer's last count
-        void timerTicks(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void timerTicks(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (!independent())
             {
@@ -173,7 +173,7 @@ namespace vcs
         // FUN_002f47c0; on Update's second call (independent timing) its minimum step is lifted first: the step was
         // just computed and raised to 0.5 when below; recompute it from the frame's ticks as Update does
         // (ticks * scale * 50/147456000) and put it back, floored at kMinStep. The maximum clamp follows the call.
-        void timerEnsure(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void timerEnsure(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (independent() && GPR_U32(ctx, 31) == kAfterMinClamp && readF(rdram, kTimeStep) == 0.5f)
             {
@@ -195,7 +195,7 @@ namespace vcs
 
         // The end of a game frame in independent timing (the limiter's VBlank wait): present it, wait for the cap's
         // deadline on the host clock, bring the emulated clock up to real time, and end the limiter's wait.
-        void limiterWait(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void limiterWait(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             ps2PresentGameFrame(); // the frame's display list was kicked just before
 
@@ -259,7 +259,7 @@ namespace vcs
         // health under 10, more `& 2 / 4 / 8` toggles - game-internals.md 4) counts frames, so it flashed twice as fast
         // at 60 fps. Above 30 fps the pass sees a counter whose low bits advance 30 times a game second (game clock);
         // the real one is put back as CTimer::Update starts (timerUpdate), which counts the next frame on it.
-        void twoDPass(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void twoDPass(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const bool fast = independent() ? effectiveFps() != 30.0 : g_cap.load(std::memory_order_relaxed) != 30;
             if (fast && !g_counterSwapped)
@@ -275,7 +275,7 @@ namespace vcs
         }
 
         // FUN_002f4960 = CTimer::Update: the real frame counter back first (twoDPass), then the original
-        void timerUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void timerUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (g_counterSwapped)
             {
@@ -286,7 +286,7 @@ namespace vcs
         }
 
         // FUN_003703b8 = WaitVBlank
-        void waitVBlank(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void waitVBlank(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             { // VCS_TIMING_LOG=1: WaitVBlank calls by return address, every 2 s
                 static const bool log = std::getenv("VCS_TIMING_LOG") != nullptr;

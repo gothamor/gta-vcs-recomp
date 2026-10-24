@@ -18,7 +18,7 @@ namespace vcs
 {
     namespace
     {
-        using GuestFn = void (*)(uint8_t *, R5900Context *, PS2Runtime *);
+        using GuestFn = PS2Runtime::RecompiledFunction;
 
         uint64_t call2(PS2Runtime &runtime, GuestFn fn, uint32_t pc, uint64_t a, uint64_t b)
         {

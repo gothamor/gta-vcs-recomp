@@ -426,7 +426,7 @@ namespace vcs::rig
         });
     }
 
-    void onGameFrame(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2_GUEST_CC void onGameFrame(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_rdram = rdram;
         g_frames.fetch_add(1, std::memory_order_relaxed);

@@ -136,6 +136,18 @@ the worker (NATIVE_RENDERER.md "The GS stage", `PS2X_GS_THREAD=0` = off). Uncapp
 
 (standing spots vary +-10% between runs with the scene). Now the game thread is the limit nearly everywhere.
 
+### 8. Guest functions without register saves (2026-10-25)
+
+Every generated function used the Win64 convention: its prologue saved 8 general and 6 vector registers and its
+epilogue restored them, on every guest call - though generated code keeps nothing in registers across a guest call (the
+guest's state lives in R5900Context). Guest functions now use clang's `preserve_none` (`ps2_guest_cc.h`,
+`PS2_GUEST_CC`): the recompiler emits it on every generated function and stub wrapper, `RecompiledFunction` carries it,
+and the host functions that replace guest ones (src/game, src/debug) are marked; named stub / syscall handlers keep the
+platform convention behind a thunk. Host code calling into guest code pays for the saves at that boundary (the
+scheduler, an override calling its original). The scheduler's `EeDispatcherTransfer` exceptions unwind through the
+guest frames as before. A/B against the build before (same route, two alternating rounds, 60 fps): game thread
+standing 4.18 -> 3.90 ms, driving 7.18 -> 6.97 ms (~3-7%). Scenes unchanged.
+
 ## Next
 
 - **Game thread** (4-6 ms; the limit again): the per-call cost of guest functions (Win64 prologues save 8 GPRs + 6 XMM

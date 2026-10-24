@@ -58,6 +58,13 @@ namespace
         return leaf.string();
     }
 
+    // [gta-recomp] a stub / syscall handler (the platform's calling convention) as a guest function (ps2_guest_cc.h)
+    template <void (*Handler)(uint8_t *, R5900Context *, PS2Runtime *)>
+    PS2_GUEST_CC void guestThunk(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        Handler(rdram, ctx, runtime);
+    }
+
     std::optional<PS2Runtime::RecompiledFunction> resolveHandlerByName(std::string_view handlerName)
     {
         const std::string_view resolvedSyscall = ps2_runtime_calls::resolveSyscallName(handlerName);
@@ -66,7 +73,7 @@ namespace
 #define PS2_RESOLVE_SYSCALL(name)                   \
     if (resolvedSyscall == std::string_view{#name}) \
     {                                               \
-        return &ps2_syscalls::name;                 \
+        return &guestThunk<&ps2_syscalls::name>;    \
     }
             PS2_SYSCALL_LIST(PS2_RESOLVE_SYSCALL)
 #undef PS2_RESOLVE_SYSCALL
@@ -78,7 +85,7 @@ namespace
 #define PS2_RESOLVE_STUB(name)                   \
     if (resolvedStub == std::string_view{#name}) \
     {                                            \
-        return &ps2_stubs::name;                 \
+        return &guestThunk<&ps2_stubs::name>;    \
     }
             PS2_STUB_LIST(PS2_RESOLVE_STUB)
 #undef PS2_RESOLVE_STUB

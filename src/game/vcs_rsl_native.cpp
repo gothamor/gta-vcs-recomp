@@ -306,7 +306,7 @@ namespace vcs::rslnative
             g_stats = Stats{};
         }
 
-        void flushHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void flushHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             checkPending(rdram);
             report();

@@ -761,19 +761,19 @@ namespace vcs::rslworld
                 g_openBlock.open = false;
         }
         // before the original only (DECISIONS.md "Rule for hooks on recompiled functions")
-        void worldHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void worldHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_current.push_back({3u, getRegU32(ctx, 4) & kRamMask, getRegU32(ctx, 5) & 0xFFFFu, World});
             g_worldOriginal(rdram, ctx, runtime);
         }
 
-        void modelHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void modelHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_current.push_back({5u, getRegU32(ctx, 4) & kRamMask, 0u, Model});
             g_modelOriginal(rdram, ctx, runtime);
         }
 
-        void modelBHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void modelBHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_current.push_back({5u, getRegU32(ctx, 4) & kRamMask, 0u, ModelB});
             g_modelBOriginal(rdram, ctx, runtime);

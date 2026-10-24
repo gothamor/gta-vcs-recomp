@@ -1605,18 +1605,22 @@ PS2Runtime::RecompiledFunction PS2Runtime::lookupFunction(uint32_t address)
               << " trace=" << formatDispatchHistory()
               << std::dec << std::endl;
 
-    static RecompiledFunction missingFunction = [](uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    // [gta-recomp] a named function, not a lambda: lambdas convert only to the platform's calling convention
+    struct Missing
     {
-        const uint32_t badPc = ctx->pc;
-        runtime->reportMissingFunction(rdram,
-                                       ctx,
-                                       badPc,
-                                       0u,
-                                       PS2Runtime::GuestBranchKind::IndirectJump,
-                                       "dispatch");
+        static PS2_GUEST_CC void function(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t badPc = ctx->pc;
+            runtime->reportMissingFunction(rdram,
+                                           ctx,
+                                           badPc,
+                                           0u,
+                                           PS2Runtime::GuestBranchKind::IndirectJump,
+                                           "dispatch");
+        }
     };
 
-    return missingFunction;
+    return &Missing::function;
 }
 
 void PS2Runtime::setMissingFunctionPolicy(MissingFunctionPolicy policy)

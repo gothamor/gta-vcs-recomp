@@ -152,7 +152,7 @@ namespace vcs::rslshadow
         }
 
         template <int I>
-        void hook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void hook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             // before the original only (DECISIONS.md "Rule for hooks on recompiled functions")
             g_rdram = rdram;

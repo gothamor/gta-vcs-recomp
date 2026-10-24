@@ -105,7 +105,7 @@ namespace vcs
         }
 
         // FUN_00221818(channel, dest, lsn, size)
-        void streamRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+        PS2_GUEST_CC void streamRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
         {
             Reader &r = reader();
             const int32_t size = static_cast<int32_t>(GPR_U32(ctx, 7));
@@ -130,7 +130,7 @@ namespace vcs
 
         // FUN_002218f0(channel): a read still in flight is waited for up to 20 ms - the game polls right after starting
         // most reads and otherwise loses a frame per read to "busy" (boot took 1 s longer than through the IOP)
-        void streamPoll(uint8_t *, R5900Context *ctx, PS2Runtime *)
+        PS2_GUEST_CC void streamPoll(uint8_t *, R5900Context *ctx, PS2Runtime *)
         {
             Reader &r = reader();
             std::atomic<uint32_t> &pending = r.pending[GPR_U32(ctx, 4) % kChannels];
@@ -146,7 +146,7 @@ namespace vcs
         }
 
         // FUN_00221968()
-        void streamFn5(uint8_t *, R5900Context *ctx, PS2Runtime *)
+        PS2_GUEST_CC void streamFn5(uint8_t *, R5900Context *ctx, PS2Runtime *)
         {
             SET_GPR_U64(ctx, 2, 0);
             ctx->pc = GPR_U32(ctx, 31);

@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <cstdint>
+#include "ps2_guest_cc.h" // [gta-recomp]
 #include <vector>
 #include <string>
 #include <string_view>
@@ -374,7 +375,7 @@ public:
                              DebugUiCallback shutdownCallback,
                              void *userData);
 
-    using RecompiledFunction = void (*)(uint8_t *, R5900Context *, PS2Runtime *);
+    using RecompiledFunction = void(PS2_GUEST_CC *)(uint8_t *, R5900Context *, PS2Runtime *); // [gta-recomp] ps2_guest_cc.h
 
     enum class GuestBranchKind
     {

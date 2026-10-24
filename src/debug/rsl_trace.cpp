@@ -82,7 +82,7 @@ namespace vcs::rsltrace
         }
 
         template <int I>
-        void hook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void hook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             note(rdram, I); // before the original only (DECISIONS.md "Rule for hooks on recompiled functions")
             g_fns[I].original(rdram, ctx, runtime);

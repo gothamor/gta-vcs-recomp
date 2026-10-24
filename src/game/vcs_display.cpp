@@ -41,7 +41,7 @@ namespace vcs
         void store32(uint8_t *rdram, uint32_t addr, uint32_t v) { std::memcpy(rdram + (addr & kRamMask), &v, 4); }
 
         // FUN_001ab9e0(camera a0, raster rect a1 (null: 640x448), tan(FOV / 2) f12, aspect f13)
-        void setViewWindow(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void setViewWindow(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const float r = g_widening.load(std::memory_order_relaxed);
             if (r > 1.0001f || r < 0.9999f)

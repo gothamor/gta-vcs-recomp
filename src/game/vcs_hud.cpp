@@ -125,7 +125,7 @@ namespace vcs
                               {0x002A9708u, "after4", nullptr}, {0x0025CD98u, "after5", nullptr}};
 
         template <int I>
-        void marker(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void marker(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (traceNow())
                 std::fprintf(stderr, "[im2d] --- %s (%08x)\n", g_markers[I].name, g_markers[I].address);
@@ -292,7 +292,7 @@ namespace vcs
             }
         }
 
-        void im2dRender(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void im2dRender(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             trace(rdram, ctx, false);
             capture(rdram, ctx);
@@ -300,7 +300,7 @@ namespace vcs
             g_origRender(rdram, ctx, runtime);
         }
 
-        void im2dRenderIndexed(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void im2dRenderIndexed(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             trace(rdram, ctx, true);
             capture(rdram, ctx);
@@ -308,14 +308,14 @@ namespace vcs
             g_origRenderIndexed(rdram, ctx, runtime);
         }
 
-        void renderStateSet(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void renderStateSet(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (GPR_U32(ctx, 4) == 6u)
                 g_zTest = GPR_U32(ctx, 5) != 0u;
             g_origRenderStateSet(rdram, ctx, runtime);
         }
 
-        void hudDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void hudDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (traceNow())
                 std::fprintf(stderr, "[im2d] --- hud (%08x)\n", kHudDraw);
@@ -323,7 +323,7 @@ namespace vcs
             g_origHudDraw(rdram, ctx, runtime);
         }
 
-        void menuDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void menuDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (traceNow())
                 std::fprintf(stderr, "[im2d] --- menu (%08x)\n", kMenuDraw);
@@ -331,7 +331,7 @@ namespace vcs
             g_origMenuDraw(rdram, ctx, runtime);
         }
 
-        void loadingScreen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2_GUEST_CC void loadingScreen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (traceNow())
                 std::fprintf(stderr, "[im2d] --- loading screen (%08x)\n", kLoadingScreen);
