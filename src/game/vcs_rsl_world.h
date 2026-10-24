@@ -19,6 +19,15 @@
 // raster here too (onDirect: where each upload's pixels are in the chain's copy). VCS_RSL_SKIP=0: copy every block;
 // VCS_RSL_SKIP_VERIFY=1: decide, copy anyway, compare; VCS_RSL_RASTERS=0: no raster names.
 //
+// Step 4c, draw items: a world / model draw call whose state flush is native (game/vcs_rsl_native.h) replaces the draw
+// function and writes no packets for the draw: its flush (when all CNTs), its GS registers and its block become an item,
+// and the packet buffer gets one 16-byte CNT whose VIFcodes - MARK (0x8000 + index), NOP (0xD4 | frame) - keep its place
+// in the chain. At the kick the item's block is skipped or copied from guest RAM as the walker would; at the MARK the
+// worker runs the item. Draws stay packets while FUN_00240ED8 caches a sector's packets (it copies them and sends the
+// copy again in later frames), when the flush calls plug-in callbacks, and for a model block not yet seen copied by the
+// walker. VCS_RSL_ITEMS=0: the draws' packets as before; VCS_RSL_ITEMS_VERIFY=1: the original writes the packets, which
+// are compared with what each item stands for, and each block the walker copies with what an item would have copied.
+//
 // VCS_RSL_WORLD=0 / VCS_RSL_MODELS=0: world blocks / CALLed packets through the packet path. VCS_RSL_WORLD_VERIFY=1:
 // every hit is processed by the packet path instead and recorded again, and the new recording compared with the
 // cached one. VCS_RSL_WORLD_LOG=1: counts every 10 s.

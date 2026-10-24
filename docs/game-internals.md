@@ -774,6 +774,21 @@ whole block uploaded earlier in the chain. World draws match the RSL state compl
 own state. The "render context" (`*0x4882A4`) is not a per-instance object: a few values recur (`0x16EEEC0`,
 `0x16EF040`, `0x16EF1C0`); the per-instance matrix is the block at `0x520860`.
 
+**Sectors cache their own packets** (2026-10-25, `FUN_00240ED8` read from its decompile; found when packet-buffer
+tags turned up in the chain of later frames). `FUN_00240ED8(level, sector entry)` draws a sector through
+`FUN_002409C8(level, sector, pass)`, and the first time a sector is drawn in the caching branch (the frustum test
+`FUN_002F7528` not 2, `*0x487484 >= 60.0`, the entry's cache word `entry + 4` still 0) it notes the cursor, lets
+`FUN_002409C8` write the sector's packets (its material setup, the GS registers and every world draw's flush, GS packet
+and REF), puts a RET after them, copies the whole range into a block allocated from the pool at `0x6F3DB8`
+(`FUN_002BC730`, copied by `FUN_0045CE10`), stores the block in `entry + 4` and draws it with `FUN_002F7D58(block)` -
+a model draw of the copy. Later frames only make that model draw: the sector's packets as written on the first frame
+are sent again for as long as the block lives. The caching call of `FUN_002409C8` returns to `0x241060`. (When the
+pool has no room the sector is drawn a second time by a plain call and the first copy's packets stay in the buffer.)
+`FUN_002409C8` itself caches each material's setup the same way (texture bind, `FUN_002F7B30`'s GS packet) into a
+block at `entry + 4` of the material and CALLs it on later frames. Code that writes something frame-specific into
+the packet buffer while a sector is cached therefore has it sent again in later frames - the draw items of
+docs/FULLY_NATIVE.md step 4c stay packets there.
+
 **A world block** (the REF payload of `FUN_002F7EB0`, sector geometry in the streamed cells; listed from a RAM dump,
 2026-10-24) is one shape throughout: per packet `UNPACK V4-32 x1 -> TOP+0` (the header: count, nloop), `STMASK`,
 `STROW`, `UNPACK V3-16 x n -> TOP+1` (positions, masked: w from ROW), `STMASK`, `STROW`, `UNPACK V2-8 usn x n -> TOP+0x48`

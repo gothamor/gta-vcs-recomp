@@ -22,7 +22,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 1 | The last GS draws | S-M | done 2026-10-24 (3 render-target reads left for step 3) |
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
-| 4 | Draw-call replay (3D without building packets) | M-L | in progress: 4a, 4b done 2026-10-24 (no copy of unchanged blocks) |
+| 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
 | 5 | An empty chain | M | planned |
 
 ### 1. The last GS draws
@@ -205,8 +205,37 @@ construction (a small chain walker for CALLed packets). Results:
     not a measured loss; a profile of the drive puts the walker's work and `skippable` at ~1-2% of the game thread.
     Measure again on a quiet machine.
 
-Still to do for step 4 as defined: the draw hooks replaying without writing their tags at all (the state flush and GS
-registers then as native items in chain order), which the skip's validity now allows.
+**4c - draw calls as items (done 2026-10-25).** The world / model draw functions (`FUN_002F7EB0`, `FUN_002F7D58`,
+`FUN_002F80A0`) are replaced whole when their state flush is native (game/vcs_rsl_native.h): the flush (when it is all
+CNTs - else its tags stay in the buffer, before the item), the queued GS registers and the block become an **item**, and
+the packet buffer gets one 16-byte CNT whose two VIFcodes - MARK `0x8000 + index`, a NOP holding `0xD4` and the frame's
+number - keep the draw's place in the chain (DECISIONS.md 2026-10-25). The GS packet and the CALL / REF are not
+written. At the kick, after the write watch's fold, each item's block is decided as a marked block is: skipped when
+unchanged since a confirmed copy, else copied from guest RAM by `flattenBlock` (the walker's rules: tags' upper halves,
+payloads, one nested CALL; the pages it is made of and its raster uploads noted as the walker's observer notes them).
+At the MARK the worker runs the item's VIF bytes (the flush's UNPACKs / MSCALs, the GS registers' DIRECTHL) and replays
+or processes the block - as the packet path, through the same interpreter and recordings.
+- **What stays packets**: draws whose flush calls plug-in callbacks or `FUN_001CFAE0` (guest code; ~15% of draws
+  while driving, ~1% standing in the city); a model block until the walker has once copied it as `flattenBlock`
+  copies it; and every draw while `FUN_00240ED8` caches a sector (game-internals.md 6i: the sector's packets are copied
+  into the heap and sent again on later frames - found because item tags from old frames turned up in later chains,
+  drawing the wrong blocks and, for a cached sector drawn as an item, recursing into itself). Item tags carry the
+  frame's number; a tag of another frame is counted and not drawn (0 in the runs below). `FUN_002F80A0` with its
+  shared state packet (bit 31) keeps the flush, GS packet and that CALL in the buffer and makes the block an item.
+- **Checked**: `VCS_RSL_ITEMS_VERIFY=1` (the original writes its packets; they are compared with what the item stands
+  for, and every block the walker copies with what `flattenBlock` copies) - driving, 3.0M draws and 1.4M blocks,
+  0 differ. `VCS_RSL_SKIP_VERIFY=1` with items: 1.04M skip decisions, 0 wrong. `VCS_RSL_WORLD_VERIFY=1` with items
+  (each recording against the packet path): 375k, 0 differ. Reference scenes: static ones identical; tour subset
+  classes unchanged (15 ok, 2 relocated, 1 falling).
+- **Counts** (city spot (1325, -325), per 10 s): ~820k items made (74k world, 423k model, 327k model-b), 2k draws left
+  to the packet path for their flush, 2k while caching; at the kick 60% skipped, 40% copied; all seen by the worker,
+  none unplaced.
+- **Measured** (A/B, same build, `VCS_RSL_ITEMS=0` vs on, three alternating rounds, `--opt none`, uncapped): driving
+  110.5 -> 111.3 fps, the game thread's chain submission 1.12 -> 1.02 ms, render worker 4.38 -> 4.29 ms; standing within
+  noise. The walker's share of the game thread falls (its copy, `skippable`) by about what the items cost to make
+  (`itemDraw` ~0.5%): the copy savings were taken by 4b already. What 4c buys is that these draws no longer depend on
+  the chain's bytes - the ground step 5 builds on.
+- `VCS_RSL_ITEMS=0`: the draws' packets as before.
 
 ### 5. An empty chain
 

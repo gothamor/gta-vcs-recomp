@@ -38,32 +38,24 @@ namespace vcs::rslnative
         void wr32(uint8_t *rdram, uint32_t addr, uint32_t v) { std::memcpy(rdram + (addr & kRamMask), &v, 4); }
         void wr64(uint8_t *rdram, uint32_t addr, uint64_t v) { std::memcpy(rdram + (addr & kRamMask), &v, 8); }
 
-        // what one flush writes: packet bytes at the cursor, GS registers queued, the dirty word after
-        struct Output
+        // what one flush writes (Flush, vcs_rsl_native.h): packet bytes at the cursor, GS registers queued, the dirty word after
+        using Output = Flush;
+        void put64(Output &o, uint64_t v)
         {
-            uint8_t bytes[1024];
-            uint32_t size = 0;
-            uint64_t queue[4][2];
-            uint32_t queued = 0;
-            uint32_t dirtyAfter = 0;
-
-            void put64(uint64_t v)
-            {
-                std::memcpy(bytes + size, &v, 8);
-                size += 8;
-            }
-            void put32x4(uint32_t a)
-            {
-                const uint32_t w[4] = {a, 0u, 0u, 0u};
-                std::memcpy(bytes + size, w, 16);
-                size += 16;
-            }
-            void copy(const uint8_t *rdram, uint32_t addr, uint32_t n)
-            {
-                std::memcpy(bytes + size, rdram + (addr & kRamMask), n);
-                size += n;
-            }
-        };
+            std::memcpy(o.bytes + o.size, &v, 8);
+            o.size += 8;
+        }
+        void put32x4(Output &o, uint32_t a)
+        {
+            const uint32_t w[4] = {a, 0u, 0u, 0u};
+            std::memcpy(o.bytes + o.size, w, 16);
+            o.size += 16;
+        }
+        void copy(Output &o, const uint8_t *rdram, uint32_t addr, uint32_t n)
+        {
+            std::memcpy(o.bytes + o.size, rdram + (addr & kRamMask), n);
+            o.size += n;
+        }
 
         uint64_t g_fallbackCfae0 = 0; // flushes the original ran for bit 0x4 (the rest: plug-in callbacks)
 
@@ -91,88 +83,92 @@ namespace vcs::rslnative
                         return false;
                 }
             }
+            if (dirty & 0x3u)
+                out.cntOnly = false; // CALLs (also from the table entry, the instance matrix's REF: below)
             if (dirty & 0x1u) // CALL the render context's own packet
             {
-                out.put64((uint64_t(context + 0x10u) << 32) | 0x50000000u);
-                out.put64(0x1000000000000000ull);
+                put64(out, (uint64_t(context + 0x10u) << 32) | 0x50000000u);
+                put64(out, 0x1000000000000000ull);
             }
             if (dirty & 0x2u) // CALL the render context's packet
             {
-                out.put64((uint64_t(rd32(rdram, 0x4882A8u)) << 32) | 0x50000000u);
-                out.put64(0x1000000000000000ull);
+                put64(out, (uint64_t(rd32(rdram, 0x4882A8u)) << 32) | 0x50000000u);
+                put64(out, 0x1000000000000000ull);
             }
             if ((dirty & 0x11u) && (dirty & 0x600u) != 0x600u) // MSCALs the context change needs (0x75 / 0x4A) unless done below
             {
-                out.put64(0x10000000u);
-                out.put64((uint64_t((dirty & 0x200u) ? 0u : 0x1400004Au) << 32) | ((dirty & 0x400u) ? 0u : 0x14000075u));
+                put64(out, 0x10000000u);
+                put64(out, (uint64_t((dirty & 0x200u) ? 0u : 0x1400004Au) << 32) | ((dirty & 0x400u) ? 0u : 0x14000075u));
             }
             if (dirty & 0x2000u) // three CALLs from the current table entry
             {
+                out.cntOnly = false;
                 const uint32_t entry = rd32(rdram, 0x742AB0u + rd32(rdram, 0x4CD57Cu) * 4u);
                 for (uint32_t k = 0; k < 3u; ++k)
                 {
-                    out.put64((uint64_t(rd32(rdram, rd32(rdram, entry + k * 4u))) << 32) | 0x50000000u);
-                    out.put64(k == 0u ? 0x10000000u : 0u);
+                    put64(out, (uint64_t(rd32(rdram, rd32(rdram, entry + k * 4u))) << 32) | 0x50000000u);
+                    put64(out, k == 0u ? 0x10000000u : 0u);
                 }
             }
             if (dirty & 0x8u) // UNPACK V4-32 x5 -> 0x31 (0x742AE0)
             {
-                out.put64(0x10000005u);
-                out.put64(0x6C05003110000000ull);
-                out.copy(rdram, 0x742AE0u, 0x50u);
+                put64(out, 0x10000005u);
+                put64(out, 0x6C05003110000000ull);
+                copy(out, rdram, 0x742AE0u, 0x50u);
             }
             if (dirty & 0x1000u) // viewport -> 0x0C, 0x520AC0 -> 0x41
             {
-                out.put64(0x10000000u);
-                out.put64(0x10000000u);
-                out.put64(0x10000005u);
-                out.put64(0x6C04000C01000101ull);
-                out.copy(rdram, 0x520920u, 0x40u);
-                out.put32x4(0x1400008Fu);
-                out.put64(0x10000001u);
-                out.put64(0x6C01004110000000ull);
-                out.copy(rdram, 0x520AC0u, 0x10u);
+                put64(out, 0x10000000u);
+                put64(out, 0x10000000u);
+                put64(out, 0x10000005u);
+                put64(out, 0x6C04000C01000101ull);
+                copy(out, rdram, 0x520920u, 0x40u);
+                put32x4(out, 0x1400008Fu);
+                put64(out, 0x10000001u);
+                put64(out, 0x6C01004110000000ull);
+                copy(out, rdram, 0x520AC0u, 0x10u);
             }
             if (dirty & 0x800u) // 0x5208E0 -> 0x08, lights 0x5209A0 -> 0x3B
             {
-                out.put64(0x10000000u);
-                out.put64(0x10000000u);
-                out.put64(0x10000005u);
-                out.put64(0x6C04000801000101ull);
-                out.copy(rdram, 0x5208E0u, 0x40u);
-                out.put32x4(0x1400008Fu);
-                out.put64(0x10000006u);
-                out.put64(0x6C06003B00000000ull);
-                out.copy(rdram, 0x5209A0u, 0x60u);
+                put64(out, 0x10000000u);
+                put64(out, 0x10000000u);
+                put64(out, 0x10000005u);
+                put64(out, 0x6C04000801000101ull);
+                copy(out, rdram, 0x5208E0u, 0x40u);
+                put32x4(out, 0x1400008Fu);
+                put64(out, 0x10000006u);
+                put64(out, 0x6C06003B00000000ull);
+                copy(out, rdram, 0x5209A0u, 0x60u);
             }
             if (dirty & 0x400u) // 0x520990 -> 0x20, 0x5208A0 -> 0x04
             {
-                out.put64(0x10000001u);
-                out.put64(0x6C01002010000000ull);
-                out.copy(rdram, 0x520990u, 0x10u);
-                out.put64(0x10000000u);
-                out.put64(0x10000000u);
-                out.put64(0x10000005u);
-                out.put64(0x6C04000401000101ull);
-                out.copy(rdram, 0x5208A0u, 0x40u);
-                out.put32x4(0x14000083u);
+                put64(out, 0x10000001u);
+                put64(out, 0x6C01002010000000ull);
+                copy(out, rdram, 0x520990u, 0x10u);
+                put64(out, 0x10000000u);
+                put64(out, 0x10000000u);
+                put64(out, 0x10000005u);
+                put64(out, 0x6C04000401000101ull);
+                copy(out, rdram, 0x5208A0u, 0x40u);
+                put32x4(out, 0x14000083u);
             }
             if ((dirty & 0x200u) && rd32(rdram, 0x4882B0u) == 0u) // the instance matrix 0x520860 -> 0x00 (or a REF to it)
             {
                 const uint32_t ref = rd32(rdram, 0x4882B8u);
                 if (ref == 0u)
                 {
-                    out.put64(0x10000005u);
-                    out.put64(0x6C04800001000101ull);
-                    out.copy(rdram, 0x520860u, 0x40u);
-                    out.put32x4(0x1400003Cu);
+                    put64(out, 0x10000005u);
+                    put64(out, 0x6C04800001000101ull);
+                    copy(out, rdram, 0x520860u, 0x40u);
+                    put32x4(out, 0x1400003Cu);
                 }
                 else
                 {
-                    out.put64((uint64_t(ref) << 32) | 0x30000004u);
-                    out.put64(0x6C04800000000000ull);
-                    out.put64(0x10000000u);
-                    out.put64(0x1400003Cu);
+                    out.cntOnly = false;
+                    put64(out, (uint64_t(ref) << 32) | 0x30000004u);
+                    put64(out, 0x6C04800000000000ull);
+                    put64(out, 0x10000000u);
+                    put64(out, 0x1400003Cu);
                 }
             }
             // GS registers: FOG (0x80), FOGCOL (0x100), TEST (0x20), ... (0x40)
@@ -313,6 +309,7 @@ namespace vcs::rslnative
             thread_local Output out;
             out.size = 0;
             out.queued = 0;
+            out.cntOnly = true;
             uint32_t cursor = 0;
             if (!build(rdram, out))
             {
@@ -363,4 +360,16 @@ namespace vcs::rslnative
         if (g_native && g_verify)
             checkPending(rdram);
     }
+
+    bool enabled() { return g_native && !g_verify; }
+
+    bool buildFlush(const uint8_t *rdram, Flush &out)
+    {
+        out.size = 0;
+        out.queued = 0;
+        out.cntOnly = true;
+        return build(rdram, out);
+    }
+
+    bool packetRoom(const uint8_t *rdram, uint32_t bytes, uint32_t &cursor) { return cursorWithRoom(rdram, bytes, cursor); }
 }

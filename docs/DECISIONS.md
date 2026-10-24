@@ -316,3 +316,19 @@ generations once per kick. Not page protection: the stream thread reads the disc
 write into a protected page fails instead of faulting. Not hooks on the game's streaming / instancing functions: every
 path that writes packet memory would have to be found and kept up. Exact by construction (any write to any of a
 block's pages makes it dirty), checked with a decide-copy-compare mode (2.4M decisions, 0 wrong).
+
+## 2026-10-25 - Draw items: one tag in the chain per draw, the block decided at the kick
+
+FULLY_NATIVE.md step 4 asked for world / model draws that make no packets. Chosen: the draw call becomes an item (its
+flush when all CNTs, its GS registers, its block), and the packet buffer keeps one 16-byte CNT per draw whose MARK /
+NOP name the item and the frame. Not "no tag at all": 2D, effects, texture uploads and the setters' own uploads still
+go through the chain between the draws (step 5), and the tag is what keeps each draw in its place among them. The
+block's validity is decided at the kick, after the write watch's fold, exactly as for a marked block - not at the draw
+call: generations there only cover writes up to the last kick, and a cell streamed in this frame and drawn this frame
+would be replayed from an old recording. A block that changed is copied from guest RAM at the kick (`flattenBlock`,
+the walker's rules; checked against the walker's copy), so nothing reads guest RAM later on the worker.
+Draws stay packets where an item would not stand for the same bytes later or cannot be made exactly: while
+`FUN_00240ED8` caches a sector (the copy is sent again in later frames: game-internals.md 6i), when the flush calls
+plug-in callbacks (guest code: ~15% of draws while driving), for a model block not yet seen copied by the walker.
+Speed was not the reason (measured even: the walker's share falls by about what the items cost); the reason is the
+path - the draws no longer depend on the chain's bytes, which step 5 needs.
