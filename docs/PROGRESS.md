@@ -290,6 +290,12 @@ dropped on uploads (lazy render-target patching).
       PGO + ThinLTO ~20-30% of game code. Checked: static reference scenes unchanged (loading 0.00, pause map 0.33),
       world tour subset classes unchanged, its worst frame 21.0 -> 16.7 ms. Remaining on the game thread (driving):
       game code ~65%, memmove ~3%, VU0 programs ~6%, IOP ~2%.
+
+      Retrained 2026-10-24 (after RSL phase 2 and the game-thread work: `--opt pgo --train`, ~45 min). A/B against
+      the same code without PGO (`--opt none`), two alternating rounds: standing at Fort Baxter 11.7-12.9 -> 8.1-9.3 ms,
+      AI drive 19.4-20.2 -> 14.8 ms (44.6-46.9 -> 56.8-56.9 fps). Reference scenes all ok (a first capture right
+      after the build caught `loading` / `flyover_base` on black / mid-fade frames - timing; the next capture matched,
+      `loading` at the usual 1.17).
 - [x] Frame-rate independence, phase 1 - timing (2026-10-23): Display > Game timing (Original / Frame-rate
       independent, restart) and Frame rate cap (30 / 60 / 120 / 144 / display refresh / unlimited). Independent:
       host-clock CTimer in whole ms, the 0.5 minimum step lifted, host pacing in the limiter, frames presented as the
