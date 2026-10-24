@@ -194,7 +194,7 @@ Game code is 12-14 ms of the 33 ms frame - the main budget left for 60 fps on mo
 - **Recompiler output**: skip per-instruction `ctx->pc` stores for pure ALU ops (emitter change
   pending a regenerate), `__restrict`, keep guest registers in locals across basic blocks, cheaper
   memory access for known-RAM pointers, ThinLTO / PGO for release builds.
-- **Render submission at the RW level**: the game still builds DMA packets on the EE for every model
+- **Render submission at the RW level** (RSL in VCS; plan in RSL_SUBMISSION.md, 2026-10-24): the game still builds DMA packets on the EE for every model
   (RpAtomic instancing, matrix uploads) that the native renderer then parses. Hooking the PS2 render
   pipeline callbacks instead removes both the packet building and the parsing.
 - **Hot functions by profile**: the sampling profiler (`src/debug/profiler.cpp`) ranks them; the
