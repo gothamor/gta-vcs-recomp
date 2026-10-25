@@ -94,6 +94,7 @@ namespace vcs::rslworld
             bool hasBlock = false;                   // step 5a: an item of state ops alone has none
             uint32_t refAt = 0, refCount = 0;        // step 5b: its reference ops (the frame's / the table's refs)
             uint32_t prefixRastersAt = 0, prefixRasterCount = 0; // step 5b: raster uploads in its prefix (itemRasters)
+            bool continued = false;                  // step 5f: the next item runs right after it (no tag of its own)
         };
         // step 5b: a REF the item stands for - its two VIFcodes and the payload in guest RAM, copied at the kick (when the DMA
         // would read it) into the item's VIF bytes at `pos` (the inline bytes before it)
@@ -710,7 +711,6 @@ namespace vcs::rslworld
                 ++g_itemsUnplacedW;
                 return;
             }
-            const Item &it = table->items[index];
             ++g_itemsSeenW;
             ++depth;
             struct Leave
@@ -718,6 +718,9 @@ namespace vcs::rslworld
                 int &d;
                 ~Leave() { --d; }
             } leave{depth};
+            for (;; ++index) // step 5f: an item, then the items that continue it
+            {
+            const Item &it = table->items[index];
             if (it.prefixBytes)
             {
                 t_block = table->arena.data() + it.prefixAt; // step 5b: the uploads in it keep their raster names
@@ -743,6 +746,9 @@ namespace vcs::rslworld
                 t_blockBytes = 0;
                 t_blockRasters = nullptr;
                 t_blockRasterCount = 0;
+            }
+            if (!it.continued || index + 1u >= table->items.size())
+                break;
             }
             report();
         }
@@ -1239,7 +1245,8 @@ namespace vcs::rslworld
             {0x002F53D8u, "camera 2F53D8"},
         };
         constexpr int kCapturedCount = int(sizeof(kCaptured) / sizeof(kCaptured[0]));
-        static_assert(kCapturedCount <= kMaxEmitters);
+        constexpr int kDrawEmitter = kCapturedCount; // step 5f: a draw left to its original (stats slot after the emitters)
+        static_assert(kCapturedCount + 1 <= kMaxEmitters);
         struct Im2dStats
         {
             uint64_t ops[kMaxEmitters] = {}, kept[kMaxEmitters] = {}, partial[kMaxEmitters] = {}, empty = 0, verifySame = 0, verifyDiffer = 0;
@@ -1252,41 +1259,71 @@ namespace vcs::rslworld
         };
         std::vector<Im2dCheck> g_im2dChecks;
 
-        // a captured region into the open item or a new one. resume 0: the whole region (the cursor is at `start`, the region's
-        // bytes still there); else only [start, resume) is taken - the packets from `resume` on stay, the cursor stays, and
-        // the start of the region gets the item's tag (unless it joins the open item) and a NEXT to `resume`
-        bool appendRegion(uint8_t *rdram, uint32_t start, const std::vector<uint8_t> &inl, const std::vector<std::pair<uint32_t, RefOp>> &refs,
-                          uint32_t resume = 0u)
+        // step 5f: a captured region in pieces - inline VIF bytes and references, then optionally a block (a CALLed packet, or
+        // the draw's own REF / CALL when the region is a draw left to its original): one item each, the first with the
+        // region's tag (or joining the open item), the others continuing it
+        struct Piece
+        {
+            std::vector<uint8_t> inl;
+            std::vector<std::pair<uint32_t, RefOp>> refs;
+            bool hasBlock = false;
+            Draw d{};
+        };
+
+        // the pieces into items. resume 0: the whole region (the cursor is at `start`); else only [start, resume) - the
+        // packets from `resume` on stay, the cursor stays, and the region's start gets the tag and a NEXT to `resume`
+        bool appendRegion(uint8_t *rdram, uint32_t start, const Piece *pieces, size_t count, uint32_t resume = 0u)
         {
             uint32_t cursor = 0;
+            const bool join = g_openItem >= 0 && start == g_openEnd && size_t(g_openItem) + 1u == g_itemsCurrent.size();
             if (resume)
             {
-                const bool join = g_openItem >= 0 && start == g_openEnd && size_t(g_openItem) + 1u == g_itemsCurrent.size();
                 if (resume - start < (join ? 16u : 32u) && !(resume - start == 16u && !join))
                     return false; // no room for the tags it needs
-                if (!join && g_itemsCurrent.size() >= kMaxItems)
-                    return false;
-                const uint32_t index = join ? static_cast<uint32_t>(g_openItem) : static_cast<uint32_t>(g_itemsCurrent.size());
-                Item &it = join ? g_itemsCurrent[index] : g_itemsCurrent.emplace_back();
-                if (!join)
+            }
+            else if (!cursorForItem(rdram, 16u, cursor) || cursor != start)
+                return false;
+            if (g_itemsCurrent.size() + count + 1u >= kMaxItems)
+                return false;
+            uint32_t first = 0, index = 0;
+            for (size_t k = 0; k < count; ++k)
+            {
+                const Piece &pc = pieces[k];
+                const bool joinThis = k == 0 && join;
+                index = joinThis ? static_cast<uint32_t>(g_openItem) : static_cast<uint32_t>(g_itemsCurrent.size());
+                if (k == 0)
+                    first = index;
+                else
+                    g_itemsCurrent[index - 1u].continued = true; // (the item before is the one just made)
+                Item &it = joinThis ? g_itemsCurrent[index] : g_itemsCurrent.emplace_back();
+                if (!joinThis)
                     it.prefixAt = static_cast<uint32_t>(g_arenaCurrent.size());
                 const uint32_t base = it.prefixBytes;
-                if (!refs.empty() && !it.refCount)
+                if (!pc.refs.empty() && !it.refCount)
                     it.refAt = static_cast<uint32_t>(g_refsCurrent.size());
-                for (const auto &[pos, r] : refs)
+                for (const auto &[pos, r] : pc.refs)
                 {
                     RefOp op = r;
                     op.pos = base + pos;
                     op.owner = index;
                     g_refsCurrent.push_back(op);
                 }
-                it.refCount += static_cast<uint32_t>(refs.size());
-                g_arenaCurrent.insert(g_arenaCurrent.end(), inl.begin(), inl.end());
-                it.prefixBytes += static_cast<uint32_t>(inl.size());
+                it.refCount += static_cast<uint32_t>(pc.refs.size());
+                g_arenaCurrent.insert(g_arenaCurrent.end(), pc.inl.begin(), pc.inl.end());
+                it.prefixBytes += static_cast<uint32_t>(pc.inl.size());
+                if (pc.hasBlock)
+                {
+                    it.d = pc.d;
+                    it.hasBlock = true;
+                }
+            }
+            const bool lastOpen = !pieces[count - 1u].hasBlock;
+            if (resume)
+            {
                 uint32_t at = start;
                 if (!join)
                 {
-                    writeItemTag(rdram, at, index, false);
+                    writeItemTag(rdram, at, first, false);
                     at += 16u;
                 }
                 if (at < resume)
@@ -1298,47 +1335,52 @@ namespace vcs::rslworld
                 ++(join ? g_opStats.merged : g_opStats.ops);
                 return true;
             }
-            if (!cursorForItem(rdram, 16u, cursor) || cursor != start)
-                return false;
-            const bool merge = g_openItem >= 0 && start == g_openEnd && size_t(g_openItem) + 1u == g_itemsCurrent.size();
-            if (!merge && g_itemsCurrent.size() >= kMaxItems)
-                return false;
-            const uint32_t index = merge ? static_cast<uint32_t>(g_openItem) : static_cast<uint32_t>(g_itemsCurrent.size());
-            Item &it = merge ? g_itemsCurrent[index] : g_itemsCurrent.emplace_back();
-            if (!merge)
-                it.prefixAt = static_cast<uint32_t>(g_arenaCurrent.size());
-            const uint32_t base = it.prefixBytes;
-            if (!refs.empty() && !it.refCount)
-                it.refAt = static_cast<uint32_t>(g_refsCurrent.size());
-            for (const auto &[pos, r] : refs)
-            {
-                RefOp op = r;
-                op.pos = base + pos;
-                op.owner = index;
-                g_refsCurrent.push_back(op);
-            }
-            it.refCount += static_cast<uint32_t>(refs.size());
-            g_arenaCurrent.insert(g_arenaCurrent.end(), inl.begin(), inl.end());
-            it.prefixBytes += static_cast<uint32_t>(inl.size());
-            if (merge)
+            if (join)
                 ++g_opStats.merged; // (the cursor stays at the region's start, the open item's end)
             else
             {
-                writeItemTag(rdram, start, index);
-                g_openItem = static_cast<int>(index);
+                writeItemTag(rdram, start, first);
                 g_openEnd = start + 16u;
                 ++g_opStats.ops;
             }
+            g_openItem = lastOpen ? static_cast<int>(index) : -1; // a later op may follow the last piece when it has no block
             return true;
         }
 
-        // sp: the guest stack pointer of the hook asking (~0u: the kick - every emitter has returned)
-        void settleIm2D(uint8_t *rdram, uint32_t sp)
+        // step 5f: a draw left to its original (its flush calls guest code), captured like an emitter
+        bool g_captureDraw = false;
+        // the first of this frame's draw-list entries (g_current) made during the capture: the captured draw's own, or the
+        // draws an emitter makes inside it. Their tags are in the region in the same order; a tag taken into an item is
+        // never seen by the walker, so its entry goes (else the walker's matching, g_kicked, falls out of step)
+        size_t g_captureCurrentAt = 0;
+        uint32_t g_captureDrawFn[2] = {};  // the draw function's code (game/vcs/functions.csv)
+
+        // a hook deeper on the stack than a draw being captured runs inside it only when called from the draw, its flush
+        // (FUN_002F8710), the plug-in callbacks' wrappers or FUN_001CFAE0: other hooks deeper on the stack run after the
+        // draw returned (a draw's caller calling another function)
+        bool insideDraw(uint32_t ra)
         {
-            g_inCapture = g_im2dPending && sp < g_captureSp;
+            static constexpr uint32_t kInside[][2] = {
+                {0x002F8710u, 0x002F937Cu}, {0x002A9538u, 0x002A9560u}, {0x002F4080u, 0x002F40ACu},
+                {0x0040F798u, 0x0040F7C0u}, {0x001CEF90u, 0x001CEFACu}, {0x001CFAE0u, 0x001CFCDCu},
+            };
+            if (ra >= g_captureDrawFn[0] && ra < g_captureDrawFn[1])
+                return true;
+            for (const auto &r : kInside)
+                if (ra >= r[0] && ra < r[1])
+                    return true;
+            return false;
+        }
+
+        // sp / ra: the guest stack pointer and return address of the hook asking (sp ~0u: the kick - every emitter has
+        // returned)
+        void settleIm2D(uint8_t *rdram, uint32_t sp, uint32_t ra)
+        {
+            g_inCapture = g_im2dPending && sp < g_captureSp && (!g_captureDraw || insideDraw(ra));
             if (!g_im2dPending || g_inCapture)
                 return;
             g_im2dPending = false;
+            g_captureDraw = false;
             const int e = g_captureEmitter;
             const uint32_t start = g_im2dStart, cursor = rd32(rdram, kPacketCursor);
             if (cursor == start)
@@ -1346,10 +1388,19 @@ namespace vcs::rslworld
                 ++g_im2dStats.empty; // nothing written
                 return;
             }
-            thread_local std::vector<uint8_t> inl;
-            thread_local std::vector<std::pair<uint32_t, RefOp>> refs;
-            inl.clear();
-            refs.clear();
+            thread_local std::vector<Piece> pieces; // (kept with their buffers: hundreds of settles a frame)
+            size_t count = 0;
+            const auto newPiece = [&]() -> Piece & {
+                if (count == pieces.size())
+                    pieces.emplace_back();
+                Piece &pc = pieces[count++];
+                pc.inl.clear();
+                pc.refs.clear();
+                pc.hasBlock = false;
+                return pc;
+            };
+            newPiece();
+            size_t draw = g_captureCurrentAt; // the next draw-list entry whose tag the region should hold
             uint32_t at = start;
             const char *why = nullptr;
             while (!why && at < cursor) // (`at` stays at the first tag that is not taken)
@@ -1359,10 +1410,13 @@ namespace vcs::rslworld
                     why = "shape";
                     break;
                 }
+                Piece &cur = pieces[count - 1u];
                 uint64_t lo;
                 std::memcpy(&lo, rdram + (at & kRamMask), 8);
                 const uint32_t qwc = static_cast<uint32_t>(lo & 0xFFFFu), id = static_cast<uint32_t>((lo >> 28) & 7u);
                 const uint32_t addr = static_cast<uint32_t>(lo >> 32) & 0x7FFFFFFFu;
+                const bool ram = (addr & 0xF0000000u) == 0u && (addr & kRamMask) + qwc * 16u <= kRamMask + 1u;
+                const Draw *want = draw < g_current.size() ? &g_current[draw] : nullptr;
                 if ((lo >> 31) & 1u)
                     why = "irq";
                 else if (id == 1u) // CNT: its VIFcodes and payload, as the walker copies them
@@ -1371,13 +1425,24 @@ namespace vcs::rslworld
                         why = "shape";
                     else
                     {
-                        inl.insert(inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16u + qwc * 16u);
+                        cur.inl.insert(cur.inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16u + qwc * 16u);
                         at += 16u + qwc * 16u;
                     }
                 }
+                else if ((id == 3u || id == 4u) && want && want->id == 3u && ram && (addr & kRamMask) == want->addr &&
+                         qwc == want->qwc && qwc)
+                {
+                    // a world draw's REF: its VIFcodes, then the geometry as a world block (recordings, step 4c)
+                    cur.inl.insert(cur.inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16);
+                    cur.hasBlock = true;
+                    cur.d = *want;
+                    newPiece();
+                    ++draw;
+                    at += 16u;
+                }
                 else if (id == 3u || id == 4u) // REF / REFS: a reference, its payload read at the kick
                 {
-                    if ((addr & 0xF0000000u) != 0u || (addr & kRamMask) + qwc * 16u > kRamMask + 1u)
+                    if (!ram)
                         why = "ram";
                     else
                     {
@@ -1385,19 +1450,59 @@ namespace vcs::rslworld
                         std::memcpy(r.code, rdram + (at & kRamMask) + 8, 8);
                         r.addr = addr & kRamMask;
                         r.qwc = qwc;
-                        refs.push_back({static_cast<uint32_t>(inl.size()), r}); // (nothing inline: the payload goes in at resolve)
+                        cur.refs.push_back({static_cast<uint32_t>(cur.inl.size()), r}); // (the payload goes in at resolve)
                         at += 16u;
+                    }
+                }
+                else if (id == 5u) // CALL: its VIFcodes and payload, then the CALLed packet as a block (step 5f)
+                {
+                    const bool own = want && want->id == 5u && (addr & kRamMask) == want->addr; // a model draw's CALL
+                    const Draw d = own ? *want : Draw{5u, addr & kRamMask, 0u, OtherCall};
+                    static const bool calls = !(std::getenv("VCS_RSL_CAPTURE_CALLS") && *std::getenv("VCS_RSL_CAPTURE_CALLS") == '0');
+                    if (!calls && !own)
+                        why = "call"; // VCS_RSL_CAPTURE_CALLS=0: other CALLs end the region (as before step 5f's end)
+                    else if ((addr & 0xF0000000u) != 0u || !g_flatOk.count(blockKey(d.kind, d.addr, 0u)))
+                        why = "call"; // not known to be copied as flattenBlock copies it
+                    else if (at + 16u + qwc * 16u > cursor)
+                        why = "shape";
+                    else
+                    {
+                        cur.inl.insert(cur.inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16u + qwc * 16u);
+                        cur.hasBlock = true;
+                        cur.d = d;
+                        newPiece();
+                        draw += own ? 1u : 0u;
+                        at += 16u + qwc * 16u;
                     }
                 }
                 else
                     why = "tag";
             }
+            if (count > 1u && pieces[count - 1u].inl.empty() && pieces[count - 1u].refs.empty())
+                --count; // (nothing after the last block)
+            const auto taken = [&] { // the draws whose tags went into items: the walker will not see them
+                if (draw > g_captureCurrentAt && draw <= g_current.size())
+                    g_current.erase(g_current.begin() + static_cast<ptrdiff_t>(g_captureCurrentAt),
+                                    g_current.begin() + static_cast<ptrdiff_t>(draw));
+            };
             if (why || at != cursor)
             {
                 ++(why && why[0] == 'i' ? g_im2dStats.irq : why && why[0] == 'r' ? g_im2dStats.notRam : g_im2dStats.notCntRef);
-                // the tags before the first one not taken: the emitter's own packets (what follows came after it returned)
-                if (at > start && !g_itemVerify && appendRegion(rdram, start, inl, refs, at))
+                static const bool keptLog = std::getenv("VCS_RSL_KEPT_LOG") != nullptr;
+                static int logged = 0;
+                if (keptLog && logged < 4000)
                 {
+                    ++logged;
+                    uint64_t lo;
+                    std::memcpy(&lo, rdram + (at & kRamMask), 8);
+                    std::fprintf(stderr, "[rsl-kept] %s: %s%s at +0x%x of 0x%x, tag %016llx\n", e < kCapturedCount ? kCaptured[e].name : "draw",
+                                 at > start ? "front only, " : "",
+                                 why ? why : "end", at - start, cursor - start, (unsigned long long)lo);
+                }
+                // the tags before the first one not taken: the emitter's own packets (what follows came after it returned)
+                if (at > start && !g_itemVerify && appendRegion(rdram, start, pieces.data(), count, at))
+                {
+                    taken();
                     ++g_im2dStats.partial[e];
                     return;
                 }
@@ -1416,12 +1521,13 @@ namespace vcs::rslworld
                 return;
             }
             wr32(rdram, kPacketCursor, start);
-            if (!appendRegion(rdram, start, inl, refs))
+            if (!appendRegion(rdram, start, pieces.data(), count))
             {
                 wr32(rdram, kPacketCursor, cursor);
                 ++g_im2dStats.kept[e];
                 return;
             }
+            taken();
             ++g_im2dStats.ops[e];
         }
 
@@ -1452,6 +1558,11 @@ namespace vcs::rslworld
                 ++st.shape;
                 return false;
             }
+            if (g_caching)
+            {
+                ++st.caching; // the packets are copied into the sector's cache: the packet path
+                return false;
+            }
             if (kind != World && !g_flatOk.count(blockKey(kind, addr, 0u)))
             {
                 ++st.unknown; // not yet seen copied by the walker as flattenBlock copies it
@@ -1460,11 +1571,6 @@ namespace vcs::rslworld
             if (g_itemsCurrent.size() >= kMaxItems)
             {
                 ++st.full;
-                return false;
-            }
-            if (g_caching)
-            {
-                ++st.caching; // the packets are copied into the sector's cache: the packet path
                 return false;
             }
             thread_local vcs::rslnative::Flush f;
@@ -1692,8 +1798,8 @@ namespace vcs::rslworld
         void noteFlattenable(uint64_t key, uint32_t units)
         {
             const Kind kind = static_cast<Kind>(key >> 56);
-            if (!g_items || (kind != Model && kind != ModelB) || g_flatOk.count(key))
-                return;
+            if (!g_items || (kind != Model && kind != ModelB && kind != OtherCall) || g_flatOk.count(key))
+                return; // (step 5f: other calls too - captured regions take them as blocks)
             thread_local std::vector<uint8_t> flat;
             thread_local std::vector<uint32_t> pages;
             flat.clear();
@@ -1725,9 +1831,9 @@ namespace vcs::rslworld
                          (unsigned long long)g_opStats.packets, (unsigned long long)g_opStats.caching);
             g_opStats = OpStats{};
             std::fprintf(stderr, "[rsl-items] captured regions as ops / their front as ops / kept:");
-            for (int e = 0; e < kCapturedCount; ++e)
+            for (int e = 0; e <= kCapturedCount; ++e)
                 if (g_im2dStats.ops[e] || g_im2dStats.kept[e] || g_im2dStats.partial[e])
-                    std::fprintf(stderr, " %s %llu/%llu/%llu", kCaptured[e].name, (unsigned long long)g_im2dStats.ops[e],
+                    std::fprintf(stderr, " %s %llu/%llu/%llu", e < kCapturedCount ? kCaptured[e].name : "draws", (unsigned long long)g_im2dStats.ops[e],
                                  (unsigned long long)g_im2dStats.partial[e], (unsigned long long)g_im2dStats.kept[e]);
             std::fprintf(stderr, "; empty %llu; kept for: other tags %llu, IRQ %llu, not RAM %llu%s", (unsigned long long)g_im2dStats.empty,
                          (unsigned long long)g_im2dStats.notCntRef, (unsigned long long)g_im2dStats.irq, (unsigned long long)g_im2dStats.notRam,
@@ -1761,7 +1867,7 @@ namespace vcs::rslworld
         template <int Which>
         PS2_GUEST_CC void gsSendHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
             const uint32_t ra = getRegU32(ctx, 31);
             if (Which == 1 && ra == kMaterialCacheGs)
             {
@@ -1816,7 +1922,7 @@ namespace vcs::rslworld
         bool unpack3Op(uint8_t *rdram, uint32_t code1, uint32_t src, PS2Runtime::RecompiledFunction original, R5900Context *ctx,
                        PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
             uint8_t tags[16 + 48];
             const uint64_t tag[2] = {0x10000003u, 0x10000000ull | (uint64_t(code1) << 32)};
             std::memcpy(tags, tag, 16);
@@ -1852,7 +1958,7 @@ namespace vcs::rslworld
 
         PS2_GUEST_CC void flushAHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
             const uint64_t tag[2] = {0x10000000u, 0x1300000000000000ull}; // CNT 0: NOP, FLUSHA
             const auto *t = reinterpret_cast<const uint8_t *>(tag);
             if (g_itemVerify)
@@ -1901,7 +2007,7 @@ namespace vcs::rslworld
         // transfer header (FLUSHE, DIRECTHL 6) and the pixels (DIRECTHL bytes / 16) - as reference ops when the header exists
         PS2_GUEST_CC void uploadHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
             const uint32_t at = getRegU32(ctx, 4), psm = getRegU32(ctx, 5), w = getRegU32(ctx, 6), h = getRegU32(ctx, 7);
             const uint32_t bytes = getRegU32(ctx, 8), source = getRegU32(ctx, 9), dest = getRegU32(ctx, 10);
             const uint64_t key = (uint64_t(int64_t(int32_t(dest >> 6))) << 48) | (uint64_t(psm & 0xFFFFu) << 32) | (w & 0xFFFFu) |
@@ -1942,7 +2048,7 @@ namespace vcs::rslworld
         PS2_GUEST_CC void captureHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t sp = getRegU32(ctx, 29);
-            settleIm2D(rdram, sp);
+            settleIm2D(rdram, sp, getRegU32(ctx, 31));
             uint32_t cursor = 0;
             if (!g_inCapture && (opsAllowed() || (g_itemVerify && !g_caching && !g_materialCaching)) && cursorForItem(rdram, 16u, cursor))
             {
@@ -1950,6 +2056,7 @@ namespace vcs::rslworld
                 g_im2dStart = cursor;
                 g_captureSp = sp;
                 g_captureEmitter = E;
+                g_captureCurrentAt = g_current.size();
             }
             g_capturedOriginal[E](rdram, ctx, runtime);
         }
@@ -1957,20 +2064,20 @@ namespace vcs::rslworld
         // before the originals only: the texture binds reserve upload slots at the cursor - a captured region goes first
         PS2_GUEST_CC void texSlotHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29));
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31));
             g_texSlotOriginal(rdram, ctx, runtime);
         }
 
         PS2_GUEST_CC void clutSlotHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29));
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31));
             g_clutSlotOriginal(rdram, ctx, runtime);
         }
 
         // before the original only: the material cache's texture bind opens the window its packets are copied from
         PS2_GUEST_CC void textureBindHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
             g_materialCaching = getRegU32(ctx, 31) == kMaterialCacheBind;
             g_textureBindOriginal(rdram, ctx, runtime);
         }
@@ -1979,15 +2086,33 @@ namespace vcs::rslworld
         // after it - the cached block's own draw, or the sector drawn again when caching failed: game-internals.md 6i)
         PS2_GUEST_CC void sectorHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
             g_caching = getRegU32(ctx, 31) == kSectorCaching;
             g_sectorOriginal(rdram, ctx, runtime);
         }
 
         // before the original only (DECISIONS.md "Rule for hooks on recompiled functions"), or the whole work (an item)
+        // step 5f: a draw left to its original as a captured region (emitter index kDrawEmitter)
+        void captureDraw(uint8_t *rdram, R5900Context *ctx, const Draw &d)
+        {
+            uint32_t cursor = 0;
+            static const bool on = !(std::getenv("VCS_RSL_DRAW_CAPTURE") && *std::getenv("VCS_RSL_DRAW_CAPTURE") == '0');
+            if (!on || g_im2dPending || g_inCapture || !(opsAllowed() || (g_itemVerify && !g_caching && !g_materialCaching)) ||
+                !cursorForItem(rdram, 16u, cursor))
+                return;
+            g_im2dPending = true;
+            g_im2dStart = cursor;
+            g_captureSp = getRegU32(ctx, 29);
+            g_captureEmitter = kDrawEmitter;
+            g_captureDraw = true;
+            g_captureCurrentAt = g_current.size() - 1u;
+            g_captureDrawFn[0] = d.kind == World ? 0x002F7EB0u : d.kind == Model ? 0x002F7D58u : 0x002F80A0u;
+            g_captureDrawFn[1] = d.kind == World ? 0x002F8024u : d.kind == Model ? 0x002F7EACu : 0x002F8250u;
+        }
+
         PS2_GUEST_CC void worldHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
             const uint32_t a0 = getRegU32(ctx, 4), a1 = getRegU32(ctx, 5);
             g_materialCaching = false;
             if (g_items && g_world && !g_itemVerify && itemDraw(rdram, ctx, World, a0, a1))
@@ -1995,12 +2120,14 @@ namespace vcs::rslworld
             if (g_itemVerify)
                 verifyDraw(rdram, World, a0, a1);
             g_current.push_back({3u, a0 & kRamMask, a1 & 0xFFFFu, World});
+            if (g_items && g_world && (a0 & 0xF0000000u) == 0u && (a1 & 0x0FFF0000u) == 0u)
+                captureDraw(rdram, ctx, g_current.back());
             g_worldOriginal(rdram, ctx, runtime);
         }
 
         PS2_GUEST_CC void modelHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
             const uint32_t a0 = getRegU32(ctx, 4);
             g_caching = false; // FUN_002409C8 draws no models: this is after the cached sector (FUN_00240ED8 draws it)
             if (g_items && !g_itemVerify && itemDraw(rdram, ctx, Model, a0, 0u))
@@ -2008,12 +2135,14 @@ namespace vcs::rslworld
             if (g_itemVerify)
                 verifyDraw(rdram, Model, a0, 0u);
             g_current.push_back({5u, a0 & kRamMask, 0u, Model});
+            if (g_items && (a0 & 0xF0000000u) == 0u)
+                captureDraw(rdram, ctx, g_current.back());
             g_modelOriginal(rdram, ctx, runtime);
         }
 
         PS2_GUEST_CC void modelBHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
             const uint32_t a0 = getRegU32(ctx, 4);
             g_caching = false;
             if (g_items && !g_itemVerify && itemDraw(rdram, ctx, ModelB, a0, 0u))
@@ -2021,6 +2150,8 @@ namespace vcs::rslworld
             if (g_itemVerify)
                 verifyDraw(rdram, ModelB, a0, 0u);
             g_current.push_back({5u, a0 & kRamMask, 0u, ModelB});
+            if (g_items && (a0 & 0xF0000000u) == 0u)
+                captureDraw(rdram, ctx, g_current.back());
             g_modelBOriginal(rdram, ctx, runtime);
         }
 
@@ -2236,7 +2367,9 @@ namespace vcs::rslworld
             {
                 d.kind = want->kind;
                 ++g_next;
-                if (g_itemVerify && !g_openBlock.open) // what an item of this draw would have copied
+            }
+            {
+                if (g_itemVerify && !g_openBlock.open) // what an item of this draw / other call would have copied
                 {
                     thread_local std::vector<uint8_t> flat;
                     thread_local std::vector<uint32_t> pages;
@@ -2403,7 +2536,7 @@ namespace vcs::rslworld
             ps2chain::setDirectHandler(&onDirect);
     }
 
-    void settlePending(uint8_t *rdram, uint32_t sp) { settleIm2D(rdram, sp); }
+    void settlePending(uint8_t *rdram, uint32_t sp, uint32_t ra) { settleIm2D(rdram, sp, ra); }
 
     bool flushAsOp(uint8_t *rdram, const uint8_t *tags, uint32_t bytes)
     {
@@ -2426,7 +2559,7 @@ namespace vcs::rslworld
         g_kicked.swap(g_current);
         g_current.clear();
         g_next = 0;
-        settleIm2D(const_cast<uint8_t *>(g_rdram), ~0u); // steps 5c / 5d: before the chain goes out
+        settleIm2D(const_cast<uint8_t *>(g_rdram), ~0u, 0u); // steps 5c / 5d: before the chain goes out
         g_inCapture = false;
         if (g_itemVerify)
         {

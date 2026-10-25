@@ -332,3 +332,11 @@ Draws stay packets where an item would not stand for the same bytes later or can
 plug-in callbacks (guest code: ~15% of draws while driving), for a model block not yet seen copied by the walker.
 Speed was not the reason (measured even: the walker's share falls by about what the items cost); the reason is the
 path - the draws no longer depend on the chain's bytes, which step 5 needs.
+
+## 2026-10-25 - Draws whose flush calls guest code: captured, not ported
+
+Step 5f could have ported everything a state flush may call (FUN_001CFAE0's float maths, the two immediate-geometry
+callbacks) so that every draw is built natively. Chosen instead: those draws run the original and the region they
+wrote is captured into items (the 5d mechanism, with CALLs taken as blocks). The chain loses their packets all the
+same, nothing new has to be checked bit for bit, and the guest code keeps doing what it does. A port stays possible
+later if their CPU time ever matters (small: ~2% of flushes).

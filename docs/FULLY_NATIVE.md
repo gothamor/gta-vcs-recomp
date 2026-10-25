@@ -23,7 +23,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | L | 5a-5d done, 5e and 5f in part 2026-10-25; 5e's render-target reads, the rest of 5f, 5g left |
+| 5 | An empty chain | L | 5a-5d, 5f done, 5e in part 2026-10-25; 5e's render-target reads, 5g left |
 
 ### 1. The last GS draws
 
@@ -432,9 +432,40 @@ these becomes an item like any other.
   ~21k with the other two callbacks (`0x2A9538`, `0x2F4080`), whose packets 5d's captures already take in part.
 - Measured: A/B `VCS_RSL_PLUGINS=0` vs on, three alternating rounds on a quiet machine: standing 205.1 -> 208.4 fps (game thread 4.27 -> 4.17 ms, render worker 2.17 -> 1.88), driving 117.5 -> 120.5 fps (game thread 7.58 -> 7.33 ms).
 - `VCS_RSL_PLUGINS=0`: those flushes left to the original as before.
-- **Left in 5f**: `FUN_001CFAE0` (bit 0x4: three qwords computed with float maths - a port to check bit for bit), the
-  two remaining callbacks, and Im3D (`FUN_002F8250`, kept by 5d's capture: its region starts with the flush's context
-  CALLs - a capture taking CALLs as blocks of the item would make it an op).
+- Left then: `FUN_001CFAE0` (bit 0x4, float maths), the two remaining callbacks, and Im3D (`FUN_002F8250`, kept by
+  5d's capture: its region starts with the flush's context CALLs).
+
+**5f done, 2026-10-25 - captured regions take CALLs; draws left to the original are captured.** Rather than port the
+rest of what a flush may call (FUN_001CFAE0 and two geometry callbacks, each to be checked bit for bit), the draws
+whose flush calls them now run the original and are **captured** like the 5d emitters: the region the draw wrote -
+the flush's packets, whatever its callbacks wrote, the draw's own REF / CALL - becomes items at the next hook point.
+- **CALLs as blocks.** A captured region is cut at each CALL into pieces: a piece's CNTs and REFs as before, then the
+  CALL's own bytes and the CALLed packet as the piece's block (copied at the kick by `flattenBlock`, or skipped and
+  replayed when unchanged - exactly as a model item's block). Only targets the walker has already copied as
+  `flattenBlock` copies them (`g_flatOk`, now kept for "other calls" too) are taken; at any other CALL the region's
+  convertible front is taken and the rest stays packets. The first piece's item carries the region's tag (or joins the
+  open item); the others are **continuation items** (`Item::continued`) - no tag of their own, the worker runs them
+  right after the item before. Im3D's regions (context CALLs, then its geometry) become ops this way.
+- **Draws in regions.** Every draw made during a capture - the captured draw itself, or draws an emitter makes inside
+  it (game-internals.md 6i "Emitters draw models") - has its tag in the region, in order: a world draw's REF becomes
+  a world block, a model draw's CALL a model block; the draw leaves this frame's draw list when its tag is taken, so
+  the walker's in-order matching stays in step.
+- **Inside a draw** is decided by stack depth *and* return address (game-internals.md 6i "Inside a draw, by return
+  address"); stack depth alone took the caller's next draws in too.
+- Checked: `VCS_RSL_ITEMS_VERIFY=1` driving - 1.51M captured regions unchanged at the kick, 0 changed; 3.38M draws /
+  ops, 0 differ; 640k blocks (other calls' now included) copied as the walker copies them, 0 differ.
+  `VCS_RSL_WORLD_VERIFY=1` driving, 1.54M recordings, 0 differ, no stray item tags. Reference scenes: static ones as
+  before (the loading bar's edge a few pixels further), moving ones within their usual spread; tour subset unchanged
+  (15 ok, 2 relocated, 1 falling, as before).
+- Counts (driving, per 10 s): Im3D 16.4k regions as ops (all kept before); the 18.6k draws left to the original all
+  captured whole; model items 90k (31k before - the draw-list matching was out of step before, see game-internals);
+  model draws not known 4 (77k). Kept per frame: the camera packet's END. Census: 742 top-level tags a chain, 780
+  payload qwords - 288 of them item tags, 278 empty CNTs (filler in slots the game reserved).
+- Measured: A/B against step 5f's first part, five alternating rounds (60 fps cap, `--opt none`; two rounds had load spikes on one side, so per-round medians): game thread even - standing 4.33 -> 4.32 ms, driving 8.68 -> 8.50 ms; render worker while driving 6.0 -> 5.0 ms, lower in every round (Im3D and the captured draws reach it as items instead of packets). A first version that matched draw tags only for the captured draw itself was 0.5-0.9 ms slower standing: the walker's matching out of step, no model items at all there.
+- `VCS_RSL_DRAW_CAPTURE=0`: draws left to the original keep their packets. `VCS_RSL_CAPTURE_CALLS=0`: other CALLs end
+  a region (as before). `VCS_RSL_KEPT_LOG=1`: where each region not taken whole stops (first 4000).
+- Not ported, and no need now: `FUN_001CFAE0` and the two geometry callbacks run recompiled inside captured draws;
+  their output reaches the chain as items. A native port would only save their CPU time (small).
 
 Expected gains, honestly: the game thread's share of handing frames over (the walk, copy, fold and bookkeeping:
 ~5% while driving) shrinks with every part; the render worker gains where an op replaces VIF parsing and VU-memory

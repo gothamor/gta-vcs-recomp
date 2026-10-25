@@ -46,6 +46,13 @@
 // Step 5e: recordings take BASE / OFFSET / ITOP and MPG (with its microcode) as raw VIF bytes, replayed through the
 // interpreter in order - the render-context packets that upload VU1 code are replayable. VCS_RSL_RAW=0: refused.
 //
+// Step 5f: a CALL in a captured region ends a piece: its packet becomes that piece's block (when the walker has copied
+// it as flattenBlock does), the pieces after it continuation items (no tag; the worker runs them after the item
+// before). Draws whose flush calls guest code run the original and are captured too; a draw made during a capture
+// whose tag is taken leaves the frame's draw list. A hook is inside a captured draw only when called from the draw,
+// its flush or the plug-in callbacks (return address). VCS_RSL_DRAW_CAPTURE=0: their packets. VCS_RSL_CAPTURE_CALLS=0:
+// other CALLs end a region. VCS_RSL_KEPT_LOG=1: where regions stop.
+//
 // VCS_RSL_WORLD=0 / VCS_RSL_MODELS=0: world blocks / CALLed packets through the packet path. VCS_RSL_WORLD_VERIFY=1:
 // every hit is processed by the packet path instead and recorded again, and the new recording compared with the
 // cached one. VCS_RSL_WORLD_LOG=1: counts every 10 s.
@@ -63,6 +70,7 @@ namespace vcs::rslworld
     // writes them into the packet buffer (ops off, a cache being filled, no room)
     bool flushAsOp(uint8_t *rdram, const uint8_t *tags, uint32_t bytes);
     // steps 5c / 5d: a captured emitter's region becomes an op now (before the caller writes packets), unless the caller
-    // runs inside that emitter (sp: its guest stack pointer, deeper than the emitter's)
-    void settlePending(uint8_t *rdram, uint32_t sp);
+    // runs inside that emitter (sp: its guest stack pointer, deeper than the emitter's; ra: its return address - inside a
+    // captured draw only when called from the draw, its flush or the plug-in callbacks, step 5f)
+    void settlePending(uint8_t *rdram, uint32_t sp, uint32_t ra);
 }

@@ -903,6 +903,20 @@ state ops since FULLY_NATIVE.md step 5a):
   -> VU `vu`), `0x40F798` = `FUN_0040F6C8(vu, src)` when the word at `src + 0x90` is set (CNT 9: 9 qwords, and the word
   cleared), `0x2A9538` -> `FUN_002A92C0` and `0x2F4080` -> `FUN_002F3DD0` (immediate geometry with REFs and their own
   program). The first two are ~85% of the callback flushes; the native flush writes them since FULLY_NATIVE.md 5f.
+- **Inside a draw, by return address** (2026-10-25): a hook cannot tell "inside a draw" from "after it" by the guest
+  stack pointer alone - a draw's caller often calls a helper next, whose own draws run deeper on the stack than the
+  first draw did. What runs inside a draw is called from the draw function itself (`FUN_002F7EB0` 0x2F7EB0-0x2F8024,
+  `FUN_002F7D58` 0x2F7D58-0x2F7EAC, `FUN_002F80A0` 0x2F80A0-0x2F8250), its flush (`FUN_002F8710` 0x2F8710-0x2F937C),
+  the callback wrappers (`0x2A9538`, `0x2F4080`, `0x40F798`, `0x1CEF90`) or `FUN_001CFAE0`: a hook is inside a draw
+  when it is deeper on the stack *and* its `$ra` lies in one of those (bounds from `game/vcs/functions.csv`). With
+  stack depth alone every later draw of the caller's helper counted as "inside" (items fell from ~31k to ~12k per 10 s
+  while driving).
+- **Emitters draw models** (2026-10-25): some captured emitters call the RSL draw functions inside them (the draws run
+  the original there: their packets belong to the emitter's region). The draws' tags then sit inside the emitter's
+  region, in the order the draws were made. A region that takes such a tag into an item must also drop the draw from
+  the frame's draw list - the walker matches the list against the chain's tags in order, and one missing tag puts it
+  out of step for the rest of the frame: no model packet is ever learned (`not known`), and standing at Fort Baxter no
+  model draw became an item at all.
 - The buffer's free space is `0xE6670 - FUN_00476770(0x520F90)` (`FUN_00478628`); with too little the flush writes
   through a null pointer (never seen). While driving ~9% of flushes have plug-in callbacks (skinned / effect
   plug-ins) and ~1% bit 0x4; those still run the original.
