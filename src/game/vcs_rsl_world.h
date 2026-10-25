@@ -43,6 +43,9 @@
 // settle, no ops of its own), and a region that ends in packets which must stay gives its front (tag + NEXT over the
 // rest). VCS_RSL_IM2D=0: no captures.
 //
+// Step 5e: recordings take BASE / OFFSET / ITOP and MPG (with its microcode) as raw VIF bytes, replayed through the
+// interpreter in order - the render-context packets that upload VU1 code are replayable. VCS_RSL_RAW=0: refused.
+//
 // VCS_RSL_WORLD=0 / VCS_RSL_MODELS=0: world blocks / CALLed packets through the packet path. VCS_RSL_WORLD_VERIFY=1:
 // every hit is processed by the packet path instead and recorded again, and the new recording compared with the
 // cached one. VCS_RSL_WORLD_LOG=1: counts every 10 s.

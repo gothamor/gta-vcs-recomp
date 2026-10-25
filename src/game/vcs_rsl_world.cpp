@@ -189,7 +189,8 @@ namespace vcs::rslworld
             {
                 Unpack,
                 Mscal,
-                Direct
+                Direct,
+                Raw // step 5e: VIFcodes replayed through the interpreter as they were (BASE / OFFSET / ITOP; MPG with its code)
             } type = Unpack;
             uint32_t startPc = 0;            // MSCAL
             vcs::hleworld::WorldMesh mesh;   // MSCAL: its world packet's mesh
@@ -215,6 +216,12 @@ namespace vcs::rslworld
             bool setsMask = false, setsRow = false, setsCycle = false; // the block's STMASK / STROW / STCYCL
             uint32_t mask = 0, row[4] = {}, finalCycle = 0;             // the VIF mask / row / cycle it leaves
         };
+
+        bool rawOps() // step 5e: VCS_RSL_RAW=0 refuses blocks with BASE / OFFSET / ITOP / MPG as before
+        {
+            static const bool on = !(std::getenv("VCS_RSL_RAW") && *std::getenv("VCS_RSL_RAW") == '0');
+            return on;
+        }
 
         class Recorder final : public ps2chain::VifRecorder
         {
@@ -284,8 +291,40 @@ namespace vcs::rslworld
                     rowSet = true;
                 else if (opcode == 0x01u)
                     cycleSet = true; // (the cycle each UNPACK saw is checked there)
+                else if ((opcode == 0x02u || opcode == 0x03u || opcode == 0x04u || opcode == 0x4Au) && !rawOps())
+                    fail(vifcodeName(opcode)); // VCS_RSL_RAW=0: refused as before step 5e
+                else if (opcode == 0x02u || opcode == 0x03u || opcode == 0x04u)
+                {
+                    // step 5e: OFFSET / BASE / ITOP (the double buffer's registers, TOPS): replayed as they are, in order
+                    Op &op = rec->ops.emplace_back();
+                    op.type = Op::Raw;
+                    const auto *c = reinterpret_cast<const uint8_t *>(&vifcode);
+                    op.data.assign(c, c + 4);
+                }
+                else if (opcode == 0x4Au)
+                {
+                    // MPG: recorded with its microcode by mpg()
+                }
                 else if (opcode != 0x00u && opcode != 0x10u && opcode != 0x11u && opcode != 0x13u && opcode != 0x50u && opcode != 0x51u)
-                    fail(vifcodeName(opcode)); // not NOP / FLUSH* / DIRECT*: OFFSET / BASE / ITOP / STMOD / MSKPATH3 / MARK / ...
+                    fail(vifcodeName(opcode)); // not NOP / FLUSH* / DIRECT*: STMOD / MSKPATH3 / MARK / MSCNT / ...
+            }
+
+            // step 5e: a VU1 microcode upload - replayed through the interpreter (the same compare, copy and decode-cache
+            // invalidation as the packet path's)
+            void mpg(uint32_t vifcode, const uint8_t *data, uint32_t bytes, bool complete) override
+            {
+                if (!rawOps())
+                    return; // (refused in other())
+                if (!complete)
+                {
+                    fail("MPG cut off");
+                    return;
+                }
+                Op &op = rec->ops.emplace_back();
+                op.type = Op::Raw;
+                const auto *c = reinterpret_cast<const uint8_t *>(&vifcode);
+                op.data.assign(c, c + 4);
+                op.data.insert(op.data.end(), data, data + bytes);
             }
 
             static const char *vifcodeName(uint32_t opcode)
@@ -362,6 +401,8 @@ namespace vcs::rslworld
                     vcs::hleworld::setMeshHint(nullptr);
                     ++g_packets;
                 }
+                else if (op.type == Op::Raw) // step 5e: BASE / OFFSET / ITOP / MPG, through the interpreter as they were
+                    memory.processVIF1Data(op.data.data(), static_cast<uint32_t>(op.data.size()));
                 else if (op.type == Op::Direct)
                 {
                     if (op.rasterBytes) // the texture keeps its name when its upload comes from a recording
@@ -429,8 +470,8 @@ namespace vcs::rslworld
                     what = "op kind";
                 else if (x.topRelative != y.topRelative || x.vuAddr != y.vuAddr || x.qwords != y.qwords || x.lanes != y.lanes)
                     what = "unpack address / size / fields";
-                else if (x.type == Op::Direct ? x.data != y.data : !sameLanes(x, y))
-                    what = x.type == Op::Direct ? "direct data" : "unpack data";
+                else if (x.type == Op::Direct || x.type == Op::Raw ? x.data != y.data : !sameLanes(x, y))
+                    what = x.type == Op::Direct ? "direct data" : x.type == Op::Raw ? "raw VIFcodes / microcode" : "unpack data";
                 else if (x.mesh.valid && y.mesh.valid && (x.mesh.key != y.mesh.key || x.mesh.vertices != y.mesh.vertices))
                     what = "mesh";
             }

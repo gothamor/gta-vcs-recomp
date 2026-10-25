@@ -844,6 +844,17 @@ PRE, PRIM = prim | IIP | TME (when the context's texture entry `0x6EDCBC + conte
 16-bit coordinates (or x << 4, y << 4 when `screen` is set) and Z = the 32-bit word at +0xC through int -> float ->
 int. The HUD layer draws these (NATIVE_RENDERER.md "HUD layer"); since FULLY_NATIVE.md step 5c they reach it as ops.
 
+**The frame's fixed structure** (2026-10-25, `PS2X_DUMP_CHAIN=<n>` - every tag of one kick - read with the census).
+The chain starts in the static root list (`0x480D20` / `0x480DE0`, 6a): CALLs to fixed packets in `.data` around
+`0x480EA0`-`0x481760` that send GS setup (CNT + DIRECT), VU1 setup (CNT STCYCL + UNPACK, NEXT, CNT MPG - VU1
+microcode - and RET with an MSCAL) and finally a NEXT into the packet buffer's half. **Render-context packets**
+(CALLed by the state flush, bits 0x1 / 0x2 / 0x2000; in the model heap and the heap) open with a REF whose VIFcodes
+are **BASE / OFFSET** (VU1's double buffer), then CALL a block of **MPG REFs into `.text`** (the draw programs: e.g.
+five of 128 / 112 qwords from `0x2AC130`, one of 27 from `0x25E890`, three from `0x368730`) and end with a REF of the
+context's matrices (STCYCL, UNPACK) and an MSCAL. Every frame re-sends the same microcode (the runtime copies it only
+when it differs). The Z clear (6a: 40 column strips) is a VU1 program in the chain, run natively (`zclearProgram`,
+`src/game/vcs_hle_world.cpp`).
+
 **The other packet writers** (2026-10-25, step 5d of FULLY_NATIVE.md; callers from the recompiled code's `jal`s, shapes
 from decompiles and the census of what each writes): `FUN_002F8250` is **Im3D's submit** (called by `FUN_002FC2E8` /
 `FUN_002FC838`, `FUN_002FC210` writing the vertices): it runs the state flush, then REFs the vertices with an UNPACK

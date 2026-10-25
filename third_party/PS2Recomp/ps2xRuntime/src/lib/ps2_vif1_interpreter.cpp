@@ -629,6 +629,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             uint32_t destAddr = (uint32_t)imm * 8u;
             const uint32_t instructionCount = (num == 0u) ? 256u : static_cast<uint32_t>(num);
             const uint32_t mpgBytes = instructionCount * 8u;
+            if (ps2chain::VifRecorder *recorder = ps2chain::vifRecorder()) // [gta-recomp] the code, for a recording's replay
+                recorder->mpg(cmd, data + pos, std::min<uint32_t>(mpgBytes, sizeBytes - pos), pos + mpgBytes <= sizeBytes);
             if (m_vu1Code && destAddr < PS2_VU1_CODE_SIZE && mpgBytes > 0)
             {
                 uint32_t copyBytes = mpgBytes;

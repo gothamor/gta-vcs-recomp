@@ -68,6 +68,11 @@ namespace ps2chain
         {
             (void)data, (void)qwords, (void)directHl, (void)complete;
         }
+        // [gta-recomp] MPG: its VIFcode and the microcode after it (complete: the stream held all of it), after other()
+        virtual void mpg(uint32_t vifcode, const uint8_t *data, uint32_t bytes, bool complete)
+        {
+            (void)vifcode, (void)data, (void)bytes, (void)complete;
+        }
     };
     void setVifRecorder(VifRecorder *recorder); // this thread
     VifRecorder *vifRecorder();

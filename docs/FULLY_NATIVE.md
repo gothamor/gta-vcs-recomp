@@ -23,7 +23,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | L | 5a-5d done 2026-10-25 (state ops, texture uploads, Im2D, effect / immediate-geometry writers); 5e-5g planned below |
+| 5 | An empty chain | L | 5a-5d done, 5e in part 2026-10-25 (VU1 code uploads and double-buffer setup replayable); 5e's render-target reads, 5f, 5g left |
 
 ### 1. The last GS draws
 
@@ -389,6 +389,26 @@ camera packet `FUN_002F53D8`. None is rewritten:
   while driving: ~1,090 -> ~740 top-level tags a frame.
 - Measured: A/B with all captures off (`VCS_RSL_IM2D=0`) vs on (steps 5c + 5d), three alternating rounds on a quiet machine: driving 99.2 -> 101.3 fps (game thread 8.91 -> 8.69 ms, worker 4.76 -> 5.13), standing 179.2 -> 165.3 fps (game thread 4.85 -> 5.44 ms). The standing difference did not hold up: a standing-only A/B (none / Im2D only / all, three rounds each) gave 4.58 / 4.28 / 4.65 ms with one setting ranging 3.82-5.43 ms between runs (what is spawned at Fort Baxter varies), and no capture code shows in the profile. Read as even within this noise; a longer standing measurement would settle it.
 - `VCS_RSL_IM2D=0`: no captures (Im2D and these writers write their packets as before).
+
+**5e in part, 2026-10-25 - VU1 code uploads and the double buffer in recordings.** The frame's structure, dumped
+(game-internals.md 6i "The frame's fixed structure"): the static root list, the render-context packets the flush
+CALLs - BASE / OFFSET, MPG REFs re-sending the draw programs' microcode every frame, the context's matrices and an
+MSCAL - and the camera packet. Those context packets were the chain's main "other call" blocks, and none could be
+replayed: the recorder refused BASE / OFFSET / ITOP and MPG. Now the recorder takes them as **raw ops** - the VIFcode
+(and for MPG the microcode, through a new `VifRecorder::mpg` callback of the runtime) - and a replay sends those bytes
+through the VIF interpreter itself, in order: TOPS / DBF, ITOPS and the VU1 code memory (with its decode cache's
+invalidation, only when the code differs) end as the packet path leaves them. So VU1 code uploads are "code image" ops
+of the recordings, and the context packets are replayed - and, unchanged, skipped (step 4b) - like any other block.
+- Checked: `VCS_RSL_WORLD_VERIFY=1` (each block recorded again by the packet path and compared op by op, raw ops
+  included) at the city spot, 1.79M recordings, 0 differ; reference scenes as before; tour subset unchanged.
+- Counts (city spot, per 10 s): "other call" blocks 0 not replayable (15.6k before), ~437k replayed, ~400 recorded
+  (100k before - the refused ones were recorded again and again).
+- Measured: A/B `VCS_RSL_RAW=0` vs on, three alternating rounds on a quiet machine (`--opt none`, uncapped): standing 195.3 -> 208.1 fps (game thread 4.54 -> 4.16 ms, render worker 2.13 -> 2.01), driving 110.1 -> 115.0 fps (game thread 8.11 -> 7.70 ms). The game thread gains as well: an unchanged context packet is now skipped at the kick instead of copied.
+- `VCS_RSL_RAW=0`: these blocks refused as before.
+- **Left in 5e**: the root list itself (static tags in `.data`, walked every kick), and the three render-target reads
+  (the reflection map's two copies into FBP 420, the sky's self-copy - the only GS-path draws left, `gs_draws` 3): they
+  need native passes by target role in the renderer (step 3d named the targets). The Z clear needs nothing more: the
+  zclear program runs natively.
 
 Expected gains, honestly: the game thread's share of handing frames over (the walk, copy, fold and bookkeeping:
 ~5% while driving) shrinks with every part; the render worker gains where an op replaces VIF parsing and VU-memory
