@@ -1,6 +1,7 @@
 // Native RSL packet emitters - see game/vcs_rsl_native.h.
 #include "game/vcs_rsl_native.h"
 
+#include "game/vcs_rsl_world.h"
 #include "ps2_runtime.h"
 
 #include <chrono>
@@ -201,10 +202,17 @@ namespace vcs::rslnative
             return space >= static_cast<int32_t>(bytes + 0x400u);
         }
 
+        void commitState(uint8_t *rdram, const Output &out);
         void commit(uint8_t *rdram, uint32_t cursor, const Output &out)
         {
             std::memcpy(rdram + (cursor & kRamMask), out.bytes, out.size);
             wr32(rdram, kPacketBuffer + 0x18u, cursor + out.size);
+            commitState(rdram, out);
+        }
+
+        // the queued GS registers and the dirty word (the packet bytes went elsewhere: a state op, vcs_rsl_world.h)
+        void commitState(uint8_t *rdram, const Output &out)
+        {
             uint32_t count = rd32(rdram, kGsQueueCount);
             for (uint32_t i = 0; i < out.queued; ++i, ++count)
             {
@@ -335,7 +343,10 @@ namespace vcs::rslnative
                 g_original(rdram, ctx, runtime);
                 return;
             }
-            commit(rdram, cursor, out);
+            if (out.cntOnly && vcs::rslworld::flushAsOp(rdram, out.bytes, out.size))
+                commitState(rdram, out); // step 5a: its bytes as a state op (docs/FULLY_NATIVE.md)
+            else
+                commit(rdram, cursor, out);
             ++g_stats.native;
             ctx->pc = getRegU32(ctx, 31);
         }

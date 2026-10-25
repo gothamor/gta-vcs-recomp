@@ -28,6 +28,11 @@
 // walker. VCS_RSL_ITEMS=0: the draws' packets as before; VCS_RSL_ITEMS_VERIFY=1: the original writes the packets, which
 // are compared with what each item stands for, and each block the walker copies with what an item would have copied.
 //
+// Step 5a, state ops: the GS queue senders (FUN_002F7908 / FUN_002F7B30), the texture matrix (FUN_002F7090),
+// FUN_001CEF18, FUN_002F9CE8 and all-CNT native flushes (flushAsOp) put their VIF bytes into the item stream instead of
+// the packet buffer - several in a row share one item and tag. Not while a sector or a material's setup is being cached
+// (FUN_002409C8 copies the latter too). VCS_RSL_OPS=0: their packets.
+//
 // VCS_RSL_WORLD=0 / VCS_RSL_MODELS=0: world blocks / CALLed packets through the packet path. VCS_RSL_WORLD_VERIFY=1:
 // every hit is processed by the packet path instead and recorded again, and the new recording compared with the
 // cached one. VCS_RSL_WORLD_LOG=1: counts every 10 s.
@@ -41,4 +46,7 @@ namespace vcs::rslworld
 {
     void install(PS2Runtime &runtime); // main thread, before runtime.run()
     void onFrameKick();                // game thread, at the frame kick: the frame's world draws are complete
+    // step 5a: a native state flush's bytes (DMA CNTs with their data) as a state op in chain order; false: the caller
+    // writes them into the packet buffer (ops off, a cache being filled, no room)
+    bool flushAsOp(uint8_t *rdram, const uint8_t *tags, uint32_t bytes);
 }

@@ -219,6 +219,9 @@ dropped on uploads (lazy render-target patching).
       the worker as an item, the block decided at the kick. Sectors cached by `FUN_00240ED8` keep their packets (the game
       sends the copy again). Verify: 3.0M draws / 1.4M blocks 0 differ. Speed even (the copy savings came with 4b).
       `VCS_RSL_ITEMS=0` = packets.
+- [x] **State setters as item ops** (2026-10-25, FULLY_NATIVE.md step 5a): the GS queue senders, texture matrix,
+      `FUN_001CEF18`, `FUN_002F9CE8` and all-CNT state flushes become VIF-byte ops in the item stream (not while a
+      sector / material is cached). Verify 2.67M draws / ops 0 differ. `VCS_RSL_OPS=0` = their packets.
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -509,6 +512,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_TRACE_PATH2_TAGS=1` | PATH2 (VIF DIRECT) packets by the shape of their first GIFtag, and the register sequence of A+D packets that draw, every 5 s (`[path2]`) |
 | `PS2X_WRITE_WATCH=0`, `PS2X_WRITE_WATCH_LOG=1` | guest RAM without the OS's write watch (no block can then be told unchanged); pages written per fold and the fold's cost, every 5 s |
 | `VCS_RSL_ITEMS=0`, `VCS_RSL_ITEMS_VERIFY=1` | world / model draws as packets (no draw items); items built but the original writes the packets, compared with what each item stands for, and each block the walker copies with what an item would copy (FULLY_NATIVE.md step 4c) |
+| `VCS_RSL_OPS=0` | the state setters (GS queue senders, texture matrix, `FUN_001CEF18`, `FUN_002F9CE8`, all-CNT flushes) write their packets instead of item ops (FULLY_NATIVE.md step 5a) |
 | `VCS_RSL_CENSUS=1` | every 5 s: what the VIF1 chain still carries outside marked blocks and items - top-level tags by DMA id, first VIFcode and data region, per chain (FULLY_NATIVE.md step 5) |
 | `VCS_RSL_SKIP=0`, `VCS_RSL_SKIP_VERIFY=1`, `VCS_RSL_SKIP_KINDS=<mask>` | copy every marked block; decide skips but copy anyway and check each against the recording it would have replayed; which kinds may be skipped (bit 0 world, 1 model, 2 model-b, 3 other call; default all) |
 | `VCS_RSL_MEASURE=1` | with `VCS_RSL_WORLD_LOG`: per chain the bytes copied, the marked blocks and the distinct ones |

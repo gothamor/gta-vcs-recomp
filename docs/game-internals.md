@@ -785,7 +785,9 @@ a model draw of the copy. Later frames only make that model draw: the sector's p
 are sent again for as long as the block lives. The caching call of `FUN_002409C8` returns to `0x241060`. (When the
 pool has no room the sector is drawn a second time by a plain call and the first copy's packets stay in the buffer.)
 `FUN_002409C8` itself caches each material's setup the same way (texture bind, `FUN_002F7B30`'s GS packet) into a
-block at `entry + 4` of the material and CALLs it on later frames. Code that writes something frame-specific into
+block at `entry + 4` of the material and CALLs it on later frames: the cursor noted, `FUN_00408F30` called from
+`0x240D14` (returns to `0x240D1C`), `FUN_002F7B30` from `0x240D1C` (returns to `0x240D24`), the range copied by
+`FUN_0045CE10` at `0x240D9C`. Code that writes something frame-specific into
 the packet buffer while a sector is cached therefore has it sent again in later frames - the draw items of
 docs/FULLY_NATIVE.md step 4c stay packets there.
 
@@ -815,6 +817,21 @@ from a RAM dump and checked by the phase 2 recorder, 2026-10-24):
   every other frame; a few state packets in the `0x16EExxx`-`0x16EFxxx` render-context blocks (6i above) use VIF BASE.
 - Volume at city spot (-700, -500), per 10 s: 248k `FUN_002F7D58` CALLs, 106k `FUN_002F80A0` CALLs, 89k other CALLs,
   61k world REFs; ~1.29M draw program MSCALs among them.
+
+**The state setters** (2026-10-25, decompiled before / read from the recompiled code's disassembly comments; native as
+state ops since FULLY_NATIVE.md step 5a):
+- `FUN_002F7908` and `FUN_002F7B30` are the same code: queue FOG (6) / FOGCOL (7) / registers 0x14 / 0x15 by the
+  dirty bits 0x80 / 0x100 / 0x20 / 0x40 (values at `0x4882E0` / `E8` / `F0` / `F8`), clear bits 0x1E0, and when the
+  queue is not empty send it as the draws do (CNT n + 1, FLUSHE, DIRECTHL n + 1, GIFtag `0x1000000000008000 | n`, the
+  pairs) and empty it.
+- `FUN_002F7090(m)`: CNT 3, FLUSHE, UNPACK V4-32 x3 -> VU 0x2C, the three qwords at `m` (the texture matrix, VU
+  44-46; with too little room it writes them through a null pointer).
+- `FUN_001CEF18(vu, m)`: CNT 3, FLUSHE, UNPACK V4-32 x3 -> VU `vu` (the code word `vu | 0x6C030000`), the three
+  qwords at `m`; returns 3. No room check.
+- `FUN_002F9CE8()`: CNT 0 with NOP, FLUSHA.
+- `FUN_002F9FA0(x, y, z)` runs the flush, then an UNPACK of a vector computed with float divides (`/ 65535.0`,
+  `* -32768.0`); `FUN_002F53D8(...)` the frame's camera packet: CNT 0 (STCYCL 1 1, FLUSHA), CALL `*0x4882DC + 0x10`,
+  dirty word `0x3E1F`.
 
 **The state flush** `FUN_002F8710` (decompiled with `tools/eedecomp.py`, 2026-10-24; native in
 `src/game/vcs_rsl_native.cpp`, byte-exact against the original). The dirty word `0x4882A0`, in the order written:

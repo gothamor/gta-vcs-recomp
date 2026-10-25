@@ -32,6 +32,13 @@ namespace vcs::rslworld
         constexpr uint32_t kWorldDraw = 0x002F7EB0u;               // FUN_002F7EB0(geometry, qwc): REF geometry
         constexpr uint32_t kSectorDraw = 0x002409C8u;              // FUN_002409C8(level, sector, pass): a sector's draws
         constexpr uint32_t kSectorCaching = 0x00241060u;           // its return address when FUN_00240ED8 caches its packets
+        // step 5a: FUN_002409C8 caches a material's setup - FUN_00408F30 (texture bind) and FUN_002F7B30 (GS registers)
+        // between these calls are copied into a block CALLed on later frames (game-internals.md 6i)
+        constexpr uint32_t kTextureBind = 0x00408F30u, kMaterialCacheBind = 0x00240D1Cu, kMaterialCacheGs = 0x00240D24u;
+        constexpr uint32_t kGsSendA = 0x002F7908u, kGsSendB = 0x002F7B30u; // send the queued GS registers
+        constexpr uint32_t kTexMatrix = 0x002F7090u;                       // FUN_002F7090(m): 3 qwords -> VU 0x2C
+        constexpr uint32_t kVuConstants = 0x001CEF18u;                     // FUN_001CEF18(vu, m): 3 qwords -> VU vu
+        constexpr uint32_t kFlushA = 0x002F9CE8u;                          // FUN_002F9CE8: CNT with FLUSHA
         constexpr uint32_t kModelDraw = 0x002F7D58u;               // FUN_002F7D58(packet): CALL packet
         constexpr uint32_t kModelDrawB = 0x002F80A0u;              // FUN_002F80A0(packet): CALL packet
 
@@ -81,6 +88,7 @@ namespace vcs::rslworld
             uint32_t blockAt = 0, blockBytes = 0;   // in the arena: the block, copied at the kick (none when skipped)
             uint32_t rastersAt = 0, rasterCount = 0; // in the table's itemRasters
             bool skip = false, lost = false;         // skip: replayed by key; lost: its block could not be copied
+            bool hasBlock = false;                   // step 5a: an item of state ops alone has none
         };
         std::vector<Draw> g_current, g_kicked; // this frame's draw calls / the frame whose chain is being copied
         size_t g_next = 0;                     // the next of g_kicked whose tag the chain should hold
@@ -890,7 +898,7 @@ namespace vcs::rslworld
                 g_openBlock.open = false;
         }
         // ---- step 4c: draw items, the game thread ----------------------------------------------------------------
-        bool g_items = false, g_itemVerify = false;
+        bool g_items = false, g_itemVerify = false, g_ops = false;
         const uint8_t *g_rdram = nullptr;
         std::vector<Item> g_itemsCurrent, g_itemsKicked;       // this frame's items / the frame whose chain is being copied
         std::vector<uint8_t> g_arenaCurrent, g_arenaKicked;    // their VIF bytes
@@ -1039,6 +1047,63 @@ namespace vcs::rslworld
             return false;
         }
 
+        // ---- step 5a: state ops ----------------------------------------------------------------------------------------
+        // An item of VIF bytes alone (a setter's UNPACK, a GS register packet, a standalone flush), in chain order like a
+        // draw's. Consecutive ones - and the draw after them - share one item and one tag while nothing else was written
+        // to the packet buffer in between (the cursor is still right after the open item's tag).
+        int g_openItem = -1;      // the last item, still taking ops (no block yet)
+        uint32_t g_openEnd = 0;   // the cursor right after its tag
+        bool g_materialCaching = false; // FUN_002409C8 is caching a material's setup (its packets are copied)
+        struct OpStats
+        {
+            uint64_t ops = 0, merged = 0, packets = 0, caching = 0, mergedDraws = 0;
+        } g_opStats;
+
+        bool opsAllowed() { return g_items && !g_itemVerify && !g_caching && !g_materialCaching; }
+
+        // the half in use and the room for `bytes` at the cursor: false = the packet path
+        bool cursorForItem(const uint8_t *rdram, uint32_t bytes, uint32_t &cursor)
+        {
+            if (!vcs::rslnative::packetRoom(rdram, bytes, cursor))
+                return false;
+            const uint32_t half = 0x520F90u + rd32(rdram, 0x520F90u + 0x14u) * 0xE6670u + 0x20u;
+            return cursor >= half && cursor + bytes <= half + 0xE6670u;
+        }
+
+        void writeItemTag(uint8_t *rdram, uint32_t cursor, uint32_t index)
+        {
+            const uint32_t tag[4] = {0x10000000u, 0u, 0x07000000u | (kItemMark + index), kItemNop | (g_itemFrame & 0xFFFFu)}; // CNT: MARK, NOP
+            std::memcpy(rdram + (cursor & kRamMask), tag, 16);
+            wr32(rdram, kPacketCursor, cursor + 16u);
+        }
+
+        // VIF bytes as a state op: into the open item, or a new item and its tag; false = the caller writes its packets
+        bool appendOp(uint8_t *rdram, const uint8_t *vif, uint32_t bytes)
+        {
+            uint32_t cursor = 0;
+            if (!cursorForItem(rdram, 16u, cursor))
+                return false;
+            if (g_openItem >= 0 && cursor == g_openEnd && size_t(g_openItem) + 1u == g_itemsCurrent.size())
+            {
+                g_arenaCurrent.insert(g_arenaCurrent.end(), vif, vif + bytes);
+                g_itemsCurrent[g_openItem].prefixBytes += bytes;
+                ++g_opStats.merged;
+                return true;
+            }
+            if (g_itemsCurrent.size() >= kMaxItems)
+                return false;
+            const uint32_t index = static_cast<uint32_t>(g_itemsCurrent.size());
+            Item &it = g_itemsCurrent.emplace_back();
+            it.prefixAt = static_cast<uint32_t>(g_arenaCurrent.size());
+            g_arenaCurrent.insert(g_arenaCurrent.end(), vif, vif + bytes);
+            it.prefixBytes = bytes;
+            writeItemTag(rdram, cursor, index);
+            g_openItem = static_cast<int>(index);
+            g_openEnd = cursor + 16u;
+            ++g_opStats.ops;
+            return true;
+        }
+
         // the draw call as an item (game thread, the draw function's whole work); false: the original runs
         bool itemDraw(uint8_t *rdram, R5900Context *ctx, Kind kind, uint32_t raw0, uint32_t raw1)
         {
@@ -1089,26 +1154,27 @@ namespace vcs::rslworld
             }
             const uint32_t written = static_cast<uint32_t>(tags.size()) + 16u;
             uint32_t cursor = 0;
-            if (!vcs::rslnative::packetRoom(rdram, written, cursor))
+            if (!cursorForItem(rdram, written, cursor))
             {
-                ++st.noRoom;
+                ++st.noRoom; // no room, or the cursor is somewhere else (a packet built for later): the packet path
                 return false;
             }
-            const uint32_t half = 0x520F90u + rd32(rdram, 0x520F90u + 0x14u) * 0xE6670u + 0x20u; // the half in use
-            if (cursor < half || cursor + written > half + 0xE6670u)
-            {
-                ++st.noRoom; // the cursor is somewhere else (a packet built for later): the packet path
-                return false;
-            }
-            const uint32_t index = static_cast<uint32_t>(g_itemsCurrent.size());
-            Item &it = g_itemsCurrent.emplace_back();
+            // step 5a: the open item's ops come right before this draw - it takes the draw (no tag of its own)
+            const bool merge = tags.empty() && g_openItem >= 0 && cursor == g_openEnd && size_t(g_openItem) + 1u == g_itemsCurrent.size();
+            const uint32_t index = merge ? static_cast<uint32_t>(g_openItem) : static_cast<uint32_t>(g_itemsCurrent.size());
+            Item &it = merge ? g_itemsCurrent[index] : g_itemsCurrent.emplace_back();
             it.d = {kind == World ? 3u : 5u, addr, kind == World ? (raw1 & 0xFFFFu) : 0u, kind};
-            it.prefixAt = static_cast<uint32_t>(g_arenaCurrent.size());
+            it.hasBlock = true;
+            if (!merge)
+                it.prefixAt = static_cast<uint32_t>(g_arenaCurrent.size());
+            const uint32_t prefixBefore = merge ? it.prefixBytes : 0u;
+            g_openItem = -1; // a draw ends the item
             if (f.cntOnly && !stateCall)
                 tagsToVif(f.bytes, f.size, g_arenaCurrent);
             if (!stateCall)
                 gsVif(rdram, f, g_arenaCurrent);
             it.prefixBytes = static_cast<uint32_t>(g_arenaCurrent.size()) - it.prefixAt;
+            (void)prefixBefore;
             if (!tags.empty())
             {
                 std::memcpy(rdram + (cursor & kRamMask), tags.data(), tags.size());
@@ -1116,9 +1182,10 @@ namespace vcs::rslworld
             }
             if (stateCall)
                 ++st.stateCall; // (made as an item all the same)
-            const uint32_t tag[4] = {0x10000000u, 0u, 0x07000000u | (kItemMark + index), kItemNop | (g_itemFrame & 0xFFFFu)}; // CNT: MARK, NOP
-            std::memcpy(rdram + (cursor & kRamMask), tag, 16);
-            wr32(rdram, kPacketCursor, cursor + 16u);
+            if (merge)
+                ++g_opStats.mergedDraws; // its tag is the open item's, already in the buffer
+            else
+                writeItemTag(rdram, cursor, index);
             wr32(rdram, kGsQueueCount, 0u); // the draw sent the queue
             wr32(rdram, kDirty, stateCall ? f.dirtyAfter & 0x7FFFFFFFu : f.dirtyAfter);
             ++st.made[kind];
@@ -1200,6 +1267,8 @@ namespace vcs::rslworld
             thread_local std::vector<uint32_t> pages;
             for (Item &it : table.items)
             {
+                if (!it.hasBlock)
+                    continue; // step 5a: state ops alone
                 Draw &d = it.d;
                 const uint64_t snapshotKey = d.kind == World ? blockKey(World, d.addr, d.qwc) : blockKey(d.kind, d.addr, 0u);
                 uint32_t units = 0;
@@ -1270,12 +1339,147 @@ namespace vcs::rslworld
                          (unsigned long long)s.skipped,
                          (unsigned long long)s.copied, (unsigned long long)s.lost, (unsigned long long)g_itemsSeenW.exchange(0),
                          (unsigned long long)g_itemsUnplacedW.exchange(0), (unsigned long long)g_itemsStaleW.exchange(0));
+            std::fprintf(stderr, "[rsl-items] state ops: %llu items of their own, %llu merged into one, %llu draws into an op item; packet path: %llu "
+                                 "(no room / not RAM), %llu (a cache being filled)\n",
+                         (unsigned long long)g_opStats.ops, (unsigned long long)g_opStats.merged, (unsigned long long)g_opStats.mergedDraws,
+                         (unsigned long long)g_opStats.packets, (unsigned long long)g_opStats.caching);
+            g_opStats = OpStats{};
             if (g_itemVerify)
-                std::fprintf(stderr, "[rsl-items] verify: %llu draws wrote what their item stands for, %llu differ; blocks: %llu copied as the walker "
+                std::fprintf(stderr, "[rsl-items] verify: %llu draws / ops wrote what their item stands for, %llu differ; blocks: %llu copied as the walker "
                                      "copies them, %llu differ\n",
                              (unsigned long long)s.verifySame, (unsigned long long)s.verifyDiffer,
                              (unsigned long long)g_itemBlockSameW.exchange(0), (unsigned long long)g_itemBlockDifferW.exchange(0));
             s = ItemStats{};
+        }
+
+        PS2Runtime::RecompiledFunction g_gsSendOriginal[2] = {}, g_texMatrixOriginal = nullptr, g_vuConstantsOriginal = nullptr,
+                                       g_flushAOriginal = nullptr, g_textureBindOriginal = nullptr;
+
+        // VCS_RSL_ITEMS_VERIFY: what a setter would have made an op of, compared with what its original writes (checkItem)
+        void verifyOp(const uint8_t *rdram, const uint8_t *tags, uint32_t bytes)
+        {
+            checkItem(rdram);
+            g_itemCheck.expect.assign(tags, tags + bytes);
+            g_itemCheck.cursor = rd32(rdram, kPacketCursor);
+            g_itemCheck.armed = bytes != 0u;
+        }
+
+        // FUN_002F7908 / FUN_002F7B30 (the same code, game-internals.md 6i): queue FOG / FOGCOL / registers 0x14 / 0x15 by
+        // the dirty bits 0x80 / 0x100 / 0x20 / 0x40, clear bits 0x1E0, send the queue as CNT + DIRECTHL
+        template <int Which>
+        PS2_GUEST_CC void gsSendHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t ra = getRegU32(ctx, 31);
+            if (Which == 1 && ra == kMaterialCacheGs)
+            {
+                g_materialCaching = false; // the material cache's own GS packet (copied with it): the packet path, and its end
+                ++g_opStats.caching;
+                g_gsSendOriginal[Which](rdram, ctx, runtime);
+                return;
+            }
+            const uint32_t dirty = rd32(rdram, kDirty);
+            thread_local vcs::rslnative::Flush adds;
+            adds.queued = 0;
+            const struct
+            {
+                uint32_t bit, value, reg;
+            } regs[4] = {{0x80u, 0x4882E0u, 6u}, {0x100u, 0x4882E8u, 7u}, {0x20u, 0x4882F0u, 0x14u}, {0x40u, 0x4882F8u, 0x15u}};
+            for (const auto &g : regs)
+                if (dirty & g.bit)
+                {
+                    uint64_t v;
+                    std::memcpy(&v, rdram + g.value, 8);
+                    adds.queue[adds.queued][0] = v;
+                    adds.queue[adds.queued][1] = g.reg;
+                    ++adds.queued;
+                }
+            if (g_itemVerify)
+            {
+                thread_local std::vector<uint8_t> e;
+                e.clear();
+                gsPacket(rdram, adds, e);
+                verifyOp(rdram, e.data(), static_cast<uint32_t>(e.size()));
+                g_gsSendOriginal[Which](rdram, ctx, runtime);
+                return;
+            }
+            thread_local std::vector<uint8_t> vif;
+            vif.clear();
+            gsVif(rdram, adds, vif);
+            if (!vif.empty() && (!opsAllowed() || !appendOp(rdram, vif.data(), static_cast<uint32_t>(vif.size()))))
+            {
+                ++(opsAllowed() ? g_opStats.packets : g_opStats.caching);
+                g_gsSendOriginal[Which](rdram, ctx, runtime);
+                return;
+            }
+            const uint32_t count = rd32(rdram, kGsQueueCount); // the queue as the original leaves it
+            for (uint32_t i = 0; i < adds.queued; ++i)
+                std::memcpy(rdram + kGsQueue + (count + i) * 16u, adds.queue[i], 16);
+            wr32(rdram, kGsQueueCount, vif.empty() ? count : 0u);
+            wr32(rdram, kDirty, dirty & 0xFFFFFE1Fu);
+            ctx->pc = ra;
+        }
+
+        // a setter's CNT (FLUSHE, UNPACK V4-32 x3 -> vu) with the three qwords at src, as an op
+        bool unpack3Op(uint8_t *rdram, uint32_t code1, uint32_t src, PS2Runtime::RecompiledFunction original, R5900Context *ctx,
+                       PS2Runtime *runtime)
+        {
+            uint8_t tags[16 + 48];
+            const uint64_t tag[2] = {0x10000003u, 0x10000000ull | (uint64_t(code1) << 32)};
+            std::memcpy(tags, tag, 16);
+            if ((src & 0xF0000000u) == 0u)
+                std::memcpy(tags + 16, rdram + (src & kRamMask), 48);
+            if (g_itemVerify)
+            {
+                if ((src & 0xF0000000u) == 0u)
+                    verifyOp(rdram, tags, sizeof(tags));
+                original(rdram, ctx, runtime);
+                return false;
+            }
+            if ((src & 0xF0000000u) != 0u || !opsAllowed() || !appendOp(rdram, tags + 8, sizeof(tags) - 8u))
+            {
+                ++(opsAllowed() ? g_opStats.packets : g_opStats.caching);
+                original(rdram, ctx, runtime);
+                return false;
+            }
+            ctx->pc = getRegU32(ctx, 31);
+            return true;
+        }
+
+        PS2_GUEST_CC void texMatrixHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            unpack3Op(rdram, 0x6C03002Cu, getRegU32(ctx, 4), g_texMatrixOriginal, ctx, runtime);
+        }
+
+        PS2_GUEST_CC void vuConstantsHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (unpack3Op(rdram, getRegU32(ctx, 4) | 0x6C030000u, getRegU32(ctx, 5), g_vuConstantsOriginal, ctx, runtime))
+                setReturnS32(ctx, 3); // its return value
+        }
+
+        PS2_GUEST_CC void flushAHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint64_t tag[2] = {0x10000000u, 0x1300000000000000ull}; // CNT 0: NOP, FLUSHA
+            const auto *t = reinterpret_cast<const uint8_t *>(tag);
+            if (g_itemVerify)
+            {
+                verifyOp(rdram, t, 16u);
+                g_flushAOriginal(rdram, ctx, runtime);
+                return;
+            }
+            if (!opsAllowed() || !appendOp(rdram, t + 8, 8u))
+            {
+                ++(opsAllowed() ? g_opStats.packets : g_opStats.caching);
+                g_flushAOriginal(rdram, ctx, runtime);
+                return;
+            }
+            ctx->pc = getRegU32(ctx, 31);
+        }
+
+        // before the original only: the material cache's texture bind opens the window its packets are copied from
+        PS2_GUEST_CC void textureBindHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            g_materialCaching = getRegU32(ctx, 31) == kMaterialCacheBind;
+            g_textureBindOriginal(rdram, ctx, runtime);
         }
 
         // FUN_002409C8 called by FUN_00240ED8 to cache the sector: its draws stay packets (until the next RSL draw call
@@ -1290,6 +1494,7 @@ namespace vcs::rslworld
         PS2_GUEST_CC void worldHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t a0 = getRegU32(ctx, 4), a1 = getRegU32(ctx, 5);
+            g_materialCaching = false;
             if (g_items && g_world && !g_itemVerify && itemDraw(rdram, ctx, World, a0, a1))
                 return;
             if (g_itemVerify)
@@ -1634,6 +1839,16 @@ namespace vcs::rslworld
                   !std::getenv("VCS_TRACE_RSL");
         if (g_items && g_world && !hook(runtime, kSectorDraw, g_sectorOriginal, &sectorHook))
             g_items = false; // world items need to know when a sector is cached
+        // step 5a: the state setters as ops (VCS_RSL_OPS=0: their packets)
+        if (g_items && !off("VCS_RSL_OPS") && hook(runtime, kTextureBind, g_textureBindOriginal, &textureBindHook))
+        {
+            g_ops = true;
+            hook(runtime, kGsSendA, g_gsSendOriginal[0], &gsSendHook<0>);
+            hook(runtime, kGsSendB, g_gsSendOriginal[1], &gsSendHook<1>);
+            hook(runtime, kTexMatrix, g_texMatrixOriginal, &texMatrixHook);
+            hook(runtime, kVuConstants, g_vuConstantsOriginal, &vuConstantsHook);
+            hook(runtime, kFlushA, g_flushAOriginal, &flushAHook);
+        }
         g_itemVerify = g_items && std::getenv("VCS_RSL_ITEMS_VERIFY") != nullptr;
         g_log = g_verify || g_itemVerify || std::getenv("VCS_RSL_WORLD_LOG") != nullptr;
         ps2chain::addTagObserver(&observe);
@@ -1641,6 +1856,20 @@ namespace vcs::rslworld
         ps2chain::setMarkHandler(&onMark);
         if (g_rasters)
             ps2chain::setDirectHandler(&onDirect);
+    }
+
+    bool flushAsOp(uint8_t *rdram, const uint8_t *tags, uint32_t bytes)
+    {
+        if (!g_ops || !opsAllowed())
+        {
+            if (g_ops)
+                ++g_opStats.caching;
+            return false;
+        }
+        thread_local std::vector<uint8_t> vif;
+        vif.clear();
+        tagsToVif(tags, bytes, vif);
+        return vif.empty() || appendOp(rdram, vif.data(), static_cast<uint32_t>(vif.size()));
     }
 
     void onFrameKick()
@@ -1655,6 +1884,8 @@ namespace vcs::rslworld
         g_itemsKicked.swap(g_itemsCurrent); // step 4c (a frame whose chain was not observed loses its items with it)
         g_itemFrameKicked = g_itemFrame++;
         g_caching = false;
+        g_materialCaching = false;
+        g_openItem = -1;
         g_itemsCurrent.clear();
         g_arenaKicked.swap(g_arenaCurrent);
         g_arenaCurrent.clear();

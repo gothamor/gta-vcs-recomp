@@ -23,7 +23,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | L | planned in detail 2026-10-25 (5a-5g below) |
+| 5 | An empty chain | L | 5a done 2026-10-25 (state ops); 5b-5g planned below |
 
 ### 1. The last GS draws
 
@@ -313,6 +313,24 @@ Order (by what it removes, then risk):
 - **5g - no walk** (S). When a frame's chain holds only item tags and fixed tags, the kick hands the item list to the
   worker without walking or copying the chain (the write watch's fold stays for the blocks' validity); the walker and
   the VIF interpreter remain the reference path (`VCS_RSL_ITEMS=0`).
+
+**5a done 2026-10-25 - state ops.** An item may hold VIF bytes alone (`hasBlock` false). The GS queue senders
+(`FUN_002F7908`, `FUN_002F7B30`), the texture matrix (`FUN_002F7090`), `FUN_001CEF18`, `FUN_002F9CE8` and the native
+state flush when it is all CNTs (a standalone flush, `FUN_002F7388`'s, or one inside a draw left to the packet path)
+write no packets: their VIF bytes - exactly what the walker would make of the CNTs they replace - go into the open item
+or a new one with its tag; ops in a row share an item while nothing else is written to the packet buffer between them
+(and a draw right after them joins it). Their effects on guest memory (the GS queue, the dirty word, `FUN_001CEF18`'s
+return value) are kept. Packets stay packets while a sector or a material is being cached (`FUN_002409C8`'s material
+cache: from `FUN_00408F30` called at `0x240D14` to `FUN_002F7B30` called at `0x240D1C`, game-internals.md 6i).
+- Checked: `VCS_RSL_ITEMS_VERIFY=1` now also compares every op's original packets with the op (driving: 2.67M draws
+  and ops, 0 differ; 563k blocks, 0 differ). Reference scenes: `loading` identical, `pause_map` within the run-to-run
+  noise it has between any two captures (1-2 levels on ~7-10k pixels); tour subset classes unchanged.
+- Counts (city spot, per 10 s): ~450k ops making items of their own, ~52k merged into the item before them; no draw
+  merged yet - a texture bind's upload packets sit between the setters and the draw (5b). Census at that spot, same
+  window, ops off / on: top-level tags 1,055 -> 848 a frame; CNT FLUSHE (the GS senders' and setters' CNTs start with
+  FLUSHE) 236 -> 59, CNT MSCAL 68 -> 46, items 158 -> 222. CNT DIRECTHL (~90) is not theirs and stays.
+- Measured: A/B, same build, `VCS_RSL_OPS=0` vs on, three alternating rounds, `--opt none`, uncapped: driving 104.1 -> 113.9 fps (game thread 8.49 -> 7.72 ms, chain submission 1.15 -> 1.03, worker 4.64 -> 4.37); standing even (183 / 182 fps). The machine's run-to-run noise is about 5%: the drive's gain is consistent across every column but should be taken as 'up to ~9%'.
+- `VCS_RSL_OPS=0`: the setters' packets as before (items for draws stay).
 
 Expected gains, honestly: the game thread's share of handing frames over (the walk, copy, fold and bookkeeping:
 ~5% while driving) shrinks with every part; the render worker gains where an op replaces VIF parsing and VU-memory
