@@ -50,7 +50,7 @@ namespace fs = std::filesystem;
 
 namespace vcs
 {
-    void configureWatch(); // debug/watch.cpp
+    void configureWatch(uint8_t *rdram); // debug/watch.cpp
 }
 
 namespace
@@ -462,7 +462,7 @@ int main(int argc, char *argv[])
         PS2Runtime::setIoPaths(paths);
 
         vcs::rig::install(runtime); // control-channel automation commands (debug/rig.h)
-        vcs::configureWatch();
+        vcs::configureWatch(runtime.memory().getRDRAM());
         vcs::runSelfTest(runtime);
         vcs::startWatchdog(runtime);
         vcs::startProfiler(runtime);

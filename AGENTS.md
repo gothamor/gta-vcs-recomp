@@ -68,6 +68,7 @@ python tools/rig.py player|scripts|peekf 0x4e4910 1|scm <hex>  # inspect / drive
 python tools/tour.py OUT [--every 9 --limit 18]               # world tour (quick subset with --every/--limit)
 python tools/saves.py [OUT]                                   # save / Load Game / Delete Game through the menus
 python tools/soak.py [OUT] --hours 3                          # hours of autodrive: crash / hang / leak / falling
+python tools/shakedown.py [OUT]                               # mission 50: cutscene + shop entry (the "Loading..." hang)
 python tools/soundcheck.py all OUT [--mission N]             # native sound vs the emulated IOP: record, replay, compare
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
@@ -127,6 +128,9 @@ card copies to start from (never the user's live card).
 - Thread "returns" to a float bit pattern (`0x3F333333`...): a saved `$ra` overwritten - the
   checkpoint-unwind class of bug (`VCS_WATCH=lo,hi,...`).
 - Saves written but never found: card directory order (game-internals.md 10c).
+- A mission stuck after a ped should talk, or peds vanishing: check the mission audio slots and who deletes the ped
+  (`VCS_TRACE_PED_REMOVE`, game-internals.md 12); Shakedown's was the recompiler's 32-bit compare-with-zero branches.
+- Something wrong only above 100 fps: a `ms_fTimeStep < 0.5` branch the PS2 never takes (game-internals.md 4).
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs

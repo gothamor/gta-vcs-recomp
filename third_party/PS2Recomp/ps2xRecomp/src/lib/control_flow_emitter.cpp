@@ -438,12 +438,16 @@ namespace ps2recomp
         case OPCODE_BNE:
         case OPCODE_BNEL:
             return fmt::format("GPR_U64(ctx, {}) != GPR_U64(ctx, {})", rsReg, rtReg);
+        // [gta-recomp] The R5900's compare-with-zero branches test the whole 64-bit register (as BEQ / BNE and SLT
+        // do). Upstream tested the low word: identical for sign-extended 32-bit values, wrong after an LD of a 64-bit
+        // bitfield whose bit 31 differs from bit 63 - VCS's CPed::ProcessControl took "bFadeOut" (bit 63 of +0x1C8) from
+        // bit 31 and faded out / deleted mission peds (game-internals.md 12, the Shakedown shopkeeper).
         case OPCODE_BLEZ:
         case OPCODE_BLEZL:
-            return fmt::format("GPR_S32(ctx, {}) <= 0", rsReg);
+            return fmt::format("GPR_S64(ctx, {}) <= 0", rsReg);
         case OPCODE_BGTZ:
         case OPCODE_BGTZL:
-            return fmt::format("GPR_S32(ctx, {}) > 0", rsReg);
+            return fmt::format("GPR_S64(ctx, {}) > 0", rsReg);
         case OPCODE_REGIMM:
             switch (m_branchInst.rt)
             {
@@ -451,12 +455,12 @@ namespace ps2recomp
             case REGIMM_BLTZL:
             case REGIMM_BLTZAL:
             case REGIMM_BLTZALL:
-                return fmt::format("GPR_S32(ctx, {}) < 0", rsReg);
+                return fmt::format("GPR_S64(ctx, {}) < 0", rsReg);
             case REGIMM_BGEZ:
             case REGIMM_BGEZL:
             case REGIMM_BGEZAL:
             case REGIMM_BGEZALL:
-                return fmt::format("GPR_S32(ctx, {}) >= 0", rsReg);
+                return fmt::format("GPR_S64(ctx, {}) >= 0", rsReg);
             default:
                 return "false";
             }

@@ -152,6 +152,16 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   becomes 0.001, so every real step takes the `/ step` path); steps >= 0.5 are unchanged. Audit afterwards: run /
   drive / fall at 1/144 - 1/240 as at 1/30 - 1/100, sprint -5% / -11% at 1/200 / 1/240. Independent timing's ceiling
   is now 240 fps (step floor 50/240, `vcs_framerate.cpp` kMaxFps).
+- **Found (2026-10-25): FUN_0031ae38 = CCutsceneObject::ProcessControl** (as in reVC) has the same dead branch:
+  `if (ms_fTimeStep < 0.5) speed *= 2 (add.s x, x, x); else speed *= 1 / ms_fTimeStep;` (0x31b19c - 0x31b234, the
+  0.5 from `lui $at, 0x3F00` at 0x31b19c, used only for the compare), then the object's offset +0x210 += step * speed
+  and its position = +0x200 + +0x210. Below the floor each frame kept only 2 * step of the animation's root movement,
+  so cutscene characters drifted off their animation: at 144 fps (step 0.35) Vic floated over the trailer and Marty
+  sat sunk in his truck in MAR_A1 "Shakedown"'s opening cutscene (user report). Found by checking that the cutscene was
+  right with original timing and with `VCS_MIN_STEP=0.5` at 144 fps, then scanning the generated code for
+  `lwc1 -0x2EF0(...)` (the step) next to a `lui 0x3F00` and a compare. Patched like the ped one
+  (game/vcs/overrides.toml: 0.001). The scan's other hits are not this pattern: FUN_001f4bf0 / FUN_0033bb2c use
+  `max(step, 0.5)` (below), FUN_00348128 compares `step * 0.5` with 0.05, FUN_002f4960 is CTimer itself.
 - **Audit results in the supported range** (`tools/framerate_audit.py`, steps 1/15 .. 1/100, per simulated second,
   2026-10-24): game clock exact (1/15 gets 60 ms a frame: the +60 ms cap, below ~17 fps the game slows, as on the
   PS2); car acceleration the same within 3% (speed at 2 / 3 / 4 s, distance in 4 s); running / sprinting the same
@@ -1271,6 +1281,40 @@ game's own `LOAD_AND_LAUNCH_MISSION_INTERNAL` (refuse while `0x4CD3E7` is set).
 - `CREATE_CAR` (0x0048, handler `0x3d03b0`): 4 parameters (model, x, y, z; z = -100 finds the ground) plus the
   handle output (e.g. 0x1201 = vehicle pool slot 0x12). Vehicle model ids used by MAIN.SCM: 171..276 (211 most).
 - `SET_CHAR_COORDINATES` with z = -100 puts the player on the ground (or a roof: (-1400, 1250) landed at z 84).
+- **Pools** (`CPool`: +0 entries, +4 flag bytes (bit 0x80 = free, low 7 bits = the handle's generation), +8 size;
+  lookup `FUN_00471788(pool, handle)`: slot = handle >> 8, the low byte must equal the flag byte): peds `*(0x487A94)`
+  (70 entries of 0xD20 bytes from 0x1D3FF80 in a game started from the Fort Baxter card), vehicles `*(0x487A98)`
+  (entries 0x8C0). A script char handle 0x1006 = ped slot 0x10, generation 6.
+- **Ped fields** used below: +0x48 entity flags (64-bit; bits 4..8 = status, bit 32 = bRemoveFromWorld), +0x56 model
+  index, +0x1C8 ped flags (64-bit; **bit 63 = bFadeOut**), +0x6F8 near peds (10) with the count at +0x77A, +0x8A4 /
+  +0x8C4 ped state (0x37 driving, 0x39 / 0x3A dying / dead), +0x8F4 created by (1 random, 2 mission).
+- **Frame functions** (found tracing ped removal, 2026-10-25): FUN_003ba8d8 = CGame::Process (scripts, then the world,
+  population and cars); FUN_001933c0 = CWorld::Process (each entity's ProcessControl through its vtable; entities with
+  bRemoveFromWorld go to FUN_00198408, which removes and deletes them); FUN_00210780 =
+  CPed::FlagToDestroyWhenNextProcessed (sets bRemoveFromWorld, gets the ped out of a vehicle); FUN_001f4bf0 =
+  CPed::ProcessControl (at 0x1f4cfc: if bFadeOut, alpha -= 8 and FlagToDestroy below 0); FUN_00430148 =
+  CPopulation::Update (FUN_00430290 adds peds); FUN_00433008 / FUN_00433378 = CCarCtrl::RemoveDistantCars /
+  PossiblyRemoveVehicle (a removed car deletes its occupants); FUN_0014ca80 = CAutomobile::ProcessControlInputs (with
+  the player's controls disabled it brakes and calls FUN_00237c30, which destroys the player's off-screen random near
+  peds and makes the others flee). The script command at 0x2b0b9c (FUN_002b0200) sets bFadeOut on many peds at once
+  (an area clear).
+- **Mission audio slots** (main script, `AUDIMON` at 0xaf7f and the subroutines 0xa81a - 0xac40 its users CALL): 5
+  slots in globals 0x606 (state bits: 1 free, 2 load requested, 4 loaded, 8 playing, 0x20 locked, 0x40 play once
+  loaded), 0x60B (the line's name, a script-space string offset, e.g. "MARA1CA"), 0x610, 0x615 (the speaking char's
+  handle, -99 none). 0xaa14 requests a line (opcode 0x0413 / 0x0257), 0xa9b6 finds the slot of a name and waits
+  (`WAIT 0`) until bit 4 is set. AUDIMON, per slot: requested and loaded (opcode 0x0258) -> 4; **if the speaker is
+  "dead" (opcode 0x009F IS_CHAR_DEAD: no ped for the handle, or state 0x39 / 0x3A) the slot is freed (1)** - and a
+  mission already waiting in 0xa9b6 on that slot waits forever. Opcode 0x048F tests `(a & b) != 0`, 0x048D ORs.
+- **Shakedown's shop "Loading..." hang (MAR_A1, 2026-10-25)** was that wait: entering the shop (the mission's own
+  interior at (-1735, 634, 150), area 2) the mission creates the shopkeeper (model 152) and two extras, requests his
+  line with him as the speaker - and he had already been deleted, by his own ProcessControl taking the bFadeOut path.
+  bFadeOut was clear; bit 31 of the same 64-bit word was set, and the recompiler tested the low word in `bgez`
+  (docs/PS2RECOMP_PATCHES.md). Found by: the mission script sitting in 0xa9f9 - 0xaa0b (the `scripts` / `peek` rig
+  commands and a rough disassembler with parameter counts taken from each opcode handler's CollectParameters /
+  StoreParameters / GetPointerToScriptVariable calls), a write watch on the slot globals (2 -> 0x42 -> 4 -> 1 in one
+  AUDIMON pass), the speaker's handle (G615) and its free pool slot, `VCS_TRACE_PED_REMOVE` (who flags and deletes
+  peds), a watch on every ped's +0x1C8 armed at the door (`VCS_WATCH_STRIDE`, rig `watch`: no store ever set bit 63)
+  and the flag word logged at the removal (bit 63 clear, bit 31 set). It hung at every frame rate and timing mode.
 
 ## 13. Open questions / next research targets
 

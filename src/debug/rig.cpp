@@ -20,6 +20,11 @@
 #include <thread>
 #include <vector>
 
+namespace vcs
+{
+    bool armWatch(const char *spec); // debug/watch.cpp
+}
+
 namespace vcs::rig
 {
     namespace
@@ -405,6 +410,13 @@ namespace vcs::rig
         g_rdram = runtime.memory().getRDRAM();
         registerMemoryCommands();
         registerScriptCommands();
+        // watch <lo>,<hi>[,<value>[,<mask>]] -> ok: arm the guest write watch now (debug/watch.cpp; VCS_WATCH at start)
+        ps2control::addCommand("watch", [](const std::string &args, ps2control::Reply reply) {
+            const std::string spec = args;
+            runOnGameThread([spec, reply](uint8_t *, R5900Context *, PS2Runtime *) {
+                reply(vcs::armWatch(spec.c_str()) ? "ok" : "error usage: watch <lo>,<hi>[,<value>[,<mask>]] (hex)");
+            });
+        });
         // gsdraws [reset] -> ok <the draws still made from GS primitives, by kind, per frame since the last reset>
         // (gsHwDrawSourceReport; lines joined by " ;; "). The first call starts the table.
         ps2control::addCommand("gsdraws", [](const std::string &args, ps2control::Reply reply) {

@@ -45,3 +45,13 @@ stubs = [
 [[patches]]
 address = "0x001F2158"
 value = "0x3C013A83"
+
+# FUN_0031ae38 (CCutsceneObject::ProcessControl, as in reVC) turns the frame's animation movement into a move speed:
+# `if (ms_fTimeStep < 0.5) speed *= 2; else speed *= 1 / ms_fTimeStep;`, then adds step * speed to the object's
+# offset (+0x210). The `< 0.5` branch is dead on the PS2 and wrong (2 where 1/step > 2): below the floor a cutscene
+# character kept only 2 * step of each frame's root movement and drifted off its animation - floating or sunk in the
+# ground at 144 fps (mission MAR_A1 "Shakedown"). The 0.5 is only the compare's (`lui $at, 0x3F00` at 0x31B19C);
+# 0.001 sends every real step down the 1 / step path, and a zero step still takes the finite `* 2`.
+[[patches]]
+address = "0x0031B19C"
+value = "0x3C013A83"

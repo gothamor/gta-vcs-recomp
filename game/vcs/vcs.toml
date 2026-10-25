@@ -741,6 +741,7 @@ skip = [
 [patches]
 instructions = [
   { address = "0x001F2158", value = "0x3C013A83" },
+  { address = "0x0031B19C", value = "0x3C013A83" },
 ]
 
 [[jump_tables.table]]

@@ -439,6 +439,18 @@ dropped on uploads (lazy render-target patching).
       it after the points before it, in every configuration; a fresh teleport there from Fort Baxter lands (z 14.5).
       Collision streaming order / timing at that spot needs a look.
 ## Phase 5 - stability
+- [x] Shakedown (MAR_A1): characters floating over / sunk into the ground in the opening cutscene, and the game stuck on
+      "Loading..." when entering the shop (user report 2026-10-25) - **fixed 2026-10-25**, two separate bugs
+      (game-internals.md 4 and 12). The cutscene: CCutsceneObject::ProcessControl's dead `step < 0.5` branch (only
+      above 100 fps; patched like the ped-movement one). The shop, at every frame rate: the recompiler's compare-with-zero
+      branches tested only the low 32 bits, so CPed::ProcessControl read bit 31 of the ped flags as bFadeOut and deleted
+      the shopkeeper; his audio line was then dropped and the mission waited for it forever (PS2RECOMP_PATCHES.md).
+      Check: `python tools/shakedown.py` (cutscene skipped, truck to the shop, the two gang members beaten, Vic through
+      the door, shopkeeper alive and the loading screen gone; also a `regress.py` step). With the branch fix the gang
+      members who start a fight outside the shop stay alive (the 32-bit test had faded them out too), so the mission now
+      plays as written. Regression suite afterwards: missions, drive, evening, saves, tour, shakedown all ok; all 8
+      scenes match the capture from before the change (`loading` / `pause_map` differ from the 2026-10-23 baseline
+      before it too).
 - [x] Vic falls through the world in some places - **no longer happens** at the spot the user saw it (user
       playtest 2026-10-24); fixed along the way by other work (which change is not known: the VU0 collision
       natives, the scheduler / timing work and the renderer changes all came in between). The original report:
@@ -494,7 +506,8 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_FAST_DISPATCH=0` | guest calls / loop checkpoints always through the scheduler (no inline fast path) |
 | `VCS_EXE=path` | tools/run.py (and the rig, bench, scenes on top of it) run that build |
 | `VCS_WATCHDOG=s` | EE + IOP thread states |
-| `VCS_WATCH=lo,hi[,val]` | guest write watchpoint |
+| `VCS_WATCH=lo,hi[,val[,mask]]` | guest write watchpoint (rig `watch lo,hi[,val[,mask]]` arms it mid-run) |
+| `VCS_WATCH_STACK=1`, `VCS_WATCH_STRIDE=stride,offset` | watch hits also list s2-s7 and the code addresses on the guest stack (callers); only writes to one field of every pool entry (e.g. `d20,1c8`: the peds' flags) |
 | `VCS_TRACE_FILES=1` | game file API / inflate / GTAG relocation trace |
 | `PS2X_TRACE_RPC=n` | first n SIF RPC events |
 | `PS2X_LOG_MPG=1`, `PS2X_DUMP_MPG_DIR=d` | VU1 microcode uploads |
@@ -597,6 +610,7 @@ dropped on uploads (lazy render-target patching).
 | `python tools/regress.py [OUT] [--quick] [--set-baseline]` | regression suite against build/regress/baseline |
 | `PS2X_FRAME_STATS=1` | brightness probe without the control channel (black / dip frames in the perf line and log) |
 | `VCS_TRACE_TELEPORT=1` | log every ped teleport (FUN_0020b3d8) with its caller |
+| `VCS_TRACE_PED_REMOVE=1` | log every ped flagged for removal (FlagToDestroy, FUN_00210780) and deleted (FUN_00198408): handle, position, model, created-by, flags, last script, callers |
 | `display.scale=<1..8>` (old `scale=` still read) | internal render resolution, as `PS2X_HW_SCALE` (the environment wins) |
 | `python tools/vudis.py code.bin --start 0x30 --to-ebit` | VU microcode disassembler |
 | `python tools/sendkey.py Return`, `python tools/screenshot.py f.png` | key press / screenshot (control channel if open, else the window) |

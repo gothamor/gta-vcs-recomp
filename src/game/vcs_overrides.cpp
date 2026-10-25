@@ -538,6 +538,55 @@ namespace
         FUN_0020b3d8_0x20b3d8(rdram, ctx, runtime);
     }
 
+    // VCS_TRACE_PED_REMOVE: FUN_00210780 = CPed::FlagToDestroyWhenNextProcessed (sets bRemoveFromWorld, bit 32 of +0x48),
+    // FUN_00198408 = CWorld::Process's remove + delete of a flagged entity. Logs each ped (pool entries 0xD20 bytes) with
+    // its position, model (+0x56), created-by (+0x8F4: 1 random, 2 mission), state (+0x8C4), the script last
+    // interpreted and the code addresses on the guest stack (the callers).
+    void logPedRemoval(uint8_t *rdram, R5900Context *ctx, const char *what)
+    {
+        const auto rd32 = [&](uint32_t a) { uint32_t v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
+        const uint32_t ped = GPR_U32(ctx, 4);
+        const uint32_t pool = rd32(0x00487A94u); // CPools ped pool: entries, flags, size
+        const uint32_t entries = rd32(pool), flags = rd32(pool + 4u), size = rd32(pool + 8u);
+        if (!pool || ped < entries || ped >= entries + size * 0xD20u || (ped - entries) % 0xD20u)
+            return; // not a ped
+        const uint32_t slot = (ped - entries) / 0xD20u;
+        float pos[3];
+        std::memcpy(pos, rdram + ((ped + 0x30u) & 0x01FFFFFFu), sizeof(pos));
+        int16_t model = 0;
+        std::memcpy(&model, rdram + ((ped + 0x56u) & 0x01FFFFFFu), 2);
+        char name[9] = {};
+        if (g_currentScript)
+            std::memcpy(name, rdram + ((g_currentScript + 0x20F) & 0x01FFFFFFu), 8);
+        std::string callers;
+        const uint32_t sp = GPR_U32(ctx, 29) & 0x01FFFFFFu;
+        for (uint32_t off = 0, n = 0; off < 0x300u && n < 12u; off += 4u)
+        {
+            const uint32_t w = rd32(sp + off);
+            if (w >= 0x100000u && w < 0x480000u && !(w & 3u))
+            {
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), " %x", w);
+                callers += buf;
+                ++n;
+            }
+        }
+        std::fprintf(stderr, "[ped-remove] %s ped %08x handle %04x (%.2f, %.2f, %.2f) model %d created-by %u state %u "
+                     "+1c8 %08x%08x ra=%08x script %s callers%s\n", what, ped, (slot << 8) | rdram[(flags + slot) & 0x01FFFFFFu],
+                     pos[0], pos[1], pos[2], model, rd32(ped + 0x8F4u), rd32(ped + 0x8C4u), rd32(ped + 0x1CCu),
+                     rd32(ped + 0x1C8u), GPR_U32(ctx, 31), name, callers.c_str());
+    }
+    PS2_GUEST_CC void tracePedFlagDestroy(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        logPedRemoval(rdram, ctx, "flag");
+        FUN_00210780_0x210780(rdram, ctx, runtime);
+    }
+    PS2_GUEST_CC void tracePedWorldRemove(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        logPedRemoval(rdram, ctx, "delete");
+        FUN_00198408_0x198408(rdram, ctx, runtime);
+    }
+
     uint64_t g_sectorCalls = 0; // FUN_00240ED8 calls, for VCS_TRACE_CELL
     PS2_GUEST_CC void traceSector(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -729,6 +778,12 @@ namespace
         if (std::getenv("VCS_TRACE_TELEPORT"))
         {
             runtime.replaceFunction(0x0020B3D8u, &traceTeleport);
+            runtime.replaceFunction(0x002560D8u, &traceScriptCommand);
+        }
+        if (std::getenv("VCS_TRACE_PED_REMOVE"))
+        {
+            runtime.replaceFunction(0x00210780u, &tracePedFlagDestroy);
+            runtime.replaceFunction(0x00198408u, &tracePedWorldRemove);
             runtime.replaceFunction(0x002560D8u, &traceScriptCommand);
         }
         if (std::getenv("VCS_TRACE_SECTORS"))
