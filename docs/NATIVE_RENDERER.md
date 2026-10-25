@@ -574,6 +574,13 @@ TEXFLUSH) still take the front end; the GS registers and vertex queue are left a
 - `tools/bench.py`, one run each (same build, `PS2X_HLE_PACKED=0` vs default), render worker ms: city (1325, -325)
   14.5 -> 11.7, AI drive 21.2 -> 18.2 (41.3 -> 44.9 fps); the light spots (~2-3 ms) unchanged within noise.
 
+**The last three (2026-10-26, FULLY_NATIVE.md 5e).** A+D runs that continue the current PRIM (queue vertices first,
+without a kick), A+D packets with pure state writes before PRIM (written through the register path after the whole
+packet is checked), and Im2D line strips / lines (`recordPacked` mode 1, as `Submit`) - checked with
+`PS2X_HW_PACKED_VERIFY=1`, 7.5M packets exact. `gs_draws` 0 in the reference scenes and the tour subset.
+`PS2X_HW_PATH2_CONTINUED=0` / `PS2X_HW_PATH2_LEAD=0` / `PS2X_HW_PATH2_LINES=0` = the front end;
+`PS2X_HW_FRONT_DRAW_LOG=<n>` logs the draws the front end still makes, with their packets.
+
 **PATH2 packets recorded whole (2026-10-24, docs/FULLY_NATIVE.md step 1).** The game's own 2D / effect packets take
 the same route: `GS::processGIFPacket` hands a PATH2 packet to `submitPackedKick` first, which now also takes
 - Im2D's packet - one PACKED tag, ST / RGBAQ / **XYZ2** (`0x512`: a 32-bit Z, fog from the FOG register), the shape of

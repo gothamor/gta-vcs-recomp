@@ -476,6 +476,13 @@ clipper read back from VU memory (`vcsclip::clipFromOutput`).
 
 ### 6f. 2D: HUD, text, radar, menus, effects
 
+- **The render-target reads' packets** (2026-10-26, `PS2X_HW_FRONT_DRAW_LOG`): the reflection map's copies into FBP 420
+  (0x1A4) and FBP 452 (0x1C4) and the self-copy into FBP 140 (0x8C) sample target 140 (TBP 0x1180) through PATH2 A+D
+  packets: one tag (NLOOP 0x36 or 0x10, A+D) of UV / RGBAQ / XYZ2 writes - a triangle strip whose PRIM (0x31C:
+  TRISTRIP, IIP, TME, FST, context 2) came in an earlier state packet - or, for the sky's copy, XYOFFSET_2 (0x19),
+  TEST_2 (0x48), SCISSOR_2 (0x41), then PRIM, then the strip. The flyover also draws one Im2D packet a frame with
+  PRIM LINESTRIP (two vertices).
+
 Found from frame dumps (`PS2X_HW_DUMP`, draw lists with depth) during the widescreen work:
 - RenderWare keeps **ZTE on for 2D** (ZTE=0 is prohibited on the GS) and uses ZTST ALWAYS or GEQUAL.
 - The HUD, text (font texture 256x256), radar and menus (RwIm2D) are all drawn at the **largest Z**

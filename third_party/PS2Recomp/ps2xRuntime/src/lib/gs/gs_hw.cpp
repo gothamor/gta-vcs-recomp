@@ -2181,7 +2181,18 @@ namespace
             std::unique_ptr<Frame> packed = std::move(m_frame);
             m_frame = std::make_unique<Frame>();
             const uint8_t type = state.prim.type;
-            for (uint32_t i = 2; handled && i < count; ++i)
+            for (uint32_t i = 1; handled && (type == GS_PRIM_LINE || type == GS_PRIM_LINESTRIP) && i < count; ++i)
+            {
+                if ((type == GS_PRIM_LINE && i % 2u != 1u) || !kick[i])
+                    continue;
+                GSPrimitiveBatch batch{};
+                batch.state = state;
+                batch.vertexCount = 2;
+                batch.vertices[0] = vertices[i - 1u];
+                batch.vertices[1] = vertices[i];
+                Submit(batch);
+            }
+            for (uint32_t i = 2; handled && type != GS_PRIM_LINE && type != GS_PRIM_LINESTRIP && i < count; ++i)
             {
                 if ((type == GS_PRIM_TRIANGLE && i % 3u != 2u) || !kick[i])
                     continue;
@@ -2251,13 +2262,50 @@ namespace
         bool recordPacked(const GSDrawState &state, const GSVertex *vertices, const uint8_t *kick, uint32_t count)
         {
             const uint8_t type = state.prim.type;
-            if (type != GS_PRIM_TRIANGLE && type != GS_PRIM_TRISTRIP && type != GS_PRIM_TRIFAN)
+            const bool lines = type == GS_PRIM_LINE || type == GS_PRIM_LINESTRIP; // [gta-recomp] Im2D's lines (FULLY_NATIVE.md 5e)
+            if (type != GS_PRIM_TRIANGLE && type != GS_PRIM_TRISTRIP && type != GS_PRIM_TRIFAN && !lines)
                 return false;
             GSPrimitiveBatch batch{};
             batch.state = state;
             HwState s{};
             if (!buildState(batch, s))
                 return true; // ZTST NEVER: Submit draws nothing either
+            if (lines) // as Submit draws a line: its two vertices, mode 1, one primitive at a time
+            {
+                const auto &lctx = state.context;
+                const float lofx = lctx.xyoffset.ofx / 16.0f, lofy = lctx.xyoffset.ofy / 16.0f, lzs = depthScale(lctx);
+                const uint32_t lsource = gsCurrentDrawSource() | kGsDrawSourcePacked;
+                const bool lclassify = gsDrawSourcePath(lsource) == 2u;
+                s.mode = 1;
+                GSPrimitiveBatch prim{};
+                prim.state = state;
+                prim.vertexCount = 2;
+                thread_local std::vector<HwVertex> lhv;
+                lhv.resize(count);
+                bool any = false;
+                for (uint32_t i = 0; i < count; ++i)
+                    lhv[i] = hwVertex(state, vertices[i], lofx, lofy, lzs);
+                for (uint32_t i = 1; i < count; ++i)
+                {
+                    if ((type == GS_PRIM_LINE && i % 2u != 1u) || !kick[i])
+                        continue;
+                    HwVertex out[2] = {lhv[i - 1u], lhv[i]};
+                    any = true;
+                    if (lclassify)
+                    {
+                        prim.vertices[0] = vertices[i - 1u];
+                        prim.vertices[1] = vertices[i];
+                    }
+                    recordPrimitive(s, out, 2u, lclassify ? &prim : nullptr, lofx, lofy, lsource, false);
+                }
+                if (any)
+                {
+                    if (s.zte && s.ztst != 1u && s.zbp != s.fbp)
+                        noteDepthBuffer(s);
+                    noteTarget(s.fbp, s.fbw, s.fpsm, lhv.data(), count, s.scy1);
+                }
+                return true;
+            }
             if (!s.tme && !s.abe && s.fbmsk == 0u && depthBufferAt(s.fbp))
                 return false;
             s.mode = 0;

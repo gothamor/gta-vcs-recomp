@@ -249,6 +249,9 @@ dropped on uploads (lazy render-target patching).
       742 -> 303 top-level tags a frame (245 items, ~32 NEXTs, ~16 fixed root tags), payload 780 -> 232 qwords. 2.15M
       regions unchanged, 0 tags reading inside one, 3.34M draws / ops, 631k blocks, 1.40M recordings: 0 differ.
       `VCS_RSL_GAPS=0`, `VCS_RSL_RUNS=0`.
+- [x] **No GS front-end draws** (2026-10-26, FULLY_NATIVE.md 5e): the three render-target reads (A+D runs continuing
+      an earlier PRIM, state writes before PRIM) and the flyover's Im2D line strip drawn by the packed path; 7.5M
+      packets exact against per-primitive `Submit`. `gs_draws` 0 in the reference scenes and the tour subset.
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -554,6 +557,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_RSL_ITEMS=0`, `VCS_RSL_ITEMS_VERIFY=1` | world / model draws as packets (no draw items); items built but the original writes the packets, compared with what each item stands for, and each block the walker copies with what an item would copy (FULLY_NATIVE.md step 4c) |
 | `VCS_RSL_SLOW_LOG=1` | kicks whose item resolve takes > 3 ms (items, references, bytes) and chains the render worker takes > 15 ms on |
 | `VCS_RSL_PLUGINS=0`, `VCS_RSL_PLUGIN_LOG=1` | the native flush leaves flushes with plug-in callbacks to the original (as before step 5f); log which callbacks the flushes left to the original would call |
+| `PS2X_HW_PATH2_CONTINUED=0`, `PS2X_HW_PATH2_LEAD=0`, `PS2X_HW_PATH2_LINES=0` | A+D runs without their own PRIM / A+D packets with state writes before PRIM / Im2D lines through the GS front end (as before 2026-10-26) |
+| `PS2X_HW_FRONT_DRAW_LOG=<n>` | the first n draws the GS front end makes from GS primitives (PATH1 aside), with the GIF packet each came from |
 | `PS2X_HW_PACKED_LOG=<n>` | the first n PATH2 packets the GS front end takes instead of the packed path (`submitPackedKick`), by their GIF tags; A+D packets only when they carry a vertex (FULLY_NATIVE.md 5e) |
 | `VCS_RSL_RAW=0` | recordings refuse blocks with BASE / OFFSET / ITOP / MPG as before step 5e (instead of replaying them through the VIF interpreter) |
 | `VCS_RSL_GAPS=0`, `VCS_RSL_RUNS=0`, `VCS_RSL_GAP_LOG=1`, `VCS_RSL_GAP_FNS=,<hex>,` | no gap captures; regions stop at their first kept tag (both as before step 5h); log frame 400's gaps; gaps only at the listed hook points (debug bisection, 0 = the kick) |

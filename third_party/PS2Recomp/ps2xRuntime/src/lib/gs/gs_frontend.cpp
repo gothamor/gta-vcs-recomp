@@ -780,6 +780,14 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
     return true;
 }
 
+// [gta-recomp] PS2X_HW_FRONT_DRAW_LOG=<n>: the first n draws the front end makes from GS primitives, with the GIF packet
+// they came from (path, tags, registers) - to find what still takes the register-by-register way
+namespace
+{
+    thread_local const uint8_t *t_frontPacket = nullptr;
+    thread_local uint32_t t_frontPacketBytes = 0;
+}
+
 void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
 {
     if (ps2_render_worker::gsStage() && data && sizeBytes >= 16u && toGsStage(kGsGif, data, sizeBytes, 0u, 0u)) // [gta-recomp]
@@ -828,6 +836,12 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
         }
     });
 
+    t_frontPacket = data;
+    t_frontPacketBytes = sizeBytes;
+    struct ClearPacket
+    {
+        ~ClearPacket() { t_frontPacket = nullptr; }
+    } clearPacket;
     uint32_t offset = 0;
     while (offset + 16 <= sizeBytes)
     {
@@ -960,6 +974,49 @@ bool GS::submitPackedKick(const uint8_t *data, uint32_t sizeBytes) // [gta-recom
     thread_local std::vector<uint8_t> kicks;
     vertices.clear();
     kicks.clear();
+    bool continued = false; // an A+D run with no PRIM of its own: the current PRIM, the queue's vertices first
+    static const bool imLines = [] { // PS2X_HW_PATH2_LINES=0: Im2D's lines through the front end
+        const char *e = std::getenv("PS2X_HW_PATH2_LINES");
+        return !(e && e[0] == '0');
+    }();
+    static const bool continuedOn = [] {
+        const char *e = std::getenv("PS2X_HW_PATH2_CONTINUED");
+        return !(e && e[0] == '0');
+    }();
+    auto continuedRuns = [] { return continuedOn; };
+    auto isVertexWrite = [](uint32_t reg) {
+        return reg == GS_REG_RGBAQ || reg == GS_REG_ST || reg == GS_REG_UV || reg == GS_REG_XYZ2 || reg == GS_REG_XYZ3;
+    };
+    // the A+D state writes a packet may make before its PRIM (pure register state: XYOFFSET, TEST, SCISSOR, ALPHA, FRAME,
+    // ZBUF, TEX1, CLAMP, FBA, PABE, DTHE, COLCLAMP, TEXA, FOGCOL, TEXFLUSH, PRMODECONT - not TEX0 / TEX2, whose writes
+    // may load a CLUT); PS2X_HW_PATH2_LEAD=0: none
+    static const bool leadOn = [] {
+        const char *e = std::getenv("PS2X_HW_PATH2_LEAD");
+        return !(e && e[0] == '0');
+    }();
+    auto isStateWrite = [](uint32_t reg) {
+        switch (reg)
+        {
+        case 0x08: case 0x09: case 0x14: case 0x15: case 0x18: case 0x19: case 0x1A: case 0x3B: case 0x3D: case 0x3F:
+        case 0x40: case 0x41: case 0x42: case 0x43: case 0x45: case 0x46: case 0x47: case 0x48: case 0x49: case 0x4A:
+        case 0x4B: case 0x4C: case 0x4D: case 0x4E: case 0x4F:
+            return true;
+        default:
+            return false;
+        }
+    };
+    auto leadStates = [&](const uint8_t *d, uint32_t n) {
+        uint32_t i = 0;
+        while (leadOn && i < n && isStateWrite(static_cast<uint32_t>(loadLE64(d + 24u + i * 16u) & 0xFFu)))
+            ++i;
+        return i;
+    };
+    auto verticesOnly = [&](const uint8_t *d, uint32_t n, uint32_t from) {
+        for (uint32_t i = from; i < n; ++i)
+            if (!isVertexWrite(static_cast<uint32_t>(loadLE64(d + 24u + i * 16u) & 0xFFu)))
+                return false;
+        return true;
+    };
     float s = m_curS, t = m_curT, q = 1.0f;
     uint8_t r = m_curR, g = m_curG, b = m_curB, a = m_curA;
     uint16_t u = m_curU, v = m_curV;
@@ -971,8 +1028,10 @@ bool GS::submitPackedKick(const uint8_t *data, uint32_t sizeBytes) // [gta-recom
     // ST (2), RGBAQ (1), XYZF2 (4) - the C++ reproductions - or XYZ2 (5) - the game's Im2D packets (PATH2, FUN_002FB690);
     // one tag filling the packet
     const bool xyz2 = regs == 0x512u;
+    // (2026-10-26: Im2D's line strips / lines too - the flyover draws one a frame)
+    const uint32_t tagPrimType = static_cast<uint32_t>((tagLo >> 47) & 7u);
     if (flg == GIF_FMT_PACKED && pre && nreg == 3u && (regs == 0x412u || xyz2) && sizeBytes == 16u + nloop * 48u &&
-        isTriangles((tagLo >> 47) & 0x7FFu))
+        (isTriangles((tagLo >> 47) & 0x7FFu) || (xyz2 && imLines && (tagPrimType == GS_PRIM_LINE || tagPrimType == GS_PRIM_LINESTRIP))))
     {
         prim = (tagLo >> 47) & 0x7FFu;
         vertices.resize(nloop);
@@ -1013,12 +1072,41 @@ bool GS::submitPackedKick(const uint8_t *data, uint32_t sizeBytes) // [gta-recom
         }
     }
     // A+D: PRIM, then vertices as register writes - RGBAQ / ST / UV, then XYZ2 (kick) or XYZ3 (no kick); the game's own
-    // full-screen effect strips (PATH2). Any other register: the front end takes the packet.
-    else if (flg == GIF_FMT_PACKED && nreg == 1u && (regs & 0xFu) == 0xEu && nloop >= 2u && sizeBytes == 16u + nloop * 16u &&
-             (loadLE64(data + 24) & 0xFFu) == GS_REG_PRIM && isTriangles(loadLE64(data + 16) & 0x7FFu))
+    // full-screen effect strips (PATH2). Any other register: the front end takes the packet. FULLY_NATIVE.md 5e
+    // (2026-10-26): also a run with no PRIM of its own - the reflection map's copies into FBP 420 and the sky's self-copy
+    // send PRIM with their state in an earlier packet - drawn with the current PRIM; the vertices already in the queue
+    // (a strip / fan the earlier packet began) go first, without a kick of their own, as the front end has them.
+    else if (flg == GIF_FMT_PACKED && nreg == 1u && (regs & 0xFu) == 0xEu && nloop >= 1u && sizeBytes == 16u + nloop * 16u &&
+             (((loadLE64(data + 24u + leadStates(data, nloop) * 16u) & 0xFFu) == GS_REG_PRIM &&
+               nloop >= leadStates(data, nloop) + 2u && isTriangles(loadLE64(data + 16u + leadStates(data, nloop) * 16u) & 0x7FFu) &&
+               verticesOnly(data, nloop, leadStates(data, nloop) + 1u)) ||
+              (continuedRuns() && isVertexWrite(static_cast<uint32_t>(loadLE64(data + 24) & 0xFFu)) &&
+               isTriangles(static_cast<uint64_t>(m_prim.type)))))
     {
-        prim = loadLE64(data + 16) & 0x7FFu; // (Q starts at 1.0 at the tag, as for any GIFtag)
-        for (uint32_t i = 1; i < nloop; ++i)
+        // (2026-10-26) state writes before PRIM - the sky's copy sets XYOFFSET / TEST / SCISSOR first: the whole packet was
+        // checked above (state, PRIM, vertex writes only), so they are written now, as the front end would, and the run
+        // after PRIM is drawn packed
+        const uint32_t lead = leadStates(data, nloop);
+        const bool own = (loadLE64(data + 24u + lead * 16u) & 0xFFu) == GS_REG_PRIM;
+        uint32_t first = 1;
+        if (own)
+        {
+            for (uint32_t i = 0; i < lead; ++i)
+                writeRegisterUnlocked(static_cast<uint8_t>(loadLE64(data + 24u + i * 16u) & 0xFFu), loadLE64(data + 16u + i * 16u));
+            prim = loadLE64(data + 16u + lead * 16u) & 0x7FFu; // (Q starts at 1.0 at the tag, as for any GIFtag)
+            first = lead + 1u;
+        }
+        else
+        {
+            first = 0;
+            continued = true;
+            for (int i = 0; i < m_vtxCount && i < 3; ++i) // the queue's vertices, as the next kick would use them
+            {
+                vertices.push_back(m_vtxQueue[i]);
+                kicks.push_back(0u);
+            }
+        }
+        for (uint32_t i = first; i < nloop; ++i)
         {
             const uint64_t value = loadLE64(data + 16u + i * 16u);
             const uint32_t reg = static_cast<uint32_t>(loadLE64(data + 24u + i * 16u) & 0xFFu);
@@ -1066,8 +1154,8 @@ bool GS::submitPackedKick(const uint8_t *data, uint32_t sizeBytes) // [gta-recom
             else
                 return false; // nothing written yet
         }
-        if (vertices.empty())
-            return false;
+        if (vertices.empty() || (continued && std::count(kicks.begin(), kicks.end(), uint8_t(1)) == 0))
+            return false; // (no draw in it: the front end)
     }
     else
     {
@@ -1106,8 +1194,9 @@ bool GS::submitPackedKick(const uint8_t *data, uint32_t sizeBytes) // [gta-recom
         return false;
     }
     const uint32_t count = static_cast<uint32_t>(vertices.size());
-    const uint32_t type = static_cast<uint32_t>(prim & 7u);
-    writeRegisterUnlocked(GS_REG_PRIM, prim);
+    const uint32_t type = continued ? static_cast<uint32_t>(m_prim.type) : static_cast<uint32_t>(prim & 7u);
+    if (!continued)
+        writeRegisterUnlocked(GS_REG_PRIM, prim);
     const GSPrimitiveBatch batch = buildDrawBatch(0);
     if (!m_backend->SubmitPacked(batch.state, vertices.data(), kicks.data(), count))
         return false; // processGIFPacket writes PRIM again
@@ -1122,8 +1211,14 @@ bool GS::submitPackedKick(const uint8_t *data, uint32_t sizeBytes) // [gta-recom
     m_curG = g;
     m_curB = b;
     m_curA = a;
-    m_vtxIndex += static_cast<int>(count);
-    if (type == GS_PRIM_TRIANGLE)
+    m_vtxIndex += static_cast<int>(count) - (continued ? m_vtxCount : 0); // (the queue's own were counted already)
+    if (type == GS_PRIM_LINE || type == GS_PRIM_LINESTRIP) // as vertexKick leaves the queue
+    {
+        m_vtxCount = type == GS_PRIM_LINE ? static_cast<int>(count % 2u) : (count ? 1 : 0);
+        if (m_vtxCount)
+            m_vtxQueue[0] = vertices[count - 1u];
+    }
+    else if (type == GS_PRIM_TRIANGLE)
     {
         m_vtxCount = static_cast<int>(count % 3u);
         for (int i = 0; i < m_vtxCount; ++i)
@@ -1966,6 +2061,19 @@ void GS::vertexKick(bool drawing)
     {
         GSPrimitiveBatch batch = buildDrawBatch(needed);
         updatePreferredDisplaySourceForDraw(batch);
+        static const long frontLog = std::getenv("PS2X_HW_FRONT_DRAW_LOG") ? std::atol(std::getenv("PS2X_HW_FRONT_DRAW_LOG")) : 0;
+        static std::atomic<long> frontLogged{0};
+        if (frontLog > 0 && (g_currentGifPath & 3u) != 1u && frontLogged.fetch_add(1) < frontLog)
+        {
+            const GSContext &c = activeContext();
+            std::fprintf(stderr, "[gs-front] draw prim %u path %u fbp 0x%x tbp 0x%x tme %u, packet %s %u bytes:", unsigned(m_prim.type),
+                         unsigned(g_currentGifPath & 3u), unsigned(c.frame.fbp), unsigned(c.tex0.tbp0), unsigned(m_prim.tme),
+                         t_frontPacket ? "GIF" : "(none: register writes)", t_frontPacket ? t_frontPacketBytes : 0u);
+            for (uint32_t q = 0; t_frontPacket && q < t_frontPacketBytes && q < 24u * 16u; q += 16u)
+                std::fprintf(stderr, " %016llx:%016llx", (unsigned long long)loadLE64(t_frontPacket + q + 8),
+                             (unsigned long long)loadLE64(t_frontPacket + q));
+            std::fprintf(stderr, "\n");
+        }
         m_backend->Submit(batch);
         recordDrawDebugEventUnlocked(needed);
     }

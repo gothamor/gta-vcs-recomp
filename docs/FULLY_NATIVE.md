@@ -19,11 +19,11 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 
 | # | Step | Size | Status |
 |---|---|---|---|
-| 1 | The last GS draws | S-M | done 2026-10-24 (3 render-target reads left for step 3) |
+| 1 | The last GS draws | S-M | done 2026-10-24; the 3 render-target reads 2026-10-26 (`gs_draws` 0) |
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | L | 5a-5d, 5f, 5h done, 5e in part 2026-10-26; 5e's render-target reads, 5g left |
+| 5 | An empty chain | L | 5a-5f, 5h done 2026-10-26; 5g left |
 
 ### 1. The last GS draws
 
@@ -420,6 +420,23 @@ of the recordings, and the context packets are replayed - and, unchanged, skippe
   draws; that change was taken out again. Next: find their route from the draw itself (a stack at the backend when a
   GS-path draw samples target 140), then record that route whole - or, as planned, draw the copies as passes by target
   role. No frame-rate gain to expect: three draws a frame.
+- **The render-target reads, done (2026-10-26).** A log at the front end's own draw (`PS2X_HW_FRONT_DRAW_LOG=<n>`: each
+  draw it makes from GS primitives with the GIF packet it came from, PATH1 aside) found them: A+D packets after all -
+  vertex runs (UV / RGBAQ / XYZ2) with **no PRIM of their own** (PRIM sent with the state in an earlier packet), and
+  one that writes XYOFFSET_2 / TEST_2 / SCISSOR_2 **before** its PRIM (game-internals.md 6f "The render-target reads'
+  packets"). `submitPackedKick` took A+D runs only when they began with PRIM. Now it also takes a run that continues
+  the current PRIM (the vertices already in the GS vertex queue go first, without a kick, as the front end has them)
+  and a packet whose leading writes are pure state registers (checked over the whole packet first, then written
+  through the normal register path; TEX0 / TEX2 excluded - their writes may load a CLUT). One more PATH2 draw in the
+  flyover was an Im2D **line strip**: the packed path and `recordPacked` take lines too (two vertices, as `Submit`).
+  (The earlier `PS2X_HW_PACKED_LOG` run missed these packets: its first n were spent before gameplay.)
+  - Checked: `PS2X_HW_PACKED_VERIFY=1` (each packet also drawn one `Submit` per primitive, every vertex and state
+    compared) standing 1.88M packets and the reference scenes 5.6M, all exact.
+  - `gs_draws` 0.0 in the reference scenes (gameplay, cutscene, flyover) and the tour subset (mean 0.0, max 0.0):
+    **no draw goes through the GS front end in a normal frame**; pictures as before. The front end's register path
+    still applies the packets' state writes (A+D state packets, the leading writes above), as the native draws need
+    them; that is register state, not drawing.
+  - `PS2X_HW_PATH2_CONTINUED=0`, `PS2X_HW_PATH2_LEAD=0`, `PS2X_HW_PATH2_LINES=0`: each kind through the front end.
 
 **5f in part, 2026-10-25 - the plug-in callbacks.** The draws left to the packet path were those whose state flush
 calls plug-in code. Logged (`VCS_RSL_PLUGIN_LOG=1`, game-internals.md 6i "The plug-in callbacks"): only `+0x50`
