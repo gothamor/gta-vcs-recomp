@@ -23,7 +23,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | L | 5a, 5b done 2026-10-25 (state ops, texture uploads); 5c-5g planned below |
+| 5 | An empty chain | L | 5a-5c done 2026-10-25 (state ops, texture uploads, Im2D); 5d-5g planned below |
 
 ### 1. The last GS draws
 
@@ -352,6 +352,21 @@ names (step 3d) when the worker sends the pixels. A texture's mip levels share o
   Left as packets: uploads while a sector or a material is being cached, and a destination's first upload.
 - Measured: not settled. The cleanest A/B (uploads off / on, three alternating rounds, per run) gave driving 107.1 -> 103.4 fps and standing even; the kick then copied each payload twice (into a buffer, then into the arena) and now builds the item's bytes in place - not re-measured, because the machine was under changing background load for the rest of the session (runs with uploads off fell to 66-74 fps as well). In one hour of runs ~half of the runs with uploads on had windows of 40-100 ms frames (game thread and render worker waiting together; the GS stage not saturated, no texture misses, no drains, no stale items); in the 27 runs after it none did, with or without instruments - most likely the same background load, not proven. To measure on a quiet machine: alternating runs of the same build (stand, then the bench drive), `VCS_RSL_UPLOADS=0` vs on. `VCS_RSL_SLOW_LOG=1` logs kicks whose resolve takes > 3 ms and chains the worker takes > 15 ms on; `PS2X_RENDER_THREAD_LOG=1` now also counts GS stage drains.
 - `VCS_RSL_UPLOADS=0`: the uploads' REFs as before.
+
+**5c done 2026-10-25 - Im2D as ops.** Not a rewrite of `FUN_002FB690` (game-internals.md 6i "Im2D's packet writer"):
+the original writes its CNT + DIRECT as before, and at the next of our hook points - every hooked RSL writer, the
+texture binds that reserve upload slots, the state flush, the frame kick - the packet becomes an op when the cursor
+moved by exactly its length since the call (nothing else written in between): its VIF bytes into the open item (it
+usually follows the GS registers' op) or a new one, and the cursor goes back to the packet's start. Its only caller
+never reads the packet again; `VCS_RSL_ITEMS_VERIFY=1` checks that every captured packet still holds the same bytes at
+the kick.
+- Checked: driving, 803k packets captured, 0 changed afterwards; 1.52M draws / ops 0 differ (the other checks);
+  reference scenes - `loading` and `pause_map` (drawn with Im2D) identical, the HUD scenes as before; tour subset
+  unchanged.
+- Counts (driving, per 10 s): ~770k Im2D packets as ops, none kept as packets. The census's CNT DIRECT row (~55 tags
+  a frame) is gone.
+- Measured: A/B `VCS_RSL_IM2D=0` vs on, three alternating rounds under varying background load: driving 95.2 -> 99.3 fps (chain submission 1.64 -> 1.18 ms, worker 6.04 -> 4.97), standing 172 / 171 fps; in the one quiet pair of runs both read the same (submission ~1.1 ms driving). No regression; the gain, if any, is within this machine's noise.
+- `VCS_RSL_IM2D=0`: the packets as written.
 
 Expected gains, honestly: the game thread's share of handing frames over (the walk, copy, fold and bookkeeping:
 ~5% while driving) shrinks with every part; the render worker gains where an op replaces VIF parsing and VU-memory

@@ -37,6 +37,9 @@
 // ops - their payloads copied from guest RAM at the kick into the item's bytes, raster names noted - when the header
 // exists already. VCS_RSL_UPLOADS=0: their REFs. VCS_RSL_SLOW_LOG=1: slow kicks / chains.
 //
+// Step 5c, Im2D: FUN_002FB690's packet, as the game writes it, becomes an op at the next hook point (settlePending) when
+// nothing else was written after it - the cursor rewound to its start. VCS_RSL_IM2D=0: the packets as written.
+//
 // VCS_RSL_WORLD=0 / VCS_RSL_MODELS=0: world blocks / CALLed packets through the packet path. VCS_RSL_WORLD_VERIFY=1:
 // every hit is processed by the packet path instead and recorded again, and the new recording compared with the
 // cached one. VCS_RSL_WORLD_LOG=1: counts every 10 s.
@@ -53,4 +56,6 @@ namespace vcs::rslworld
     // step 5a: a native state flush's bytes (DMA CNTs with their data) as a state op in chain order; false: the caller
     // writes them into the packet buffer (ops off, a cache being filled, no room)
     bool flushAsOp(uint8_t *rdram, const uint8_t *tags, uint32_t bytes);
+    // step 5c: an Im2D packet written since the last hook point becomes an op now (before the caller writes packets)
+    void settlePending(uint8_t *rdram);
 }

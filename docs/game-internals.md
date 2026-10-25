@@ -834,6 +834,16 @@ reference ops since FULLY_NATIVE.md step 5b):
   dirty bits. `FUN_002F6A78` (the CLUT) reserves 32 bytes for one call (CT32 16x16 or 8x2 by the palette size) and may
   write a CNT 2 (A+D: register 0x42, TEXFLUSH).
 
+**Im2D's packet writer** `FUN_002FB690(prim, n, vertices, indices, context, screen)` (2026-10-25, from the recompiled
+code's disassembly; its only caller is `FUN_002FB9D0`, which does not touch the packet after it): nothing while
+`*0x488398` is set; else one CNT of 3n + 1 qwords whose VIFcodes are NOP, DIRECT 3n + 1. The GIFtag: NLOOP n, EOP,
+PRE, PRIM = prim | IIP | TME (when the context's texture entry `0x6EDCBC + context * 4` is set) | ABE | CTXT (context << 9), NREG 3, REGS
+`0x512` (ST, RGBAQ, XYZ2). Per vertex (16-byte Im2D vertices, through the index list when there is one): ST = the
+16-bit u / v * 2^-15 with Q 1.0 (kept from the vertex before when untextured), RGBA from bytes 4-7 with alpha halved
+(every channel halved while `*0x488370` is set), XYZ2 = ((x + 0x6C0) << 4) - 8, ((y + 0x720) << 4) - 8 from the
+16-bit coordinates (or x << 4, y << 4 when `screen` is set) and Z = the 32-bit word at +0xC through int -> float ->
+int. The HUD layer draws these (NATIVE_RENDERER.md "HUD layer"); since FULLY_NATIVE.md step 5c they reach it as ops.
+
 **The state setters** (2026-10-25, decompiled before / read from the recompiled code's disassembly comments; native as
 state ops since FULLY_NATIVE.md step 5a):
 - `FUN_002F7908` and `FUN_002F7B30` are the same code: queue FOG (6) / FOGCOL (7) / registers 0x14 / 0x15 by the
