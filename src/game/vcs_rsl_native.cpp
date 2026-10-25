@@ -312,7 +312,7 @@ namespace vcs::rslnative
 
         PS2_GUEST_CC void flushHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            vcs::rslworld::settlePending(rdram); // step 5c: an Im2D packet before this flush's
+            vcs::rslworld::settlePending(rdram, getRegU32(ctx, 29)); // steps 5c / 5d: a captured region before this flush's
             checkPending(rdram);
             report();
             thread_local Output out;

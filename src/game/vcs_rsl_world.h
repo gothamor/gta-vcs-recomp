@@ -38,7 +38,10 @@
 // exists already. VCS_RSL_UPLOADS=0: their REFs. VCS_RSL_SLOW_LOG=1: slow kicks / chains.
 //
 // Step 5c, Im2D: FUN_002FB690's packet, as the game writes it, becomes an op at the next hook point (settlePending) when
-// nothing else was written after it - the cursor rewound to its start. VCS_RSL_IM2D=0: the packets as written.
+// nothing else was written after it - the cursor rewound to its start. Step 5d: the same for the effect / immediate-
+// geometry writers (kCaptured); a hook deeper on the guest stack than a pending capture runs inside the emitter (no
+// settle, no ops of its own), and a region that ends in packets which must stay gives its front (tag + NEXT over the
+// rest). VCS_RSL_IM2D=0: no captures.
 //
 // VCS_RSL_WORLD=0 / VCS_RSL_MODELS=0: world blocks / CALLed packets through the packet path. VCS_RSL_WORLD_VERIFY=1:
 // every hit is processed by the packet path instead and recorded again, and the new recording compared with the
@@ -56,6 +59,7 @@ namespace vcs::rslworld
     // step 5a: a native state flush's bytes (DMA CNTs with their data) as a state op in chain order; false: the caller
     // writes them into the packet buffer (ops off, a cache being filled, no room)
     bool flushAsOp(uint8_t *rdram, const uint8_t *tags, uint32_t bytes);
-    // step 5c: an Im2D packet written since the last hook point becomes an op now (before the caller writes packets)
-    void settlePending(uint8_t *rdram);
+    // steps 5c / 5d: a captured emitter's region becomes an op now (before the caller writes packets), unless the caller
+    // runs inside that emitter (sp: its guest stack pointer, deeper than the emitter's)
+    void settlePending(uint8_t *rdram, uint32_t sp);
 }

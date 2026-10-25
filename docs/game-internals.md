@@ -844,6 +844,18 @@ PRE, PRIM = prim | IIP | TME (when the context's texture entry `0x6EDCBC + conte
 16-bit coordinates (or x << 4, y << 4 when `screen` is set) and Z = the 32-bit word at +0xC through int -> float ->
 int. The HUD layer draws these (NATIVE_RENDERER.md "HUD layer"); since FULLY_NATIVE.md step 5c they reach it as ops.
 
+**The other packet writers** (2026-10-25, step 5d of FULLY_NATIVE.md; callers from the recompiled code's `jal`s, shapes
+from decompiles and the census of what each writes): `FUN_002F8250` is **Im3D's submit** (called by `FUN_002FC2E8` /
+`FUN_002FC838`, `FUN_002FC210` writing the vertices): it runs the state flush, then REFs the vertices with an UNPACK
+and an MSCAL. `FUN_0040F6C8(vu, src)` (called by `FUN_0040F798`) writes one CNT with a 9-qword UNPACK and returns 9;
+`FUN_002A92C0(program, block)` (called by `FUN_002A9538`) writes a CNT UNPACK, a REF to the block's data with an UNPACK
+and an empty REF carrying an MSCAL - immediate geometry with its own program. `FUN_0040C430` and `FUN_00266868` have
+no direct callers (reached through function pointers - plug-in or pipeline callbacks). `FUN_002F0360` and
+`FUN_0032D880` (which calls `FUN_0032D480` / `FUN_0032D7C8`) are called from `FUN_001ACE40`; `FUN_002F39D8` from
+`FUN_0035C9E0`, `FUN_002F3DD0` from `FUN_002F4080`, `FUN_002F5520` from `FUN_0018F1C8` / `FUN_0018F450`, `FUN_002ABF68`
+from `FUN_002AC048`. None of them patches its packets after returning (checked: every captured region is unchanged
+at the kick).
+
 **The state setters** (2026-10-25, decompiled before / read from the recompiled code's disassembly comments; native as
 state ops since FULLY_NATIVE.md step 5a):
 - `FUN_002F7908` and `FUN_002F7B30` are the same code: queue FOG (6) / FOGCOL (7) / registers 0x14 / 0x15 by the

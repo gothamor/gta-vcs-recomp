@@ -21,6 +21,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vcs::rslworld
@@ -40,7 +41,6 @@ namespace vcs::rslworld
         constexpr uint32_t kVuConstants = 0x001CEF18u;                     // FUN_001CEF18(vu, m): 3 qwords -> VU vu
         constexpr uint32_t kFlushA = 0x002F9CE8u;                          // FUN_002F9CE8: CNT with FLUSHA
         constexpr uint32_t kUpload = 0x003298D8u;                          // FUN_003298D8: a texture upload's two REFs
-        constexpr uint32_t kIm2D = 0x002FB690u;                            // FUN_002FB690: an Im2D primitive's CNT + DIRECT
         constexpr uint32_t kTexSlot = 0x002F62B8u, kClutSlot = 0x002F6A78u; // reserve upload slots (5c: settle first)
         constexpr uint32_t kModelDraw = 0x002F7D58u;               // FUN_002F7D58(packet): CALL packet
         constexpr uint32_t kModelDrawB = 0x002F80A0u;              // FUN_002F80A0(packet): CALL packet
@@ -1084,7 +1084,10 @@ namespace vcs::rslworld
             uint64_t ops = 0, merged = 0, packets = 0, caching = 0, mergedDraws = 0, uploads = 0;
         } g_opStats;
 
-        bool opsAllowed() { return g_items && !g_itemVerify && !g_caching && !g_materialCaching; }
+        // step 5d: this hook runs inside an emitter being captured (deeper on the guest stack): its packets go into the
+        // emitter's region as packets, never as ops of their own (settleIm2D sets it at every hook's entry)
+        bool g_inCapture = false;
+        bool opsAllowed() { return g_items && !g_itemVerify && !g_caching && !g_materialCaching && !g_inCapture; }
 
         // the half in use and the room for `bytes` at the cursor: false = the packet path
         bool cursorForItem(const uint8_t *rdram, uint32_t bytes, uint32_t &cursor)
@@ -1170,54 +1173,215 @@ namespace vcs::rslworld
             return true;
         }
 
-        // ---- step 5c: Im2D ----------------------------------------------------------------------------------------------
-        // FUN_002FB690 writes one CNT (3n + 1 qwords, DIRECT 3n + 1: a GIFtag and n vertices of ST / RGBAQ / XYZ2) at the
-        // cursor; its only caller (FUN_002FB9D0) never touches it again. The original writes it; at the next of our hook
-        // points (or the kick) - before anything else is written - the packet, when the cursor moved by exactly its length,
-        // becomes an op: its VIF bytes into the open item or a new one, the cursor back at its start.
-        bool g_im2dPending = false;
-        uint32_t g_im2dStart = 0;
+        // ---- steps 5c / 5d: captured emitters ---------------------------------------------------------------------------
+        // An emitter (Im2D's FUN_002FB690, the effect / immediate-geometry writers: kCaptured) writes its packets as it always
+        // does; its entry notes the cursor and the guest stack pointer. At the next of our hook points on the same stack
+        // level or above (or the kick) the region it wrote - CNTs and REFs only, nothing else written after it - becomes an
+        // op: the CNTs' VIF bytes inline, the REFs as references (their payloads copied at the kick), into the open item or
+        // a new one, the cursor back at the region's start. Hooks deeper on the stack run inside the emitter: they neither
+        // settle it nor make ops (their packets are part of its region).
+        bool g_im2dPending = false;  // (a capture pending - Im2D's name kept from step 5c)
+        uint32_t g_im2dStart = 0, g_captureSp = 0;
+        int g_captureEmitter = 0;
+        constexpr int kMaxEmitters = 24;
+        // the emitters whose packets are captured (game-internals.md 6i): Im2D, then the effect and immediate-geometry
+        // writers left in the chain after 5a-5c (VCS_RSL_CENSUS / VCS_TRACE_RSL)
+        constexpr struct
+        {
+            uint32_t addr;
+            const char *name;
+        } kCaptured[] = {
+            {0x002FB690u, "Im2D 2FB690"},  {0x0040C430u, "40C430"},     {0x0040F6C8u, "40F6C8"}, {0x00266868u, "266868"},
+            {0x002F3DD0u, "2F3DD0"},       {0x002A92C0u, "2A92C0"},     {0x002F5520u, "2F5520"}, {0x002ABF68u, "2ABF68"},
+            {0x0032D480u, "32D480"},       {0x0032D7C8u, "32D7C8"},     {0x002F8250u, "2F8250"}, {0x002F0360u, "2F0360"},
+            {0x002F39D8u, "2F39D8"},       {0x0032CD60u, "32CD60"},     {0x0032D880u, "32D880"}, {0x002F9FA0u, "2F9FA0"},
+            {0x002F53D8u, "camera 2F53D8"},
+        };
+        constexpr int kCapturedCount = int(sizeof(kCaptured) / sizeof(kCaptured[0]));
+        static_assert(kCapturedCount <= kMaxEmitters);
         struct Im2dStats
         {
-            uint64_t ops = 0, kept = 0, verifySame = 0, verifyDiffer = 0;
+            uint64_t ops[kMaxEmitters] = {}, kept[kMaxEmitters] = {}, partial[kMaxEmitters] = {}, empty = 0, verifySame = 0, verifyDiffer = 0;
+            uint64_t notCntRef = 0, irq = 0, notRam = 0;
         } g_im2dStats;
-        struct Im2dCheck // VCS_RSL_ITEMS_VERIFY: the packets as captured, compared with guest memory at the kick
+        struct Im2dCheck // VCS_RSL_ITEMS_VERIFY: the regions as captured, compared with guest memory at the kick
         {
             uint32_t at;
             std::vector<uint8_t> bytes;
         };
         std::vector<Im2dCheck> g_im2dChecks;
 
-        void settleIm2D(uint8_t *rdram)
+        // a captured region into the open item or a new one. resume 0: the whole region (the cursor is at `start`, the region's
+        // bytes still there); else only [start, resume) is taken - the packets from `resume` on stay, the cursor stays, and
+        // the start of the region gets the item's tag (unless it joins the open item) and a NEXT to `resume`
+        bool appendRegion(uint8_t *rdram, uint32_t start, const std::vector<uint8_t> &inl, const std::vector<std::pair<uint32_t, RefOp>> &refs,
+                          uint32_t resume = 0u)
         {
-            if (!g_im2dPending)
+            uint32_t cursor = 0;
+            if (resume)
+            {
+                const bool join = g_openItem >= 0 && start == g_openEnd && size_t(g_openItem) + 1u == g_itemsCurrent.size();
+                if (resume - start < (join ? 16u : 32u) && !(resume - start == 16u && !join))
+                    return false; // no room for the tags it needs
+                if (!join && g_itemsCurrent.size() >= kMaxItems)
+                    return false;
+                const uint32_t index = join ? static_cast<uint32_t>(g_openItem) : static_cast<uint32_t>(g_itemsCurrent.size());
+                Item &it = join ? g_itemsCurrent[index] : g_itemsCurrent.emplace_back();
+                if (!join)
+                    it.prefixAt = static_cast<uint32_t>(g_arenaCurrent.size());
+                const uint32_t base = it.prefixBytes;
+                if (!refs.empty() && !it.refCount)
+                    it.refAt = static_cast<uint32_t>(g_refsCurrent.size());
+                for (const auto &[pos, r] : refs)
+                {
+                    RefOp op = r;
+                    op.pos = base + pos;
+                    op.owner = index;
+                    g_refsCurrent.push_back(op);
+                }
+                it.refCount += static_cast<uint32_t>(refs.size());
+                g_arenaCurrent.insert(g_arenaCurrent.end(), inl.begin(), inl.end());
+                it.prefixBytes += static_cast<uint32_t>(inl.size());
+                uint32_t at = start;
+                if (!join)
+                {
+                    writeItemTag(rdram, at, index, false);
+                    at += 16u;
+                }
+                if (at < resume)
+                {
+                    const uint64_t next[2] = {(uint64_t(resume) << 32) | 0x20000000u, 0u}; // NEXT resume, NOP NOP
+                    std::memcpy(rdram + (at & kRamMask), next, 16);
+                }
+                g_openItem = -1; // the packets after it come before anything later
+                ++(join ? g_opStats.merged : g_opStats.ops);
+                return true;
+            }
+            if (!cursorForItem(rdram, 16u, cursor) || cursor != start)
+                return false;
+            const bool merge = g_openItem >= 0 && start == g_openEnd && size_t(g_openItem) + 1u == g_itemsCurrent.size();
+            if (!merge && g_itemsCurrent.size() >= kMaxItems)
+                return false;
+            const uint32_t index = merge ? static_cast<uint32_t>(g_openItem) : static_cast<uint32_t>(g_itemsCurrent.size());
+            Item &it = merge ? g_itemsCurrent[index] : g_itemsCurrent.emplace_back();
+            if (!merge)
+                it.prefixAt = static_cast<uint32_t>(g_arenaCurrent.size());
+            const uint32_t base = it.prefixBytes;
+            if (!refs.empty() && !it.refCount)
+                it.refAt = static_cast<uint32_t>(g_refsCurrent.size());
+            for (const auto &[pos, r] : refs)
+            {
+                RefOp op = r;
+                op.pos = base + pos;
+                op.owner = index;
+                g_refsCurrent.push_back(op);
+            }
+            it.refCount += static_cast<uint32_t>(refs.size());
+            g_arenaCurrent.insert(g_arenaCurrent.end(), inl.begin(), inl.end());
+            it.prefixBytes += static_cast<uint32_t>(inl.size());
+            if (merge)
+                ++g_opStats.merged; // (the cursor stays at the region's start, the open item's end)
+            else
+            {
+                writeItemTag(rdram, start, index);
+                g_openItem = static_cast<int>(index);
+                g_openEnd = start + 16u;
+                ++g_opStats.ops;
+            }
+            return true;
+        }
+
+        // sp: the guest stack pointer of the hook asking (~0u: the kick - every emitter has returned)
+        void settleIm2D(uint8_t *rdram, uint32_t sp)
+        {
+            g_inCapture = g_im2dPending && sp < g_captureSp;
+            if (!g_im2dPending || g_inCapture)
                 return;
             g_im2dPending = false;
+            const int e = g_captureEmitter;
             const uint32_t start = g_im2dStart, cursor = rd32(rdram, kPacketCursor);
-            uint64_t lo;
-            std::memcpy(&lo, rdram + (start & kRamMask), 8);
-            const uint32_t qwc = static_cast<uint32_t>(lo & 0xFFFFu), id = static_cast<uint32_t>((lo >> 28) & 7u);
-            const uint32_t end = start + 16u + qwc * 16u;
             if (cursor == start)
-                return; // nothing written (FUN_002FB690 writes nothing while *0x488398 is set)
-            if (id != 1u || end != cursor)
             {
-                ++g_im2dStats.kept; // something else was written too: the packet stays
+                ++g_im2dStats.empty; // nothing written
+                return;
+            }
+            thread_local std::vector<uint8_t> inl;
+            thread_local std::vector<std::pair<uint32_t, RefOp>> refs;
+            inl.clear();
+            refs.clear();
+            uint32_t at = start;
+            const char *why = nullptr;
+            while (!why && at < cursor) // (`at` stays at the first tag that is not taken)
+            {
+                if (at + 16u > cursor)
+                {
+                    why = "shape";
+                    break;
+                }
+                uint64_t lo;
+                std::memcpy(&lo, rdram + (at & kRamMask), 8);
+                const uint32_t qwc = static_cast<uint32_t>(lo & 0xFFFFu), id = static_cast<uint32_t>((lo >> 28) & 7u);
+                const uint32_t addr = static_cast<uint32_t>(lo >> 32) & 0x7FFFFFFFu;
+                if ((lo >> 31) & 1u)
+                    why = "irq";
+                else if (id == 1u) // CNT: its VIFcodes and payload, as the walker copies them
+                {
+                    if (at + 16u + qwc * 16u > cursor)
+                        why = "shape";
+                    else
+                    {
+                        inl.insert(inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16u + qwc * 16u);
+                        at += 16u + qwc * 16u;
+                    }
+                }
+                else if (id == 3u || id == 4u) // REF / REFS: a reference, its payload read at the kick
+                {
+                    if ((addr & 0xF0000000u) != 0u || (addr & kRamMask) + qwc * 16u > kRamMask + 1u)
+                        why = "ram";
+                    else
+                    {
+                        RefOp r{};
+                        std::memcpy(r.code, rdram + (at & kRamMask) + 8, 8);
+                        r.addr = addr & kRamMask;
+                        r.qwc = qwc;
+                        refs.push_back({static_cast<uint32_t>(inl.size()), r}); // (nothing inline: the payload goes in at resolve)
+                        at += 16u;
+                    }
+                }
+                else
+                    why = "tag";
+            }
+            if (why || at != cursor)
+            {
+                ++(why && why[0] == 'i' ? g_im2dStats.irq : why && why[0] == 'r' ? g_im2dStats.notRam : g_im2dStats.notCntRef);
+                // the tags before the first one not taken: the emitter's own packets (what follows came after it returned)
+                if (at > start && !g_itemVerify && appendRegion(rdram, start, inl, refs, at))
+                {
+                    ++g_im2dStats.partial[e];
+                    return;
+                }
+                if (at > start && g_itemVerify)
+                {
+                    g_im2dChecks.push_back({start, std::vector<uint8_t>(rdram + (start & kRamMask), rdram + (at & kRamMask))});
+                    ++g_im2dStats.partial[e];
+                    return;
+                }
+                ++g_im2dStats.kept[e]; // the region stays packets
                 return;
             }
             if (g_itemVerify)
             {
-                g_im2dChecks.push_back({start, std::vector<uint8_t>(rdram + (start & kRamMask), rdram + (end & kRamMask))});
+                g_im2dChecks.push_back({start, std::vector<uint8_t>(rdram + (start & kRamMask), rdram + (cursor & kRamMask))});
                 return;
             }
             wr32(rdram, kPacketCursor, start);
-            if (!appendOp(rdram, rdram + (start & kRamMask) + 8u, end - start - 8u)) // (copies the bytes before its tag lands)
+            if (!appendRegion(rdram, start, inl, refs))
             {
                 wr32(rdram, kPacketCursor, cursor);
-                ++g_im2dStats.kept;
+                ++g_im2dStats.kept[e];
                 return;
             }
-            ++g_im2dStats.ops;
+            ++g_im2dStats.ops[e];
         }
 
         void checkIm2D(const uint8_t *rdram)
@@ -1232,6 +1396,11 @@ namespace vcs::rslworld
         bool itemDraw(uint8_t *rdram, R5900Context *ctx, Kind kind, uint32_t raw0, uint32_t raw1)
         {
             ItemStats &st = g_itemStats;
+            if (g_inCapture)
+            {
+                ++st.caching; // inside an emitter being captured: its region takes the draw's packets
+                return false;
+            }
             // FUN_002F80A0 CALLs the shared state packet (*0x48830C) after the GS packet when bit 31 is set: then the flush,
             // the GS packet and that CALL stay in the chain as the original writes them, and the item is the block alone
             const bool stateCall = kind == ModelB && static_cast<int32_t>(rd32(rdram, kDirty)) < 0;
@@ -1513,10 +1682,16 @@ namespace vcs::rslworld
                          (unsigned long long)g_opStats.uploads,
                          (unsigned long long)g_opStats.packets, (unsigned long long)g_opStats.caching);
             g_opStats = OpStats{};
-            std::fprintf(stderr, "[rsl-items] Im2D: %llu packets as ops, %llu kept%s",
-                         (unsigned long long)g_im2dStats.ops, (unsigned long long)g_im2dStats.kept, g_itemVerify ? "" : "\n");
+            std::fprintf(stderr, "[rsl-items] captured regions as ops / their front as ops / kept:");
+            for (int e = 0; e < kCapturedCount; ++e)
+                if (g_im2dStats.ops[e] || g_im2dStats.kept[e] || g_im2dStats.partial[e])
+                    std::fprintf(stderr, " %s %llu/%llu/%llu", kCaptured[e].name, (unsigned long long)g_im2dStats.ops[e],
+                                 (unsigned long long)g_im2dStats.partial[e], (unsigned long long)g_im2dStats.kept[e]);
+            std::fprintf(stderr, "; empty %llu; kept for: other tags %llu, IRQ %llu, not RAM %llu%s", (unsigned long long)g_im2dStats.empty,
+                         (unsigned long long)g_im2dStats.notCntRef, (unsigned long long)g_im2dStats.irq, (unsigned long long)g_im2dStats.notRam,
+                         g_itemVerify ? "" : "\n");
             if (g_itemVerify)
-                std::fprintf(stderr, "; verify: %llu captured packets unchanged at the kick, %llu changed after capture\n",
+                std::fprintf(stderr, "; verify: %llu captured regions unchanged at the kick, %llu changed after capture\n",
                              (unsigned long long)g_im2dStats.verifySame, (unsigned long long)g_im2dStats.verifyDiffer);
             g_im2dStats = Im2dStats{};
             if (g_itemVerify)
@@ -1544,7 +1719,7 @@ namespace vcs::rslworld
         template <int Which>
         PS2_GUEST_CC void gsSendHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram); // step 5c
+            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
             const uint32_t ra = getRegU32(ctx, 31);
             if (Which == 1 && ra == kMaterialCacheGs)
             {
@@ -1599,7 +1774,7 @@ namespace vcs::rslworld
         bool unpack3Op(uint8_t *rdram, uint32_t code1, uint32_t src, PS2Runtime::RecompiledFunction original, R5900Context *ctx,
                        PS2Runtime *runtime)
         {
-            settleIm2D(rdram); // step 5c
+            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
             uint8_t tags[16 + 48];
             const uint64_t tag[2] = {0x10000003u, 0x10000000ull | (uint64_t(code1) << 32)};
             std::memcpy(tags, tag, 16);
@@ -1635,7 +1810,7 @@ namespace vcs::rslworld
 
         PS2_GUEST_CC void flushAHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram); // step 5c
+            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
             const uint64_t tag[2] = {0x10000000u, 0x1300000000000000ull}; // CNT 0: NOP, FLUSHA
             const auto *t = reinterpret_cast<const uint8_t *>(tag);
             if (g_itemVerify)
@@ -1684,7 +1859,7 @@ namespace vcs::rslworld
         // transfer header (FLUSHE, DIRECTHL 6) and the pixels (DIRECTHL bytes / 16) - as reference ops when the header exists
         PS2_GUEST_CC void uploadHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram); // step 5c
+            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
             const uint32_t at = getRegU32(ctx, 4), psm = getRegU32(ctx, 5), w = getRegU32(ctx, 6), h = getRegU32(ctx, 7);
             const uint32_t bytes = getRegU32(ctx, 8), source = getRegU32(ctx, 9), dest = getRegU32(ctx, 10);
             const uint64_t key = (uint64_t(int64_t(int32_t(dest >> 6))) << 48) | (uint64_t(psm & 0xFFFFu) << 32) | (w & 0xFFFFu) |
@@ -1716,38 +1891,44 @@ namespace vcs::rslworld
             ctx->pc = getRegU32(ctx, 31);
         }
 
-        PS2Runtime::RecompiledFunction g_im2dOriginal = nullptr, g_texSlotOriginal = nullptr, g_clutSlotOriginal = nullptr;
+        PS2Runtime::RecompiledFunction g_texSlotOriginal = nullptr, g_clutSlotOriginal = nullptr;
 
-        // before the original only: FUN_002FB690's packet is captured at the next hook point (settleIm2D)
-        PS2_GUEST_CC void im2dHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        PS2Runtime::RecompiledFunction g_capturedOriginal[kMaxEmitters] = {};
+
+        // before the original only: the region it writes is captured at the next hook point on its stack level (settleIm2D)
+        template <int E>
+        PS2_GUEST_CC void captureHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram);
+            const uint32_t sp = getRegU32(ctx, 29);
+            settleIm2D(rdram, sp);
             uint32_t cursor = 0;
-            if ((opsAllowed() || g_itemVerify) && cursorForItem(rdram, 16u, cursor))
+            if (!g_inCapture && (opsAllowed() || (g_itemVerify && !g_caching && !g_materialCaching)) && cursorForItem(rdram, 16u, cursor))
             {
                 g_im2dPending = true;
                 g_im2dStart = cursor;
+                g_captureSp = sp;
+                g_captureEmitter = E;
             }
-            g_im2dOriginal(rdram, ctx, runtime);
+            g_capturedOriginal[E](rdram, ctx, runtime);
         }
 
-        // before the originals only: the texture binds reserve upload slots at the cursor - a captured packet goes first
+        // before the originals only: the texture binds reserve upload slots at the cursor - a captured region goes first
         PS2_GUEST_CC void texSlotHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram);
+            settleIm2D(rdram, getRegU32(ctx, 29));
             g_texSlotOriginal(rdram, ctx, runtime);
         }
 
         PS2_GUEST_CC void clutSlotHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram);
+            settleIm2D(rdram, getRegU32(ctx, 29));
             g_clutSlotOriginal(rdram, ctx, runtime);
         }
 
         // before the original only: the material cache's texture bind opens the window its packets are copied from
         PS2_GUEST_CC void textureBindHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram); // step 5c
+            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
             g_materialCaching = getRegU32(ctx, 31) == kMaterialCacheBind;
             g_textureBindOriginal(rdram, ctx, runtime);
         }
@@ -1756,7 +1937,7 @@ namespace vcs::rslworld
         // after it - the cached block's own draw, or the sector drawn again when caching failed: game-internals.md 6i)
         PS2_GUEST_CC void sectorHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram); // step 5c
+            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
             g_caching = getRegU32(ctx, 31) == kSectorCaching;
             g_sectorOriginal(rdram, ctx, runtime);
         }
@@ -1764,7 +1945,7 @@ namespace vcs::rslworld
         // before the original only (DECISIONS.md "Rule for hooks on recompiled functions"), or the whole work (an item)
         PS2_GUEST_CC void worldHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram); // step 5c
+            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
             const uint32_t a0 = getRegU32(ctx, 4), a1 = getRegU32(ctx, 5);
             g_materialCaching = false;
             if (g_items && g_world && !g_itemVerify && itemDraw(rdram, ctx, World, a0, a1))
@@ -1777,7 +1958,7 @@ namespace vcs::rslworld
 
         PS2_GUEST_CC void modelHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram); // step 5c
+            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
             const uint32_t a0 = getRegU32(ctx, 4);
             g_caching = false; // FUN_002409C8 draws no models: this is after the cached sector (FUN_00240ED8 draws it)
             if (g_items && !g_itemVerify && itemDraw(rdram, ctx, Model, a0, 0u))
@@ -1790,7 +1971,7 @@ namespace vcs::rslworld
 
         PS2_GUEST_CC void modelBHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram); // step 5c
+            settleIm2D(rdram, getRegU32(ctx, 29)); // steps 5c / 5d
             const uint32_t a0 = getRegU32(ctx, 4);
             g_caching = false;
             if (g_items && !g_itemVerify && itemDraw(rdram, ctx, ModelB, a0, 0u))
@@ -2120,6 +2301,15 @@ namespace vcs::rslworld
             runtime.replaceFunction(addr, replacement);
             return true;
         }
+
+        template <int... I>
+        void hookCaptured(PS2Runtime &runtime, std::integer_sequence<int, I...>)
+        {
+            // VCS_RSL_CAPTURE_MASK: a bit per kCaptured entry (default all)
+            const char *m = std::getenv("VCS_RSL_CAPTURE_MASK");
+            const unsigned long mask = m ? std::strtoul(m, nullptr, 0) : ~0ul;
+            ((((mask >> I) & 1ul) ? (void)hook(runtime, kCaptured[I].addr, g_capturedOriginal[I], &captureHook<I>) : (void)0), ...);
+        }
     }
 
     void install(PS2Runtime &runtime)
@@ -2155,9 +2345,9 @@ namespace vcs::rslworld
             hook(runtime, kFlushA, g_flushAOriginal, &flushAHook);
             if (!off("VCS_RSL_UPLOADS")) // step 5b: texture uploads (VCS_RSL_UPLOADS=0: their REFs)
                 hook(runtime, kUpload, g_uploadOriginal, &uploadHook);
-            if (!off("VCS_RSL_IM2D")) // step 5c: Im2D packets (VCS_RSL_IM2D=0: as written)
+            if (!off("VCS_RSL_IM2D")) // steps 5c / 5d: captured emitters (VCS_RSL_IM2D=0: their packets as written)
             {
-                hook(runtime, kIm2D, g_im2dOriginal, &im2dHook);
+                hookCaptured(runtime, std::make_integer_sequence<int, kCapturedCount>{});
                 hook(runtime, kTexSlot, g_texSlotOriginal, &texSlotHook);
                 hook(runtime, kClutSlot, g_clutSlotOriginal, &clutSlotHook);
             }
@@ -2171,11 +2361,10 @@ namespace vcs::rslworld
             ps2chain::setDirectHandler(&onDirect);
     }
 
-    void settlePending(uint8_t *rdram) { settleIm2D(rdram); }
+    void settlePending(uint8_t *rdram, uint32_t sp) { settleIm2D(rdram, sp); }
 
     bool flushAsOp(uint8_t *rdram, const uint8_t *tags, uint32_t bytes)
     {
-        settleIm2D(rdram); // step 5c
         if (!g_ops || !opsAllowed())
         {
             if (g_ops)
@@ -2195,7 +2384,8 @@ namespace vcs::rslworld
         g_kicked.swap(g_current);
         g_current.clear();
         g_next = 0;
-        settleIm2D(const_cast<uint8_t *>(g_rdram)); // step 5c: before the chain goes out
+        settleIm2D(const_cast<uint8_t *>(g_rdram), ~0u); // steps 5c / 5d: before the chain goes out
+        g_inCapture = false;
         if (g_itemVerify)
         {
             checkItem(g_rdram);

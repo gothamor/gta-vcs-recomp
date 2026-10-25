@@ -228,6 +228,10 @@ dropped on uploads (lazy render-target patching).
 - [x] **Im2D as ops** (2026-10-25, FULLY_NATIVE.md step 5c): `FUN_002FB690`'s packet, as the game writes it, becomes an
       op at the next hook point (cursor rewound). 803k captured packets unchanged at the kick; HUD / pause-map scenes as
       before. `VCS_RSL_IM2D=0` = the packets.
+- [x] **The other packet writers captured** (2026-10-25, FULLY_NATIVE.md step 5d): 16 effect / immediate-geometry /
+      frame writers captured like Im2D, nesting told apart by the guest stack pointer, a region's convertible front
+      taken when other packets follow it (NEXT over them). 766k regions unchanged at the kick. Drive census ~1,090 ->
+      ~740 tags a frame.
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -519,7 +523,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_WRITE_WATCH=0`, `PS2X_WRITE_WATCH_LOG=1` | guest RAM without the OS's write watch (no block can then be told unchanged); pages written per fold and the fold's cost, every 5 s |
 | `VCS_RSL_ITEMS=0`, `VCS_RSL_ITEMS_VERIFY=1` | world / model draws as packets (no draw items); items built but the original writes the packets, compared with what each item stands for, and each block the walker copies with what an item would copy (FULLY_NATIVE.md step 4c) |
 | `VCS_RSL_SLOW_LOG=1` | kicks whose item resolve takes > 3 ms (items, references, bytes) and chains the render worker takes > 15 ms on |
-| `VCS_RSL_IM2D=0` | Im2D packets (`FUN_002FB690`) stay in the chain instead of becoming ops (FULLY_NATIVE.md step 5c) |
+| `VCS_RSL_IM2D=0` | no captured emitters: Im2D (`FUN_002FB690`) and the effect / immediate-geometry writers keep their packets in the chain (FULLY_NATIVE.md steps 5c, 5d); `VCS_RSL_CAPTURE_MASK=<bits>`: which of them are captured (a bit per entry of `kCaptured` in `src/game/vcs_rsl_world.cpp`, default all) |
 | `VCS_RSL_UPLOADS=0` | texture uploads (`FUN_003298D8`'s two REFs) as REFs in the chain instead of reference ops (FULLY_NATIVE.md step 5b) |
 | `VCS_RSL_OPS=0` | the state setters (GS queue senders, texture matrix, `FUN_001CEF18`, `FUN_002F9CE8`, all-CNT flushes) write their packets instead of item ops (FULLY_NATIVE.md step 5a) |
 | `VCS_RSL_CENSUS=1` | every 5 s: what the VIF1 chain still carries outside marked blocks and items - top-level tags by DMA id, first VIFcode and data region, per chain (FULLY_NATIVE.md step 5) |

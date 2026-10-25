@@ -23,7 +23,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | L | 5a-5c done 2026-10-25 (state ops, texture uploads, Im2D); 5d-5g planned below |
+| 5 | An empty chain | L | 5a-5d done 2026-10-25 (state ops, texture uploads, Im2D, effect / immediate-geometry writers); 5e-5g planned below |
 
 ### 1. The last GS draws
 
@@ -367,6 +367,28 @@ the kick.
   a frame) is gone.
 - Measured: A/B `VCS_RSL_IM2D=0` vs on, three alternating rounds under varying background load: driving 95.2 -> 99.3 fps (chain submission 1.64 -> 1.18 ms, worker 6.04 -> 4.97), standing 172 / 171 fps; in the one quiet pair of runs both read the same (submission ~1.1 ms driving). No regression; the gain, if any, is within this machine's noise.
 - `VCS_RSL_IM2D=0`: the packets as written.
+
+**5d done 2026-10-25 - the other writers, captured.** Step 5c's capture generalized to every packet writer the census
+and the trace still showed (game-internals.md 6i "The other packet writers"): Im3D's submit `FUN_002F8250`,
+`FUN_0040C430`, `FUN_0040F6C8`, `FUN_00266868`, `FUN_002F3DD0`, `FUN_002A92C0`, `FUN_002F5520`, `FUN_002ABF68`,
+`FUN_0032D480`, `FUN_0032D7C8`, `FUN_002F0360`, `FUN_002F39D8`, `FUN_0032CD60`, `FUN_0032D880`, `FUN_002F9FA0` and the
+camera packet `FUN_002F53D8`. None is rewritten:
+- An emitter's entry notes the cursor and the **guest stack pointer**. A hook deeper on the stack runs inside the
+  emitter (several call the GS register sender or the flush): it neither settles the capture nor makes ops of its own
+  - its packets become part of the emitter's region. The capture settles at the next hook point on the emitter's
+  level or above, or at the kick.
+- A region of CNTs and REFs becomes an op: CNTs inline, REFs as reference ops (step 5b). When it ends in something
+  else - packets other code wrote after the emitter returned (a CALL from the game's own flush, the camera packet's
+  CALL) - **its front** becomes the op: the region's start gets the item's tag and a NEXT to the first packet that
+  stays, the cursor untouched.
+- Checked: `VCS_RSL_ITEMS_VERIFY=1` driving - 766k captured regions unchanged at the kick, the other checks 0 differ;
+  reference scenes as before (static identical); tour subset unchanged.
+- Counts (driving, per 10 s): Im2D 708k whole; `FUN_0040F6C8` 7k whole + 11k front; `FUN_002F3DD0` 4.7k and
+  `FUN_002A92C0` 3.7k front; the frame-level writers once a frame each. Kept: Im3D (`FUN_002F8250`, 24k) and
+  `FUN_002F9FA0` - both start with the flush, whose CALLs to render-context packets stay in the chain (5f). Census
+  while driving: ~1,090 -> ~740 top-level tags a frame.
+- Measured: A/B with all captures off (`VCS_RSL_IM2D=0`) vs on (steps 5c + 5d), three alternating rounds on a quiet machine: driving 99.2 -> 101.3 fps (game thread 8.91 -> 8.69 ms, worker 4.76 -> 5.13), standing 179.2 -> 165.3 fps (game thread 4.85 -> 5.44 ms). The standing difference did not hold up: a standing-only A/B (none / Im2D only / all, three rounds each) gave 4.58 / 4.28 / 4.65 ms with one setting ranging 3.82-5.43 ms between runs (what is spawned at Fort Baxter varies), and no capture code shows in the profile. Read as even within this noise; a longer standing measurement would settle it.
+- `VCS_RSL_IM2D=0`: no captures (Im2D and these writers write their packets as before).
 
 Expected gains, honestly: the game thread's share of handing frames over (the walk, copy, fold and bookkeeping:
 ~5% while driving) shrinks with every part; the render worker gains where an op replaces VIF parsing and VU-memory
