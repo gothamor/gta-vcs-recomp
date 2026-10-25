@@ -1522,6 +1522,7 @@ namespace vcs::rslworld
                 writeItemTag(rdram, cursor, index);
             wr32(rdram, kGsQueueCount, 0u); // the draw sent the queue
             wr32(rdram, kDirty, stateCall ? f.dirtyAfter & 0x7FFFFFFFu : f.dirtyAfter);
+            vcs::rslnative::applyClears(rdram, f); // step 5f: the plug-in callbacks' writes
             ++st.made[kind];
             ctx->pc = getRegU32(ctx, 31);
             return true;

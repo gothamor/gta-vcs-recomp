@@ -5,6 +5,7 @@
 #include "ps2_runtime.h"
 
 #include <chrono>
+#include <map>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -70,18 +71,52 @@ namespace vcs::rslnative
                 return false; // FUN_001CFAE0
             }
             const uint32_t context = rd32(rdram, 0x4882A4u);
+            // step 5f: the +0x50 callbacks on bit 0x10 that are known (game-internals.md 6i "The state flush"), emitted
+            // natively below in the original's place: {callback, node +0x34, +0x54}
+            uint32_t plugins[16][3];
+            uint32_t pluginCount = 0;
+            static const bool nativePlugins = !(std::getenv("VCS_RSL_PLUGINS") && *std::getenv("VCS_RSL_PLUGINS") == '0');
             if (dirty & 0x11u)
             {
                 // the render context's plug-in list (+0x114, ends at +0xB0, next at +0x64): any callback the flush would
-                // call (+0x48 and +0x4C on a context change, +0x50 on bit 0x10) means the original runs
+                // call (+0x48 and +0x4C on a context change, +0x50 on bit 0x10) means the original runs - but for the two
+                // +0x50 ones VCS has (0x1CEF90 -> FUN_001CEF18, 0x40F798 -> FUN_0040F6C8), written here
                 const uint32_t end = context + 0xB0u;
                 uint32_t node = rd32(rdram, context + 0x114u);
                 for (int n = 0; node != end; ++n, node = rd32(rdram, node + 0x64u))
                 {
                     if (n >= 64 || (node & 0xF0000000u) != 0u)
                         return false;
+                    const uint32_t cb50 = (dirty & 0x1u) ? 0u : rd32(rdram, node + 0x50u);
+                    if (nativePlugins && cb50 && (cb50 == 0x001CEF90u || cb50 == 0x0040F798u) && pluginCount < 16u)
+                    {
+                        plugins[pluginCount][0] = cb50;
+                        plugins[pluginCount][1] = rd32(rdram, node + 0x34u);
+                        plugins[pluginCount][2] = rd32(rdram, node + 0x54u);
+                        ++pluginCount;
+                        continue;
+                    }
                     if ((dirty & 0x1u) ? (rd32(rdram, node + 0x48u) | rd32(rdram, node + 0x4Cu)) != 0u : rd32(rdram, node + 0x50u) != 0u)
+                    {
+                        static const bool log = std::getenv("VCS_RSL_PLUGIN_LOG") != nullptr; // step 5f: which callbacks
+                        if (log)
+                        {
+                            static std::map<uint64_t, uint64_t> seen;
+                            static auto at = std::chrono::steady_clock::now();
+                            const uint32_t cb = (dirty & 0x1u) ? (rd32(rdram, node + 0x48u) ? rd32(rdram, node + 0x48u) : rd32(rdram, node + 0x4Cu))
+                                                               : rd32(rdram, node + 0x50u);
+                            ++seen[(uint64_t(cb) << 32) | ((dirty & 0x1u) ? (rd32(rdram, node + 0x48u) ? 0x48u : 0x4Cu) : 0x50u)];
+                            if (std::chrono::steady_clock::now() - at > std::chrono::seconds(5))
+                            {
+                                at = std::chrono::steady_clock::now();
+                                for (const auto &[k, n] : seen)
+                                    std::fprintf(stderr, "[rsl-plugin] callback 0x%08x at +0x%02x: %llu flushes\n", unsigned(k >> 32),
+                                                 unsigned(k & 0xFFu), (unsigned long long)n);
+                                seen.clear();
+                            }
+                        }
                         return false;
+                    }
                 }
             }
             if (dirty & 0x3u)
@@ -95,6 +130,27 @@ namespace vcs::rslnative
             {
                 put64(out, (uint64_t(rd32(rdram, 0x4882A8u)) << 32) | 0x50000000u);
                 put64(out, 0x1000000000000000ull);
+            }
+            for (uint32_t i = 0; i < pluginCount; ++i) // step 5f: the +0x50 callbacks, in the list's order
+            {
+                const uint32_t vu = plugins[i][1], src = plugins[i][2];
+                if ((src & 0xF0000000u) != 0u)
+                    return false; // (not main RAM: the original)
+                if (plugins[i][0] == 0x001CEF90u) // FUN_001CEF18(vu, src): CNT 3, FLUSHE, UNPACK V4-32 x3 -> vu
+                {
+                    put64(out, 0x10000003u);
+                    put64(out, 0x10000000ull | (uint64_t(vu | 0x6C030000u) << 32));
+                    copy(out, rdram, src, 48u);
+                }
+                else if (rd32(rdram, src + 0x90u) != 0u) // FUN_0040F6C8(vu, src) when src+0x90 is set: CNT 9, x9; clears it
+                {
+                    if (out.clearCount >= 16u)
+                        return false;
+                    put64(out, 0x10000009u);
+                    put64(out, 0x10000000ull | (uint64_t(vu | 0x6C090000u) << 32));
+                    copy(out, rdram, src, 144u);
+                    out.clears[out.clearCount++] = src + 0x90u;
+                }
             }
             if ((dirty & 0x11u) && (dirty & 0x600u) != 0x600u) // MSCALs the context change needs (0x75 / 0x4A) unless done below
             {
@@ -221,6 +277,8 @@ namespace vcs::rslnative
             }
             wr32(rdram, kGsQueueCount, count);
             wr32(rdram, kDirty, out.dirtyAfter);
+            for (uint32_t i = 0; i < out.clearCount; ++i) // step 5f: what the callbacks write besides their packets
+                wr32(rdram, out.clears[i], 0u);
         }
 
         struct Stats
@@ -319,6 +377,7 @@ namespace vcs::rslnative
             out.size = 0;
             out.queued = 0;
             out.cntOnly = true;
+            out.clearCount = 0;
             uint32_t cursor = 0;
             if (!build(rdram, out))
             {
@@ -380,8 +439,15 @@ namespace vcs::rslnative
         out.size = 0;
         out.queued = 0;
         out.cntOnly = true;
+        out.clearCount = 0;
         return build(rdram, out);
     }
 
     bool packetRoom(const uint8_t *rdram, uint32_t bytes, uint32_t &cursor) { return cursorWithRoom(rdram, bytes, cursor); }
+
+    void applyClears(uint8_t *rdram, const Flush &f)
+    {
+        for (uint32_t i = 0; i < f.clearCount; ++i)
+            wr32(rdram, f.clears[i], 0u);
+    }
 }

@@ -23,7 +23,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | L | 5a-5d done, 5e in part 2026-10-25 (VU1 code uploads and double-buffer setup replayable); 5e's render-target reads, 5f, 5g left |
+| 5 | An empty chain | L | 5a-5d done, 5e and 5f in part 2026-10-25; 5e's render-target reads, the rest of 5f, 5g left |
 
 ### 1. The last GS draws
 
@@ -418,6 +418,23 @@ of the recordings, and the context packets are replayed - and, unchanged, skippe
   draws; that change was taken out again. Next: find their route from the draw itself (a stack at the backend when a
   GS-path draw samples target 140), then record that route whole - or, as planned, draw the copies as passes by target
   role. No frame-rate gain to expect: three draws a frame.
+
+**5f in part, 2026-10-25 - the plug-in callbacks.** The draws left to the packet path were those whose state flush
+calls plug-in code. Logged (`VCS_RSL_PLUGIN_LOG=1`, game-internals.md 6i "The plug-in callbacks"): only `+0x50`
+callbacks, four functions, two of them thin wrappers around writers already known - `FUN_001CEF18` (3 qwords) and
+`FUN_0040F6C8` (9 qwords, behind a flag it clears). The native flush now writes those two in the original's place
+(after the context CALLs, in the list's order) and clears the flag as the original does; a draw whose flush has only
+these becomes an item like any other.
+- Checked: `VCS_RSL_NATIVE_VERIFY=1` driving, 1.62M flushes the same as the original's bytes, 0 differ;
+  `VCS_RSL_ITEMS_VERIFY=1` 1.68M draws / ops, 0 differ; reference scenes as before; tour subset unchanged.
+- Counts (driving): the flushes with the two callbacks now written natively were ~50k per 5 s (the log, first callback
+  per flush); left to the original now, per 10 s, ~36k of ~870k: ~15k for `FUN_001CFAE0` (bit 0x4, float maths) and
+  ~21k with the other two callbacks (`0x2A9538`, `0x2F4080`), whose packets 5d's captures already take in part.
+- Measured: A/B `VCS_RSL_PLUGINS=0` vs on, three alternating rounds on a quiet machine: standing 205.1 -> 208.4 fps (game thread 4.27 -> 4.17 ms, render worker 2.17 -> 1.88), driving 117.5 -> 120.5 fps (game thread 7.58 -> 7.33 ms).
+- `VCS_RSL_PLUGINS=0`: those flushes left to the original as before.
+- **Left in 5f**: `FUN_001CFAE0` (bit 0x4: three qwords computed with float maths - a port to check bit for bit), the
+  two remaining callbacks, and Im3D (`FUN_002F8250`, kept by 5d's capture: its region starts with the flush's context
+  CALLs - a capture taking CALLs as blocks of the item would make it an op).
 
 Expected gains, honestly: the game thread's share of handing frames over (the walk, copy, fold and bookkeeping:
 ~5% while driving) shrinks with every part; the render worker gains where an op replaces VIF parsing and VU-memory

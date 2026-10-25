@@ -235,6 +235,9 @@ dropped on uploads (lazy render-target patching).
 - [x] **VU1 code uploads and double-buffer setup in recordings** (2026-10-25, FULLY_NATIVE.md step 5e in part): BASE /
       OFFSET / ITOP / MPG recorded as raw VIF bytes and replayed through the interpreter; the render-context packets
       ("other calls") all replayable now (15.6k refused per 10 s before). 1.79M recordings 0 differ. `VCS_RSL_RAW=0`.
+- [x] **Plug-in callbacks in the native flush** (2026-10-25, FULLY_NATIVE.md step 5f in part): the two `+0x50`
+      callbacks that write constants (`FUN_001CEF18`, `FUN_0040F6C8`) written natively (~50k flushes per 5 s driving);
+      ~36k of ~870k flushes per 10 s still left to the original. 1.62M flushes 0 differ. `VCS_RSL_PLUGINS=0`.
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -526,6 +529,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_WRITE_WATCH=0`, `PS2X_WRITE_WATCH_LOG=1` | guest RAM without the OS's write watch (no block can then be told unchanged); pages written per fold and the fold's cost, every 5 s |
 | `VCS_RSL_ITEMS=0`, `VCS_RSL_ITEMS_VERIFY=1` | world / model draws as packets (no draw items); items built but the original writes the packets, compared with what each item stands for, and each block the walker copies with what an item would copy (FULLY_NATIVE.md step 4c) |
 | `VCS_RSL_SLOW_LOG=1` | kicks whose item resolve takes > 3 ms (items, references, bytes) and chains the render worker takes > 15 ms on |
+| `VCS_RSL_PLUGINS=0`, `VCS_RSL_PLUGIN_LOG=1` | the native flush leaves flushes with plug-in callbacks to the original (as before step 5f); log which callbacks the flushes left to the original would call |
 | `PS2X_HW_PACKED_LOG=<n>` | the first n PATH2 packets the GS front end takes instead of the packed path (`submitPackedKick`), by their GIF tags; A+D packets only when they carry a vertex (FULLY_NATIVE.md 5e) |
 | `VCS_RSL_RAW=0` | recordings refuse blocks with BASE / OFFSET / ITOP / MPG as before step 5e (instead of replaying them through the VIF interpreter) |
 | `VCS_RSL_IM2D=0` | no captured emitters: Im2D (`FUN_002FB690`) and the effect / immediate-geometry writers keep their packets in the chain (FULLY_NATIVE.md steps 5c, 5d); `VCS_RSL_CAPTURE_MASK=<bits>`: which of them are captured (a bit per entry of `kCaptured` in `src/game/vcs_rsl_world.cpp`, default all) |

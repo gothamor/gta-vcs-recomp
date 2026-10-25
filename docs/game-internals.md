@@ -896,6 +896,13 @@ state ops since FULLY_NATIVE.md step 5a):
 - GS registers to the queue `0x729510` (`{value, register}` pairs, count `0x488308`; the draw sends them as a
   `CNT` + `DIRECTHL` right after the flush): 0x80 FOG (6) `0x4882E0`, 0x100 FOGCOL (7) `0x4882E8`, 0x20 register
   0x14 `0x4882F0`, 0x40 register 0x15 `0x4882F8`. The word is left with bit 31 only.
+- **The plug-in callbacks** (2026-10-25, `VCS_RSL_PLUGIN_LOG=1`: which callbacks the flushes would call, while
+  driving; the callers' code read from the recompiled functions): only `+0x50` callbacks (bit 0x10 without 0x1) occur,
+  called as `cb(node[+0x34], node[+0x54], node[+0x58])` in the list's order, after the CALLs of bits 0x1 / 0x2 and before
+  the MSCALs; their return values are not used. Four functions: `0x1CEF90` = `FUN_001CEF18(vu, src)` (CNT 3: 3 qwords
+  -> VU `vu`), `0x40F798` = `FUN_0040F6C8(vu, src)` when the word at `src + 0x90` is set (CNT 9: 9 qwords, and the word
+  cleared), `0x2A9538` -> `FUN_002A92C0` and `0x2F4080` -> `FUN_002F3DD0` (immediate geometry with REFs and their own
+  program). The first two are ~85% of the callback flushes; the native flush writes them since FULLY_NATIVE.md 5f.
 - The buffer's free space is `0xE6670 - FUN_00476770(0x520F90)` (`FUN_00478628`); with too little the flush writes
   through a null pointer (never seen). While driving ~9% of flushes have plug-in callbacks (skinned / effect
   plug-ins) and ~1% bit 0x4; those still run the original.
