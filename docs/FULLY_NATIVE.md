@@ -11,7 +11,8 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 0) or VU1 (`vu1_programs` 0), no IOP code runs, and the sound comes from the SPU2 core behind the ported libsd
 (DECISIONS.md 2026-10-24). Checked over the reference scenes, the tour subset and all 95 missions of the smoke test
 (`tools/missions.py`, 45 s each from a fresh load): every mission ran (no crash, no hang), GS-path draws 0 in all of
-them after MAR_A1's second world image was accepted (game-internals.md 6d). The frame reaches the renderer as draw
+them after MAR_A1's second world image was accepted (game-internals.md 6d), and `vu1_programs` 0 in every perf sample
+of every mission (the tool records the worst value, `max_vu1_programs`). The frame reaches the renderer as draw
 items in the chain's order; what the chain still holds is the frame's structure (the root lists' fixed tags in
 `.data`, the items' tags, NEXTs over runs taken in place). The emulated GS, VU1, VIF packet path and IOP stay as
 switchable references.
