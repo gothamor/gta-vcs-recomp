@@ -244,6 +244,11 @@ dropped on uploads (lazy render-target patching).
       frame's draw list (the walker's matching was out of step: model items 31k -> 90k per 10 s driving). Im3D all ops.
       1.51M regions, 3.38M draws / ops, 640k blocks, 1.54M recordings: 0 differ. `VCS_RSL_DRAW_CAPTURE=0`,
       `VCS_RSL_CAPTURE_CALLS=0`.
+- [x] **Gaps and runs** (2026-10-26, FULLY_NATIVE.md step 5h): what any code writes between two hook points is taken
+      into items in place; regions taken in runs around the tags that must stay; texture binds captured. Driving chain
+      742 -> 303 top-level tags a frame (245 items, ~32 NEXTs, ~16 fixed root tags), payload 780 -> 232 qwords. 2.15M
+      regions unchanged, 0 tags reading inside one, 3.34M draws / ops, 631k blocks, 1.40M recordings: 0 differ.
+      `VCS_RSL_GAPS=0`, `VCS_RSL_RUNS=0`.
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -551,6 +556,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_RSL_PLUGINS=0`, `VCS_RSL_PLUGIN_LOG=1` | the native flush leaves flushes with plug-in callbacks to the original (as before step 5f); log which callbacks the flushes left to the original would call |
 | `PS2X_HW_PACKED_LOG=<n>` | the first n PATH2 packets the GS front end takes instead of the packed path (`submitPackedKick`), by their GIF tags; A+D packets only when they carry a vertex (FULLY_NATIVE.md 5e) |
 | `VCS_RSL_RAW=0` | recordings refuse blocks with BASE / OFFSET / ITOP / MPG as before step 5e (instead of replaying them through the VIF interpreter) |
+| `VCS_RSL_GAPS=0`, `VCS_RSL_RUNS=0`, `VCS_RSL_GAP_LOG=1`, `VCS_RSL_GAP_FNS=,<hex>,` | no gap captures; regions stop at their first kept tag (both as before step 5h); log frame 400's gaps; gaps only at the listed hook points (debug bisection, 0 = the kick) |
+| `VCS_RSL_CENSUS=2` | the census names each tag left in the chain after the last hook point before it (hooked function and its caller) |
 | `VCS_RSL_DRAW_CAPTURE=0`, `VCS_RSL_CAPTURE_CALLS=0`, `VCS_RSL_KEPT_LOG=1` | draws left to the original keep their packets; other CALLs end a captured region (both as before step 5f's end); log where each captured region not taken whole stops |
 | `VCS_RSL_IM2D=0` | no captured emitters: Im2D (`FUN_002FB690`) and the effect / immediate-geometry writers keep their packets in the chain (FULLY_NATIVE.md steps 5c, 5d); `VCS_RSL_CAPTURE_MASK=<bits>`: which of them are captured (a bit per entry of `kCaptured` in `src/game/vcs_rsl_world.cpp`, default all) |
 | `VCS_RSL_UPLOADS=0` | texture uploads (`FUN_003298D8`'s two REFs) as REFs in the chain instead of reference ops (FULLY_NATIVE.md step 5b) |

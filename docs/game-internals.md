@@ -927,6 +927,20 @@ state ops since FULLY_NATIVE.md step 5a):
   the frame's draw list - the walker matches the list against the chain's tags in order, and one missing tag puts it
   out of step for the rest of the frame: no model packet is ever learned (`not known`), and standing at Fort Baxter no
   model draw became an item at all.
+- **The texture binds' own packet** (2026-10-26, `VCS_RSL_CENSUS=2` and a dump of the payloads): after its uploads
+  (`FUN_003298D8`, called at 0x2F660C), `FUN_002F62B8` writes a `CNT 5` + `DIRECTHL 5` itself (0x2F66A4 on: reserves
+  0x50 bytes after `FUN_00478628`'s free-space check) - an A+D GIF tag with TEXA (0x3B), MIPTBP1_1 (0x34), TEX2_1 (0x36,
+  the CLUT load) and TEXFLUSH (0x3F); values from the bind's locals and the table at 0x742B30. ~80 a frame while
+  driving. The binds reserve their upload slots first and fill them through `FUN_003298D8`: a capture must never read
+  the buffer between the two (half-filled slots).
+- **Callers hold the cursor across calls** (2026-10-26): `FUN_00240ED8` keeps the start of the range it copies into a
+  sector's cache across its call of `FUN_002409C8`; moving the cursor back at a hook point inside that call shifted the
+  copied range (the frame lost its alpha pass, effects, HUD and post passes). Packets may be taken at any hook point,
+  but the cursor may only move back where no caller can hold it - in practice: only for an emitter / draw region
+  settled at its own stack level, never for a gap (FULLY_NATIVE.md 5h).
+- **The material cache's last packet** (2026-10-26): `FUN_002409C8` calls `FUN_002F7B30` at 0x240D1C+8 (return
+  0x240D24) to write the material's GS packet, and copies the material's packets (bind and that GS packet) into its
+  cache after it returns - the window covers that packet, so it ends at the next hook point, not at the call.
 - The buffer's free space is `0xE6670 - FUN_00476770(0x520F90)` (`FUN_00478628`); with too little the flush writes
   through a null pointer (never seen). While driving ~9% of flushes have plug-in callbacks (skinned / effect
   plug-ins) and ~1% bit 0x4; those still run the original.

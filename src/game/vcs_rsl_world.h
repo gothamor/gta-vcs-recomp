@@ -53,6 +53,11 @@
 // its flush or the plug-in callbacks (return address). VCS_RSL_DRAW_CAPTURE=0: their packets. VCS_RSL_CAPTURE_CALLS=0:
 // other CALLs end a region. VCS_RSL_KEPT_LOG=1: where regions stop.
 //
+// Step 5h: gaps - at every hook point what any code wrote since the last one is a captured region, taken in place (item
+// tag + NEXT; the cursor never moves back: a caller may hold it). Regions are taken in runs around the tags that must
+// stay (a CALL not known yet, a REF outside RAM, an item's tag). The texture binds are captures (their upload slots are
+// filled after they are reserved). VCS_RSL_GAPS=0, VCS_RSL_RUNS=0: as before. VCS_RSL_CENSUS=2: the census by origin.
+//
 // VCS_RSL_WORLD=0 / VCS_RSL_MODELS=0: world blocks / CALLed packets through the packet path. VCS_RSL_WORLD_VERIFY=1:
 // every hit is processed by the packet path instead and recorded again, and the new recording compared with the
 // cached one. VCS_RSL_WORLD_LOG=1: counts every 10 s.
@@ -72,5 +77,5 @@ namespace vcs::rslworld
     // steps 5c / 5d: a captured emitter's region becomes an op now (before the caller writes packets), unless the caller
     // runs inside that emitter (sp: its guest stack pointer, deeper than the emitter's; ra: its return address - inside a
     // captured draw only when called from the draw, its flush or the plug-in callbacks, step 5f)
-    void settlePending(uint8_t *rdram, uint32_t sp, uint32_t ra);
+    void settlePending(uint8_t *rdram, uint32_t sp, uint32_t ra, uint32_t fn = 0u);
 }

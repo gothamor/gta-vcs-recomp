@@ -41,7 +41,6 @@ namespace vcs::rslworld
         constexpr uint32_t kVuConstants = 0x001CEF18u;                     // FUN_001CEF18(vu, m): 3 qwords -> VU vu
         constexpr uint32_t kFlushA = 0x002F9CE8u;                          // FUN_002F9CE8: CNT with FLUSHA
         constexpr uint32_t kUpload = 0x003298D8u;                          // FUN_003298D8: a texture upload's two REFs
-        constexpr uint32_t kTexSlot = 0x002F62B8u, kClutSlot = 0x002F6A78u; // reserve upload slots (5c: settle first)
         constexpr uint32_t kModelDraw = 0x002F7D58u;               // FUN_002F7D58(packet): CALL packet
         constexpr uint32_t kModelDrawB = 0x002F80A0u;              // FUN_002F80A0(packet): CALL packet
 
@@ -1126,6 +1125,7 @@ namespace vcs::rslworld
         int g_openItem = -1;      // the last item, still taking ops (no block yet)
         uint32_t g_openEnd = 0;   // the cursor right after its tag
         bool g_materialCaching = false; // FUN_002409C8 is caching a material's setup (its packets are copied)
+        bool g_materialCacheEnds = false; // its last packet written: the window ends at the next settle
         struct OpStats
         {
             uint64_t ops = 0, merged = 0, packets = 0, caching = 0, mergedDraws = 0, uploads = 0;
@@ -1145,12 +1145,17 @@ namespace vcs::rslworld
             return cursor >= half && cursor + bytes <= half + 0xE6670u;
         }
 
+        uint32_t g_lastCursor = 0; // step 5h: the cursor after the last hook point / our last write (gaps start here)
+
         void writeItemTag(uint8_t *rdram, uint32_t cursor, uint32_t index, bool moveCursor = true)
         {
             const uint32_t tag[4] = {0x10000000u, 0u, 0x07000000u | (kItemMark + index), kItemNop | (g_itemFrame & 0xFFFFu)}; // CNT: MARK, NOP
             std::memcpy(rdram + (cursor & kRamMask), tag, 16);
             if (moveCursor)
+            {
                 wr32(rdram, kPacketCursor, cursor + 16u);
+                g_lastCursor = cursor + 16u;
+            }
         }
 
         std::vector<RefOp> g_refsCurrent, g_refsKicked; // step 5b: the frame's reference ops
@@ -1243,10 +1248,14 @@ namespace vcs::rslworld
             {0x0032D480u, "32D480"},       {0x0032D7C8u, "32D7C8"},     {0x002F8250u, "2F8250"}, {0x002F0360u, "2F0360"},
             {0x002F39D8u, "2F39D8"},       {0x0032CD60u, "32CD60"},     {0x0032D880u, "32D880"}, {0x002F9FA0u, "2F9FA0"},
             {0x002F53D8u, "camera 2F53D8"},
+            // the texture binds (they reserve upload slots, fill them through FUN_003298D8, then write TEXA / MIPTBP1 /
+            // TEX2 / TEXFLUSH as a CNT DIRECTHL): captured whole - their slots are never seen half filled (step 5h)
+            {0x002F62B8u, "bind 2F62B8"},  {0x002F6A78u, "bind 2F6A78"},
         };
         constexpr int kCapturedCount = int(sizeof(kCaptured) / sizeof(kCaptured[0]));
         constexpr int kDrawEmitter = kCapturedCount; // step 5f: a draw left to its original (stats slot after the emitters)
-        static_assert(kCapturedCount + 1 <= kMaxEmitters);
+        constexpr int kGapEmitter = kCapturedCount + 1; // step 5h: what was written between two hook points
+        static_assert(kCapturedCount + 2 <= kMaxEmitters);
         struct Im2dStats
         {
             uint64_t ops[kMaxEmitters] = {}, kept[kMaxEmitters] = {}, partial[kMaxEmitters] = {}, empty = 0, verifySame = 0, verifyDiffer = 0;
@@ -1258,6 +1267,8 @@ namespace vcs::rslworld
             std::vector<uint8_t> bytes;
         };
         std::vector<Im2dCheck> g_im2dChecks;
+        std::vector<std::pair<uint32_t, uint32_t>> g_regionsWalk; // step 5h verify: the kicked frame's regions [start, end)
+        uint64_t g_regionReferenced = 0;
 
         // step 5f: a captured region in pieces - inline VIF bytes and references, then optionally a block (a CALLed packet, or
         // the draw's own REF / CALL when the region is a draw left to its original): one item each, the first with the
@@ -1372,13 +1383,121 @@ namespace vcs::rslworld
             return false;
         }
 
-        // sp / ra: the guest stack pointer and return address of the hook asking (sp ~0u: the kick - every emitter has
-        // returned)
-        void settleIm2D(uint8_t *rdram, uint32_t sp, uint32_t ra)
+        // VCS_RSL_CENSUS=2: the cursor at every hook point (the hooked function, its caller) - the census names each tag
+        // left in the chain after the last hook point before it
+        struct Origin
         {
-            g_inCapture = g_im2dPending && sp < g_captureSp && (!g_captureDraw || insideDraw(ra));
-            if (!g_im2dPending || g_inCapture)
+            uint32_t cursor, fn, ra;
+        };
+        std::vector<Origin> g_originNow, g_originWalk;
+        bool censusOrigins()
+        {
+            static const bool on = std::getenv("VCS_RSL_CENSUS") && *std::getenv("VCS_RSL_CENSUS") == '2';
+            return on;
+        }
+
+        // step 5h: a texture bind being captured - only its uploads run inside it (called from the bind itself); a hook
+        // deeper on the stack called from elsewhere runs after the bind returned (its caller's next call)
+        bool g_captureBind = false;
+        uint32_t g_captureBindFn[2] = {};
+        bool insideBind(uint32_t ra)
+        {
+            return (ra >= g_captureBindFn[0] && ra < g_captureBindFn[1]) || (ra >= 0x003298D8u && ra < 0x00329BFCu);
+        }
+
+        // sp / ra: the guest stack pointer and return address of the hook asking (sp ~0u: the kick - every emitter has
+        // returned); fn: the hooked function (census origins)
+        void settleRegion(uint8_t *rdram);
+        void captureGap(uint8_t *rdram);
+        uint32_t g_gapFn = 0, g_gapRa = 0; // (VCS_RSL_GAP_LOG)
+        size_t g_currentAtSettle = 0; // g_current's size after the last settle (draws made since: their tags in the gap)
+
+        void settleIm2D(uint8_t *rdram, uint32_t sp, uint32_t ra, uint32_t fn)
+        {
+            if (censusOrigins() && sp != ~0u)
+                g_originNow.push_back({rd32(rdram, kPacketCursor), fn, ra});
+            g_inCapture = g_im2dPending && sp < g_captureSp && (!g_captureDraw || insideDraw(ra)) && (!g_captureBind || insideBind(ra));
+            if (g_inCapture)
                 return;
+            g_gapFn = fn;
+            g_gapRa = ra;
+            if (g_im2dPending)
+                settleRegion(rdram);
+            else
+                captureGap(rdram);
+            if (g_materialCacheEnds)
+            {
+                g_materialCaching = false;
+                g_materialCacheEnds = false;
+            }
+            g_lastCursor = rd32(rdram, kPacketCursor);
+            g_currentAtSettle = g_current.size();
+        }
+
+        // VCS_RSL_GAPS=0: no gap captures
+        bool g_gaps = false;
+
+        // step 5h: what any code wrote since the last hook point - a region like an emitter's (not while a cache is being
+        // filled: those bytes are copied and sent again; not from a cursor outside this frame's half)
+        uint64_t g_gapWhy[6] = {}; // (VCS_RSL_WORLD_LOG) not taken: cache, material cache, no ops, cursor, nothing new, taken
+        void captureGap(uint8_t *rdram)
+        {
+            if (!g_gaps)
+                return;
+            if (g_caching || g_materialCaching || !(opsAllowed() || g_itemVerify))
+            {
+                ++g_gapWhy[g_caching ? 0 : g_materialCaching ? 1 : 2];
+                return;
+            }
+            static const char *fns = std::getenv("VCS_RSL_GAP_FNS"); // (debug: gaps only at these hook points; 0 = the kick)
+            if (fns)
+            {
+                char want[16];
+                std::snprintf(want, sizeof(want), ",%x,", g_gapFn);
+                if (!std::strstr(fns, want))
+                    return;
+            }
+            uint32_t cursor = 0;
+            if (!cursorForItem(rdram, 16u, cursor))
+            {
+                ++g_gapWhy[3];
+                return;
+            }
+            const uint32_t half = 0x520F90u + rd32(rdram, 0x520F90u + 0x14u) * 0xE6670u + 0x20u;
+            const uint32_t from = g_lastCursor >= half && g_lastCursor <= cursor ? g_lastCursor : half; // (a new frame: its start)
+            if (from >= cursor || (from & 0xFu) != 0u)
+            {
+                ++g_gapWhy[4];
+                return;
+            }
+            ++g_gapWhy[5];
+            g_im2dPending = true;
+            g_im2dStart = from;
+            g_captureEmitter = kGapEmitter;
+            g_captureDraw = false;
+            g_captureBind = false;
+            g_captureCurrentAt = std::min(g_currentAtSettle, g_current.size());
+            static const bool gapLog = std::getenv("VCS_RSL_GAP_LOG") != nullptr;
+            static int logged = 0;
+            if (gapLog && g_itemFrame == 400u && logged < 2000)
+            {
+                ++logged;
+                uint64_t lo;
+                std::memcpy(&lo, rdram + (from & kRamMask), 8);
+                std::fprintf(stderr, "[rsl-gap] frame %u: 0x%08x-0x%08x (%u bytes, half 0x%08x, last 0x%08x) first tag %016llx code %08x %08x, settle fn %06x ra %06x\n",
+                             g_itemFrame, from, cursor, cursor - from, half, g_lastCursor, (unsigned long long)lo, rd32(rdram, from + 8u),
+                             rd32(rdram, from + 12u), g_gapFn, g_gapRa);
+            }
+            settleRegion(rdram);
+        }
+
+        // the pending capture's region into items (settleIm2D). Step 5h: in runs - a tag the walker must still read (a CALL
+        // of a packet not known yet, a REF outside main RAM, an item's own tag) stays where it is and the parse goes on
+        // after it; each run of convertible tags before / between / after them becomes items in place (its start gets the
+        // item's tag and a NEXT to the next kept tag). Only a region taken whole in one run moves the cursor back (as
+        // before), and never a gap's.
+        void settleRegion(uint8_t *rdram)
+        {
             g_im2dPending = false;
             g_captureDraw = false;
             const int e = g_captureEmitter;
@@ -1399,125 +1518,186 @@ namespace vcs::rslworld
                 pc.hasBlock = false;
                 return pc;
             };
-            newPiece();
+            thread_local std::vector<size_t> runDraws, erase; // draw-list entries whose tags this run / the region took
+            erase.clear();
             size_t draw = g_captureCurrentAt; // the next draw-list entry whose tag the region should hold
-            uint32_t at = start;
-            const char *why = nullptr;
-            while (!why && at < cursor) // (`at` stays at the first tag that is not taken)
+            static const bool calls = !(std::getenv("VCS_RSL_CAPTURE_CALLS") && *std::getenv("VCS_RSL_CAPTURE_CALLS") == '0');
+            static const bool runs = !(std::getenv("VCS_RSL_RUNS") && *std::getenv("VCS_RSL_RUNS") == '0');
+            bool whole = false, tookAny = false;
+            uint32_t run = start;
+            for (;;)
             {
-                if (at + 16u > cursor)
+                count = 0;
+                newPiece();
+                runDraws.clear();
+                uint32_t at = run;
+                const char *why = nullptr;
+                uint32_t stopId = 0, stopQwc = 0;
+                bool stopOwn = false;
+                while (!why && at < cursor) // (`at` stays at the first tag that is not taken)
                 {
-                    why = "shape";
-                    break;
-                }
-                Piece &cur = pieces[count - 1u];
-                uint64_t lo;
-                std::memcpy(&lo, rdram + (at & kRamMask), 8);
-                const uint32_t qwc = static_cast<uint32_t>(lo & 0xFFFFu), id = static_cast<uint32_t>((lo >> 28) & 7u);
-                const uint32_t addr = static_cast<uint32_t>(lo >> 32) & 0x7FFFFFFFu;
-                const bool ram = (addr & 0xF0000000u) == 0u && (addr & kRamMask) + qwc * 16u <= kRamMask + 1u;
-                const Draw *want = draw < g_current.size() ? &g_current[draw] : nullptr;
-                if ((lo >> 31) & 1u)
-                    why = "irq";
-                else if (id == 1u) // CNT: its VIFcodes and payload, as the walker copies them
-                {
-                    if (at + 16u + qwc * 16u > cursor)
+                    if (at + 16u > cursor)
+                    {
                         why = "shape";
-                    else
-                    {
-                        cur.inl.insert(cur.inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16u + qwc * 16u);
-                        at += 16u + qwc * 16u;
+                        break;
                     }
-                }
-                else if ((id == 3u || id == 4u) && want && want->id == 3u && ram && (addr & kRamMask) == want->addr &&
-                         qwc == want->qwc && qwc)
-                {
-                    // a world draw's REF: its VIFcodes, then the geometry as a world block (recordings, step 4c)
-                    cur.inl.insert(cur.inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16);
-                    cur.hasBlock = true;
-                    cur.d = *want;
-                    newPiece();
-                    ++draw;
-                    at += 16u;
-                }
-                else if (id == 3u || id == 4u) // REF / REFS: a reference, its payload read at the kick
-                {
-                    if (!ram)
-                        why = "ram";
-                    else
-                    {
-                        RefOp r{};
-                        std::memcpy(r.code, rdram + (at & kRamMask) + 8, 8);
-                        r.addr = addr & kRamMask;
-                        r.qwc = qwc;
-                        cur.refs.push_back({static_cast<uint32_t>(cur.inl.size()), r}); // (the payload goes in at resolve)
-                        at += 16u;
-                    }
-                }
-                else if (id == 5u) // CALL: its VIFcodes and payload, then the CALLed packet as a block (step 5f)
-                {
-                    const bool own = want && want->id == 5u && (addr & kRamMask) == want->addr; // a model draw's CALL
-                    const Draw d = own ? *want : Draw{5u, addr & kRamMask, 0u, OtherCall};
-                    static const bool calls = !(std::getenv("VCS_RSL_CAPTURE_CALLS") && *std::getenv("VCS_RSL_CAPTURE_CALLS") == '0');
-                    if (!calls && !own)
-                        why = "call"; // VCS_RSL_CAPTURE_CALLS=0: other CALLs end the region (as before step 5f's end)
-                    else if ((addr & 0xF0000000u) != 0u || !g_flatOk.count(blockKey(d.kind, d.addr, 0u)))
-                        why = "call"; // not known to be copied as flattenBlock copies it
-                    else if (at + 16u + qwc * 16u > cursor)
-                        why = "shape";
-                    else
-                    {
-                        cur.inl.insert(cur.inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16u + qwc * 16u);
-                        cur.hasBlock = true;
-                        cur.d = d;
-                        newPiece();
-                        draw += own ? 1u : 0u;
-                        at += 16u + qwc * 16u;
-                    }
-                }
-                else
-                    why = "tag";
-            }
-            if (count > 1u && pieces[count - 1u].inl.empty() && pieces[count - 1u].refs.empty())
-                --count; // (nothing after the last block)
-            const auto taken = [&] { // the draws whose tags went into items: the walker will not see them
-                if (draw > g_captureCurrentAt && draw <= g_current.size())
-                    g_current.erase(g_current.begin() + static_cast<ptrdiff_t>(g_captureCurrentAt),
-                                    g_current.begin() + static_cast<ptrdiff_t>(draw));
-            };
-            if (why || at != cursor)
-            {
-                ++(why && why[0] == 'i' ? g_im2dStats.irq : why && why[0] == 'r' ? g_im2dStats.notRam : g_im2dStats.notCntRef);
-                static const bool keptLog = std::getenv("VCS_RSL_KEPT_LOG") != nullptr;
-                static int logged = 0;
-                if (keptLog && logged < 4000)
-                {
-                    ++logged;
+                    Piece &cur = pieces[count - 1u];
                     uint64_t lo;
                     std::memcpy(&lo, rdram + (at & kRamMask), 8);
-                    std::fprintf(stderr, "[rsl-kept] %s: %s%s at +0x%x of 0x%x, tag %016llx\n", e < kCapturedCount ? kCaptured[e].name : "draw",
-                                 at > start ? "front only, " : "",
-                                 why ? why : "end", at - start, cursor - start, (unsigned long long)lo);
+                    const uint32_t qwc = static_cast<uint32_t>(lo & 0xFFFFu), id = static_cast<uint32_t>((lo >> 28) & 7u);
+                    const uint32_t addr = static_cast<uint32_t>(lo >> 32) & 0x7FFFFFFFu;
+                    const bool ram = (addr & 0xF0000000u) == 0u && (addr & kRamMask) + qwc * 16u <= kRamMask + 1u;
+                    const Draw *want = draw < g_current.size() ? &g_current[draw] : nullptr;
+                    stopId = id;
+                    stopQwc = qwc;
+                    if ((lo >> 31) & 1u)
+                        why = "irq";
+                    else if (id == 1u && qwc == 0u && (rd32(rdram, at + 8u) >> 24) == 0x07u &&
+                             (rd32(rdram, at + 12u) & 0xFFFF0000u) == kItemNop)
+                        why = "item"; // an item's tag (never taken into another item's bytes)
+                    else if (id == 1u) // CNT: its VIFcodes and payload, as the walker copies them
+                    {
+                        if (at + 16u + qwc * 16u > cursor)
+                            why = "shape";
+                        else
+                        {
+                            cur.inl.insert(cur.inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16u + qwc * 16u);
+                            at += 16u + qwc * 16u;
+                        }
+                    }
+                    else if ((id == 3u || id == 4u) && want && want->id == 3u && ram && (addr & kRamMask) == want->addr &&
+                             qwc == want->qwc && qwc)
+                    {
+                        // a world draw's REF: its VIFcodes, then the geometry as a world block (recordings, step 4c)
+                        cur.inl.insert(cur.inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16);
+                        cur.hasBlock = true;
+                        cur.d = *want;
+                        newPiece();
+                        runDraws.push_back(draw++);
+                        at += 16u;
+                    }
+                    else if (id == 3u || id == 4u) // REF / REFS: a reference, its payload read at the kick
+                    {
+                        if (!ram)
+                            why = "ram";
+                        else
+                        {
+                            RefOp r{};
+                            std::memcpy(r.code, rdram + (at & kRamMask) + 8, 8);
+                            r.addr = addr & kRamMask;
+                            r.qwc = qwc;
+                            cur.refs.push_back({static_cast<uint32_t>(cur.inl.size()), r}); // (the payload goes in at resolve)
+                            at += 16u;
+                        }
+                    }
+                    else if (id == 5u) // CALL: its VIFcodes and payload, then the CALLed packet as a block (step 5f)
+                    {
+                        const bool own = want && want->id == 5u && (addr & kRamMask) == want->addr; // a model draw's CALL
+                        const Draw d = own ? *want : Draw{5u, addr & kRamMask, 0u, OtherCall};
+                        stopOwn = own;
+                        if (!calls && !own)
+                            why = "call"; // VCS_RSL_CAPTURE_CALLS=0: other CALLs end the region (as before step 5f's end)
+                        else if ((addr & 0xF0000000u) != 0u || !g_flatOk.count(blockKey(d.kind, d.addr, 0u)))
+                            why = "call"; // not known to be copied as flattenBlock copies it
+                        else if (at + 16u + qwc * 16u > cursor)
+                            why = "shape";
+                        else
+                        {
+                            cur.inl.insert(cur.inl.end(), rdram + (at & kRamMask) + 8, rdram + (at & kRamMask) + 16u + qwc * 16u);
+                            cur.hasBlock = true;
+                            cur.d = d;
+                            newPiece();
+                            if (own)
+                                runDraws.push_back(draw++);
+                            at += 16u + qwc * 16u;
+                        }
+                    }
+                    else
+                        why = "tag";
                 }
-                // the tags before the first one not taken: the emitter's own packets (what follows came after it returned)
-                if (at > start && !g_itemVerify && appendRegion(rdram, start, pieces.data(), count, at))
+                if (count > 1u && pieces[count - 1u].inl.empty() && pieces[count - 1u].refs.empty())
+                    --count; // (nothing after the last block)
+                if (run == start && !why && at == cursor)
                 {
-                    taken();
-                    ++g_im2dStats.partial[e];
-                    return;
+                    whole = true; // one run, the whole region: below
+                    erase.insert(erase.end(), runDraws.begin(), runDraws.end());
+                    break;
                 }
-                if (at > start && g_itemVerify)
+                if (why)
                 {
-                    g_im2dChecks.push_back({start, std::vector<uint8_t>(rdram + (start & kRamMask), rdram + (at & kRamMask))});
-                    ++g_im2dStats.partial[e];
-                    return;
+                    ++(why[0] == 'i' && why[1] == 'r' ? g_im2dStats.irq : why[0] == 'r' ? g_im2dStats.notRam : g_im2dStats.notCntRef);
+                    static const bool keptLog = std::getenv("VCS_RSL_KEPT_LOG") != nullptr;
+                    static int logged = 0;
+                    if (keptLog && logged < 4000)
+                    {
+                        ++logged;
+                        uint64_t lo;
+                        std::memcpy(&lo, rdram + (at & kRamMask), 8);
+                        std::fprintf(stderr, "[rsl-kept] %s: %s%s at +0x%x of 0x%x, tag %016llx\n",
+                                     e < kCapturedCount ? kCaptured[e].name : e == kDrawEmitter ? "draw" : "gap",
+                                     at > run ? "run before it taken, " : "", why, at - start, cursor - start, (unsigned long long)lo);
+                    }
                 }
-                ++g_im2dStats.kept[e]; // the region stays packets
+                if (at > run) // the run before the tag that stays (or before the region's end)
+                {
+                    if (g_itemVerify)
+                    {
+                        g_im2dChecks.push_back({run, std::vector<uint8_t>(rdram + (run & kRamMask), rdram + (at & kRamMask))});
+                        tookAny = true;
+                    }
+                    else if (appendRegion(rdram, run, pieces.data(), count, at))
+                    {
+                        erase.insert(erase.end(), runDraws.begin(), runDraws.end());
+                        tookAny = true;
+                    }
+                }
+                if (!why || at >= cursor || !runs)
+                    break;
+                // a tag the walker reads as it is, and goes on after: the parse goes on there too
+                uint32_t next = 0;
+                if (why[0] == 'c' && stopId == 5u)
+                {
+                    next = at + 16u + stopQwc * 16u; // (a CALL returns after its own payload)
+                    if (stopOwn)
+                        ++draw; // the draw's tag stays: its entry too
+                }
+                else if (why[0] == 'r' || (why[0] == 'i' && why[1] == 't'))
+                    next = at + 16u;
+                else
+                    break;
+                if (next >= cursor)
+                    break;
+                run = next;
+            }
+            const auto taken = [&] { // the draws whose tags went into items: the walker will not see them
+                std::sort(erase.begin(), erase.end());
+                for (size_t k = erase.size(); k-- > 0;)
+                    if (erase[k] < g_current.size())
+                        g_current.erase(g_current.begin() + static_cast<ptrdiff_t>(erase[k]));
+            };
+            if (!whole)
+            {
+                taken();
+                ++(tookAny ? g_im2dStats.partial[e] : g_im2dStats.kept[e]);
                 return;
             }
             if (g_itemVerify)
             {
                 g_im2dChecks.push_back({start, std::vector<uint8_t>(rdram + (start & kRamMask), rdram + (cursor & kRamMask))});
+                return;
+            }
+            if (e == kGapEmitter)
+            {
+                // step 5h: a gap is taken in place - the cursor never moves back. A gap is settled at any hook point, and a
+                // caller up the stack may hold the cursor across that call (FUN_00240ED8 keeps the start of the range it
+                // copies into the sector cache across FUN_002409C8: a rewind there shifted the copied range)
+                if (!appendRegion(rdram, start, pieces.data(), count, cursor))
+                {
+                    ++g_im2dStats.kept[e];
+                    return;
+                }
+                taken();
+                ++g_im2dStats.ops[e];
                 return;
             }
             wr32(rdram, kPacketCursor, start);
@@ -1533,6 +1713,10 @@ namespace vcs::rslworld
 
         void checkIm2D(const uint8_t *rdram)
         {
+            g_regionsWalk.clear();
+            for (const Im2dCheck &c : g_im2dChecks)
+                g_regionsWalk.push_back({c.at & kRamMask, (c.at & kRamMask) + static_cast<uint32_t>(c.bytes.size())});
+            std::sort(g_regionsWalk.begin(), g_regionsWalk.end());
             for (const Im2dCheck &c : g_im2dChecks)
                 ++(std::memcmp(rdram + (c.at & kRamMask), c.bytes.data(), c.bytes.size()) == 0 ? g_im2dStats.verifySame
                                                                                                 : g_im2dStats.verifyDiffer);
@@ -1626,6 +1810,8 @@ namespace vcs::rslworld
                 ++g_opStats.mergedDraws; // its tag is the open item's, already in the buffer
             else
                 writeItemTag(rdram, cursor, index);
+            if (!tags.empty())
+                g_lastCursor = cursor - static_cast<uint32_t>(tags.size()); // step 5h: the next gap takes them (in place)
             wr32(rdram, kGsQueueCount, 0u); // the draw sent the queue
             wr32(rdram, kDirty, stateCall ? f.dirtyAfter & 0x7FFFFFFFu : f.dirtyAfter);
             vcs::rslnative::applyClears(rdram, f); // step 5f: the plug-in callbacks' writes
@@ -1831,17 +2017,24 @@ namespace vcs::rslworld
                          (unsigned long long)g_opStats.packets, (unsigned long long)g_opStats.caching);
             g_opStats = OpStats{};
             std::fprintf(stderr, "[rsl-items] captured regions as ops / their front as ops / kept:");
-            for (int e = 0; e <= kCapturedCount; ++e)
+            for (int e = 0; e <= kGapEmitter; ++e)
                 if (g_im2dStats.ops[e] || g_im2dStats.kept[e] || g_im2dStats.partial[e])
-                    std::fprintf(stderr, " %s %llu/%llu/%llu", e < kCapturedCount ? kCaptured[e].name : "draws", (unsigned long long)g_im2dStats.ops[e],
+                    std::fprintf(stderr, " %s %llu/%llu/%llu", e < kCapturedCount ? kCaptured[e].name : e == kDrawEmitter ? "draws" : "gaps", (unsigned long long)g_im2dStats.ops[e],
                                  (unsigned long long)g_im2dStats.partial[e], (unsigned long long)g_im2dStats.kept[e]);
             std::fprintf(stderr, "; empty %llu; kept for: other tags %llu, IRQ %llu, not RAM %llu%s", (unsigned long long)g_im2dStats.empty,
                          (unsigned long long)g_im2dStats.notCntRef, (unsigned long long)g_im2dStats.irq, (unsigned long long)g_im2dStats.notRam,
                          g_itemVerify ? "" : "\n");
             if (g_itemVerify)
-                std::fprintf(stderr, "; verify: %llu captured regions unchanged at the kick, %llu changed after capture\n",
-                             (unsigned long long)g_im2dStats.verifySame, (unsigned long long)g_im2dStats.verifyDiffer);
+                std::fprintf(stderr, "; verify: %llu captured regions unchanged at the kick, %llu changed after capture, %llu tags reading "
+                                     "inside one\n",
+                             (unsigned long long)g_im2dStats.verifySame, (unsigned long long)g_im2dStats.verifyDiffer,
+                             (unsigned long long)std::exchange(g_regionReferenced, 0));
             g_im2dStats = Im2dStats{};
+            if (g_gaps)
+                std::fprintf(stderr, "[rsl-items] gap points: %llu taken, %llu nothing new; not taken: %llu sector cache, %llu material cache, %llu no ops, %llu cursor elsewhere\n",
+                             (unsigned long long)g_gapWhy[5], (unsigned long long)g_gapWhy[4], (unsigned long long)g_gapWhy[0],
+                             (unsigned long long)g_gapWhy[1], (unsigned long long)g_gapWhy[2], (unsigned long long)g_gapWhy[3]);
+            std::fill(std::begin(g_gapWhy), std::end(g_gapWhy), 0ull);
             if (g_itemVerify)
                 std::fprintf(stderr, "[rsl-items] verify: %llu draws / ops wrote what their item stands for, %llu differ; blocks: %llu copied as the walker "
                                      "copies them, %llu differ\n",
@@ -1867,11 +2060,13 @@ namespace vcs::rslworld
         template <int Which>
         PS2_GUEST_CC void gsSendHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31), ctx->pc); // steps 5c / 5d
             const uint32_t ra = getRegU32(ctx, 31);
             if (Which == 1 && ra == kMaterialCacheGs)
             {
-                g_materialCaching = false; // the material cache's own GS packet (copied with it): the packet path, and its end
+                g_materialCacheEnds = true; // the material cache's own GS packet (copied with it): the packet path, and the
+                                            // window's end - at the next hook point, after its bytes (step 5h: a gap there
+                                            // would take this packet before the game copies it)
                 ++g_opStats.caching;
                 g_gsSendOriginal[Which](rdram, ctx, runtime);
                 return;
@@ -1922,7 +2117,7 @@ namespace vcs::rslworld
         bool unpack3Op(uint8_t *rdram, uint32_t code1, uint32_t src, PS2Runtime::RecompiledFunction original, R5900Context *ctx,
                        PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31), ctx->pc); // steps 5c / 5d
             uint8_t tags[16 + 48];
             const uint64_t tag[2] = {0x10000003u, 0x10000000ull | (uint64_t(code1) << 32)};
             std::memcpy(tags, tag, 16);
@@ -1958,7 +2153,7 @@ namespace vcs::rslworld
 
         PS2_GUEST_CC void flushAHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31), ctx->pc); // steps 5c / 5d
             const uint64_t tag[2] = {0x10000000u, 0x1300000000000000ull}; // CNT 0: NOP, FLUSHA
             const auto *t = reinterpret_cast<const uint8_t *>(tag);
             if (g_itemVerify)
@@ -2007,7 +2202,7 @@ namespace vcs::rslworld
         // transfer header (FLUSHE, DIRECTHL 6) and the pixels (DIRECTHL bytes / 16) - as reference ops when the header exists
         PS2_GUEST_CC void uploadHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31), ctx->pc); // steps 5c / 5d
             const uint32_t at = getRegU32(ctx, 4), psm = getRegU32(ctx, 5), w = getRegU32(ctx, 6), h = getRegU32(ctx, 7);
             const uint32_t bytes = getRegU32(ctx, 8), source = getRegU32(ctx, 9), dest = getRegU32(ctx, 10);
             const uint64_t key = (uint64_t(int64_t(int32_t(dest >> 6))) << 48) | (uint64_t(psm & 0xFFFFu) << 32) | (w & 0xFFFFu) |
@@ -2039,8 +2234,6 @@ namespace vcs::rslworld
             ctx->pc = getRegU32(ctx, 31);
         }
 
-        PS2Runtime::RecompiledFunction g_texSlotOriginal = nullptr, g_clutSlotOriginal = nullptr;
-
         PS2Runtime::RecompiledFunction g_capturedOriginal[kMaxEmitters] = {};
 
         // before the original only: the region it writes is captured at the next hook point on its stack level (settleIm2D)
@@ -2048,7 +2241,7 @@ namespace vcs::rslworld
         PS2_GUEST_CC void captureHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t sp = getRegU32(ctx, 29);
-            settleIm2D(rdram, sp, getRegU32(ctx, 31));
+            settleIm2D(rdram, sp, getRegU32(ctx, 31), ctx->pc);
             uint32_t cursor = 0;
             if (!g_inCapture && (opsAllowed() || (g_itemVerify && !g_caching && !g_materialCaching)) && cursorForItem(rdram, 16u, cursor))
             {
@@ -2056,28 +2249,18 @@ namespace vcs::rslworld
                 g_im2dStart = cursor;
                 g_captureSp = sp;
                 g_captureEmitter = E;
+                g_captureBind = kCaptured[E].addr == 0x002F62B8u || kCaptured[E].addr == 0x002F6A78u; // (game/vcs/functions.csv)
+                g_captureBindFn[0] = kCaptured[E].addr;
+                g_captureBindFn[1] = kCaptured[E].addr == 0x002F62B8u ? 0x002F6968u : 0x002F6DC8u;
                 g_captureCurrentAt = g_current.size();
             }
             g_capturedOriginal[E](rdram, ctx, runtime);
         }
 
-        // before the originals only: the texture binds reserve upload slots at the cursor - a captured region goes first
-        PS2_GUEST_CC void texSlotHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-        {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31));
-            g_texSlotOriginal(rdram, ctx, runtime);
-        }
-
-        PS2_GUEST_CC void clutSlotHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-        {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31));
-            g_clutSlotOriginal(rdram, ctx, runtime);
-        }
-
         // before the original only: the material cache's texture bind opens the window its packets are copied from
         PS2_GUEST_CC void textureBindHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31), ctx->pc); // steps 5c / 5d
             g_materialCaching = getRegU32(ctx, 31) == kMaterialCacheBind;
             g_textureBindOriginal(rdram, ctx, runtime);
         }
@@ -2086,7 +2269,7 @@ namespace vcs::rslworld
         // after it - the cached block's own draw, or the sector drawn again when caching failed: game-internals.md 6i)
         PS2_GUEST_CC void sectorHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31), ctx->pc); // steps 5c / 5d
             g_caching = getRegU32(ctx, 31) == kSectorCaching;
             g_sectorOriginal(rdram, ctx, runtime);
         }
@@ -2104,6 +2287,7 @@ namespace vcs::rslworld
             g_im2dStart = cursor;
             g_captureSp = getRegU32(ctx, 29);
             g_captureEmitter = kDrawEmitter;
+            g_captureBind = false;
             g_captureDraw = true;
             g_captureCurrentAt = g_current.size() - 1u;
             g_captureDrawFn[0] = d.kind == World ? 0x002F7EB0u : d.kind == Model ? 0x002F7D58u : 0x002F80A0u;
@@ -2112,7 +2296,7 @@ namespace vcs::rslworld
 
         PS2_GUEST_CC void worldHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31), ctx->pc); // steps 5c / 5d
             const uint32_t a0 = getRegU32(ctx, 4), a1 = getRegU32(ctx, 5);
             g_materialCaching = false;
             if (g_items && g_world && !g_itemVerify && itemDraw(rdram, ctx, World, a0, a1))
@@ -2127,7 +2311,7 @@ namespace vcs::rslworld
 
         PS2_GUEST_CC void modelHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31), ctx->pc); // steps 5c / 5d
             const uint32_t a0 = getRegU32(ctx, 4);
             g_caching = false; // FUN_002409C8 draws no models: this is after the cached sector (FUN_00240ED8 draws it)
             if (g_items && !g_itemVerify && itemDraw(rdram, ctx, Model, a0, 0u))
@@ -2142,7 +2326,7 @@ namespace vcs::rslworld
 
         PS2_GUEST_CC void modelBHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31)); // steps 5c / 5d
+            settleIm2D(rdram, getRegU32(ctx, 29), getRegU32(ctx, 31), ctx->pc); // steps 5c / 5d
             const uint32_t a0 = getRegU32(ctx, 4);
             g_caching = false;
             if (g_items && !g_itemVerify && itemDraw(rdram, ctx, ModelB, a0, 0u))
@@ -2212,6 +2396,13 @@ namespace vcs::rslworld
         {
             if (chainStart)
             {
+                if (censusOrigins())
+                {
+                    g_originWalk.swap(g_originNow);
+                    g_originNow.clear();
+                    std::stable_sort(g_originWalk.begin(), g_originWalk.end(),
+                                     [](const Origin &x, const Origin &y) { return x.cursor < y.cursor; });
+                }
                 ++g_censusChains;
                 const auto now = std::chrono::steady_clock::now();
                 if (now - g_censusAt > std::chrono::seconds(5) && g_censusChains > 1)
@@ -2224,7 +2415,7 @@ namespace vcs::rslworld
                     for (const auto &[k, r] : rows)
                         tags += r.tags, qw += r.qwords;
                     std::fprintf(stderr, "[rsl-census] per chain: %.0f top-level tags, %.0f payload qwords\n", tags / c, qw / c);
-                    for (size_t i = 0; i < rows.size() && i < 24u; ++i)
+                    for (size_t i = 0; i < rows.size() && i < (censusOrigins() ? 60u : 24u); ++i)
                         std::fprintf(stderr, "[rsl-census] %8.1f tags %9.1f qw  %s\n", rows[i].second.tags / c, rows[i].second.qwords / c,
                                      rows[i].first.c_str());
                     g_census.clear();
@@ -2242,6 +2433,19 @@ namespace vcs::rslworld
             key += std::string(" | tag in ") + censusWhere(tagAddr);
             if (qwc)
                 key += std::string(", data in ") + censusWhere(dataAddr);
+            if (censusOrigins() && key.compare(0, 4, "item") != 0 && (tagAddr & kRamMask) >= kPktLo && (tagAddr & kRamMask) < kPktHi)
+            {
+                // the hook point with the greatest cursor at or before the tag (the origins sorted by cursor at chain start)
+                const uint32_t a = tagAddr & kRamMask;
+                auto it = std::upper_bound(g_originWalk.begin(), g_originWalk.end(), a,
+                                           [](uint32_t v, const Origin &o) { return v < o.cursor; });
+                char buf[64];
+                if (it == g_originWalk.begin())
+                    std::snprintf(buf, sizeof(buf), " | after: (none)");
+                else
+                    std::snprintf(buf, sizeof(buf), " | after: %06x from %06x", (it - 1)->fn, (it - 1)->ra);
+                key += buf;
+            }
             CensusRow &r = g_census[key];
             ++r.tags;
             r.qwords += qwc;
@@ -2253,6 +2457,28 @@ namespace vcs::rslworld
             static const bool doCensus = std::getenv("VCS_RSL_CENSUS") != nullptr;
             if (doCensus)
                 census(tagAddr, id, dataAddr, qwc, vifCodes, chainStart);
+            if (g_itemVerify && !g_regionsWalk.empty()) // step 5h: a tag that reads inside a region an item took (REF data
+            {                                           // anywhere in it, a CALL / NEXT past its start) - it would read
+                uint32_t target = 0;                    // what replaced the region
+                bool any = false;
+                if ((id == 3u || id == 4u) && qwc)
+                    target = dataAddr & kRamMask, any = true;
+                else if (id == 2u || id == 5u)
+                    target = tagTarget & kRamMask;
+                auto it = std::upper_bound(g_regionsWalk.begin(), g_regionsWalk.end(), std::make_pair(target, ~0u));
+                if (target && it != g_regionsWalk.begin())
+                {
+                    --it;
+                    if (target < it->second && (any ? target >= it->first : target > it->first))
+                    {
+                        ++g_regionReferenced;
+                        static int logged = 0;
+                        if (logged++ < 20)
+                            std::fprintf(stderr, "[rsl-items] verify: tag at 0x%08x (id %u) reads 0x%08x inside a taken region [0x%08x, 0x%08x)\n",
+                                         tagAddr, id, target, it->first, it->second);
+                    }
+                }
+            }
             if (chainStart)
             {
                 g_building = ChainTable{};
@@ -2523,8 +2749,9 @@ namespace vcs::rslworld
             if (!off("VCS_RSL_IM2D")) // steps 5c / 5d: captured emitters (VCS_RSL_IM2D=0: their packets as written)
             {
                 hookCaptured(runtime, std::make_integer_sequence<int, kCapturedCount>{});
-                hook(runtime, kTexSlot, g_texSlotOriginal, &texSlotHook);
-                hook(runtime, kClutSlot, g_clutSlotOriginal, &clutSlotHook);
+                // step 5h: gaps need the binds captured (else their half-filled upload slots would be read)
+                const unsigned long mask = std::getenv("VCS_RSL_CAPTURE_MASK") ? std::strtoul(std::getenv("VCS_RSL_CAPTURE_MASK"), nullptr, 0) : ~0ul;
+                g_gaps = !off("VCS_RSL_GAPS") && ((mask >> (kCapturedCount - 2)) & 3ul) == 3ul;
             }
         }
         g_itemVerify = g_items && std::getenv("VCS_RSL_ITEMS_VERIFY") != nullptr;
@@ -2536,7 +2763,7 @@ namespace vcs::rslworld
             ps2chain::setDirectHandler(&onDirect);
     }
 
-    void settlePending(uint8_t *rdram, uint32_t sp, uint32_t ra) { settleIm2D(rdram, sp, ra); }
+    void settlePending(uint8_t *rdram, uint32_t sp, uint32_t ra, uint32_t fn) { settleIm2D(rdram, sp, ra, fn); }
 
     bool flushAsOp(uint8_t *rdram, const uint8_t *tags, uint32_t bytes)
     {
@@ -2556,11 +2783,12 @@ namespace vcs::rslworld
     {
         if (!g_world && !g_models && !g_rasters)
             return;
+        settleIm2D(const_cast<uint8_t *>(g_rdram), ~0u, 0u, 0u); // steps 5c / 5d: before the chain goes out (and before the
+        g_inCapture = false;                                      // draw list is handed over: a region's draws leave it)
         g_kicked.swap(g_current);
         g_current.clear();
+        g_currentAtSettle = 0;
         g_next = 0;
-        settleIm2D(const_cast<uint8_t *>(g_rdram), ~0u, 0u); // steps 5c / 5d: before the chain goes out
-        g_inCapture = false;
         if (g_itemVerify)
         {
             checkItem(g_rdram);
@@ -2570,6 +2798,7 @@ namespace vcs::rslworld
         g_itemFrameKicked = g_itemFrame++;
         g_caching = false;
         g_materialCaching = false;
+        g_materialCacheEnds = false;
         g_openItem = -1;
         g_itemsCurrent.clear();
         g_arenaKicked.swap(g_arenaCurrent);

@@ -340,3 +340,12 @@ callbacks) so that every draw is built natively. Chosen instead: those draws run
 wrote is captured into items (the 5d mechanism, with CALLs taken as blocks). The chain loses their packets all the
 same, nothing new has to be checked bit for bit, and the guest code keeps doing what it does. A port stays possible
 later if their CPU time ever matters (small: ~2% of flushes).
+
+## 2026-10-26 - Gaps: take what is between hook points, in place
+
+Step 5h could have gone on adding writers to the captured list one by one (the census by origin named them). Chosen:
+every hook point takes what was written since the last one, whoever wrote it, so the list never has to be complete.
+Taken in place (item tag + NEXT over the rest; the cursor never moves back), because a gap is settled at arbitrary
+hook points where a caller may hold the cursor - one such caller (`FUN_00240ED8`) was found the hard way, and verify
+mode cannot see this class (it keeps the packets). The price is a NEXT per run (~32 a frame) and dead bytes in the
+buffer; the chain's walk in 5g skips both.

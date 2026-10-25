@@ -23,7 +23,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | L | 5a-5d, 5f done, 5e in part 2026-10-25; 5e's render-target reads, 5g left |
+| 5 | An empty chain | L | 5a-5d, 5f, 5h done, 5e in part 2026-10-26; 5e's render-target reads, 5g left |
 
 ### 1. The last GS draws
 
@@ -310,6 +310,8 @@ Order (by what it removes, then risk):
   guest plug-in code (skinned peds, vehicles). Read which plug-ins (render context list `+0x114`, game-internals.md
   6i) and port their callbacks' packet output natively, or let the callback write and take its bytes into the item
   at the next draw call (the 4c verify mode's way of reading what the original wrote).
+- **5h - gaps** (M, added 2026-10-26). Whatever the remaining writers put between two hook points, taken as a captured
+  region at the second one - no list of emitters to keep complete.
 - **5g - no walk** (S). When a frame's chain holds only item tags and fixed tags, the kick hands the item list to the
   worker without walking or copying the chain (the write watch's fold stays for the blocks' validity); the walker and
   the VIF interpreter remain the reference path (`VCS_RSL_ITEMS=0`).
@@ -466,6 +468,43 @@ the flush's packets, whatever its callbacks wrote, the draw's own REF / CALL - b
   a region (as before). `VCS_RSL_KEPT_LOG=1`: where each region not taken whole stops (first 4000).
 - Not ported, and no need now: `FUN_001CFAE0` and the two geometry callbacks run recompiled inside captured draws;
   their output reaches the chain as items. A native port would only save their CPU time (small).
+
+**5h done, 2026-10-26 - gaps: everything between two hook points.** A census by origin (`VCS_RSL_CENSUS=2`: every hook
+point notes the cursor, each tag left in the chain is named after the last hook point before it) showed what was left
+after 5f, driving, per frame: ~250 empty CNTs (upload slots whose REFs became ops), ~80 texture-bind register packets
+(game-internals.md 6i "The texture binds' own packet"), ~50 tags around the sector caches, ~20 others. Rather than
+one capture per writer:
+- **Gaps.** At every hook point, the bytes written since the last one (by any code) are parsed as a captured region
+  and taken into items - not while a sector / material cache is being filled, not from a cursor outside this frame's
+  half. A gap is taken **in place**: its start gets the item's tag and a NEXT to its end, the cursor never moves back
+  (a caller may hold it: game-internals.md 6i "Callers hold the cursor across calls" - the first version rewound and
+  lost the frame's alpha, effects, HUD and post passes).
+- **Runs.** Any region (emitter, draw, gap) is now taken in runs: a tag the walker must still read (a CALL of a packet
+  not known yet, a REF outside main RAM, an item's own tag) stays, the parse goes on after it, and each convertible run
+  becomes items in place. Before, the first such tag kept the rest of the region. Draws whose tag stays keep their
+  draw-list entry; the others leave it one by one.
+- **The texture binds are captures** (`FUN_002F62B8`, `FUN_002F6A78`): their reserved upload slots are never read half
+  filled; inside a bind is decided by return address (its own code, `FUN_003298D8`), as for draws - by stack depth
+  alone a bind swallowed its caller's next calls (Im2D among them).
+- **Draws' kept flush tags** (a flush with an instance-matrix REF or context CALLs, written before the item's tag) go
+  to the next gap.
+- Two fixes found on the way: the frame kick settled the last capture after the draw list was handed over (a region
+  taken there could not drop its draws); the material cache's window ended before its last packet was copied
+  (game-internals.md 6i "The material cache's last packet").
+- Checked: `VCS_RSL_ITEMS_VERIFY=1` driving - 2.15M captured regions unchanged at the kick, 0 changed, and 0 tags
+  reading inside a taken region (new: the walker checks every REF / CALL / NEXT target against the frame's taken
+  regions); 3.34M draws / ops and 631k blocks, 0 differ. `VCS_RSL_WORLD_VERIFY=1`, 1.40M recordings, 0 differ. Scenes as
+  step 5f's (static ones identical but for the loading bar's edge), tour subset unchanged.
+- Counts (driving, per frame): 303 top-level tags (742 after 5f), 245 of them item tags and ~32 the in-place runs'
+  NEXTs; ~16 the root lists' fixed tags in `.data`; 2-3 packets left in the buffer (the material cache's GS packet,
+  sent at the top level as well as copied, and an upload header now and then). Payload 232 qwords (780), mostly the
+  root lists'.
+- Measured: A/B against 5f, three alternating rounds on a quiet machine (60 fps cap): even - game thread standing
+  4.21 -> 4.06 ms, driving 6.34 -> 6.42 ms; render worker 2.03 -> 1.97 / 4.58 -> 4.59 ms. The gain of an all-items chain
+  is 5g's (no walk).
+- `VCS_RSL_GAPS=0`: no gaps (the binds stay captures); `VCS_RSL_RUNS=0`: a region stops at its first kept tag (as
+  before). Debug: `VCS_RSL_GAP_LOG=1` (frame 400's gaps), `VCS_RSL_GAP_FNS=,<hex>,...` (gaps only at those hook points;
+  0 = the kick), `VCS_RSL_CENSUS=2`.
 
 Expected gains, honestly: the game thread's share of handing frames over (the walk, copy, fold and bookkeeping:
 ~5% while driving) shrinks with every part; the render worker gains where an op replaces VIF parsing and VU-memory
