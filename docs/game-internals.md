@@ -818,6 +818,22 @@ from a RAM dump and checked by the phase 2 recorder, 2026-10-24):
 - Volume at city spot (-700, -500), per 10 s: 248k `FUN_002F7D58` CALLs, 106k `FUN_002F80A0` CALLs, 89k other CALLs,
   61k world REFs; ~1.29M draw program MSCALs among them.
 
+**Texture uploads** (2026-10-25, from the decompiles of `FUN_003298D8`, `FUN_002F62B8`, `FUN_002F6A78`; native as
+reference ops since FULLY_NATIVE.md step 5b):
+- `FUN_003298D8(slot, psm, log2 w, log2 h, bytes, source, dest)` writes **two REFs into a 32-byte slot its caller
+  reserved**: one to the destination's transfer header (qwc 6, VIFcodes FLUSHE, DIRECTHL 6) and one to the pixels
+  (qwc `bytes / 16`, VIFcodes NOP, DIRECTHL `bytes / 16`). The header is a 0x70-byte node of a binary tree rooted at
+  `0x6EE3F0`: key at +0x60 = `(dest >> 6) << 48 | (psm & 0xFFFF) << 32 | (h & 0xFFFF) << 16 | (w & 0xFFFF)` (compared
+  unsigned; smaller keys left at +0x68, larger right at +0x6C), the packet at +0x00: GIFtag `0x1000000000000004` A+D,
+  BITBLTBUF (0x50), TRXPOS (0x51), TRXREG (0x52) from the sizes, TRXDIR (0x53) and the IMAGE GIFtag
+  (`bytes >> 4 | 1 << 59`). A missing node is made from the pool at `*0x488760` (used / max `0x4CD58C` / `0x4CD588`);
+  with the pool full both REFs are written empty (qwc 0).
+- `FUN_002F62B8` (the bind into a VRAM slot) reserves 32 bytes per mip level and calls it for each (128 bytes and
+  `FUN_00266608` instead when `*0x488318 == 0` - not seen), then writes a CNT 5 with DIRECTHL 5 (A+D: TEXFLUSH, MIPTBP1,
+  MIPTBP2 for the slot, register 0x42, TEXFLUSH) at the cursor, and queues TEX0 into `0x4882E0 + slot * 8` with the
+  dirty bits. `FUN_002F6A78` (the CLUT) reserves 32 bytes for one call (CT32 16x16 or 8x2 by the palette size) and may
+  write a CNT 2 (A+D: register 0x42, TEXFLUSH).
+
 **The state setters** (2026-10-25, decompiled before / read from the recompiled code's disassembly comments; native as
 state ops since FULLY_NATIVE.md step 5a):
 - `FUN_002F7908` and `FUN_002F7B30` are the same code: queue FOG (6) / FOGCOL (7) / registers 0x14 / 0x15 by the

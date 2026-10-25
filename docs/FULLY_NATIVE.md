@@ -23,7 +23,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | L | 5a done 2026-10-25 (state ops); 5b-5g planned below |
+| 5 | An empty chain | L | 5a, 5b done 2026-10-25 (state ops, texture uploads); 5c-5g planned below |
 
 ### 1. The last GS draws
 
@@ -331,6 +331,27 @@ cache: from `FUN_00408F30` called at `0x240D14` to `FUN_002F7B30` called at `0x2
   FLUSHE) 236 -> 59, CNT MSCAL 68 -> 46, items 158 -> 222. CNT DIRECTHL (~90) is not theirs and stays.
 - Measured: A/B, same build, `VCS_RSL_OPS=0` vs on, three alternating rounds, `--opt none`, uncapped: driving 104.1 -> 113.9 fps (game thread 8.49 -> 7.72 ms, chain submission 1.15 -> 1.03, worker 4.64 -> 4.37); standing even (183 / 182 fps). The machine's run-to-run noise is about 5%: the drive's gain is consistent across every column but should be taken as 'up to ~9%'.
 - `VCS_RSL_OPS=0`: the setters' packets as before (items for draws stay).
+
+**5b done 2026-10-25 - texture uploads as reference ops.** `FUN_003298D8` (game-internals.md 6i "Texture uploads")
+is replaced when the destination's transfer header already exists (its tree lookup, read-only, natively; a first
+upload to a destination runs the original, which makes the node): its two REFs become **reference ops** - the two
+VIFcodes and the payload's address and size - in the open item or a new one, whose tag goes into the slot the caller
+reserved (the rest of the slot gets empty CNTs; the cursor is not moved). At the kick, after the fold, every item with
+references has its VIF bytes rebuilt: its inline bytes and each payload copied from guest RAM where the reference
+stands - exactly what the walker copies for a REF - with each raster upload's place noted, so textures keep their
+names (step 3d) when the worker sends the pixels. A texture's mip levels share one item.
+- **A bug on the way**: an open item of inline ops that then took references kept `refAt` 0, so its uploads copied
+  the frame's first references - wrong pixels under the right names, texture-cache misses on every bind and the GS
+  stage decoding all the time (driving fell to 36 fps). The tag verify could not see it (it checks what the game
+  writes, not how items resolve). Fixed; each reference now carries its item and the kick checks it (counted:
+  "references not their item's", 0).
+- Checked: `VCS_RSL_ITEMS_VERIFY=1` (the tags the original writes for each upload against the two REFs the op stands
+  for) driving 4.85M draws / ops, 0 differ; texture binds 99.998% found cached (as before); reference scenes as before
+  (static identical, `pause_map` within its noise; moving scenes looked over - same textures); tour subset unchanged.
+- Census at the city spot: chain payload ~22k -> ~7.9k qwords a frame (the pixels and headers are in the items).
+  Left as packets: uploads while a sector or a material is being cached, and a destination's first upload.
+- Measured: not settled. The cleanest A/B (uploads off / on, three alternating rounds, per run) gave driving 107.1 -> 103.4 fps and standing even; the kick then copied each payload twice (into a buffer, then into the arena) and now builds the item's bytes in place - not re-measured, because the machine was under changing background load for the rest of the session (runs with uploads off fell to 66-74 fps as well). In one hour of runs ~half of the runs with uploads on had windows of 40-100 ms frames (game thread and render worker waiting together; the GS stage not saturated, no texture misses, no drains, no stale items); in the 27 runs after it none did, with or without instruments - most likely the same background load, not proven. To measure on a quiet machine: `tools/abenv`-style alternating runs, `VCS_RSL_UPLOADS=0` vs on. `VCS_RSL_SLOW_LOG=1` logs kicks whose resolve takes > 3 ms and chains the worker takes > 15 ms on; `PS2X_RENDER_THREAD_LOG=1` now also counts GS stage drains.
+- `VCS_RSL_UPLOADS=0`: the uploads' REFs as before.
 
 Expected gains, honestly: the game thread's share of handing frames over (the walk, copy, fold and bookkeeping:
 ~5% while driving) shrinks with every part; the render worker gains where an op replaces VIF parsing and VU-memory

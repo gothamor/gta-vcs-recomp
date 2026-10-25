@@ -97,6 +97,7 @@ namespace ps2_render_worker
             std::atomic<uint32_t> framesPending{0};    // frame ends sent, not run yet
             std::atomic<bool> consumerWaiting{false}, producerWaiting{false};
             std::atomic<uint32_t> drainWaiters{0};
+            std::atomic<uint64_t> drains{0}, drainWaits{0}, drainWaitNs{0}; // [gta-recomp] PS2X_RENDER_THREAD_LOG
             std::mutex mutex;
             std::condition_variable workCv, spaceCv, doneCv;
             bool started = false, stopping = false;
@@ -286,7 +287,12 @@ namespace ps2_render_worker
                 if (s.fences[r])
                     std::fprintf(stderr, " %s %llu (%llu)", kReasonNames[r], static_cast<unsigned long long>(s.fences[r]),
                                  static_cast<unsigned long long>(s.fenceWaits[r]));
-            std::fprintf(stderr, ", fence wait %.1f ms/s\n", s.fenceWaitNs / 1e6 / secs);
+            std::fprintf(stderr, ", fence wait %.1f ms/s", s.fenceWaitNs / 1e6 / secs);
+            {
+                GsStage &g = gsState(); // [gta-recomp] the GS stage drained by the worker (front-end calls that need it idle)
+                std::fprintf(stderr, "; GS stage drains %llu (%llu waited, %.1f ms/s)\n", (unsigned long long)g.drains.exchange(0),
+                             (unsigned long long)g.drainWaits.exchange(0), g.drainWaitNs.exchange(0) / 1e6 / secs);
+            }
             s.items = s.frames = s.postWaits = s.postWaitNs = s.fenceWaitNs = 0u;
             for (size_t r = 0; r < kReasons; ++r)
                 s.fences[r] = s.fenceWaits[r] = 0u;
@@ -463,10 +469,19 @@ namespace ps2_render_worker
         if (t_onGsStage)
             return;
         GsStage &g = gsState();
+        g.drains.fetch_add(1u, std::memory_order_relaxed);
         const uint64_t target = g.tail.load(std::memory_order_seq_cst);
         auto done = [&] { return g.head.load(std::memory_order_seq_cst) >= target; };
         if (done())
             return;
+        const uint64_t start = nowNs();
+        g.drainWaits.fetch_add(1u, std::memory_order_relaxed);
+        struct Account
+        {
+            GsStage &g;
+            uint64_t start;
+            ~Account() { g.drainWaitNs.fetch_add(nowNs() - start, std::memory_order_relaxed); }
+        } account{g, start};
         for (int i = 0; i < 4000; ++i)
         {
             if (done())

@@ -39,6 +39,7 @@ namespace vcs::rslworld
         constexpr uint32_t kTexMatrix = 0x002F7090u;                       // FUN_002F7090(m): 3 qwords -> VU 0x2C
         constexpr uint32_t kVuConstants = 0x001CEF18u;                     // FUN_001CEF18(vu, m): 3 qwords -> VU vu
         constexpr uint32_t kFlushA = 0x002F9CE8u;                          // FUN_002F9CE8: CNT with FLUSHA
+        constexpr uint32_t kUpload = 0x003298D8u;                          // FUN_003298D8: a texture upload's two REFs
         constexpr uint32_t kModelDraw = 0x002F7D58u;               // FUN_002F7D58(packet): CALL packet
         constexpr uint32_t kModelDrawB = 0x002F80A0u;              // FUN_002F80A0(packet): CALL packet
 
@@ -89,6 +90,17 @@ namespace vcs::rslworld
             uint32_t rastersAt = 0, rasterCount = 0; // in the table's itemRasters
             bool skip = false, lost = false;         // skip: replayed by key; lost: its block could not be copied
             bool hasBlock = false;                   // step 5a: an item of state ops alone has none
+            uint32_t refAt = 0, refCount = 0;        // step 5b: its reference ops (the frame's / the table's refs)
+            uint32_t prefixRastersAt = 0, prefixRasterCount = 0; // step 5b: raster uploads in its prefix (itemRasters)
+        };
+        // step 5b: a REF the item stands for - its two VIFcodes and the payload in guest RAM, copied at the kick (when the DMA
+        // would read it) into the item's VIF bytes at `pos` (the inline bytes before it)
+        struct RefOp
+        {
+            uint32_t pos;
+            uint32_t code[2];
+            uint32_t addr, qwc;
+            uint32_t owner = 0; // the item it belongs to (checked at the kick)
         };
         std::vector<Draw> g_current, g_kicked; // this frame's draw calls / the frame whose chain is being copied
         size_t g_next = 0;                     // the next of g_kicked whose tag the chain should hold
@@ -106,6 +118,7 @@ namespace vcs::rslworld
             std::vector<Item> items;        // step 4c: the frame's draw items, by MARK index - kItemMark
             std::vector<uint8_t> arena;     // their VIF bytes and blocks
             std::vector<RasterInBlock> itemRasters;
+            std::vector<RefOp> refs;        // step 5b: the items' reference ops, by Item::refAt
             uint32_t chainBytes = 0;        // the copied chain's size
             uint32_t itemFrame = 0;         // the frame whose items these are (g_itemFrame)
         };
@@ -663,7 +676,17 @@ namespace vcs::rslworld
                 ~Leave() { --d; }
             } leave{depth};
             if (it.prefixBytes)
-                memory.processVIF1Data(table->arena.data() + it.prefixAt, it.prefixBytes);
+            {
+                t_block = table->arena.data() + it.prefixAt; // step 5b: the uploads in it keep their raster names
+                t_blockBytes = it.prefixBytes;
+                t_blockRasters = it.prefixRasterCount ? &table->itemRasters[it.prefixRastersAt] : nullptr;
+                t_blockRasterCount = it.prefixRasterCount;
+                memory.processVIF1Data(t_block, it.prefixBytes);
+                t_block = nullptr;
+                t_blockBytes = 0;
+                t_blockRasters = nullptr;
+                t_blockRasterCount = 0;
+            }
             if (it.skip)
                 replaySkipped(memory, it.d, table->seq);
             else if (it.blockBytes)
@@ -927,7 +950,7 @@ namespace vcs::rslworld
         struct ItemStats
         {
             uint64_t made[KindCount] = {}, flush = 0, stateCall = 0, unknown = 0, noRoom = 0, shape = 0, full = 0, caching = 0;
-            uint64_t skipped = 0, copied = 0, lost = 0, verifySame = 0, verifyDiffer = 0;
+            uint64_t skipped = 0, copied = 0, lost = 0, verifySame = 0, verifyDiffer = 0, badRefs = 0;
         } g_itemStats;                                          // game thread
 
         constexpr uint32_t kPacketCursor = 0x520F90u + 0x18u; // the packet buffer's DMA cursor (game-internals.md 6i)
@@ -1056,7 +1079,7 @@ namespace vcs::rslworld
         bool g_materialCaching = false; // FUN_002409C8 is caching a material's setup (its packets are copied)
         struct OpStats
         {
-            uint64_t ops = 0, merged = 0, packets = 0, caching = 0, mergedDraws = 0;
+            uint64_t ops = 0, merged = 0, packets = 0, caching = 0, mergedDraws = 0, uploads = 0;
         } g_opStats;
 
         bool opsAllowed() { return g_items && !g_itemVerify && !g_caching && !g_materialCaching; }
@@ -1070,11 +1093,52 @@ namespace vcs::rslworld
             return cursor >= half && cursor + bytes <= half + 0xE6670u;
         }
 
-        void writeItemTag(uint8_t *rdram, uint32_t cursor, uint32_t index)
+        void writeItemTag(uint8_t *rdram, uint32_t cursor, uint32_t index, bool moveCursor = true)
         {
             const uint32_t tag[4] = {0x10000000u, 0u, 0x07000000u | (kItemMark + index), kItemNop | (g_itemFrame & 0xFFFFu)}; // CNT: MARK, NOP
             std::memcpy(rdram + (cursor & kRamMask), tag, 16);
-            wr32(rdram, kPacketCursor, cursor + 16u);
+            if (moveCursor)
+                wr32(rdram, kPacketCursor, cursor + 16u);
+        }
+
+        std::vector<RefOp> g_refsCurrent, g_refsKicked; // step 5b: the frame's reference ops
+
+        // step 5b: REFs as ops, written by the game into a slot it reserved (`at`, 16 bytes per REF; the cursor is past it):
+        // the slot gets the item's tag (or, joining the open item, nothing) and empty CNTs for the rest
+        bool appendRefs(uint8_t *rdram, uint32_t at, const RefOp *ops, uint32_t n)
+        {
+            const uint32_t cursor = rd32(rdram, kPacketCursor);
+            const uint32_t half = 0x520F90u + rd32(rdram, 0x520F90u + 0x14u) * 0xE6670u + 0x20u;
+            const uint32_t bytes = n * 16u;
+            if ((at & 0xFu) != 0u || at < half || at + bytes > cursor || cursor > half + 0xE6670u)
+                return false;
+            const bool merge = g_openItem >= 0 && at == g_openEnd && size_t(g_openItem) + 1u == g_itemsCurrent.size();
+            if (!merge && g_itemsCurrent.size() >= kMaxItems)
+                return false;
+            const uint32_t index = merge ? static_cast<uint32_t>(g_openItem) : static_cast<uint32_t>(g_itemsCurrent.size());
+            Item &it = merge ? g_itemsCurrent[index] : g_itemsCurrent.emplace_back();
+            if (!merge)
+                it.prefixAt = static_cast<uint32_t>(g_arenaCurrent.size());
+            if (!it.refCount) // its first references (also when it is an open item of inline ops)
+                it.refAt = static_cast<uint32_t>(g_refsCurrent.size());
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                RefOp r = ops[i];
+                r.pos = it.prefixBytes;
+                r.owner = index;
+                g_refsCurrent.push_back(r);
+            }
+            it.refCount += n;
+            const uint32_t empty[4] = {0x10000000u, 0u, 0u, 0u}; // CNT 0, NOP NOP
+            for (uint32_t i = 0; i < n; ++i)
+                if (i == 0 && !merge)
+                    writeItemTag(rdram, at, index, false);
+                else
+                    std::memcpy(rdram + ((at + i * 16u) & kRamMask), empty, 16);
+            g_openItem = static_cast<int>(index);
+            g_openEnd = at + bytes;
+            ++(merge ? g_opStats.merged : g_opStats.ops);
+            return true;
         }
 
         // VIF bytes as a state op: into the open item, or a new item and its tag; false = the caller writes its packets
@@ -1265,6 +1329,50 @@ namespace vcs::rslworld
         void resolveItems(ChainTable &table)
         {
             thread_local std::vector<uint32_t> pages;
+            for (Item &it : table.items) // step 5b: prefixes with references - their payloads as guest RAM holds them now
+            {
+                if (!it.refCount)
+                    continue;
+                const uint32_t self = static_cast<uint32_t>(&it - table.items.data());
+                bool mine = it.refAt + it.refCount <= table.refs.size();
+                for (uint32_t r = it.refAt; mine && r < it.refAt + it.refCount; ++r)
+                    mine = table.refs[r].owner == self && table.refs[r].pos <= it.prefixBytes;
+                if (!mine) // (never expected: counted, and the item runs its inline bytes alone)
+                {
+                    ++g_itemStats.badRefs;
+                    it.refCount = 0;
+                    continue;
+                }
+                // built in place at the arena's end (one copy of each payload, as the walker's)
+                it.prefixRastersAt = static_cast<uint32_t>(table.itemRasters.size());
+                size_t bytes = it.prefixBytes;
+                for (uint32_t r = it.refAt; r < it.refAt + it.refCount; ++r)
+                    bytes += 8u + size_t(table.refs[r].qwc) * 16u;
+                const size_t start = table.arena.size();
+                table.arena.resize(start + bytes);
+                uint8_t *out = table.arena.data() + start;
+                const uint8_t *inl = table.arena.data() + it.prefixAt;
+                uint32_t done = 0;
+                size_t at = 0;
+                for (uint32_t r = it.refAt; r < it.refAt + it.refCount; ++r)
+                {
+                    const RefOp &op = table.refs[r];
+                    std::memcpy(out + at, inl + done, op.pos - done);
+                    at += op.pos - done;
+                    done = op.pos;
+                    std::memcpy(out + at, op.code, 8);
+                    at += 8u;
+                    // a raster upload (as observe names them): DIRECT / DIRECTHL of the REF's own size
+                    if (g_rasters && op.qwc && ((op.code[1] >> 24) & 0x7Eu) == 0x50u && (op.code[1] & 0xFFFFu) == op.qwc)
+                        table.itemRasters.push_back({static_cast<uint32_t>(at), op.addr & kRamMask, op.qwc * 16u});
+                    std::memcpy(out + at, g_rdram + (op.addr & kRamMask), op.qwc * 16u);
+                    at += op.qwc * 16u;
+                }
+                std::memcpy(out + at, inl + done, it.prefixBytes - done);
+                it.prefixRasterCount = static_cast<uint32_t>(table.itemRasters.size()) - it.prefixRastersAt;
+                it.prefixAt = static_cast<uint32_t>(start);
+                it.prefixBytes = static_cast<uint32_t>(bytes);
+            }
             for (Item &it : table.items)
             {
                 if (!it.hasBlock)
@@ -1332,16 +1440,17 @@ namespace vcs::rslworld
             ItemStats &s = g_itemStats;
             std::fprintf(stderr, "[rsl-items] made: world %llu, model %llu, model-b %llu (with the state packet %llu); packet path: flush %llu, "
                                  "not known %llu, no room %llu, shape %llu, full %llu, caching %llu; at the kick: %llu skipped, %llu copied, %llu lost; "
-                                 "worker: %llu seen, %llu not placed, %llu another frame's\n",
+                                 "worker: %llu seen, %llu not placed, %llu another frame's; references not their item's: %llu\n",
                          (unsigned long long)s.made[World], (unsigned long long)s.made[Model], (unsigned long long)s.made[ModelB],
                          (unsigned long long)s.stateCall, (unsigned long long)s.flush, (unsigned long long)s.unknown,
                          (unsigned long long)s.noRoom, (unsigned long long)s.shape, (unsigned long long)s.full, (unsigned long long)s.caching,
                          (unsigned long long)s.skipped,
                          (unsigned long long)s.copied, (unsigned long long)s.lost, (unsigned long long)g_itemsSeenW.exchange(0),
-                         (unsigned long long)g_itemsUnplacedW.exchange(0), (unsigned long long)g_itemsStaleW.exchange(0));
-            std::fprintf(stderr, "[rsl-items] state ops: %llu items of their own, %llu merged into one, %llu draws into an op item; packet path: %llu "
-                                 "(no room / not RAM), %llu (a cache being filled)\n",
+                         (unsigned long long)g_itemsUnplacedW.exchange(0), (unsigned long long)g_itemsStaleW.exchange(0), (unsigned long long)s.badRefs);
+            std::fprintf(stderr, "[rsl-items] state ops: %llu items of their own, %llu merged into one, %llu draws into an op item, %llu uploads; "
+                                 "packet path: %llu (no room / not RAM / no header yet), %llu (a cache being filled)\n",
                          (unsigned long long)g_opStats.ops, (unsigned long long)g_opStats.merged, (unsigned long long)g_opStats.mergedDraws,
+                         (unsigned long long)g_opStats.uploads,
                          (unsigned long long)g_opStats.packets, (unsigned long long)g_opStats.caching);
             g_opStats = OpStats{};
             if (g_itemVerify)
@@ -1472,6 +1581,68 @@ namespace vcs::rslworld
                 g_flushAOriginal(rdram, ctx, runtime);
                 return;
             }
+            ctx->pc = getRegU32(ctx, 31);
+        }
+
+        PS2Runtime::RecompiledFunction g_uploadOriginal = nullptr;
+
+        // FUN_003298D8's transfer header for a destination, as its lookup finds it (game-internals.md 6i: a binary tree of
+        // 0x70-byte nodes from 0x6EE3F0, key at +0x60, left +0x68, right +0x6C); 0: not there yet (the original makes it)
+        uint32_t findTransferHeader(const uint8_t *rdram, uint64_t key)
+        {
+            uint32_t node = 0x6EE3F0u;
+            for (int n = 0; n < 65536; ++n)
+            {
+                if ((node & 0xF0000000u) != 0u || (node & kRamMask) + 0x70u > kRamMask + 1u)
+                    return 0u;
+                uint64_t nodeKey;
+                std::memcpy(&nodeKey, rdram + (node & kRamMask) + 0x60u, 8);
+                uint32_t next;
+                if (nodeKey > key)
+                    next = rd32(rdram, node + 0x68u);
+                else if (nodeKey == key)
+                    return node;
+                else
+                    next = rd32(rdram, node + 0x6Cu);
+                if (next == 0u)
+                    return 0u;
+                node = next;
+            }
+            return 0u;
+        }
+
+        // FUN_003298D8(slot, psm, log2 w, log2 h, bytes, source, destination): two REFs into the slot - the destination's
+        // transfer header (FLUSHE, DIRECTHL 6) and the pixels (DIRECTHL bytes / 16) - as reference ops when the header exists
+        PS2_GUEST_CC void uploadHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t at = getRegU32(ctx, 4), psm = getRegU32(ctx, 5), w = getRegU32(ctx, 6), h = getRegU32(ctx, 7);
+            const uint32_t bytes = getRegU32(ctx, 8), source = getRegU32(ctx, 9), dest = getRegU32(ctx, 10);
+            const uint64_t key = (uint64_t(int64_t(int32_t(dest >> 6))) << 48) | (uint64_t(psm & 0xFFFFu) << 32) | (w & 0xFFFFu) |
+                                 (uint64_t(h & 0xFFFFu) << 16);
+            const uint32_t qwc = bytes >> 4, node = findTransferHeader(rdram, key);
+            const bool plain = node != 0u && qwc <= 0xFFFFu && (source & 0xF0000000u) == 0u && (source & kRamMask) + qwc * 16u <= kRamMask + 1u;
+            if (g_itemVerify)
+            {
+                if (plain)
+                {
+                    checkItem(rdram);
+                    const uint32_t tags[8] = {0x30000006u, node, 0x10000000u, 0x51000006u, qwc | 0x30000000u, source, 0u, qwc | 0x51000000u};
+                    const auto *t = reinterpret_cast<const uint8_t *>(tags);
+                    g_itemCheck.expect.assign(t, t + sizeof(tags));
+                    g_itemCheck.cursor = at;
+                    g_itemCheck.armed = true;
+                }
+                g_uploadOriginal(rdram, ctx, runtime);
+                return;
+            }
+            const RefOp ops[2] = {{0u, {0x10000000u, 0x51000006u}, node, 6u}, {0u, {0u, qwc | 0x51000000u}, source, qwc}};
+            if (!plain || !opsAllowed() || !appendRefs(rdram, at, ops, 2u))
+            {
+                ++(!plain || opsAllowed() ? g_opStats.packets : g_opStats.caching);
+                g_uploadOriginal(rdram, ctx, runtime);
+                return;
+            }
+            ++g_opStats.uploads;
             ctx->pc = getRegU32(ctx, 31);
         }
 
@@ -1643,10 +1814,30 @@ namespace vcs::rslworld
                 {
                     g_building.items = std::move(g_itemsKicked);
                     g_building.arena = std::move(g_arenaKicked);
+                    g_building.refs = std::move(g_refsKicked);
+                    g_refsKicked.clear();
                     g_building.itemFrame = g_itemFrameKicked;
                     g_itemsKicked.clear();
                     g_arenaKicked.clear();
+                    const auto t0 = std::chrono::steady_clock::now();
                     resolveItems(g_building);
+                    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                    static const bool slowLog = std::getenv("VCS_RSL_SLOW_LOG") != nullptr;
+                    if (slowLog && ms > 3.0)
+                    {
+                        uint64_t refBytes = 0;
+                        uint32_t maxQwc = 0, maxRefs = 0;
+                        for (const RefOp &r : g_building.refs)
+                        {
+                            refBytes += r.qwc * 16u;
+                            maxQwc = std::max(maxQwc, r.qwc);
+                        }
+                        for (const Item &it : g_building.items)
+                            maxRefs = std::max(maxRefs, it.refCount);
+                        std::fprintf(stderr, "[rsl-slow] resolve %.1f ms: %zu items, %zu refs (%llu KB, largest %u qw, most in one item %u), arena %zu KB\n",
+                                     ms, g_building.items.size(), g_building.refs.size(), (unsigned long long)(refBytes >> 10), maxQwc, maxRefs,
+                                     g_building.arena.size() >> 10);
+                    }
                 }
             }
             trackOpenBlock(tagAddr, id, dataAddr, qwc);
@@ -1767,8 +1958,18 @@ namespace vcs::rslworld
                 g_tables.erase(g_tables.begin());
         }
 
+        thread_local std::chrono::steady_clock::time_point t_chainStart;
         void processing(const void *key, bool begin)
         {
+            static const bool slowLog = std::getenv("VCS_RSL_SLOW_LOG") != nullptr;
+            if (slowLog && !begin)
+            {
+                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_chainStart).count();
+                if (ms > 15.0)
+                    std::fprintf(stderr, "[rsl-slow] chain processed in %.1f ms: %zu items, arena %zu KB, %zu refs\n", ms,
+                                 t_table ? t_table->items.size() : size_t(0), t_table ? t_table->arena.size() >> 10 : size_t(0),
+                                 t_table ? t_table->refs.size() : size_t(0));
+            }
             if (!begin)
             {
                 if (t_table && t_table.use_count() == 1 && (t_table->arena.capacity() || t_table->items.capacity()))
@@ -1791,6 +1992,7 @@ namespace vcs::rslworld
             }
             t_chain = static_cast<const uint8_t *>(key);
             t_seen.clear();
+            t_chainStart = std::chrono::steady_clock::now();
             ++g_measure.chains;
             g_measure.chainBytes += g_lastChainBytes.load(std::memory_order_relaxed);
             std::lock_guard<std::mutex> lock(g_tablesMutex);
@@ -1848,6 +2050,8 @@ namespace vcs::rslworld
             hook(runtime, kTexMatrix, g_texMatrixOriginal, &texMatrixHook);
             hook(runtime, kVuConstants, g_vuConstantsOriginal, &vuConstantsHook);
             hook(runtime, kFlushA, g_flushAOriginal, &flushAHook);
+            if (!off("VCS_RSL_UPLOADS")) // step 5b: texture uploads (VCS_RSL_UPLOADS=0: their REFs)
+                hook(runtime, kUpload, g_uploadOriginal, &uploadHook);
         }
         g_itemVerify = g_items && std::getenv("VCS_RSL_ITEMS_VERIFY") != nullptr;
         g_log = g_verify || g_itemVerify || std::getenv("VCS_RSL_WORLD_LOG") != nullptr;
@@ -1889,6 +2093,8 @@ namespace vcs::rslworld
         g_itemsCurrent.clear();
         g_arenaKicked.swap(g_arenaCurrent);
         g_arenaCurrent.clear();
+        g_refsKicked.swap(g_refsCurrent);
+        g_refsCurrent.clear();
         takePooled(g_arenaPool, g_arenaCurrent);
         takePooled(g_itemPool, g_itemsCurrent);
     }

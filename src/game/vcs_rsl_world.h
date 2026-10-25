@@ -33,6 +33,10 @@
 // the packet buffer - several in a row share one item and tag. Not while a sector or a material's setup is being cached
 // (FUN_002409C8 copies the latter too). VCS_RSL_OPS=0: their packets.
 //
+// Step 5b, texture uploads: FUN_003298D8's two REFs (the destination's transfer header, the pixels) become reference
+// ops - their payloads copied from guest RAM at the kick into the item's bytes, raster names noted - when the header
+// exists already. VCS_RSL_UPLOADS=0: their REFs. VCS_RSL_SLOW_LOG=1: slow kicks / chains.
+//
 // VCS_RSL_WORLD=0 / VCS_RSL_MODELS=0: world blocks / CALLed packets through the packet path. VCS_RSL_WORLD_VERIFY=1:
 // every hit is processed by the packet path instead and recorded again, and the new recording compared with the
 // cached one. VCS_RSL_WORLD_LOG=1: counts every 10 s.
