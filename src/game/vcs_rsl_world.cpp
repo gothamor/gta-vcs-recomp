@@ -1996,6 +1996,16 @@ namespace vcs::rslworld
                 g_flatOk[key] = true;
         }
 
+        // VCS_RSL_WORLD_LOG: the game thread's time per chain from its first tag to its hand-over (walk, copy, the items'
+        // resolve), and the resolve's part (FULLY_NATIVE.md 5g: what a kick without a walk could save)
+        struct KickTime
+        {
+            uint64_t chains = 0;
+            double ms = 0.0, resolveMs = 0.0, maxMs = 0.0;
+        } g_kickTime;
+        std::chrono::steady_clock::time_point g_chainStartAt{};
+        double g_chainResolveMs = 0.0;
+
         void reportItems()
         {
             if (!g_items)
@@ -2029,6 +2039,10 @@ namespace vcs::rslworld
                                      "inside one\n",
                              (unsigned long long)g_im2dStats.verifySame, (unsigned long long)g_im2dStats.verifyDiffer,
                              (unsigned long long)std::exchange(g_regionReferenced, 0));
+            if (g_kickTime.chains)
+                std::fprintf(stderr, "[rsl-items] kick: %.3f ms a chain from its first tag to its hand-over (max %.3f), of it %.3f ms the items' resolve\n",
+                             g_kickTime.ms / double(g_kickTime.chains), g_kickTime.maxMs, g_kickTime.resolveMs / double(g_kickTime.chains));
+            g_kickTime = KickTime{};
             g_im2dStats = Im2dStats{};
             if (g_gaps)
                 std::fprintf(stderr, "[rsl-items] gap points: %llu taken, %llu nothing new; not taken: %llu sector cache, %llu material cache, %llu no ops, %llu cursor elsewhere\n",
@@ -2481,6 +2495,8 @@ namespace vcs::rslworld
             }
             if (chainStart)
             {
+                g_chainStartAt = std::chrono::steady_clock::now();
+                g_chainResolveMs = 0.0;
                 g_building = ChainTable{};
                 g_building.seq = ++g_chainSeq;
                 g_openBlock.open = false;
@@ -2505,6 +2521,7 @@ namespace vcs::rslworld
                     const auto t0 = std::chrono::steady_clock::now();
                     resolveItems(g_building);
                     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                    g_chainResolveMs = ms;
                     static const bool slowLog = std::getenv("VCS_RSL_SLOW_LOG") != nullptr;
                     if (slowLog && ms > 3.0)
                     {
@@ -2631,6 +2648,15 @@ namespace vcs::rslworld
 
         void queued(const void *key, uint32_t sizeBytes)
         {
+            if (g_chainStartAt != std::chrono::steady_clock::time_point{})
+            {
+                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - g_chainStartAt).count();
+                ++g_kickTime.chains;
+                g_kickTime.ms += ms;
+                g_kickTime.resolveMs += g_chainResolveMs;
+                g_kickTime.maxMs = std::max(g_kickTime.maxMs, ms);
+                g_chainStartAt = {};
+            }
             g_lastChainBytes.store(sizeBytes, std::memory_order_relaxed);
             if (g_building.draws.empty() && g_building.rasters.empty() && g_building.items.empty())
                 return;

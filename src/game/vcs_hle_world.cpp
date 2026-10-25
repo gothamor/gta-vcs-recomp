@@ -175,7 +175,19 @@ namespace
         for (const auto &r : ranges)
             h = fnv(code, r[0], r[1], h);
         checkedGeneration = generation;
-        resident = h == 0x100E28E3AB20E014ull;
+        // the image of the reference scenes, and (2026-10-26) a second one MAR_A1 loads: other code at 0x7f8-0xbcf,
+        // 0xc58-0xfe7, 0x1460-0x156f (none of it in the routines its packets' stage tables call - entry 0x19: 0x6d0,
+        // 0x748, 0x15b0, the light slot at 0x2700), accepted after PS2X_HLE_VERIFY=1 found its packets exact
+        // (game-internals.md 6d "A second world image"); PS2X_HLE_IMAGE2=0: that image on the VU1
+        static const bool image2 = !(std::getenv("PS2X_HLE_IMAGE2") && *std::getenv("PS2X_HLE_IMAGE2") == '0');
+        resident = h == 0x100E28E3AB20E014ull || (image2 && h == 0xDFFE680D06EB60D0ull);
+        static int dumped[2] = {};
+        if (std::getenv("PS2X_HLE_DUMP_CODE") && dumped[resident ? 1 : 0]++ < 3) // (debug: the VU1 code memory, resident or not)
+            if (FILE *f = std::fopen(("vu1code_" + std::string(resident ? "ok_" : "other_") + std::to_string(generation) + ".bin").c_str(), "wb"))
+            {
+                std::fwrite(code, 1, 16384, f);
+                std::fclose(f);
+            }
         return resident;
     }
 

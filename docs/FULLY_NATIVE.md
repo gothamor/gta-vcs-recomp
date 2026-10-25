@@ -7,6 +7,15 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 
 ## Where it stands
 
+**Native, 2026-10-26** (the roadmap's point 2): in a normal frame nothing draws through the emulated GS (`gs_draws`
+0) or VU1 (`vu1_programs` 0), no IOP code runs, and the sound comes from the SPU2 core behind the ported libsd
+(DECISIONS.md 2026-10-24). Checked over the reference scenes, the tour subset and all 95 missions of the smoke test
+(`tools/missions.py`, 45 s each from a fresh load): every mission ran (no crash, no hang), GS-path draws 0 in all of
+them after MAR_A1's second world image was accepted (game-internals.md 6d). The frame reaches the renderer as draw
+items in the chain's order; what the chain still holds is the frame's structure (the root lists' fixed tags in
+`.data`, the items' tags, NEXTs over runs taken in place). The emulated GS, VU1, VIF packet path and IOP stay as
+switchable references.
+
 - **VU1**: no VU1 program runs in a normal frame (game-internals.md 6d; `vu1_programs` 0 in the reference scenes and
   the tour subset).
 - **IOP**: streaming and both sound engines on the host, the emulated IOP off by default (milestone 6).
@@ -23,7 +32,7 @@ write the details where they belong (game-internals.md, NATIVE_RENDERER.md, RSL_
 | 2 | Loading screens in the native layer (there is no title menu) | S | done 2026-10-24 |
 | 3 | Textures and render targets without GS memory | L | done 2026-10-24 (3a-3d) |
 | 4 | Draw-call replay (3D without building packets) | M-L | done 2026-10-25 (4a-4c; draws whose flush calls plug-in callbacks stay packets) |
-| 5 | An empty chain | L | 5a-5f, 5h done 2026-10-26; 5g left |
+| 5 | An empty chain | L | done 2026-10-26 (5a-5f, 5h; 5g measured and not needed) |
 
 ### 1. The last GS draws
 
@@ -485,6 +494,11 @@ the flush's packets, whatever its callbacks wrote, the draw's own REF / CALL - b
   a region (as before). `VCS_RSL_KEPT_LOG=1`: where each region not taken whole stops (first 4000).
 - Not ported, and no need now: `FUN_001CFAE0` and the two geometry callbacks run recompiled inside captured draws;
   their output reaches the chain as items. A native port would only save their CPU time (small).
+
+**5g, measured: not needed (2026-10-26).** `VCS_RSL_WORLD_LOG=1` now times the kick (first tag to hand-over): 0.23 ms
+a chain driving / standing, of which 0.19 ms is the items' resolve (block copies decided after the write watch's fold
+- a kick without a walk keeps it). The walk and copy of the ~300 remaining tags cost ~0.04 ms a frame; a second way
+to start a frame is not worth that (DECISIONS.md 2026-10-26).
 
 **5h done, 2026-10-26 - gaps: everything between two hook points.** A census by origin (`VCS_RSL_CENSUS=2`: every hook
 point notes the cursor, each tag left in the chain is named after the last hook point before it) showed what was left

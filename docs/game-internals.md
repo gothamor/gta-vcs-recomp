@@ -451,6 +451,16 @@ About 330 runs a frame in the flyover and cutscenes before (`PS2X_TRACE_VU1=1`: 
 camera routines need the VU's float edge cases (0x0478 / 0x0418 reach denormal or huge inputs: `vuMul` / `vuMadd` /
 `vuAdd` / `vuSub`). Left on the VU1: 3-4 programs a frame (the second low image). `PS2X_HLE_SETUP=0` = VU1.
 
+**A second world image** (2026-10-26, found by the mission smoke test: MAR_A1 was the only mission with GS-path draws,
+0.6 a frame, all from 0x0030 on the VU1). `PS2X_HLE_STATS=1` showed its packets passed over with `code 0` - the
+handlers' hash of the 0x0030 image (bytes 0x30-0x118, 0x6d0-0x7e0, 0x7f0-0xc20, 0xc38-0x1030, 0x1048-0x11f8,
+0x1360-0x13d8, 0x15b0-0x1638, 0x2700-0x28a8) did not match. `PS2X_HLE_DUMP_CODE=1` (writes the VU1 code memory the first
+times the check passes / fails) showed MAR_A1 loading other code at bytes 0x7f8-0xbcf, 0xc58-0xfe7, 0x1460-0x156f (and
+0x28b0-0x2f6f, outside the hash); the dispatcher and the routines its packets call (stage table entry 0x19: 0x6d0,
+0x748, 0x15b0, the light slot at 0x2700) are unchanged. Hash 0xdffe680d06eb60d0, accepted after `PS2X_HLE_VERIFY=1` over
+the mission: 1.55M fast-path packets, 133k C++-clipped, 264k setup programs, all exact. The clipper's own check
+(0x13d8-0x15b0) fails under this image, so clipped packets would still go to the VU1 there; none did in the run.
+
 **0x02c0 code images.** Three images with the shine / re-draw stage routines are seen (PS2X_HLE_DUMP_IMAGES=1 writes
 the first shine packet of each: build/analysis/shine): hash (0x30..0x2b20) 1a8edffd (the one reproduced first),
 da70874b (differs only at 0x1030 - dead code after a JR's delay slot) and 97eecb5d (also in 0x0a88-0x0c10 and

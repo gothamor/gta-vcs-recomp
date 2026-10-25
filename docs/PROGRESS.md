@@ -252,6 +252,10 @@ dropped on uploads (lazy render-target patching).
 - [x] **No GS front-end draws** (2026-10-26, FULLY_NATIVE.md 5e): the three render-target reads (A+D runs continuing
       an earlier PRIM, state writes before PRIM) and the flyover's Im2D line strip drawn by the packed path; 7.5M
       packets exact against per-primitive `Submit`. `gs_draws` 0 in the reference scenes and the tour subset.
+- [x] **Native in every mission** (2026-10-26): mission smoke test, all 95 missions ok (the 14 whose script ends
+      within 45 s of a fresh load do so on the earlier build too); GS-path draws 0 everywhere after MAR_A1's second
+      0x0030 code image was accepted (verify exact: 1.55M packets). FULLY_NATIVE.md "Where it stands": point 2 of
+      "done" holds. `PS2X_HLE_IMAGE2=0`.
 - [ ] **Step 3: post effects** (started 2026-10-23; NATIVE_RENDERER.md "Post effects", game-internals.md 6g).
   - [x] **GS pixel centres**: the renderer sampled half a pixel off the GS, so VCS's per-frame copies blurred the
         picture (softer than the PS2 at 640x448). Fixed for every draw; `PS2X_HW_PIXEL_CENTRE=0` = before.
@@ -558,6 +562,7 @@ dropped on uploads (lazy render-target patching).
 | `VCS_RSL_SLOW_LOG=1` | kicks whose item resolve takes > 3 ms (items, references, bytes) and chains the render worker takes > 15 ms on |
 | `VCS_RSL_PLUGINS=0`, `VCS_RSL_PLUGIN_LOG=1` | the native flush leaves flushes with plug-in callbacks to the original (as before step 5f); log which callbacks the flushes left to the original would call |
 | `PS2X_HW_PATH2_CONTINUED=0`, `PS2X_HW_PATH2_LEAD=0`, `PS2X_HW_PATH2_LINES=0` | A+D runs without their own PRIM / A+D packets with state writes before PRIM / Im2D lines through the GS front end (as before 2026-10-26) |
+| `PS2X_HLE_IMAGE2=0`, `PS2X_HLE_DUMP_CODE=1` | MAR_A1's second 0x0030 code image on the VU1 (as before 2026-10-26); write the VU1 code memory the first times the world-image check passes / fails (cwd) |
 | `PS2X_HW_FRONT_DRAW_LOG=<n>` | the first n draws the GS front end makes from GS primitives (PATH1 aside), with the GIF packet each came from |
 | `PS2X_HW_PACKED_LOG=<n>` | the first n PATH2 packets the GS front end takes instead of the packed path (`submitPackedKick`), by their GIF tags; A+D packets only when they carry a vertex (FULLY_NATIVE.md 5e) |
 | `VCS_RSL_RAW=0` | recordings refuse blocks with BASE / OFFSET / ITOP / MPG as before step 5e (instead of replaying them through the VIF interpreter) |

@@ -349,3 +349,10 @@ Taken in place (item tag + NEXT over the rest; the cursor never moves back), bec
 hook points where a caller may hold the cursor - one such caller (`FUN_00240ED8`) was found the hard way, and verify
 mode cannot see this class (it keeps the packets). The price is a NEXT per run (~32 a frame) and dead bytes in the
 buffer; the chain's walk in 5g skips both.
+
+## 2026-10-26 - No second way to start a frame (FULLY_NATIVE.md 5g dropped)
+
+5g would have handed the item list to the worker without walking the chain. Measured after 5h: the kick takes 0.23 ms
+a chain, 0.19 ms of it the items' resolve, which stays either way; the walk and copy of the ~300 remaining tags (the
+root lists, the item tags, the runs' NEXTs) cost ~0.04 ms. The chain is kept as what orders the frame: one path, the
+walker's checks (verify modes, the census) keep working, and nothing is drawn from the chain's own bytes any more.
