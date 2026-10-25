@@ -83,6 +83,7 @@ def main():
                 g.cmd("gsdraws reset")  # draw sources over the mission's run (tour.parse_gsdraws)
                 t0 = time.time()
                 worst = 0.0
+                vu1 = 0.0
                 pics = []
                 running = True
                 while time.time() - t0 < args.seconds:
@@ -95,9 +96,12 @@ def main():
                     st = tour.picture_stats(path)
                     if st:
                         pics.append(st)
-                    worst = max(worst, tour.perf_fields(g.cmd("perf")).get("frame_ms", 0.0))
+                    perf = tour.perf_fields(g.cmd("perf"))
+                    worst = max(worst, perf.get("frame_ms", 0.0))
+                    vu1 = max(vu1, perf.get("vu1_programs", 0.0))  # VU1 programs a frame (0: everything native)
                     running = g.player()[2]
                 rec["gsdraws"] = tour.parse_gsdraws(g.cmd("gsdraws reset"))
+                rec["max_vu1_programs"] = vu1
                 rec["mission_running"] = running
                 rec["worst_frame_ms"] = worst
                 rec["dark_shots"] = sum(1 for p in pics if p[0] < 18 or p[1] > 0.7)
