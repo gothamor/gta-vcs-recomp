@@ -1070,7 +1070,41 @@ bool GS::submitPackedKick(const uint8_t *data, uint32_t sizeBytes) // [gta-recom
             return false;
     }
     else
+    {
+        // [gta-recomp] PS2X_HW_PACKED_LOG=<n>: the first n PATH2 packets the front end takes (A+D packets only when they
+        // carry a vertex), by their GIF tags
+        static const long logRefused = std::getenv("PS2X_HW_PACKED_LOG") ? std::atol(std::getenv("PS2X_HW_PACKED_LOG")) : 0;
+        static long logged = 0;
+        bool adOnly = flg == GIF_FMT_PACKED && nreg == 1u && (regs & 0xFu) == 0xEu && sizeBytes == 16u + nloop * 16u;
+        for (uint32_t i = 0; adOnly && i < nloop; ++i) // (A+D with a vertex in it is logged)
+        {
+            const uint32_t r = static_cast<uint32_t>(loadLE64(data + 24u + i * 16u) & 0xFFu);
+            if (r == GS_REG_XYZ2 || r == GS_REG_XYZ3 || r == GS_REG_XYZF2 || r == GS_REG_XYZF3)
+                adOnly = false;
+        }
+        if (logged < logRefused && !adOnly) // (packets of A+D writes alone are state: the front end's anyway)
+        {
+            ++logged;
+            std::fprintf(stderr, "[gs-packed] refused %u bytes:", sizeBytes);
+            for (uint32_t at = 0, tags = 0; at + 16u <= sizeBytes && tags < 6u; ++tags)
+            {
+                const uint64_t lo = loadLE64(data + at), hi = loadLE64(data + at + 8);
+                const uint32_t n = static_cast<uint32_t>(lo & 0x7FFFu), f = static_cast<uint32_t>((lo >> 58) & 3u);
+                const uint32_t nr = static_cast<uint32_t>((lo >> 60) & 0xFu) ? static_cast<uint32_t>((lo >> 60) & 0xFu) : 16u;
+                std::fprintf(stderr, " | tag nloop %u flg %u nreg %u regs %llx pre %u prim %llx eop %u", n, f, nr,
+                             static_cast<unsigned long long>(hi & ((nr >= 16u) ? ~0ull : ((1ull << (nr * 4u)) - 1u))),
+                             static_cast<unsigned>((lo >> 46) & 1u), static_cast<unsigned long long>((lo >> 47) & 0x7FFu),
+                             static_cast<unsigned>((lo >> 15) & 1u));
+                if (f == GIF_FMT_PACKED && nr == 1u && (hi & 0xFu) == 0xEu)
+                    for (uint32_t i = 0; i < n && i < 12u && at + 32u + i * 16u <= sizeBytes; ++i)
+                        std::fprintf(stderr, " %02x", static_cast<unsigned>(loadLE64(data + at + 24u + i * 16u) & 0xFFu));
+                const uint32_t body = f == GIF_FMT_PACKED ? n * nr * 16u : f == 1u ? (n * nr * 8u + 15u) / 16u * 16u : n * 16u;
+                at += 16u + body;
+            }
+            std::fprintf(stderr, "\n");
+        }
         return false;
+    }
     const uint32_t count = static_cast<uint32_t>(vertices.size());
     const uint32_t type = static_cast<uint32_t>(prim & 7u);
     writeRegisterUnlocked(GS_REG_PRIM, prim);

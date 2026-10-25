@@ -406,9 +406,18 @@ of the recordings, and the context packets are replayed - and, unchanged, skippe
 - Measured: A/B `VCS_RSL_RAW=0` vs on, three alternating rounds on a quiet machine (`--opt none`, uncapped): standing 195.3 -> 208.1 fps (game thread 4.54 -> 4.16 ms, render worker 2.13 -> 2.01), driving 110.1 -> 115.0 fps (game thread 8.11 -> 7.70 ms). The game thread gains as well: an unchanged context packet is now skipped at the kick instead of copied.
 - `VCS_RSL_RAW=0`: these blocks refused as before.
 - **Left in 5e**: the root list itself (static tags in `.data`, walked every kick), and the three render-target reads
-  (the reflection map's two copies into FBP 420, the sky's self-copy - the only GS-path draws left, `gs_draws` 3): they
-  need native passes by target role in the renderer (step 3d named the targets). The Z clear needs nothing more: the
-  zclear program runs natively.
+  (the reflection map's two copies into FBP 420, the sky's self-copy - the only GS-path draws left, `gs_draws` 3). The Z
+  clear needs nothing more: the zclear program runs natively.
+- **The render-target reads, looked into (2026-10-25, not done).** They already run on the GPU (each samples target
+  140 directly, `tex=rt`); what is not native is their way in - the GS front end, register by register. Their packets
+  are not where step 1 placed them: `PS2X_HW_PACKED_LOG=<n>` (new: the PATH2 packets `submitPackedKick` refuses, by GIF
+  tags; A+D packets only when they carry a vertex) shows, refused in gameplay, only A+D state packets, image transfers
+  and PACKED sprites (PRIM 0x116 - textured, UV - with RGBAQ / UV / XYZ2 / UV / XYZ2, and an untextured RGBAQ / XYZ2 /
+  XYZ2 one); no A+D packet with vertices. Taking those sprites as whole packets (through the front end's own
+  `writeRegisterPacked`) moved neither `gs_draws` nor the packed draws at the city spot, so they are not these three
+  draws; that change was taken out again. Next: find their route from the draw itself (a stack at the backend when a
+  GS-path draw samples target 140), then record that route whole - or, as planned, draw the copies as passes by target
+  role. No frame-rate gain to expect: three draws a frame.
 
 Expected gains, honestly: the game thread's share of handing frames over (the walk, copy, fold and bookkeeping:
 ~5% while driving) shrinks with every part; the render worker gains where an op replaces VIF parsing and VU-memory
