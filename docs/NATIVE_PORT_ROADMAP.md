@@ -11,7 +11,27 @@ default and the enhancements as options.
 
 ## Where we are
 
-| Layer | Today | Native? |
+Updated 2026-10-26 (the table below the "When the roadmap was written" heading is the 2026-10-22 starting point):
+
+| Layer | Now | Native? |
+|---|---|---|
+| Game code (EE) | Statically recompiled C++; guest registers / memory model | native code, emulated machine state |
+| VU0 (collision, culling, maths) | Native C++ for the programs the game uses | yes |
+| 3D: world, peds, vehicles, props | Draw items at the game's RSL draw calls -> D3D11, recordings checked bit-exact (FULLY_NATIVE.md 4-5) | yes |
+| Sprites, particles, text, env-map pass, VU1 setup programs | C++ reproductions of the VU1 programs (`vcs_hle_world.cpp`), `vu1_programs` 0 in every mission | yes |
+| HUD, menus, post effects, loading screens, effects | Native layers / packed draws; `gs_draws` 0 (no draw through the emulated GS front end) | yes |
+| Presentation, input, window | SDL3 + RHI (D3D11) | yes |
+| Streaming (CDSTREAM) | Host-thread reads from the disc image (`vcs_stream.cpp`) | yes |
+| Sound driver (CDSTREAM's sound servers, LIBSD) | Ported to the host (`vcs_sound.cpp`, `src/sound/libsd.cpp`) | yes |
+| Sound output / mixer | The SPU2 core (C++) behind the native libsd, mixed to SDL3 - the chosen "native mixer" (DECISIONS.md 2026-10-24) | yes |
+| IOP | Off: no IRX module loaded or run (`PS2X_IOP=1` brings it back) | retired |
+| Memory card, pad | EE-side HLE (`sceMc*`, pad stubs) | yes |
+| Movies (`INTRO.PSS`, `STINGS.PSS`) | FFmpeg, sound into the same audio output (milestone 5) | yes |
+| Frame rate | Independent timing, up to 240 fps as an option; authentic 30 fps by default | yes |
+
+### When the roadmap was written (2026-10-22)
+
+| Layer | Then | Native? |
 |---|---|---|
 | Game code (EE) | Statically recompiled C++ (920k instructions); guest registers / memory model | native code, emulated machine state |
 | VU0 (collision, culling, maths) | Native C++ for the programs the game uses | yes |
@@ -25,7 +45,7 @@ default and the enhancements as options.
 | Movies (`INTRO.PSS`, `STINGS.PSS`) | Skipped | missing |
 | Frame rate | Game's own 30 fps cap on a 60 Hz VBlank | authentic only |
 
-Cost per frame today (i7-7700K / GTX 1080 Ti, 33.3 ms budget at 30 fps):
+Cost per frame then (i7-7700K / GTX 1080 Ti, 33.3 ms budget at 30 fps):
 
 | Scene | game code | render submit | IOP |
 |---|---|---|---|

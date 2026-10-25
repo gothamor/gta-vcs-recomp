@@ -47,6 +47,8 @@
       pure ALU ops - needs a regenerate + test), `__restrict` for generated code
 
 ## Phase 4 - audio, input, memory card, movies
+(Audio has been native since milestone 6 - the SPU2-emulation items below describe how it started; the current state
+and the 2026-10-26 audit are under "Milestone 6".)
 - [x] Input: keyboard + mouse + gamepad (docs/CONTROLS.md), verified in game: after the
       intro cutscene the player controls Vic at Fort Baxter (HUD, radar, mission marker)
 - [x] Audio: SPU2 emulation (`ps2xIOP/.../iop_spu2.cpp`: 2x24 ADPCM voices, ADSR, loops,
@@ -447,6 +449,19 @@ dropped on uploads (lazy render-target patching).
       now looks at where the player ends up: the runtime's `[MC]` log lines arrive late). Tour subset (`--every 9
       --limit 18`): 15 ok, 2 relocated, 1 falling - identical with the IOP off, on, and everything emulated. Six story
       missions (JER_A3, PHI_A1, MAR_A1, LOU_A1, LAN_B1, BRY_B1) run without problems with the IOP off.
+- [x] **Audio audit (2026-10-26)**: every sound path is native in the normal run. All 95 missions of the smoke test log
+      the native sound driver and the emulated IOP off, with no sound / stream / libsd warning (libsd's one unported
+      case, `VoiceTrans` modes other than 0, never occurs). Movie sound goes through FFmpeg into the same output.
+      `tools/soundcheck.py` again against the emulated IOP: MAR_A1's opening cutscene 99.89% of 23,875 SPU2 writes
+      in the same second, loudness envelopes correlating 0.999, 9 of 10 sounding windows within -40 dB (most of them
+      identical); an AI drive with radio station changes 99.42% of 34,658 writes, envelopes 0.949, each 5 s window
+      as loud as the reference within ~2 dB (sample-level differences are the known +-1-sample event timing). A
+      live native recording of the same drive changes stations like the IOP: stops completed in 37-427 ms (IOP
+      1-385 ms), every stream open accepted. Fixed in the check itself: a replayed stream open could land while a
+      native stop was still finishing (the IOP's had taken 1 ms), be refused and leave the music engine out of step
+      for the rest of the replay (4,580 replies "differing"); live the game polls the state until 0 first, so the
+      replay now lets native time run as those polls would (one open waited 308 ms). The roadmap's "Where we are"
+      table, still showing IRX modules and SPU2 emulation, now shows the current state.
 - [ ] Open (found 2026-10-24, not milestone 6): tour point (-925, 1175) falls through the world when the tour reaches
       it after the points before it, in every configuration; a fresh teleport there from Fort Baxter lands (z 14.5).
       Collision streaming order / timing at that spot needs a look.

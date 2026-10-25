@@ -1333,6 +1333,8 @@ namespace vcs
         // VCS_SOUND_REPLAY=<record>: feed RPCs recorded from a run (PS2X_RPC_RECORD, runtime/ps2_iop_native.h) to the
         // native driver at their recorded IOP times and write its SPU2 output to VCS_SOUND_REPLAY_OUT (a WAV), then
         // exit - the native driver checked against the emulated IOP's run on identical input (tools/soundcheck.py).
+        uint32_t g_replayWaits = 0, g_replayWaitMax = 0; // opens that waited for a native stop to finish (ms)
+
         void replay(const char *recordPath)
         {
             std::FILE *in = std::fopen(recordPath, "rb");
@@ -1381,6 +1383,33 @@ namespace vcs
                 request.function = h[1];
                 request.send = {0x100000u, h[2]};
                 request.receive = {0x200000u, std::min<uint32_t>(h[3], 0x100000u)};
+                if (request.sid == kSidMusic && (request.function & 0xFFFF00u) == 0x80200u && expected == 1u)
+                {
+                    // An open the IOP took while the native engine is still finishing a stop: the game only opens once
+                    // its state polls (0x80E00) read 0 - live it would poll a little longer. Let native time run as
+                    // those polls would (up to 1 s), so the replay stays in step instead of refusing the open.
+                    ps2x::iop::RpcRequest poll{};
+                    poll.sid = kSidMusic;
+                    poll.function = 0x80E00u;
+                    poll.receive = {0x200000u, 4u};
+                    for (uint32_t waited = 0;; waited += 1)
+                    {
+                        engine.call(ram.data(), poll);
+                        uint32_t state;
+                        std::memcpy(&state, ram.data() + 0x200000, 4);
+                        if (state == 0u || waited >= 1000u)
+                        {
+                            if (waited)
+                            {
+                                ++g_replayWaits;
+                                g_replayWaitMax = std::max(g_replayWaitMax, waited);
+                            }
+                            break;
+                        }
+                        engine.clock(294912u); // 1 ms of IOP time (EE cycles)
+                        now += 294912u;
+                    }
+                }
                 if (request.sid == kSidSfx || request.sid == kSidMusic)
                 {
                     engine.call(ram.data(), request);
@@ -1409,6 +1438,9 @@ namespace vcs
                 if (d.second)
                     std::fprintf(stderr, "[sound] replay: replies differ: server %x commands 0x%05x: %u of %u (first: %s)\n",
                                  0x65686570 | (group >> 24), group & 0xFFFFFF, d.second, d.first, examples[group].c_str());
+            if (g_replayWaits)
+                std::fprintf(stderr, "[sound] replay: %u stream opens waited for a stop to finish natively (at most %u ms), as the game's polls would\n",
+                             g_replayWaits, g_replayWaitMax);
             std::fprintf(stderr, "[sound] replay: %u replies compared\n", [&] { uint32_t n = 0; for (auto &e : differ) n += e.second.first; return n; }());
             engine.clock(294912000ull); // one more second
             header(out, s_frames);

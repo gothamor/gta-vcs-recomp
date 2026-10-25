@@ -11,7 +11,9 @@ for cutscene audio) with VCS_NATIVE_SOUND=0, recording every call to CDSTREAM's 
 (PS2X_RPC_RECORD), the emulated SPU2's register writes (PS2X_SPU2_TRACE) and the audio output (PS2X_AUDIO_DUMP).
 `replay` runs vcs.exe in VCS_SOUND_REPLAY mode: the recorded calls go to the native driver at the same IOP times,
 without the game, writing its own trace and audio and listing every command whose reply differs from the IOP's (the
-game acts on them: "is this voice still playing" decides whether an engine sound is restarted). `compare` reports how many register writes match per second,
+game acts on them: "is this voice still playing" decides whether an engine sound is restarted). A stream open the IOP
+took while the native engine is still finishing a stop waits for it (up to 1 s of IOP time), as the game's state polls
+would live. `compare` reports how many register writes match per second,
 the first differences, and how close the two audio outputs are.
 """
 import argparse
