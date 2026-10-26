@@ -500,6 +500,11 @@ dropped on uploads (lazy render-target patching).
       the label: that alone makes a click do nothing.
 ## Phase 6 - enhancements
 
+- **Trainer** (2026-10-26, docs/TRAINER.md): an RDR2 Native Trainer style menu (F5 / Back + RB) - god mode, never
+  wanted, wanted level, money, every weapon and loadouts, unlimited ammo, no reload, spawning all 110 vehicles,
+  vehicle invincibility / repair / flip / boost / paint, teleports to 13 districts and a saved position, time,
+  freeze time, weather, game speed. `tools/trainer_check.py`: 30 checks, 0 failed (with all 110 vehicles).
+
 ## Useful switches
 | Env var | Effect |
 |---|---|

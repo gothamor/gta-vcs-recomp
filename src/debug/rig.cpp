@@ -330,7 +330,7 @@ namespace vcs::rig
                 // TERMINATE_THIS_SCRIPT clears +0x208 and moves the script to the idle list
                 if (ram[(it->script + 0x208) & kRamMask] == 0)
                 {
-                    it->reply("ok");
+                    it->reply(fmt("ok %08x", it->script)); // its outputs: locals at +0x54 of that slot
                     it = g_pending.erase(it);
                 }
                 else if (g_frames.load() - it->startFrame > 1800) // 60 s at 30 fps: still running
@@ -345,7 +345,8 @@ namespace vcs::rig
 
         void registerScriptCommands()
         {
-            // scm <hex bytecode> -> runs it as a new script; answers when the script terminated (end it with 23 00)
+            // scm <hex bytecode> -> ok <script slot>: runs it as a new script; answers when the script terminated (end it
+            // with 23 00). Its outputs (locals) stay in the slot until the game starts another script in it.
             ps2control::addCommand("scm", [](const std::string &args, ps2control::Reply reply) {
                 const auto w = words(args);
                 std::string code;
@@ -357,15 +358,11 @@ namespace vcs::rig
                 for (size_t i = 0; i < code.size(); i += 2)
                     bytes.push_back(static_cast<uint8_t>(std::strtoul(code.substr(i, 2).c_str(), nullptr, 16)));
                 runOnGameThread([bytes, reply](uint8_t *ram, R5900Context *, PS2Runtime *) {
-                    const uint32_t space = rd32(ram, kScriptSpacePtr);
-                    if (!space)
+                    if (!rd32(ram, kScriptSpacePtr))
                         return reply("error the script engine is not running yet");
-                    // the code goes into the new script's locals, so take the slot first and write after Init
-                    const uint32_t idle = rd32(ram, kIdleScripts);
-                    if (!idle)
+                    const uint32_t s = startCodeScript(ram, bytes.data(), bytes.size(), "rig");
+                    if (!s)
                         return reply("error no free script slot");
-                    const uint32_t s = startScript(ram, idle + kCodeOffset - space, "rig");
-                    std::memcpy(ram + ((s + kCodeOffset) & kRamMask), bytes.data(), bytes.size());
                     g_pending.push_back({s, g_frames.load(), reply});
                 });
             });
@@ -395,6 +392,40 @@ namespace vcs::rig
                           g_rdram[kMissionRunning]));
             });
         }
+    }
+
+    uint32_t startCodeScript(uint8_t *ram, const uint8_t *code, size_t bytes, const char *name)
+    {
+        const uint32_t space = rd32(ram, kScriptSpacePtr);
+        const uint32_t idle = rd32(ram, kIdleScripts);
+        if (!space || !idle || bytes > kCodeMax)
+            return 0;
+        // the code goes into the new script's locals, so take the slot first and write after Init
+        const uint32_t s = startScript(ram, idle + kCodeOffset - space, name);
+        std::memcpy(ram + ((s + kCodeOffset) & kRamMask), code, bytes);
+        return s;
+    }
+
+    bool scriptActive(const uint8_t *ram, uint32_t script) { return script && ram[(script + 0x208) & kRamMask] != 0; }
+
+    void cancelCodeScript(uint8_t *ram, uint32_t s)
+    {
+        if (!scriptActive(ram, s))
+            return;
+        const uint32_t next = rd32(ram, s), prev = rd32(ram, s + 4); // out of the active list
+        if (prev)
+            wr32(ram, prev, next);
+        else
+            wr32(ram, kActiveScripts, next);
+        if (next)
+            wr32(ram, next + 4, prev);
+        const uint32_t head = rd32(ram, kIdleScripts); // back at the head of the idle list, as TERMINATE does
+        wr32(ram, s, head);
+        wr32(ram, s + 4, 0);
+        if (head)
+            wr32(ram, head + 4, s);
+        wr32(ram, kIdleScripts, s);
+        ram[(s + 0x208) & kRamMask] = 0;
     }
 
     void runOnGameThread(std::function<void(uint8_t *, R5900Context *, PS2Runtime *)> job)

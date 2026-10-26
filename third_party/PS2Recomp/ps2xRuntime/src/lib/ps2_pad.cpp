@@ -79,8 +79,10 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
         deadzone(rx, ry);
     }
 
-    auto key = [](int k)
-    { return ps2control::keyDown(k); };
+    // [gta-recomp] an in-game UI with the input (settings / trainer menu) takes injected keys from the game too
+    const bool blocked = ps2control::gameInputBlocked();
+    auto key = [blocked](int k)
+    { return !blocked && ps2control::keyDown(k); };
     press(key(platform::KEY_UP), PAD_UP);
     press(key(platform::KEY_DOWN), PAD_DOWN);
     press(key(platform::KEY_LEFT), PAD_LEFT);

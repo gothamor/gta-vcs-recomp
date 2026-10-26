@@ -8,4 +8,5 @@ namespace ui
     // Main thread, once per host frame inside the Dear ImGui frame (the runtime's debug-UI draw callback).
     void drawSettingsMenu();
     bool settingsMenuOpen();
+    bool settingsMenuBlocksInput(); // open, or its keys still held after closing (main.cpp blocks the game's input)
 }

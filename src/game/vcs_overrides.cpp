@@ -7,6 +7,7 @@
 #include "game_overrides.h"
 #include "debug/profiler.h"
 #include "debug/rig.h"
+#include "game/vcs_trainer.h"
 #include "debug/rsl_shadow.h"
 #include "debug/rsl_trace.h"
 #include "game/vcs_display.h"
@@ -759,6 +760,7 @@ namespace
         vcs::profilerFrame(); // VCS_PROFILE_SPIKES (debug/profiler.h)
         vcs::applyDisplay(rdram); // widescreen preference / aspect (settings menu)
         vcs::rig::onGameFrame(rdram, ctx, runtime); // automation rig jobs (debug/rig.h)
+        vcs::trainer::onGameFrame(rdram);           // the trainer's actions and held toggles (game/vcs_trainer.h)
         vcs::onFrameKick();                         // the HUD context ends (game/vcs_hud.h)
         vcs::rsltrace::onFrameKick(rdram);          // VCS_TRACE_RSL (debug/rsl_trace.h)
         vcs::rslshadow::onFrameKick(rdram);         // VCS_RSL_SHADOW (debug/rsl_shadow.h)

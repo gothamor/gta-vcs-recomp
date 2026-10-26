@@ -193,6 +193,13 @@ class Game:
         """Run bytecode as a new script; returns when it terminated (Scm.end() is appended)."""
         return self.cmd("scm " + (code + Scm.end()).hex(), timeout=90)
 
+    def scm_outputs(self, code, n):
+        """Run bytecode that writes locals 0..n-1 (outputs) and read them back: (ints, floats)."""
+        import struct
+        slot = int(self.scm(code).split()[0], 16)
+        raw = self.peek(slot + 0x54, n * 4)
+        return struct.unpack("<%di" % n, raw), struct.unpack("<%df" % n, raw)
+
     def player(self):
         """(ped address, (x, y, z), mission running)"""
         w = self.cmd("player").split()

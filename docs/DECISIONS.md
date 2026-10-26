@@ -364,3 +364,17 @@ Chosen: zlib 1.2.2's own loop, so every call leaves `next_in` / `avail_in` / `ho
 checkable call for call against the original (`VCS_NATIVE_INFLATE_VERIFY`) - with only the copies that cannot overlap
 done as `memcpy`. A faster decoder would stop at other points and leave zlib's state different between calls (the
 final output the same); the ~20 ms an area load costs now did not justify losing the per-call check.
+
+## 2026-10-26 - The trainer: the game's script commands, nothing saved, the game's input taken while open
+
+The user asked for a trainer like RDR2's (docs/TRAINER.md). Chosen:
+- Everything the game has a script command for goes through it (run on the game's own script VM), rather than
+  writing the game's structures: the commands keep the game's own bookkeeping (wanted level and police, streaming,
+  vehicle creation and ownership). Only values that drift every frame (health, ammunition, a clip, a vehicle's
+  health) are written directly while their switch is on - a command per frame would cost a script each time.
+- Switches are not saved in vcs.ini: the game starts authentic every time; the trainer is used, not configured.
+- The menu takes the game's input while open (as the settings menu does): its keys are the game's D-pad, Start and
+  Select. RDR2's trainer lets the game keep the keys it does not use; here every menu key is a game button.
+- Trainer scripts must never be in a save: started only while the game runs, taken back out when it pauses.
+- Models are streamed asynchronously with a time-out rather than `LOAD_ALL_MODELS_NOW`, which froze the game when the
+  streaming memory was full.

@@ -1292,6 +1292,27 @@ wrap-around, so code outside the script space works). The game's interpreter the
 with `TERMINATE_THIS_SCRIPT` and the rig answers when +0x208 drops to 0. Missions start the same way, with the
 game's own `LOAD_AND_LAUNCH_MISSION_INTERNAL` (refuse while `0x4CD3E7` is set).
 
+### 11e. Script commands checked in the game (the trainer, 2026-10-26)
+
+Opcode numbers from the Sanny Builder Library's VCS list (`build/analysis/vcs_sanny.json`), each run from the rig
+and its effect read back: 0x024B STORE_CAR_CHAR_IS_IN_NO_SAVE gives the player's vehicle handle - **0x007B
+STORE_CAR_CHAR_IS_IN answers -1 for a car made by CREATE_CAR** (MAIN.SCM uses it on cars the player took); a
+vehicle command on handle -1 never ends its script. 0x004D GET_CAR_COORDINATES, 0x00D0 / 0x00D1 GET / SET_CAR_HEADING
+(SET rebuilds the matrix upright: a flip), 0x03B9 SET_CAR_ROTATION, 0x02E9 SET_CAR_FORWARD_SPEED, 0x01CA
+GET_CAR_SPEED, 0x027F / 0x02EE GET_OFFSET_FROM_CAR / CHAR_IN_WORLD_COORDS, 0x00CE GET_CHAR_HEADING, 0x0216
+WARP_CHAR_FROM_CAR_TO_COORD, 0x0110 STORE_WANTED_LEVEL, 0x0096 STORE_SCORE, 0x005A GET_TIME_OF_DAY, 0x013C
+ADD_EXPLOSION, 0x02F9 SET_CHAR_DROWNS_IN_WATER, 0x03FA SET_PLAYER_CURRENT_WEAPON_AMMO_IN_CLIP (one parameter: the
+current weapon's clip). `SET_CHAR_COORDINATES` on the player while he drives moves the vehicle with him.
+GIVE_WEAPON_TO_CHAR takes weapon types 0..39; 40 and up hang the script.
+- **LOAD_ALL_MODELS_NOW (0x0228) can hang the game**: it loads the requested models inside the frame and does not
+  return while the streaming memory cannot take them - after 28 different vehicle models were spawned in one street
+  the game thread spun in it (watchdog: PCs all over the game, no frame kicks). The trainer requests and polls instead.
+- **HAS_MODEL_LOADED** (0x0161, handler `FUN_0012be70`) -> `FUN_003c6738`: the model's streaming info is
+  `*(*(0x489FF8) + 200) + model * 0x18`, its byte +0xC is the load state (1 = loaded). A condition's result lands in
+  the script at **+0x209** (with +0x20C the NOT flag and +0x206 the AND / OR count).
+- The rig's `scm` answers `ok <slot>`: the finished script's outputs (locals) are at slot + 0x54 until the game starts
+  another script in that slot (reading the head of the idle list instead raced with the trainer's own scripts).
+
 ## 12. Player, areas and the world
 
 - **Player ped**: `*(0x4E4910)` = `CWorld::Players[0].m_pPed` (`FUN_00237fb0(ped)` returns `&Players[0]` for the
@@ -1325,6 +1346,22 @@ game's own `LOAD_AND_LAUNCH_MISSION_INTERNAL` (refuse while `0x4CD3E7` is set).
   lookup `FUN_00471788(pool, handle)`: slot = handle >> 8, the low byte must equal the flag byte): peds `*(0x487A94)`
   (70 entries of 0xD20 bytes from 0x1D3FF80 in a game started from the Fort Baxter card), vehicles `*(0x487A98)`
   (entries 0x8C0). A script char handle 0x1006 = ped slot 0x10, generation 6.
+- **Ped fields for the trainer** (found 2026-10-26 by setting each value with a script command and searching the ped
+  for it): +0x4E4 health (float), +0x4E8 armour (float), +0x480 the vehicle it is in (0 on foot; +0x450 / +0x484 hold
+  it too), **+0x8C4 state** (1 on foot, 0x37 driving; +0x8A4 read 0 in these runs), +0x578 weapon slots: 10 x 0x1C
+  bytes {type, state, ammo in clip, ammo total (the clip included), ...}, slot 0 unarmed, 1 melee, 2 thrown, 3
+  pistols, 4 shotguns, 5 SMGs, 6 rifles, 7 heavy, 8 snipers, 9 special (camera...). Entities: +0x56 model index.
+- **Vehicle** (pool entry 0x8C0 bytes): +0x30 position, +0x20 up vector (z < 0 upside down), +0x278 health (float,
+  1000 new; +0x27C holds 1000 too).
+- **Clock and timers**: `0x4CD148` / `0x4CD149` the clock's hours / minutes (bytes; found by setting 13:37 then 7:11
+  and diffing RAM); `0x4CD104` CTimer's milliseconds - it stands still while the game is paused (the pause menu, the
+  save screen; found by diffing RAM in play and in the pause menu), so it tells running frames from paused ones.
+  The player's money: `0x4E49CC` (in CPlayerInfo).
+- **Names**: the text (GXT) table is `**(0x48A2A0)` = {entries, count, data, size}; an entry is 12 bytes {u32 UTF-16
+  text, char key[8]}, sorted by key. Vehicle models are ids 171..280 in `CModelInfo::ms_modelInfoPtrs`
+  (`*(0x486518)`); a vehicle model info's game name (its text key, e.g. `SENTINL`) is at +0x158. Zones: 56-byte
+  records {name[8], min xyz, max xyz, ...} around `0x1a6e3e0`; the main districts' names are text keys (`A_PORT`
+  Escobar International, `ARMYB`, `BEACH1..3`, `DOCKS`, `DTOWN`, `GOLFC`, `HAITI`, `HAVANA`, `PORNI`, `STARI`, `JUNKY`).
 - **Ped fields** used below: +0x48 entity flags (64-bit; bits 4..8 = status, bit 32 = bRemoveFromWorld), +0x56 model
   index, +0x1C8 ped flags (64-bit; **bit 63 = bFadeOut**), +0x6F8 near peds (10) with the count at +0x77A, +0x8A4 /
   +0x8C4 ped state (0x37 driving, 0x39 / 0x3A dying / dead), +0x8F4 created by (1 random, 2 mission).

@@ -16,6 +16,7 @@ detailed knowledge lives in `docs/`:
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | Frame rate well past 100 fps everywhere: how it is measured, what was done (numbers), what is next |
 | [docs/RSL_SUBMISSION.md](docs/RSL_SUBMISSION.md) | Plan: render submission at the RSL level (milestone 7) - draws from the game's render calls instead of DMA packets |
 | [docs/DISC.md](docs/DISC.md), [docs/CONTROLS.md](docs/CONTROLS.md) | Disc layout; keyboard / gamepad mapping |
+| [docs/TRAINER.md](docs/TRAINER.md) | The trainer (F5): what it does, how (the game's script commands), its check |
 
 **When you learn something about the game, write it into docs/game-internals.md in the same change.**
 Record addresses and how you found them. When something is weird, use judgment, fix or work around it,
@@ -39,10 +40,10 @@ choices).
 | Path | What |
 |---|---|
 | `src/main.cpp` | Launcher: ISO, settings registration, runtime start |
-| `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`) |
+| `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`) |
 | `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders, the RHI (D3D11 only under `rhi_d3d11/`), SDL3 platform layer |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
-| `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2) |
+| `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2), the trainer menu (F5) |
 | `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch |
 | `third_party/PS2Recomp/ps2xRuntime` | The runtime (EE, VIF, VU1, GS HW backend, IOP host, stubs); our changes marked `[gta-recomp]` |
 | `game/vcs/` | Recompiler config, function map, VU1 upload list |
@@ -70,6 +71,7 @@ python tools/saves.py [OUT]                                   # save / Load Game
 python tools/soak.py [OUT] --hours 3                          # hours of autodrive: crash / hang / leak / falling
 python tools/shakedown.py [OUT]                               # mission 50: cutscene + shop entry (the "Loading..." hang)
 python tools/soundcheck.py all OUT [--mission N]             # native sound vs the emulated IOP: record, replay, compare
+python tools/trainer_check.py [OUT] [--vehicles all]          # every trainer feature, checked in the game's memory
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```

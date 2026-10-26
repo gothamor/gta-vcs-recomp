@@ -26,6 +26,11 @@ Square brakes). Start or Cross (Enter / Shift) skips the intro movie; the Rockst
 skipped, as on the PS2 (Display > Skip intro movies skips both). Mapping lives in `third_party/PS2Recomp/ps2xRuntime/src/lib/ps2_pad.cpp`;
 a remappable `vcs.ini` section is planned.
 
+## Trainer
+F5 (Controls > Trainer menu key) or Back + RB on a gamepad opens the trainer (docs/TRAINER.md). In it: Up / Down or
+numpad 8 / 2 or the D-pad select, Left / Right or numpad 4 / 6 change a value, Enter / numpad 5 / A applies,
+Backspace / numpad 0 / Escape / B goes back (and closes it on the first page). The game gets no input while it is open.
+
 ## Debug keys
 | Key | Effect |
 |---|---|

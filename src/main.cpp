@@ -15,6 +15,7 @@
 #include "debug/crash.h"
 #include "debug/profiler.h"
 #include "debug/rig.h"
+#include "game/vcs_trainer.h"
 #include "debug/selftest.h"
 #include "debug/watchdog.h"
 #include "disc/iso_image.h"
@@ -26,6 +27,8 @@
 #include "render/presenter.h"
 #include "settings/settings.h"
 #include "ui/settings_menu.h"
+#include "ui/trainer_menu.h"
+#include "runtime/ps2_control.h"
 #include "util/sha1.h"
 
 #include <cstdio>
@@ -309,6 +312,17 @@ namespace
         settings::add(s);
 
         s = {};
+        s.key = "controls.trainer_key";
+        s.page = "Controls";
+        s.section = "Menu";
+        s.label = "Trainer menu key";
+        s.help = "Opens and closes the trainer (god mode, weapons, vehicles, teleports...). On a gamepad: press Back + RB "
+                 "together.";
+        s.type = Type::Key;
+        s.defaultValue = platform::KEY_F5;
+        settings::add(s);
+
+        s = {};
         s.key = "graphics.perf_overlay";
         s.page = "Advanced";
         s.section = "Diagnostics";
@@ -441,8 +455,13 @@ int main(int argc, char *argv[])
 
         PS2Runtime runtime;
         // the settings menu draws in the runtime's UI hook (registered before initialize(), which runs the init hook)
-        runtime.setDebugUiCallbacks([](PS2Runtime &, void *) {}, [](PS2Runtime &, void *) { ui::drawSettingsMenu(); }, nullptr,
-                                    nullptr);
+        runtime.setDebugUiCallbacks([](PS2Runtime &, void *) {},
+                                    [](PS2Runtime &, void *) {
+                                        ui::drawSettingsMenu();
+                                        ui::drawTrainerMenu();
+                                        ps2control::setGameInputBlocked(ui::settingsMenuBlocksInput() || ui::trainerMenuBlocksInput());
+                                    },
+                                    nullptr, nullptr);
         if (!runtime.initialize("GTA: Vice City Stories"))
         {
             std::cerr << "Failed to initialize runtime" << std::endl;
@@ -462,6 +481,7 @@ int main(int argc, char *argv[])
         PS2Runtime::setIoPaths(paths);
 
         vcs::rig::install(runtime); // control-channel automation commands (debug/rig.h)
+        vcs::trainer::install(runtime); // the trainer's control-channel command (game/vcs_trainer.h)
         vcs::configureWatch(runtime.memory().getRDRAM());
         vcs::runSelfTest(runtime);
         vcs::startWatchdog(runtime);

@@ -256,6 +256,7 @@ namespace ui
     }
 
     bool settingsMenuOpen() { return g_open; }
+    bool settingsMenuBlocksInput() { return g_open || g_releaseWait; }
 
     void drawSettingsMenu()
     {
@@ -277,7 +278,6 @@ namespace ui
 
         if (g_releaseWait && !anyInputHeld())
             g_releaseWait = false;
-        ps2control::setGameInputBlocked(g_open || g_releaseWait);
         if (!g_open)
             return;
 

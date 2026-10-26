@@ -245,6 +245,7 @@ namespace ps2control
     }
 
     void setGameInputBlocked(bool blocked) { g_gameInputBlocked.store(blocked, std::memory_order_relaxed); }
+    bool gameInputBlocked() { return g_gameInputBlocked.load(std::memory_order_relaxed); }
 
     bool physicalInputOn()
     {

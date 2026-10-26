@@ -25,6 +25,7 @@ namespace ps2control
     bool physicalInputOn();   // false when hidden, PS2X_INPUT=injected or the game's input is blocked
     // Main thread: an in-game UI (the settings menu) has the keyboard / mouse / gamepad; the game sees none of it.
     void setGameInputBlocked(bool blocked);
+    bool gameInputBlocked();  // [gta-recomp] the pad then reads no keys at all, injected ones included
 
     // Keyboard state for the game and the debug keys: physical (when allowed) or injected through the control channel.
     // `key` is a platform::Key (platform/platform.h).
