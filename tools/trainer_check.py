@@ -8,7 +8,7 @@ Loads the Fort Baxter rig save (a copy, hidden), then: the name lists; god mode 
 the player's feet survived); wanted level set / cleared / never wanted; money; weapons, loadouts, unlimited ammo
 and no reload; spawning vehicles (every one with --vehicles all, default a sample of 12) and getting in; repair,
 flip, boost, paint and vehicle invincibility; teleports to every landmark on foot and one in a vehicle; saved
-position; time, freeze time, weather, game speed; that no trainer script is left in the game's script list while
+position; time, freeze time, weather, game speed; the mission lists and a side job launched; that no trainer script is left in the game's script list while
 the game is paused (none can end up in a save); and the menu, driven with keys. Results: OUT/summary.txt; screenshots OUT/*.png.
 Default OUT: build/trainer/<date-time>.
 """
@@ -289,6 +289,23 @@ class Check:
                 time.sleep(0.3)
             notices = self.t("notices")
             self.ok("notices", "Health and armour" in notices, notices[-200:])
+
+            # missions (last: a running mission stays): the lists, a side job from on foot (the launcher puts him in
+            # its vehicle first), and a second launch refused while it runs
+            story = [e for e in self.t("list story").split(";") if ":" in e]
+            jobs = dict((int(i), n) for i, n in (e.strip().split(":", 1) for e in self.t("list jobs").split(";") if ":" in e))
+            self.ok("mission lists", len(story) >= 45 and len(jobs) == 5 and "Soldier" in story[0],
+                    "%d story, first %s; jobs %s" % (len(story), story[:1], sorted(jobs.values())))
+            g.teleport(75.0, 175.0, -100.0)
+            time.sleep(2.0)
+            taxi = next(i for i, n in jobs.items() if n == "Taxi")
+            said = self.t("mission %d" % taxi)
+            time.sleep(3.0)
+            model = struct.unpack("<H", g.peek(self.car() + 0x56, 2))[0] if self.driving() else -1
+            self.shot("mission_taxi")
+            self.ok("side job in its vehicle", "mission=1" in self.t("state") and model == 226, "%s; model %d" % (said, model))
+            said = self.t("mission %d" % int(story[1].split(":")[0]))
+            self.ok("no second mission", "A mission is running" in said, said)
         finally:
             g.quit()
         fails = [r for r in self.results if not r[1]]

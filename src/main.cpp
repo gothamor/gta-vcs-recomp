@@ -453,6 +453,18 @@ int main(int argc, char *argv[])
         MappedDisc disc(iso);
         ps2_disc::setImage(&disc);
 
+        // the trainer's mission list names each mission from MAIN.SCM (game/vcs_trainer.h)
+        if (vcs::IsoEntry scm; iso.find("MAIN.SCM", scm) && !scm.isDirectory)
+        {
+            std::vector<uint8_t> bytes((scm.size + vcs::IsoImage::kSectorSize - 1) / vcs::IsoImage::kSectorSize *
+                                       vcs::IsoImage::kSectorSize);
+            if (iso.readSectors(scm.lba, static_cast<uint32_t>(bytes.size() / vcs::IsoImage::kSectorSize), bytes.data()))
+            {
+                bytes.resize(scm.size);
+                vcs::trainer::setMissionScript(bytes);
+            }
+        }
+
         PS2Runtime runtime;
         // the settings menu draws in the runtime's UI hook (registered before initialize(), which runs the init hook)
         runtime.setDebugUiCallbacks([](PS2Runtime &, void *) {},

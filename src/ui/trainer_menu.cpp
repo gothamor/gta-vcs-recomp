@@ -36,9 +36,12 @@ namespace ui
             VehicleList,
             Teleport,
             World,
+            Missions,
+            StoryList,
+            JobList,
         };
         const char *const kPageTitles[] = {"MAIN MENU", "PLAYER", "WEAPONS", "GIVE WEAPON", "VEHICLES", "SPAWN VEHICLE",
-                                           "TELEPORT", "WORLD"};
+                                           "TELEPORT", "WORLD", "MISSIONS", "STORY", "SIDE JOBS"};
 
         enum class Value
         {
@@ -206,6 +209,7 @@ namespace ui
                 rows.push_back(pageRow("Vehicles", Vehicles, "Spawn any vehicle; repair, flip and boost the one you drive."));
                 rows.push_back(pageRow("Teleport", Teleport, "Every district of Vice City, and a position of your own."));
                 rows.push_back(pageRow("World", World, "Time of day, weather, game speed."));
+                rows.push_back(pageRow("Missions", Missions, "Start any story mission or side job."));
                 break;
             case Player:
                 rows.push_back(toggleRow("God mode", tr::GodMode,
@@ -269,6 +273,24 @@ namespace ui
                 for (const tr::Entry &e : list)
                     rows.push_back(actionRow(e.name, [id = e.id] { tr::spawnVehicle(id); },
                                              tr::toggle(tr::WarpIntoSpawned) ? "Enter: spawn it and get in." : "Enter: spawn it ahead of you."));
+                break;
+            }
+            case Missions:
+                rows.push_back(pageRow("Story missions", StoryList, "Every story mission, in story order."));
+                rows.push_back(pageRow("Side jobs", JobList, "Paramedic, Vigilante, Fire Truck, Air Rescue, Taxi."));
+                break;
+            case StoryList:
+            case JobList:
+            {
+                const std::vector<tr::Entry> list = tr::missions(page == StoryList);
+                if (list.empty())
+                    rows.push_back(actionRow("(the game's names are not loaded yet)", {}, "", false));
+                const bool running = tr::missionRunning();
+                const std::string help = running ? "A mission is running: finish or fail it first."
+                                                 : "Enter: start it here, as its marker would. Saving after a mission "
+                                                   "played out of turn keeps what it changed.";
+                for (const tr::Entry &e : list)
+                    rows.push_back(actionRow(e.name, [id = e.id] { tr::launchMission(id); }, help, !running));
                 break;
             }
             case Teleport:

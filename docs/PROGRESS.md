@@ -513,6 +513,8 @@ dropped on uploads (lazy render-target patching).
   wanted, wanted level, money, every weapon and loadouts, unlimited ammo, no reload, spawning all 110 vehicles,
   vehicle invincibility / repair / flip / boost / paint, teleports to 13 districts and a saved position, time,
   freeze time, weather, game speed. `tools/trainer_check.py`: 30 checks, 0 failed (with all 110 vehicles).
+  Mission launcher added the same day: 59 story missions by title, five side jobs (in their vehicle); 33 checks, 0
+  failed.
 
 ## Useful switches
 | Env var | Effect |

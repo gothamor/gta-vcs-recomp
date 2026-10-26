@@ -3,7 +3,7 @@
 A cheat menu for single-player fun, in the style of Red Dead Redemption 2's **Native Trainer** (Alexander Blade's
 ScriptHookRDR2 trainer, the one most RDR2 trainers copy): a list menu at the side of the screen that you open with
 a key and drive with the arrow keys / numpad or a gamepad, with pages for the player, weapons, vehicles, teleports
-and the world. Nothing changes until you use it; turning a toggle off undoes it.
+and the world - and here a mission launcher. Nothing changes until you use it; turning a toggle off undoes it.
 
 Code: `src/game/vcs_trainer.{h,cpp}` (what it does), `src/ui/trainer_menu.{h,cpp}` (the menu). Check:
 `python tools/trainer_check.py` (below).
@@ -51,6 +51,8 @@ place.
 | | Repair / Flip upright / Boost / Random paint | health 1000 / back on its wheels facing the same way / a push forward / two random colours |
 | Teleport | 13 districts | Escobar International, Fort Baxter Air Base, Ocean Beach, Washington Beach, Vice Point, Downtown, Little Haiti, Little Havana, Starfish Island, Prawn Island, Leaf Links, Viceport, Junkyard - with his vehicle when driving |
 | | Save position / Return to saved position | including the interior (area) he was in |
+| Missions | Story missions | the 59 story missions, by the game's titles, in story order (Soldier .. In the Air Tonight); started where the player stands with the game's own `LOAD_AND_LAUNCH_MISSION_INTERNAL`, as a mission marker does - most open with their cutscene |
+| | Side jobs | Paramedic, Vigilante, Fire Truck, Air Rescue, Taxi; the player is put in the job's vehicle first (ambulance, police car, fire truck, air ambulance, taxi) unless he already drives one |
 | World | Time of day | each Left / Right sets the hour |
 | | Freeze time | the clock held at the time shown when it was turned on |
 | | Weather | Normal (changes by itself), Sunny, Cloudy, Rainy, Foggy, Extra sunny, Hurricane, Extra colours, Ultra sunny |
@@ -81,6 +83,10 @@ The switches are not saved: every start is the original game (DECISIONS.md 2026-
   its end), so they run only when the ped's state is 0x37 (driving) and its vehicle pointer is set. The handle comes
   from `STORE_CAR_CHAR_IS_IN_NO_SAVE` (0x024B): `STORE_CAR_CHAR_IS_IN` (0x007B) answers -1 for a car made by
   `CREATE_CAR`.
+- **Missions** are listed from MAIN.SCM, read from the disc at start (`vcs::trainer::setMissionScript`): each
+  mission opens with `LOAD_MISSION_TEXT "<name>"` (0x033A) or `SCRIPT_NAME` (0x0238), and a story mission's title is
+  the text key of that name with a two-digit number (`JER_A1` -> `JER_A01` "Soldier"). A launch is refused while a
+  mission runs (`0x4CD3E7`): VCS has no script command that fails the current mission.
 - **Names** come from the game's text at run time (the GXT table: weapon names `WEAPnn`, district names by zone key,
   vehicle names by the model's game name), so they are the game's own and in its language. The list is built when the
   text and the vehicle models are both in memory.
@@ -90,6 +96,8 @@ The switches are not saved: every start is the original game (DECISIONS.md 2026-
 - **Repair** restores health (engine, fire) but not dents or missing panels: no script command fixes the body (a
   Pay 'n' Spray does).
 - With a wanted level the police pull the player out of a stopped vehicle, spawned or not.
+- A mission started out of turn plays as usual; passing it sets what passing it sets, and saving afterwards keeps
+  that (the story's own order may then be odd). A running mission cannot be cancelled from the trainer.
 - Boats and planes appear where the player stands, on land too; helicopters and the Airliner can be flown.
 - The developer performance overlay (F3) and the trainer share the top left corner.
 
@@ -100,5 +108,6 @@ in the game's memory: the name lists; god mode (health refilled, an explosion at
 cleared, never wanted; money; weapon, loadout, unlimited ammo, no reload; spawning (`--vehicles all`: all 110, in
 batches at eight places in the city) and getting in; repair, flip, boost, paint, vehicle invincibility; a teleport
 while driving and to every district on foot; save / return; time, freeze, weather, speed; no trainer script in the
-script list while paused; the menu opened and a row toggled with keys while the game behind it keeps running.
-2026-10-26: 30 checks, 0 failed (all 110 vehicles).
+script list while paused; the menu opened and a row toggled with keys while the game behind it keeps running; the
+mission lists, a side job launched on foot (he ends up in its vehicle, the job running) and a second launch refused.
+2026-10-26: 30 checks, 0 failed (all 110 vehicles); with missions 33 checks, 0 failed.

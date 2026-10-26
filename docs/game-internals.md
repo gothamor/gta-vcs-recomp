@@ -1241,6 +1241,14 @@ below (e.g. 0x0023 terminates, 0x0289 loads a mission, 0x0238 names a script).
   loaded on demand. Names (their `SCRIPT_NAME`): 0-5 `INITPU INITCG INITGA INITOB INITPLA INITGEN` (the main
   script launches these six at start), side activities (`PARAMED VIG FIRETRK CHOPLIF TAXI` races, trials...) and the
   story chains `JER_A* PHI_A* MAR_A* LOU_A*/B* LAN_B*/C* UMB_B* BRY_B* MEN_C* REN_C* GON_C* DIA_C*` (45..100).
+- **Mission names for people** (the trainer, 2026-10-26): almost every mission opens with `LOAD_MISSION_TEXT
+  "<name>"` (opcode 0x033A; its own `SCRIPT_NAME` 0x0238 is missing in some, e.g. 44 `JER_A2`, 77 `MEN_C6`, 80
+  `REN_C3`, 88 `LAN_C6`, and differs in others: 11 `RENC7` / `REN_C7`, 96 `TEMP1` / `DIA_C1`). The title is the main
+  text table's key of that name with a two-digit number: `JER_A01` "Soldier", `REN_C07` "In The Air Tonight". 59
+  story missions; 7 `JER_A1` opens the story and 11 `REN_C7` ends it, the rest run 44..100 in story order. Mission 6
+  is a 24-byte stub. Side jobs: 14 `PARAMED`, 15 `VIG`, 16 `FIRETRK`, 17 `CHOPLIF` (Air Rescue), 19 `TAXI` - launched
+  on foot each says "You have 39 seconds to return to your vehicle". 0x045C (VC's FAIL_CURRENT_MISSION) is something
+  else in VCS (one parameter, `FUN_00266350`); no command fails a mission.
 - `INITPLA` creates the player: `CREATE_PLAYER 0` at (-1710.7, -306.7, 14.86) into **global 0x2A5**, then
   `SET_CHAR_HEADING` on that same global - VCS uses one handle for the player and the player's char.
 

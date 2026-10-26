@@ -31,6 +31,7 @@ namespace vcs::trainer
         constexpr uint32_t kGameTimeMs = 0x004CD104u;     // CTimer::m_snTimeInMilliseconds: stands still while paused
         constexpr uint32_t kClockHours = 0x004CD148u;     // CClock: hours, minutes (bytes)
         constexpr uint32_t kCurrArea = 0x00489F7Cu;       // CGame::currArea (0 outdoors)
+        constexpr uint32_t kMissionRunning = 0x004CD3E7u; // u8, set by LOAD_AND_LAUNCH_MISSION_INTERNAL
         constexpr uint32_t kTextTable = 0x0048A2A0u;      // -> -> {entries, count, ...}; entry {u32 UTF-16 text, char key[8]}
         constexpr uint32_t kModelInfos = 0x00486518u;     // -> CModelInfo::ms_modelInfoPtrs
         constexpr uint32_t kModelGameName = 0x158u;       // vehicle model info: the game name / text key (8 chars)
@@ -84,6 +85,7 @@ namespace vcs::trainer
             SET_EVERYONE_IGNORE_PLAYER = 0x024A,
             STORE_CAR_CHAR_IS_IN_NO_SAVE = 0x024B, // STORE_CAR_CHAR_IS_IN (0x007B) answers -1 for a car made by CREATE_CAR
             LOAD_SCENE = 0x0253,
+            LOAD_AND_LAUNCH_MISSION_INTERNAL = 0x0289,
             SET_UPSIDEDOWN_CAR_NOT_DAMAGED = 0x026D,
             SET_CAR_CAN_BE_DAMAGED = 0x0275,
             GET_OFFSET_FROM_CAR_IN_WORLD_COORDS = 0x027F,
@@ -262,7 +264,30 @@ namespace vcs::trainer
 
         std::mutex g_namesMutex;
         uint32_t g_namesFrom = 0; // the text table's entries the names were built from
-        std::vector<Entry> g_vehicleNames, g_weaponNames, g_landmarkNames;
+        std::vector<Entry> g_vehicleNames, g_weaponNames, g_landmarkNames, g_storyNames, g_jobNames;
+        std::vector<std::string> g_missionKeys; // per mission index: its text name (LOAD_MISSION_TEXT), "" if none
+        std::atomic<bool> g_missionRunning{false};
+        std::atomic<int> g_vehicleModel{0}; // the model the player drives (as of the last frame kick), 0 on foot
+
+        // The side jobs the launcher offers (their script names; the game's text names most of them).
+        // Each runs only with the player in its vehicle ("You have 39 seconds to return to your vehicle"): the
+        // launcher puts him in one first.
+        struct JobDef
+        {
+            const char *key;
+            const char *fallback;
+            int vehicle; // model id
+        };
+        constexpr JobDef kJobs[] = {{"PARAMED", "Paramedic", 227 /* AMBULAN */}, {"VIG", "Vigilante", 207 /* POLICEM */},
+                                    {"FIRETRK", "Fire Truck", 194 /* FIRETRK */}, {"CHOPLIF", "Air Rescue", 189 /* AIRAMB */},
+                                    {"TAXI", "Taxi", 226 /* TAXI */}};
+
+        // A story mission's text name: three letters, _, the chapter (A / B / C), a number - JER_A1, LAN_C10.
+        bool storyKey(const std::string &k)
+        {
+            return k.size() >= 6 && k[3] == '_' && (k[4] == 'A' || k[4] == 'B' || k[4] == 'C') &&
+                   std::all_of(k.begin() + 5, k.end(), [](char c) { return c >= '0' && c <= '9'; });
+        }
 
         std::mutex g_noticesMutex;
         std::deque<Notice> g_notices;
@@ -438,10 +463,38 @@ namespace vcs::trainer
                 landmarks.push_back({lookup(kLandmarks[k].zoneKey, kLandmarks[k].fallback), static_cast<int>(k)});
             std::sort(landmarks.begin(), landmarks.end(), [](const Entry &a, const Entry &b) { return a.name < b.name; });
 
+            // Missions: the title's text key is the mission's text name with a two-digit number (JER_A1 -> JER_A01
+            // "Soldier"); a few side jobs' titles are in quotes ('Paramedic').
+            std::vector<Entry> story, jobs;
+            auto title = [&](const std::string &key, const char *fallback) {
+                std::string padded = key;
+                if (storyKey(key) && key.size() == 6)
+                    padded = key.substr(0, 5) + "0" + key.substr(5);
+                std::string t = lookup(padded.c_str(), lookup(key.c_str(), fallback ? fallback : key));
+                if (t.size() > 2 && t.front() == '\'' && t.back() == '\'')
+                    t = t.substr(1, t.size() - 2);
+                return t;
+            };
+            for (size_t i = 0; i < g_missionKeys.size(); ++i)
+            {
+                const std::string &key = g_missionKeys[i];
+                if (storyKey(key))
+                    story.push_back({title(key, nullptr), static_cast<int>(i)});
+                for (const JobDef &j : kJobs)
+                    if (key == j.key)
+                        jobs.push_back({title(key, j.fallback), static_cast<int>(i)});
+            }
+            // story order is the table's, except two kept before the story block (44..): Soldier (JER_A1) opens the
+            // story, In the Air Tonight (REN_C7, chapter C) ends it
+            auto order = [](const Entry &e) { return e.id < 44 && g_missionKeys[e.id][4] == 'C' ? 1000 + e.id : e.id; };
+            std::sort(story.begin(), story.end(), [&](const Entry &a, const Entry &b) { return order(a) < order(b); });
+
             std::lock_guard<std::mutex> lock(g_namesMutex);
             g_vehicleNames = std::move(vehicles);
             g_weaponNames = std::move(weapons);
             g_landmarkNames = std::move(landmarks);
+            g_storyNames = std::move(story);
+            g_jobNames = std::move(jobs);
             // the text is loaded before the vehicle models are registered: until they are, build the lists again
             if (!g_vehicleNames.empty())
                 g_namesFrom = entries;
@@ -701,10 +754,17 @@ namespace vcs::trainer
             const std::string verb = w.empty() ? "" : w[0];
             const int arg = w.size() > 1 ? std::atoi(w[1].c_str()) : 0;
             // answers once everything queued before has run
-            auto answerWhenDone = [&reply] { queue([](uint8_t *, Scm &, std::string &) { return true; }, reply); };
+            // answers once everything queued before has run, with the newest notice (what was done, or why not)
+            auto answerWhenDone = [&reply] {
+                queue([](uint8_t *, Scm &, std::string &) { return true; }, [reply](const std::string &) {
+                    const std::vector<Notice> n = notices(5.0);
+                    reply("ok " + (n.empty() ? std::string() : n.back().text));
+                });
+            };
             if (verb == "state")
             {
-                std::string out = fmt("ok ready=%d vehicle=%d speed=%d", ready() ? 1 : 0, inVehicle() ? 1 : 0, gameSpeed());
+                std::string out = fmt("ok ready=%d vehicle=%d speed=%d mission=%d", ready() ? 1 : 0, inVehicle() ? 1 : 0,
+                                      gameSpeed(), missionRunning() ? 1 : 0);
                 for (const auto &[name, t] : kToggleNames)
                     out += fmt(" %s=%d", name, toggle(t) ? 1 : 0);
                 return reply(out);
@@ -731,7 +791,11 @@ namespace vcs::trainer
                     return reply(listReply(landmarks()));
                 if (w[1] == "weathers")
                     return reply(listReply(weathers()));
-                return reply("error usage: trainer list vehicles|weapons|loadouts|landmarks|weathers");
+                if (w[1] == "story")
+                    return reply(listReply(missions(true)));
+                if (w[1] == "jobs")
+                    return reply(listReply(missions(false)));
+                return reply("error usage: trainer list vehicles|weapons|loadouts|landmarks|weathers|story|jobs");
             }
             if (verb == "notices")
             {
@@ -762,6 +826,7 @@ namespace vcs::trainer
                 {"time", [arg] { setTime(arg); }},
                 {"weather", [arg] { setWeather(arg); }},
                 {"speed", [arg] { setGameSpeed(arg); }},
+                {"mission", [arg] { launchMission(arg); }},
             };
             for (const auto &[name, fn] : kActions)
                 if (verb == name)
@@ -771,7 +836,7 @@ namespace vcs::trainer
                 }
             reply("error usage: trainer state | toggle <name> 0|1 | list <what> | notices | heal | money N | setwanted N | "
                   "weapon T | loadout N | noweapons | spawn MODEL | repair | flip | boost | paint | teleport N | savepos | "
-                  "returnpos | time H | weather W | speed PERCENT");
+                  "returnpos | time H | weather W | speed PERCENT | mission N");
         }
     }
 
@@ -797,6 +862,11 @@ namespace vcs::trainer
         g_ready = inGame;
         g_inVehicle = inGame && driving(ram, ped);
         g_clockHour = ram[kClockHours];
+        g_missionRunning = inGame && ram[kMissionRunning] != 0;
+        uint16_t model = 0;
+        if (g_inVehicle)
+            std::memcpy(&model, ram + ((rd32(ram, ped + kPedVehicle) + 0x56) & kRamMask), 2); // entity +0x56: model
+        g_vehicleModel = model;
         refreshNames(ram);
 
         // Scripts finish in the frame they start. One still waiting means the game paused before running it (its
@@ -880,6 +950,8 @@ namespace vcs::trainer
 
     // The model is loaded first (queue's models): a weapon given without its model loaded is held invisible. The
     // script's own REQUEST_MODEL / MARK_MODEL_AS_NO_LONGER_NEEDED pair hands it back to the streaming afterwards.
+    static void spawnVehicleAs(int model, bool getIn);
+
     static void addWeapon(Scm &code, const WeaponDef &w, bool select)
     {
         code.op(REQUEST_MODEL).i(w.model);
@@ -925,15 +997,17 @@ namespace vcs::trainer
         });
     }
 
-    void spawnVehicle(int model)
+    void spawnVehicle(int model) { spawnVehicleAs(model, false); }
+
+    static void spawnVehicleAs(int model, bool getIn)
     {
         if (model < kVehicleFirst || model > kVehicleLast)
             return post("No such vehicle");
         const std::string name = nameOf(g_vehicleNames, model, fmt("Vehicle %d", model));
-        queue([model, name](uint8_t *ram, Scm &code, std::string &notice) {
+        queue([model, name, getIn](uint8_t *ram, Scm &code, std::string &notice) {
             const uint32_t ped = rd32(ram, kPlayerPed);
             const bool inCar = driving(ram, ped);
-            const bool warp = toggle(WarpIntoSpawned);
+            const bool warp = getIn || toggle(WarpIntoSpawned);
             // where: ahead of the player (of the vehicle when driving; the ped's own matrix is not its position then),
             // facing the same way. Locals 1..3 position, 4 heading, 0 the new vehicle.
             if (inCar)
@@ -1134,6 +1208,70 @@ namespace vcs::trainer
         for (size_t k = 0; k < std::size(kLandmarks); ++k)
             out.push_back({kLandmarks[k].fallback, static_cast<int>(k)});
         return out;
+    }
+
+    void setMissionScript(const std::vector<uint8_t> &d)
+    {
+        // the mission table (game-internals.md 11a): u32 count at file 0x767C, then the missions' start IPs (file
+        // offset = IP + 8). Each mission opens with LOAD_MISSION_TEXT "<name>" (0x033A) or SCRIPT_NAME (0x0238).
+        auto u32 = [&d](size_t at) {
+            uint32_t v = 0;
+            if (at + 4 <= d.size())
+                std::memcpy(&v, d.data() + at, 4);
+            return v;
+        };
+        const uint32_t count = u32(0x767C);
+        if (count == 0 || count > 200)
+            return;
+        std::vector<std::string> keys(count);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const size_t start = static_cast<size_t>(u32(0x7680 + 4 * i)) + 8;
+            const size_t end = i + 1 < count ? static_cast<size_t>(u32(0x7680 + 4 * (i + 1))) + 8 : d.size();
+            for (size_t p = start; p + 4 < std::min({d.size(), end, start + 64}); ++p)
+            {
+                const bool missionText = d[p] == 0x3A && d[p + 1] == 0x03, scriptName = d[p] == 0x38 && d[p + 1] == 0x02;
+                if ((!missionText && !scriptName) || d[p + 2] != 0x0A)
+                    continue;
+                std::string name;
+                for (size_t q = p + 3; q < d.size() && d[q] && name.size() < 15; ++q)
+                    name += static_cast<char>(d[q]);
+                keys[i] = name;
+                if (missionText) // the text name wins over the script's own name
+                    break;
+            }
+        }
+        g_missionKeys = std::move(keys);
+    }
+
+    bool missionRunning() { return g_missionRunning.load(std::memory_order_relaxed); }
+
+    // LOAD_AND_LAUNCH_MISSION_INTERNAL: what the game's own mission markers run. The mission starts where the player
+    // is; it sets the scene up itself (most open with their cutscene).
+    void launchMission(int index)
+    {
+        const std::string name = nameOf(g_storyNames, index, nameOf(g_jobNames, index, fmt("Mission %d", index)));
+        int vehicle = 0;
+        for (const JobDef &j : kJobs)
+            if (index < static_cast<int>(g_missionKeys.size()) && g_missionKeys[index] == j.key)
+                vehicle = j.vehicle;
+        if (vehicle && !missionRunning() && g_vehicleModel != vehicle) // not in the job's vehicle: one to do it in
+            spawnVehicleAs(vehicle, true);
+        queue([index, name, vehicle](uint8_t *ram, Scm &code, std::string &notice) {
+            if (ram[kMissionRunning])
+                return (notice = "A mission is running: finish or fail it first", false);
+            if (vehicle && !driving(ram, rd32(ram, kPlayerPed)))
+                return (notice = "Could not get into the job's vehicle", false);
+            code.op(LOAD_AND_LAUNCH_MISSION_INTERNAL).i(index);
+            notice = "Mission: " + name;
+            return true;
+        });
+    }
+
+    std::vector<Entry> missions(bool story)
+    {
+        std::lock_guard<std::mutex> lock(g_namesMutex);
+        return story ? g_storyNames : g_jobNames;
     }
 
     std::vector<Entry> weathers()
