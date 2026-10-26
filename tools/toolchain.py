@@ -91,6 +91,45 @@ def tail(path, lines=20):
         return ""
 
 
+def read_png(path):
+    """An 8-bit RGB / RGBA PNG (the game's screenshots) without Pillow: (width, height, rows of RGB bytes)."""
+    import struct
+    import zlib
+    data = open(path, "rb").read()
+    pos, idat, width, height, colour = 8, b"", 0, 0, 2
+    while pos < len(data):
+        length, = struct.unpack(">I", data[pos:pos + 4])
+        kind, chunk = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b"IHDR":
+            width, height, _, colour = struct.unpack(">IIBB", chunk[:10])
+        elif kind == b"IDAT":
+            idat += chunk
+    raw = zlib.decompress(idat)
+    bpp = 4 if colour == 6 else 3
+    stride = width * bpp
+    rows, prev, i = [], bytearray(stride), 0
+    for _ in range(height):
+        kind, line = raw[i], bytearray(raw[i + 1:i + 1 + stride])
+        i += 1 + stride
+        for x in range(stride):  # the PNG filters
+            a = line[x - bpp] if x >= bpp else 0
+            b, c = prev[x], (prev[x - bpp] if x >= bpp else 0)
+            if kind == 1:
+                line[x] = (line[x] + a) & 255
+            elif kind == 2:
+                line[x] = (line[x] + b) & 255
+            elif kind == 3:
+                line[x] = (line[x] + (a + b) // 2) & 255
+            elif kind == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(bytes(line) if bpp == 3 else bytes(v for k, v in enumerate(line) if k % 4 != 3))
+        prev = line
+    return width, height, rows
+
+
 # ---- progress ---------------------------------------------------------------------------------------------------
 def _duration(seconds):
     seconds = int(seconds)

@@ -169,7 +169,8 @@ pause map) are shown at 4:3, pillarboxed.
     still go by the recording-time guess.
   Checked with `burst` (every presented frame, 50 entering and 50 leaving) at 32:9 three times, 21:9 and 16:9 on a 16:9
   screen: every frame's shape matches its picture (the build before: 3 of 100 did not) and the HUD is the same in the
-  first gameplay frame as later; the reference scenes at 32:9 unchanged.
+  first gameplay frame as later; the reference scenes at 32:9 unchanged. Regression check: `tools/regress.py` step
+  "menushape" (fails with `PS2X_HW_MENU_SWITCH=0`: 29 frames of the menu stretched, 3 of the game squashed).
 - Not done from the plan: window mode, pausing,
   control-channel `menu` / `set` commands (environment overrides cover scripted captures:
   `VCS_ASPECT=169 python tools/scenes.py capture ...`).

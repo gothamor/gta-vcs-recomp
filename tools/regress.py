@@ -16,6 +16,8 @@ Steps (each a tool of its own, run in turn; the game window shows):
             the mission stuck on "Loading...")
   widecull  at 16:9, 16:10, 21:9 and 32:9 the entity culling (CCamera's side planes) reaches the screen edges, not
             the 4:3 ones
+  menushape every presented frame into and out of the pause menu at 32:9 on a 16:9 screen: a 4:3 shape shows the menu,
+            a wide one the game (the shifted frame at the switch)
             (buildings, peds and cars vanishing at the sides in widescreen)
 
 Writes OUT/report.md and OUT/metrics.json (default OUT: build/regress/<date-time>). --set-baseline stores this
@@ -162,6 +164,62 @@ def step_widecull(out, quick):
     return res
 
 
+def step_menushape(out, quick):
+    """The pause menu's shape (SETTINGS_MENU_WIDESCREEN.md): 32:9 game, 16:9 screen; every presented frame for 50 frames
+    after Start, in and out (control command "burst"). Each frame's picture rectangle (4:3 or wide) has to fit its
+    content - the menu has no sky at the top, the game outside the barracks has. Fixed 2026-10-27: VCS shows the previous
+    frame, and frames of the game were shown squashed into the menu's 4:3 box."""
+    sys.path.insert(0, TOOLS)
+    import rig  # noqa: E402
+    import toolchain as tc  # noqa: E402
+    d = os.path.abspath(os.path.join(out, "menushape"))  # the game writes it (its own working directory)
+    env = {"VCS_ASPECT": "329", "VCS_HUD": "2", "PS2X_HW_OUTPUT": "1920x1080", "PS2X_CAPTURE_SIZE": "480x270",
+           "VCS_PERF_OVERLAY": "0"}
+    g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="regress_menushape", env=env)
+    try:
+        g.wait_ingame()
+        g.prime()
+        g.set_time(12)
+        g.weather(0)
+        time.sleep(3)
+        for phase in ("in", "out"):
+            os.makedirs(os.path.join(d, phase), exist_ok=True)
+            g.cmd("burst %s 50" % os.path.join(d, phase).replace(os.sep, "/"))
+            g.cmd("press Return 150")
+            time.sleep(4)
+    finally:
+        g.quit()
+    res = {}
+    for phase in ("in", "out"):
+        seq, bad = "", 0
+        for k in range(50):
+            path = os.path.join(d, phase, "burst_%04d.png" % k)
+            if not os.path.isfile(path):
+                break
+            w, h, rows = tc.read_png(path)
+            lit = lambda x, y: sum(rows[y][x * 3:x * 3 + 3]) > 30  # noqa: E731
+            xs = [x for x in range(w) if lit(x, h // 2)]
+            ys = [y for y in range(h) if lit(w // 2, y)]
+            if not xs or not ys:
+                seq += "."
+                continue
+            pw, ph = xs[-1] - xs[0] + 1, ys[-1] - ys[0] + 1
+            blue = red = 0
+            n = 0
+            for y in range(ys[0] + 2, ys[0] + ph // 6):
+                for x in range(w // 2 - pw // 8, w // 2 + pw // 8):
+                    red += rows[y][x * 3]
+                    blue += rows[y][x * 3 + 2]
+                    n += 1
+            game = blue / n > 150 and blue / n > red / n + 40
+            narrow = pw / ph < 1.5
+            seq += ("G" if game else "M") + ("4" if narrow else "W") + ("" if narrow != game else "!")
+            bad += narrow == game
+        res[phase] = {"frames": seq, "mismatched": bad}
+    res["pass"] = all(r["mismatched"] == 0 and len(r["frames"]) >= 50 for r in res.values() if isinstance(r, dict))
+    return res
+
+
 def compare(base, new):
     notes = []
     bt, nt = base.get("tour", {}), new.get("tour", {})
@@ -189,6 +247,9 @@ def compare(base, new):
             notes.append("saves: %s failed (see saves.log and the screenshots)" % k)
     if "shakedown" in new and new["shakedown"].get("pass") is not True:
         notes.append("shakedown: the shop entry failed %s (see shakedown/)" % json.dumps(new["shakedown"]))
+    ms = new.get("menushape", {})
+    if ms and ms.get("pass") is not True:
+        notes.append("menushape: frames whose shape does not fit their picture at the pause menu %s" % json.dumps(ms))
     for aspect, r in new.get("widecull", {}).items():
         if isinstance(r, dict) and r.get("pass") is not True:
             notes.append("widecull %s: entity culling edge %s, view window %s (models culled at the 4:3 edges again?)" % (
@@ -209,7 +270,7 @@ def main():
     metrics = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "quick": a.quick}
     for name, fn in (("scenes", step_scenes), ("tour", step_tour), ("missions", step_missions), ("drive", step_drive),
                      ("evening", step_evening), ("saves", step_saves), ("shakedown", step_shakedown),
-                     ("widecull", step_widecull)):
+                     ("widecull", step_widecull), ("menushape", step_menushape)):
         print("[regress] %s" % name)
         t0 = time.time()
         try:
