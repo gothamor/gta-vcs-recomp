@@ -176,11 +176,53 @@ namespace
         out = run(spu, cycle, 4800);
         check(rms(out, 2000, out.size()) > 1000.0, "pitch-modulated voice plays");
     }
+
+    // A core 0 voice reaches the output through core 1's external input, scaled by core 1's AVOL (0x790/0x792); BVOL
+    // (0x794) is the AutoDMA input's. libsd's sceSdInit sets core 1 AVOL 0x7FFF, BVOL 0 - with the two swapped every
+    // core 0 voice was silent (VCS: half its gunshots, doors, the bike screech).
+    double core0Output(uint16_t core1Avol, uint16_t core1Bvol)
+    {
+        IopSpu2 spu;
+        uint64_t cycle = 0;
+        for (uint32_t core : {0u, 1u})
+            wr(spu, core, 0x19A, 0xC000);
+        writeBlock(spu, 0, 0x5000, 0x07, 0x2);
+        wr(spu, 0, 0x000, 0x3FFF);
+        wr(spu, 0, 0x002, 0x3FFF);
+        wr(spu, 0, 0x004, 0x1000);
+        wr(spu, 0, 0x006, 0x000F);
+        wr(spu, 0, 0x008, 0x0000);
+        wrHiLo(spu, 0, 0x1C0, 0x5000);
+        wr(spu, 0, 0x188, 1);
+        wr(spu, 0, 0x190, 1);
+        wr(spu, 0, 0x198, 0x0FF0); // libsd's MMIX: core 0 voices dry and wet
+        wr(spu, 1, 0x198, 0x0FFC); // core 1 also takes the external input (core 0) dry
+        spu.write16(0x760u, 0x3FFF); // core 0 MVOL
+        spu.write16(0x762u, 0x3FFF);
+        spu.write16(0x788u, 0x3FFF); // core 1 MVOL
+        spu.write16(0x78Au, 0x3FFF);
+        spu.write16(0x790u, core1Avol);
+        spu.write16(0x792u, core1Avol);
+        spu.write16(0x794u, core1Bvol);
+        spu.write16(0x796u, core1Bvol);
+        wr(spu, 0, 0x1A0, 1); // KON core 0 voice 0
+        const auto out = run(spu, cycle, 4800);
+        return rms(out, 2000, out.size());
+    }
+
+    void testCore0IntoCore1()
+    {
+        const double libsdDefaults = core0Output(0x7FFF, 0), noAvol = core0Output(0, 0x7FFF);
+        std::printf("     core 0 voice at the output: %.0f with libsd's volumes, %.0f with core 1 AVOL 0\n", libsdDefaults, noAvol);
+        check(libsdDefaults > 1000.0, "a core 0 voice is heard with libsd's default volumes (core 1 AVOL 0x7FFF)");
+        check(noAvol < 1.0, "core 1 AVOL 0 silences core 0 (BVOL does not carry it)");
+    }
 }
 
 int main()
 {
     testDryAndGauss();
+    testCore0IntoCore1();
     testReverb();
     testPmonNoise();
     std::printf("%d failure(s)\n", g_failures);

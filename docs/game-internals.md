@@ -1085,6 +1085,11 @@ below are module offsets (CDSTREAM loads at IOP 0x1D600 on the emulated IOP); "d
   260, the screech, at 11000 + 5000 x skid, +2000 for bikes**. A bike at 120 km/h held on R1 and turned: front wheel
   skidding, rear locked, screech at volume ~36 (gas held) / ~25 (gas off), pitch 16,000-18,000, as long as the skid
   lasts (`VCS_SKID_LOG=1` logs the inputs for the player's vehicle).
+- **Voices and cores**: the effect voices 0-23 are core 0, 24-43 core 1 voices 0-19 (music: core 1 voices 22 / 23); the
+  game hands out voices in turn (a machine-gun burst walks 12/13, 14/15, ... - a left / right pair per shot). Core 0
+  reaches the output only through core 1's external input, scaled by core 1's AVOL, which sceSdInit sets to 0x7FFF
+  (BVOL, the AutoDMA input, 0). An SPU2 emulation that gets AVOL wrong silences ~half the game's sound effects at
+  random (fixed 2026-10-26, PROGRESS.md).
 - **Init** (0x3B10): `sceSdInit(0)`, SPDIF mode 0x800, main volumes 0 then 0x3FFF, a 128 KB IOP buffer, then every
   bank's `\AUDIO\SET<b/10>\SFX<b>_PS.SDT` read into one sound table: **12 bytes per sound** - offset in the bank's
   .RAW, bytes, sample rate - indexed from bank b's first sound (68 constants written by 0x3B10 to data 0x9FC0; last

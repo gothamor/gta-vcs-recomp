@@ -706,9 +706,10 @@ namespace ps2x::iop::detail
                 checkIrq(base + c.admaReadPos, base + c.admaReadPos + 1u);
                 checkIrq(base + 0x200u + c.admaReadPos, base + 0x200u + c.admaReadPos + 1u);
                 c.admaReadPos = (c.admaReadPos + 1u) & 0x1FFu;
-                Sweep dummy;
-                const int32_t l = (inL * fixedVolume(c.avolL, dummy)) >> 15;
-                const int32_t r = (inR * fixedVolume(c.avolR, dummy)) >> 15;
+                // [gta-recomp] BVOL ("sound data input volume") scales the AutoDMA input: a plain signed 16-bit volume
+                // (no sweep mode), as PCSX2 has it
+                const int32_t l = (inL * static_cast<int16_t>(c.bvolL)) >> 15;
+                const int32_t r = (inR * static_cast<int16_t>(c.bvolR)) >> 15;
                 if (c.mmix & 0x80u)
                     mixL += l;
                 if (c.mmix & 0x40u)
@@ -718,12 +719,13 @@ namespace ps2x::iop::detail
                 if (c.mmix & 0x10u)
                     fxR += r;
             }
-            // core 0 output into core 1
+            // core 0 output into core 1, scaled by core 1's AVOL ("core external input volume", only core 1), a plain
+            // signed 16-bit volume. [gta-recomp] Was BVOL, decoded as a sweepable volume: libsd sets core 1 AVOL 0x7FFF
+            // (full) / BVOL 0, so everything on core 0 came out silent (0x7FFF read as a fixed volume is -2).
             if (ci == 1u)
             {
-                Sweep dummy;
-                const int32_t l = (core0L * fixedVolume(c.bvolL, dummy)) >> 15;
-                const int32_t r = (core0R * fixedVolume(c.bvolR, dummy)) >> 15;
+                const int32_t l = (core0L * static_cast<int16_t>(c.avolL)) >> 15;
+                const int32_t r = (core0R * static_cast<int16_t>(c.avolR)) >> 15;
                 if (c.mmix & 0x08u)
                     mixL += l;
                 if (c.mmix & 0x04u)

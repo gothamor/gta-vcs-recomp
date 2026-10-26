@@ -438,8 +438,17 @@ dropped on uploads (lazy render-target patching).
       2026-10-24, the user (comparing with the original): no tyre screech on a bike at speed with R1 held while
       turning, with native and emulated sound alike. On the airport runway the game does request the screech
       (sound 260, volume 25-36, pitch 16-18k, held through the skid; game-internals.md 9a) and the SPU2 plays it
-      (voice output peak ~4000 against ~8300 for the engine; replay = live output). Open: whether it is quieter
-      than on the original - a clip went to the user to judge.
+      (voice output peak ~4000 against ~8300 for the engine; replay = live output). The user heard no screech in
+      that clip: it was on voice 19, core 0 - see the next entry.
+      **Fixed 2026-10-26: every sound on SPU2 core 0 was silent** (the user: machine-gun bursts where "only one bullet
+      out of a few" sounds; also the missing screech and the doors that "sometimes" don't play). The SPU2 core fed
+      core 0's output into core 1 through BVOL (the AutoDMA input's volume) instead of AVOL ("core external input",
+      only core 1), and decoded both as sweepable volumes: libsd's sceSdInit sets core 1 AVOL 0x7FFF / BVOL 0, so core
+      0 reached the output at volume 0 (0x7FFF as a fixed volume is -2). Both are plain signed 16-bit volumes (PCSX2:
+      ExtVol / InpVol = SignExtend16). The game's 44 effect voices are core 0's 24 + 20 of core 1's, used in turn:
+      ~70% of an M249 burst's shots (54 of 76) landed on core 0. Live after the fix: 76 of 76 shots sound; the bike's
+      screech and its engine come through (a ride ~10x louder overall). Native and emulated sound share the SPU2
+      core, so both had it - why the soundcheck comparisons agreed. `--iop-tests` checks a core 0 voice now.
       Mapping tools: `tools/irxdis.py --map / --decompile`
       (headless Ghidra), `tools/mipsdis.py` (MIPS I, standard library).
 - [x] Step 3 (2026-10-24): no emulated IOP in the normal run - no IRX module loaded or run, no IOP time emulated
