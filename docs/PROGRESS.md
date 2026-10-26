@@ -516,7 +516,8 @@ dropped on uploads (lazy render-target patching).
   SETTINGS_MENU_WIDESCREEN.md "Ultrawide".
   Same day: the pause menu and loading screens sit inside the game's frame at 4:3 (between the bars of a 32:9 game on
   a 16:9 monitor), the pause menu switches to 4:3 at once, and no frame is squeezed for one shape and shown in the
-  other (SETTINGS_MENU_WIDESCREEN.md).
+  other (SETTINGS_MENU_WIDESCREEN.md). Then the shifted frame at the switch (VCS shows the previous frame, so the shape
+  now follows the displayed picture; checked with every presented frame captured).
   Also: the integer Internal resolutions render wider in widescreen (1x at 32:9 is 1707x448; `PS2X_HW_WIDE_SCALE=0`
   = before), and the radar's streak of map beside its circle at 32:9 is gone (the HUD layer squeezed before rounding to
   PS2 pixels).
@@ -605,6 +606,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_RT_FULL=0` | render targets read once per PS2 texel everywhere (higher internal resolutions lost in the copies) |
 | `PS2X_HW_POSTFX=0` or letters `btc` | effects drawn as recorded / only these native: b bloom, t trails, c frame copy + motion blur |
 | `PS2X_HW_SCALE=0` | native frame: the picture's targets at the window's size (menu: Internal resolution > Match window) |
+| `python tools/rig.py burst DIR N` | the next N presented frames as DIR/burst_NNNN.png + DIR/burst.txt (shape, the renderer's batch) |
 | `PS2X_HW_MENU_SWITCH=0` | widescreen: the pause menu goes 4:3 only after 32 frames without 3D (as before 2026-10-27) |
 | `PS2X_HW_WIDE_SCALE=0` | integer scales in widescreen: the picture 640 x scale wide, stretched (as before 2026-10-27) |
 | `PS2X_HW_MSAA=2/4/8` | MSAA for the picture's targets (menu: Anti-aliasing) |

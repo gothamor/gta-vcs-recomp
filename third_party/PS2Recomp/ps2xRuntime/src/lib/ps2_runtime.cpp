@@ -437,6 +437,13 @@ void ps2ReportUnlistedResume(const R5900Context *ctx, uint32_t functionStart)
               << std::dec << std::endl;
 }
 
+// [gta-recomp] the "burst" control command's state (main thread)
+static struct
+{
+    std::string dir;
+    int left = 0, index = 0;
+} g_burst;
+
 // [gta-recomp] Shows the GPU renderer's newest picture. False when there is no GPU renderer.
 // `owned` is our texture for pictures made on the CPU; `shown` is what the window draws (owned, or the HW renderer's).
 static bool UploadGpuFrame(present::Picture &owned, present::Picture &shown, PS2Runtime *rt, uint32_t &outWidth,
@@ -1177,6 +1184,23 @@ bool PS2Runtime::initialize(const char *title)
             std::cerr << "Failed to create the window" << std::endl;
             return false;
         }
+        // [gta-recomp] "burst DIR N": the next N presented frames as DIR/burst_NNNN.png, one line each in DIR/burst.txt (the
+        // shape shown and the renderer's batch) - a transition frame by frame (screenshots manage one every ~50 ms)
+        ps2control::addCommand("burst", [](const std::string &args, ps2control::Reply reply) {
+            char dir[512] = {};
+            int n = 0;
+            if (std::sscanf(args.c_str(), "%511s %d", dir, &n) != 2 || n <= 0 || n > 600)
+            {
+                reply("error usage: burst DIR N (1..600)");
+                return;
+            }
+            g_burst.dir = dir;
+            g_burst.left = n;
+            g_burst.index = 0;
+            if (FILE *f = std::fopen((g_burst.dir + "/burst.txt").c_str(), "w"))
+                std::fclose(f);
+            reply("ok");
+        });
         ps2control::start();
         ps2AudioInit(); // [gta-recomp] SPU2 output stream
         m_audioBackend.setAudioReady(platform::audioAvailable());
@@ -3184,8 +3208,7 @@ void PS2Runtime::run()
 
         // [gta-recomp] control channel (runtime/ps2_control.h): screenshots render the same picture off-screen, so
         // they work with the window hidden or covered
-        ps2control::pump(
-            [&](const std::string &path) -> std::string
+        auto capturePng = [&](const std::string &path) -> std::string
             {
                 int w = std::max(windowWidth, 960), h = std::max(windowHeight, 672); // readable when hidden
                 // PS2X_CAPTURE_SIZE=WxH: a fixed size whatever the window (comparable test screenshots)
@@ -3201,8 +3224,22 @@ void PS2Runtime::run()
                 if (!present::capture(shownTex, srcWidth, srcHeight, aspect, w, h, rgb, frameAspect) || !platform::writePng(path.c_str(), rgb.data(), w, h))
                     return {};
                 return std::to_string(w) + "x" + std::to_string(h);
-            },
-            [this] { requestStop(); });
+            };
+        if (g_burst.left > 0) // [gta-recomp] "burst" (above)
+        {
+            char name[32];
+            std::snprintf(name, sizeof(name), "/burst_%04d.png", g_burst.index);
+            capturePng(g_burst.dir + name);
+            if (FILE *f = std::fopen((g_burst.dir + "/burst.txt").c_str(), "a"))
+            {
+                std::fprintf(f, "%04d aspect %.3f frame %.3f %s\n", g_burst.index, aspect, frameAspect,
+                             hwRenderer() ? hwRenderer()->presenter().lastFrameInfo().c_str() : "");
+                std::fclose(f);
+            }
+            ++g_burst.index;
+            --g_burst.left;
+        }
+        ps2control::pump(capturePng, [this] { requestStop(); });
         present::present();
         platform::waitNextFrame();
 

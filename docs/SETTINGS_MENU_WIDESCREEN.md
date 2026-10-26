@@ -152,9 +152,24 @@ pause map) are shown at 4:3, pillarboxed.
   (`frameWide`), the presenter shows each frame with its own (`showing3d` = the shown frame's), and a frame with the
   game's menu primitives and no 3D (the classifier ors `GSHwAnchorMenu` into the anchors of FUN_003b53f8's
   primitives) empties the 3D history: 4:3 from the first menu frame. `PS2X_HW_MENU_SWITCH=0` = the 32-frame wait as
-  before. Leaving the menu still needs 4 frames with 3D (unchanged). Checked frame by frame (screenshots ~50 ms apart)
-  entering and leaving the pause menu at 32:9 on a 16:9 screen, 16:9 and 4:3, and the reference scenes at 32:9 on a
-  16:9 screen (loading screen and pause map in the strip).
+  before. Checked frame by frame (screenshots ~50 ms apart) entering and leaving the pause menu at 32:9 on a 16:9
+  screen, 16:9 and 4:3, and the reference scenes at 32:9 on a 16:9 screen (loading screen and pause map in the strip).
+- **No shifted frame at the switch** (same day, reported by the user: "for a frame the menu and the game view shift").
+  Every presented frame captured (`burst`, below) showed, leaving the menu, about four host frames of the game squashed
+  into the 4:3 box, then one wide frame with the HUD unsqueezed. Two causes:
+  - **VCS shows the previous frame**: its finished picture (FBP 140) is copied into the displayed buffer (FBP 0) at the
+    start of the next frame, so at a switch the picture on screen is the other shape's. The shape now belongs to the
+    picture: each frame buffer keeps the shape of the frame that last drew into it (HUD-layer draws included - the pause
+    menu draws nothing else), a plain copy carries it along like the HUD layer, and the window uses the displayed
+    buffer's (`RhiExecutor::shapeOf`).
+  - **The shape came from a history the frames had not caught up with**: decided when each frame is executed from all
+    of it (`decideShape`): a menu frame without 3D is 4:3 at once, and the first 3D frame after it wide at once (before,
+    4 frames with 3D were needed). The HUD layer's squeeze is recorded in any widescreen frame and applied when the
+    frame is executed and its shape known; only draws squeezed into the buffer itself (unclassified 2D at the far plane)
+    still go by the recording-time guess.
+  Checked with `burst` (every presented frame, 50 entering and 50 leaving) at 32:9 three times, 21:9 and 16:9 on a 16:9
+  screen: every frame's shape matches its picture (the build before: 3 of 100 did not) and the HUD is the same in the
+  first gameplay frame as later; the reference scenes at 32:9 unchanged.
 - Not done from the plan: window mode, pausing,
   control-channel `menu` / `set` commands (environment overrides cover scripted captures:
   `VCS_ASPECT=169 python tools/scenes.py capture ...`).
