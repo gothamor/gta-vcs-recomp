@@ -2683,8 +2683,63 @@ namespace
             const uint32_t ubits = static_cast<uint32_t>(transferBitsPerPixel(c.bitbltbuf.dpsm));
             if (ubits != 32u && ubits != 16u && ubits != 8u && ubits != 4u)
                 return false;
-            // the upload's pixels by VRAM address (in units of its own pixels)
             const uint32_t uw = c.trxreg.rrw, uh = c.trxreg.rrh;
+            // [gta-recomp] (2026-10-26) the upload wrote the texture in its own format, at its base, width and origin: the
+            // texel at (x, y) is the upload's pixel at (x, y) - the swizzle maps both to the same VRAM bits - as long as no
+            // row is wider than the buffer (where addresses alias). The texels straight from the pixels, without three
+            // GSMem::PixelBits per texel (most of the GS stage's time in a texture-streaming burst). PS2X_HW_DECODE_FAST=0:
+            // the general mapping always.
+            static const bool fast = [] {
+                const char *e = std::getenv("PS2X_HW_DECODE_FAST");
+                return !(e && e[0] == '0');
+            }();
+            if (fast && c.bitbltbuf.dpsm == t.psm && c.bitbltbuf.dbp == t.tbp0 && c.bitbltbuf.dbw == t.tbw && c.trxpos.dsax == 0u &&
+                c.trxpos.dsay == 0u && uw >= w && uh >= h && t.tbw != 0u && uw <= t.tbw * 64u &&
+                static_cast<uint64_t>(uw) * uh * ubits <= static_cast<uint64_t>(source->data.size()) * 8u)
+            {
+                uint32_t width = 0, bit = 0;
+                if (!GSMem::PixelBits(t.psm, t.tbp0, t.tbw, 0u, 0u, bit, width) || width != ubits)
+                    goto general; // (a format whose texels are not the upload's whole pixels: P8H / P4HL / P4HH)
+                thread_local std::vector<uint32_t> direct;
+                direct.resize(static_cast<size_t>(w) * h);
+                const uint8_t *px = source->data.data();
+                for (uint32_t y = 0; y < h; ++y)
+                {
+                    const size_t row = static_cast<size_t>(y) * uw;
+                    uint32_t *o = direct.data() + static_cast<size_t>(y) * w;
+                    if (ubits == 32u)
+                        std::memcpy(o, px + row * 4u, static_cast<size_t>(w) * 4u);
+                    else if (ubits == 16u)
+                        for (uint32_t x = 0; x < w; ++x)
+                        {
+                            uint16_t v;
+                            std::memcpy(&v, px + (row + x) * 2u, 2);
+                            o[x] = v;
+                        }
+                    else if (ubits == 8u)
+                        for (uint32_t x = 0; x < w; ++x)
+                            o[x] = px[row + x];
+                    else // 4 bits, low nibble first
+                        for (uint32_t x = 0; x < w; ++x)
+                            o[x] = (px[(row + x) >> 1] >> (((row + x) & 1u) * 4u)) & 0xFu;
+                }
+                m_cpu.DecodeTextureFromTexels(d, direct, out);
+                ++m_decodeFromUpload;
+                ++m_decodeFast;
+                if (verify)
+                {
+                    std::vector<uint32_t> fromVram;
+                    materializeRectKeepTransfer(t.psm, t.tbp0, t.tbw, 0u, 0u, w, h);
+                    m_cpu.DecodeTexture(d, fromVram);
+                    ++(fromVram == out ? m_decodeVerifySame : m_decodeVerifyDiffer);
+                    if ((m_decodeVerifySame + m_decodeVerifyDiffer) % 500u == 0u)
+                        std::fprintf(stderr, "[gs-hw] textures from upload checked: %llu the same as from VRAM, %llu differ\n",
+                                     (unsigned long long)m_decodeVerifySame, (unsigned long long)m_decodeVerifyDiffer);
+                }
+                return true;
+            }
+        general:
+            // the upload's pixels by VRAM address (in units of its own pixels)
             uint32_t lo = ~0u, hi = 0u;
             for (uint32_t pass = 0; pass < 2u; ++pass)
             {
@@ -3436,9 +3491,9 @@ namespace
                          (unsigned long long)m_lazyDeferred, (unsigned long long)m_lazyWritten, (unsigned long long)m_lazyDropped,
                          m_pendingUploads.size(), m_pendingBytes >> 10, (unsigned long long)m_lazyWhy[0], (unsigned long long)m_lazyWhy[1],
                          (unsigned long long)m_lazyWhy[2], (unsigned long long)m_lazyWhy[3]);
-            std::fprintf(stderr, "[upload] clut loads from the queued upload: %llu; textures decoded from it: %llu (%llu in another format); from VRAM: %llu\n",
+            std::fprintf(stderr, "[upload] clut loads from the queued upload: %llu; textures decoded from it: %llu (%llu in another format, %llu straight from its pixels); from VRAM: %llu\n",
                          (unsigned long long)m_clutFromUpload, (unsigned long long)m_decodeFromUpload, (unsigned long long)m_decodeCrossFormat,
-                         (unsigned long long)m_decodeFromVram);
+                         (unsigned long long)m_decodeFast, (unsigned long long)m_decodeFromVram);
             std::fprintf(stderr, "[upload] textures made: %llu named by their raster, %llu not (%zu rasters known)\n",
                          (unsigned long long)m_texNamed, (unsigned long long)m_texUnnamed, g_rasterTextures.size());
             std::fprintf(stderr, "[upload] texture binds: %llu, %llu as the last one, %llu looked up (%llu found cached)\n",
@@ -3448,7 +3503,7 @@ namespace
             m_bindMemoHits = 0;
             m_texNamed = m_texUnnamed = 0;
             m_bindCalls = m_bindRepeats = m_bindLookups = m_bindLookupHits = 0;
-            m_clutFromUpload = m_decodeFromUpload = m_decodeCrossFormat = m_decodeFromVram = 0;
+            m_clutFromUpload = m_decodeFromUpload = m_decodeCrossFormat = m_decodeFromVram = m_decodeFast = 0;
             m_lazyDeferred = m_lazyWritten = m_lazyDropped = 0;
             for (uint64_t &w : m_lazyWhy)
                 w = 0;
@@ -4459,7 +4514,7 @@ namespace
         uint64_t m_lazyDeferred = 0, m_lazyWritten = 0, m_lazyDropped = 0;
         uint64_t m_clutFromUpload = 0, m_clutVerifySame = 0, m_clutVerifyDiffer = 0; // [gta-recomp] loadClutFromQueuedUpload
         uint64_t m_decodeFromUpload = 0, m_decodeVerifySame = 0, m_decodeVerifyDiffer = 0; // [gta-recomp] decodeFromQueuedUpload
-        uint64_t m_decodeCrossFormat = 0, m_decodeFromVram = 0;
+        uint64_t m_decodeCrossFormat = 0, m_decodeFromVram = 0, m_decodeFast = 0;
         std::vector<int32_t> m_scratchPixelAt; // decodeFromQueuedUpload: upload pixel index by VRAM address
         uint64_t m_lazyWhy[4]{}; // what forced queued uploads out: clut load, texture decode, direct upload, other
         std::unordered_map<uint32_t, DepthInfo> m_depthBufs; // zbp -> format / width

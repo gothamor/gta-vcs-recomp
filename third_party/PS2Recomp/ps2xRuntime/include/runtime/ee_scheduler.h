@@ -401,6 +401,7 @@ private:
     static int waitObjectId(const EeWaitState &wait);
     void writeGuestU32(uint32_t address, uint32_t value);
     void waitForEvent();
+    void logLongWait(const char *where, double ms) const; // [gta-recomp] PS2X_WAIT_LOG
     void scheduleEvent(uint64_t deadlineCycle, std::chrono::steady_clock::time_point hostDeadline, EeEvent event);
     void updateNextDeadline();
     [[nodiscard]] bool hasReadyAtOrAbovePriority(int priority) const;

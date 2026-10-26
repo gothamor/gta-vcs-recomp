@@ -12,4 +12,7 @@ class PS2Runtime;
 namespace vcs
 {
     void startProfiler(PS2Runtime &runtime);
+    // VCS_PROFILE_SPIKES=<ms> (with VCS_PROFILE): the game thread calls this once a frame (at the frame kick); a frame
+    // longer than <ms> gets its own report - the samples taken during it, by guest function / host symbol ("[spike]")
+    void profilerFrame();
 }

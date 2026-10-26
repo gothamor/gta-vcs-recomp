@@ -17,6 +17,17 @@ namespace ps2_syscalls
     static std::unordered_map<int, VagAccumEntry> g_vagAccum;
     static std::mutex g_vagAccumMutex;
     static constexpr size_t kVagAccumMaxBytes = 16 * 1024 * 1024;
+    // [gta-recomp] The VAG files read through fio were copied whole and decoded to PCM at close for PS2AudioBackend's
+    // guessed-sample playback, which is off (the sound is the SPU2 core's): ~25 ms on the game thread per sound bank
+    // load and the PCM kept for good. PS2X_VAG_DECODE=1 does it again.
+    static bool vagDecodeOn()
+    {
+        static const bool on = [] {
+            const char *e = std::getenv("PS2X_VAG_DECODE");
+            return e && *e == '1';
+        }();
+        return on;
+    }
 
     void fioOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -126,6 +137,7 @@ namespace ps2_syscalls
             ps2TraceGuestRangeWrite(rdram, bufAddr, static_cast<uint32_t>(bytesRead), "fioRead", ctx);
         }
 
+        if (vagDecodeOn())
         {
             std::lock_guard<std::mutex> lock(g_vagAccumMutex);
             auto it = g_vagAccum.find(ps2Fd);

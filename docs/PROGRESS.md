@@ -462,6 +462,10 @@ dropped on uploads (lazy render-target patching).
       for the rest of the replay (4,580 replies "differing"); live the game polls the state until 0 first, so the
       replay now lets native time run as those polls would (one open waited 308 ms). The roadmap's "Where we are"
       table, still showing IRX modules and SPU2 emulation, now shows the current state.
+- [x] **Long-run spikes** (2026-10-26, PERFORMANCE.md 14): an unused upstream VAG decode on sound-file reads removed,
+      zlib's inflate_fast native (verified: 4,096 calls the same), the 30-second model-id search native, texture decodes
+      straight from same-layout uploads (3,500 the same as VRAM). 24-minute soak: p99 13.7 -> 11.9 ms, frames over 17 ms
+      357 -> 203, game-caused frames over 25 ms away from teleports 39 -> 15; what remains are loads.
 - [ ] Open (found 2026-10-24, not milestone 6): tour point (-925, 1175) falls through the world when the tour reaches
       it after the points before it, in every configuration; a fresh teleport there from Fort Baxter lands (z 14.5).
       Collision streaming order / timing at that spot needs a look.
@@ -608,6 +612,12 @@ dropped on uploads (lazy render-target patching).
 | `VCS_RSL_SHADOW_DUMP=n`, `VCS_RSL_SHADOW_FIND=1` | with `VCS_RSL_SHADOW`: n samples of draw state + VU memory (`rsl_shadow_NNN.bin`); where in guest RAM mismatching VU rows are |
 | `PS2X_CHAIN_CENSUS=1` | the VIF1 chain by tag location / id / data source: tags and quadwords per chain, every 5 s (`[chain]`) |
 | `VCS_PROFILE_GUEST_FILE=<path>` | with `VCS_PROFILE`: every guest function's samples per report window, appended (for sums by subsystem) |
+| `VCS_PROFILE_SPIKES=<ms>` | with `VCS_PROFILE`: a frame longer than <ms> gets its own report (`[spike] t=... ms frame`: its samples by guest function / host symbol, with call chains when `VCS_PROFILE_CALLERS` matches); `VCS_PROFILE_THREAD` may list several threads (`GameThread,RenderWorker,GsStage`) |
+| `PS2X_WAIT_LOG=<ms>` | the EE scheduler logs waits longer than <ms> (pacing the EE clock to a deadline, or idle) with every guest thread's state, wait reason and pc / ra |
+| `VCS_NATIVE_INFLATE=0`, `VCS_NATIVE_INFLATE_VERIFY=1`, `VCS_NATIVE_INFLATE_LOG=1` | zlib's inflate_fast recompiled as before; native decode compared with the original's output; counts, time and slowest call every 10 s |
+| `VCS_NATIVE_MODEL_INDEX=0` | MAIN.SCM's model-id search (`FUN_00255188`) recompiled as before |
+| `PS2X_VAG_DECODE=1` | the upstream VAG-to-PCM decode of sound files read through fio (for an unused playback path) as before |
+| `PS2X_HW_DECODE_FAST=0` | textures decoded from their upload through the GS swizzle per texel even when the upload has the texture's own layout |
 | `VCS_PROFILE_CALLERS=name[,name]` | with `VCS_PROFILE`: for samples in host functions whose name contains one of these, the unwound call chain up to the first guest function (`called from <sampled function> < <caller> ...`; an unwind fault ends the chain, not the process) |
 | `VCS_RSL_NATIVE=0`, `VCS_RSL_NATIVE_VERIFY=1`, `VCS_RSL_NATIVE_LOG=1` | the original RSL state flush instead of the native one; the original runs and the native bytes are compared with it; counts every 10 s (`[rsl-native]`) |
 | `PS2X_HLE_PACKED=0`, `PS2X_HW_PACKED_VERIFY=1` | the C++ reproductions' strips / fans through the GS front end; check the packed recording against it per packet |

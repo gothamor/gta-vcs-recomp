@@ -239,6 +239,56 @@ within noise. The walker's share falls by about what making the items costs (`it
 step 4b had already taken the copy savings. Where the render worker's time goes did not change: the replay's copies
 into VU memory are ~5% of its samples (~12% of its busy time while driving), `GS::submitNative`'s ring copy 3.4%.
 
+### 14. Long-run frame-time spikes (2026-10-26)
+
+**How they were found.** A 24-minute uncapped soak (`tools/soak.py`: autodrive, a teleport to the next city spot every
+2 minutes) with the per-frame CSV (`PS2X_PERF_LOG`, `tools/perf_report.py`), then three new tools:
+- `VCS_PROFILE_SPIKES=<ms>` (with `VCS_PROFILE`): a frame longer than <ms> gets its own report - the samples taken during
+  it, by guest function / host symbol, with a timestamp; `VCS_PROFILE_THREAD` takes a list (`GameThread,RenderWorker,
+  GsStage`, threads found as they start) and `VCS_PROFILE_CALLERS` adds the call chains of matching host samples to
+  the spike lines (what a wait waits in).
+- `PS2X_WAIT_LOG=<ms>`: the EE scheduler logs a wait longer than <ms> - pacing the EE clock to a deadline, or idle with
+  every guest thread waiting - with each thread's state, wait reason and pc / ra.
+- `VCS_NATIVE_INFLATE_LOG=1`: inflate time per 10 s and the slowest call.
+
+**What they were, and what was done** (each kept bit-exact, each with a switch back):
+- **An upstream VAG decoder on every sound-file read.** PS2Recomp's file I/O copied every read of a file starting with
+  `VAGp` and decoded it to PCM at close, for a guessed-sample playback that is off (the sound is the SPU2 core's): ~25 ms
+  on the game thread per sound-bank load and the PCM kept for good. Now skipped (`PS2X_VAG_DECODE=1` = before).
+- **zlib's `inflate_fast` natively** (`src/game/vcs_inflate.cpp`): a line-for-line port of zlib 1.2.2's `inffast.c` on
+  guest memory (the EE build's `z_stream` / `inflate_state` layout, OFF = 1), non-overlapping match copies as one
+  `memcpy` each. The game inflates whole files with `avail_in` ~16 MB ("enough"): the input is checked by its start and
+  every read stays inside main RAM. 0.64% of the game thread while driving before; a whole area (~5.5 MB at a
+  Beach / Mainland swap or a teleport) now ~20 ms. `VCS_NATIVE_INFLATE_VERIFY=1` (decode into a shadow copy, compared
+  with the original's output at the next call of the same stream): tour subset 1,920 + 1,757 calls, boot + drive 419,
+  all the same (a ring of small chunks the game relocates in place before the next call shows as a false
+  "differs" - the 21 bytes are the relocated pointers). `VCS_NATIVE_INFLATE=0` = the original.
+- **A model-id search every 30 s.** `FUN_0025A348` calls `FUN_00255188` (a linear search of MAIN.SCM's 1,092-entry
+  model table, game-internals.md 11a) once per entry of a list: millions of guest loop iterations, charged to the EE
+  clock, which then held the frame until real time caught up (`PS2X_WAIT_LOG`: "pacing to a deadline" at pc 0x2551a8,
+  ~14 ms, every 30 s). Native, with the registers the loop leaves (`VCS_NATIVE_MODEL_INDEX=0` = the original).
+- **Texture decodes on the GS stage.** A texture missing from the cache is decoded from the upload that wrote it,
+  mapping every texel through the GS swizzle (`GSMem::PixelBits`, three calls a texel): ~60 ms frames with both the game
+  thread and the render worker waiting on `GsStage` after a teleport. When the upload and the texture share format,
+  base, width and origin (every decode in the game so far) the texel at (x, y) is the upload's pixel at (x, y): taken
+  directly. `PS2X_HW_DECODE_VERIFY=1`: 3,500 textures the same as the VRAM decode (`PS2X_HW_DECODE_FAST=0` = before).
+
+**Result**, the same 24-minute soak before / after (uncapped, `--opt none`): 133.3 -> 138.4 fps, p99 13.7 -> 11.9 ms;
+frames of 17-34 ms 291 -> 138, over 100 ms 40 -> 23; away from the teleports, frames over 25 ms with the game thread
+the cause 39 -> 15. An uncapped AI drive of 150 s after boot: 3 frames over 17 ms (worst 26.5 ms), p99 9.3 ms.
+`tools/bench.py --fps 0 VCS_TIMING=1 VCS_MIN_STEP=0.05`, two alternating rounds: Fort Baxter 203 / 206 -> 219 / 217 fps,
+city (1325, -325) 196 / 203 -> 216 / 222 (render worker 5.0 -> 3.3 ms), the other spots and the drive within noise.
+
+**What is left, and why it stays:**
+- Teleports and area loads (a black fade, then 150-450 ms): the game's own load - the EE idle while the native sound
+  engine plays out sound-bank DMA in real time (its duration is kept: the game relies on it, game-internals.md 9a) -
+  then the area's inflate (~20 ms). A soak artefact too: its screenshot per leg (a GPU read-back, 130-170 ms).
+- The EE clock's pacing (charged guest cycles running ahead of real time) remains for authentic timing; in
+  frame-rate-independent timing a smaller charge (1/16 instead of 1/4) changed nothing measurable.
+- Memory grows while new places are visited (529 -> 1,587 MB over the 24-minute soak) and converges when they repeat
+  (three rounds of the same 8 spots: +260, +89, +45 MB): caches filling (texture and mesh caches are LRU-bounded; the
+  RSL recordings ~115 MB of it), not a leak.
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker
@@ -247,8 +297,9 @@ into VU memory are ~5% of its samples (~12% of its busy time while driving), `GS
   docs/FULLY_NATIVE.md (state and textures as item ops) takes the chain's share down; the replay's VU-memory round
   trip needs the native handlers to take their inputs from the recordings (as the world handler's mesh already does)
   - with care for the fields an UNPACK leaves alone, which later packets read.
-- **Game thread** (guest code ~80% of it now, flat: the top function 2.3%): deeper codegen (guest registers kept in host
-  registers across calls), `inflate_fast` natively for streaming bursts (zlib 1.2.2, game-internals.md 8).
+- **Game thread** (guest code ~64-80% of it, flat: the top function 1.4%): deeper codegen (guest registers kept in host
+  registers across calls). The kick's item resolve copies (~2% driving) and the write-watch fold (~2%) are the largest
+  host-side items.
 - GS stage: per-upload / per-CLUT-load bookkeeping; content-derived page generations (more texture-bind memo hits).
 - Playtest missions above 100 fps; sprint at 1/240 s (-11%).
 - The RSL recordings' memory (an LRU bound).

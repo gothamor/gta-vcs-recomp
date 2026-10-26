@@ -30,12 +30,13 @@ import gamectl  # noqa: E402
 import toolchain as tc  # noqa: E402
 
 # (seconds, action, argument, static?) - action: shot <scene> | press <key[:ms]> | perf <scene>
-# Timeline from `explore` runs (empty card, PS2X_GS=hw, i7-7700K): legal screen ~0.5 s, loading screen 1.2-1.6 s,
+# Timeline from `explore` runs (empty card, PS2X_GS=hw, i7-7700K): legal screen ~0.5 s, loading screen 0.7-1.2 s (1.2-1.6 s
+# before zlib's inflate ran natively, 2026-10-26: GAME.DTZ is inflated faster - with VCS_NATIVE_INFLATE=0 shoot it at 1.4),
 # flyover ~3-38 s (a fade at ~40 s), intro cutscene from ~44 s (Cross skips it), gameplay next to Martinez's bike from
 # ~100 s. (Until 2026-10-25 the boot took longer - loading 1-4 s, flyover 6-45 s: the game thread got ~2x faster.)
 # Moving scenes drift by a second or two between runs; static ones are loading screen and the pause map.
 SCRIPT = [
-    (1.4, "shot", "loading", True),
+    (1.0, "shot", "loading", True),
     (12.0, "shot", "flyover_road", False),
     (24.0, "shot", "flyover_tower", False),
     (36.0, "shot", "flyover_base", False),

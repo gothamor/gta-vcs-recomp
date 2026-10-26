@@ -988,6 +988,11 @@ Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
   write 0x34, window 0x38, hold 0x40 (8 bytes), bits 0x48, lencode 0x58, distcode 0x5C, lenbits 0x60, distbits
   0x64 (mode BAD = 27). **FUN_00184428 = inflate_fast** (OFF = 1, pre-increment pointers) - read from its loads,
   2026-10-25. It is the busiest guest function while streaming: ~12% of guest time in a standing profile window.
+  Native since 2026-10-26 (PERFORMANCE.md 14). The game's whole-file inflates (GAME.DTZ, the LVZ images) pass
+  `avail_in` ~16 MB - "enough" - so the input buffer is not known by its length; one stream decodes ~8 KB chunks
+  into a ring at 0x4D3E80 / 0x4D6080 / 0x4D8280 and relocates pointers in each chunk in place right after.
+  With the native inflate the boot's loading screen shows 0.7-1.2 s (1.2-1.6 s before; `tools/scenes.py` shoots it
+  at 1.0).
 
 ## 9. Streaming and sound (CDSTREAM.IRX)
 
@@ -1253,6 +1258,10 @@ below (e.g. 0x0023 terminates, 0x0289 loads a mission, 0x0238 names a script).
 (gosub), +0x54 0x6A-word local variables (timers at locals 0x68 / 0x69), +0x1FC local frame base, +0x200 wake
 time, +0x208 active, +0x20A mission script, +0x20C NOT flag of the current condition, +0x20D, +0x20F name (8
 chars; `Init` writes `"id%02i"`), +0x217 "is the mission" (cleared by terminate).
+
+`FUN_00255188(id)` returns the index of `id` in that model-id table (count at 0x4CD3CC, table at *0x487420) or -1, by a
+linear scan; `FUN_0025A348` calls it for each entry of a list every 30 s of game time (millions of iterations: a
+frame held ~14 ms by the EE clock's charge for them until it ran natively, PERFORMANCE.md 14).
 
 Functions: `FUN_002551d0` Init, `FUN_00255950(ip)` StartNewScript (idle -> active, id, Init, IP, +0x208 = 1),
 `FUN_002558f0` / `FUN_00255928` list remove / add, `FUN_002560d8` ProcessOneCommand (u16 opcode at IP, bit 15 =

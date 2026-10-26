@@ -356,3 +356,11 @@ buffer; the chain's walk in 5g skips both.
 a chain, 0.19 ms of it the items' resolve, which stays either way; the walk and copy of the ~300 remaining tags (the
 root lists, the item tags, the runs' NEXTs) cost ~0.04 ms. The chain is kept as what orders the frame: one path, the
 walker's checks (verify modes, the census) keep working, and nothing is drawn from the chain's own bytes any more.
+
+## 2026-10-26 - zlib natively as an exact port, not a faster inflater
+
+`inflate_fast` could be replaced by a faster decoder (wide bit-buffer refills, multi-symbol tables) with the same output.
+Chosen: zlib 1.2.2's own loop, so every call leaves `next_in` / `avail_in` / `hold` / `bits` exactly as the guest's -
+checkable call for call against the original (`VCS_NATIVE_INFLATE_VERIFY`) - with only the copies that cannot overlap
+done as `memcpy`. A faster decoder would stop at other points and leave zlib's state different between calls (the
+final output the same); the ~20 ms an area load costs now did not justify losing the per-call check.

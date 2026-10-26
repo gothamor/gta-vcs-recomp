@@ -5,12 +5,14 @@
 // unity batch (~9 min), while this file only needs a relink.
 // Once a binding is settled it can move to overrides.toml.
 #include "game_overrides.h"
+#include "debug/profiler.h"
 #include "debug/rig.h"
 #include "debug/rsl_shadow.h"
 #include "debug/rsl_trace.h"
 #include "game/vcs_display.h"
 #include "game/vcs_framerate.h"
 #include "game/vcs_movie.h"
+#include "game/vcs_inflate.h"
 #include "game/vcs_sound.h"
 #include "game/vcs_stream.h"
 #include "game/vcs_hud.h"
@@ -323,6 +325,52 @@ namespace
         SET_GPR_S32(ctx, 2, static_cast<int32_t>(m + 64u));
         SET_GPR_S32(ctx, 1, 0x3F800000);
         ctx->f[0] = 1.0f;
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+
+    // FUN_00255188(id): the index of `id` in MAIN.SCM's u16 model-id table (game-internals.md 11a; table at *0x487420,
+    // count at 0x4CD3CC), -1 when absent - a linear scan in guest code. FUN_0025A348 calls it once per entry of a list
+    // every 30 s: a few million iterations, the frame held back by the EE clock's charge for them (PERFORMANCE.md 14).
+    // Natively: the same first match, $v0 / $v1 / $a1 / $a2 as the loop leaves them ($a0 compared as the whole 64-bit
+    // register, as BNEL does). A table outside main RAM runs the original. VCS_NATIVE_MODEL_INDEX=0: the original.
+    PS2Runtime::RecompiledFunction g_origModelIndex = nullptr;
+    PS2_GUEST_CC void modelIndex(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        int32_t count;
+        std::memcpy(&count, rdram + 0x4CD3CCu, 4);
+        if (count <= 0)
+        {
+            SET_GPR_S32(ctx, 5, count);
+            SET_GPR_U64(ctx, 3, 0u);
+            SET_GPR_S32(ctx, 2, -1);
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
+        uint32_t table;
+        std::memcpy(&table, rdram + 0x487420u, 4);
+        const uint32_t at = table & 0x1FFFFFFFu;
+        if (at >= 0x02000000u || static_cast<uint64_t>(count) * 2u > 0x02000000u - at)
+        {
+            g_origModelIndex(rdram, ctx, runtime);
+            return;
+        }
+        const uint64_t want = GPR_U64(ctx, 4);
+        const uint8_t *p = rdram + at;
+        int32_t i = 0;
+        if (want <= 0xFFFFu)
+            for (const uint16_t id = static_cast<uint16_t>(want); i < count; ++i)
+            {
+                uint16_t v;
+                std::memcpy(&v, p + i * 2u, 2);
+                if (v == id)
+                    break;
+            }
+        else
+            i = count; // (a halfword never equals a value above 0xFFFF)
+        SET_GPR_S32(ctx, 6, count);
+        SET_GPR_S32(ctx, 5, static_cast<int32_t>(table + static_cast<uint32_t>(i) * 2u)); // (addiu: 32 bits, sign-extended)
+        SET_GPR_S32(ctx, 3, i);
+        SET_GPR_S32(ctx, 2, i < count ? i : -1);
         ctx->pc = GPR_U32(ctx, 31);
     }
 
@@ -708,6 +756,7 @@ namespace
     PS2_GUEST_CC void markFrameKick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         ps2perf::markGameFrame();
+        vcs::profilerFrame(); // VCS_PROFILE_SPIKES (debug/profiler.h)
         vcs::applyDisplay(rdram); // widescreen preference / aspect (settings menu)
         vcs::rig::onGameFrame(rdram, ctx, runtime); // automation rig jobs (debug/rig.h)
         vcs::onFrameKick();                         // the HUD context ends (game/vcs_hud.h)
@@ -773,6 +822,13 @@ namespace
         const bool stream = vcs::installStreamHooks(runtime); // disc streaming without the IOP (game/vcs_stream.h)
         const bool sound = vcs::installSoundHooks(runtime);   // sound without the IOP (game/vcs_sound.h)
         vcs::retireIop(stream && sound);                      // then no emulated IOP at all
+        vcs::installInflate(runtime);                         // zlib's inflate_fast natively (game/vcs_inflate.h)
+        if (!std::getenv("VCS_NATIVE_MODEL_INDEX") || std::getenv("VCS_NATIVE_MODEL_INDEX")[0] != '0')
+        {
+            g_origModelIndex = runtime.lookupFunction(0x00255188u);
+            if (g_origModelIndex)
+                runtime.replaceFunction(0x00255188u, &modelIndex);
+        }
         if (std::getenv("VCS_TRACE_PACKETS"))
             runtime.replaceFunction(0x00476770u, &tracePacketUse);
         if (std::getenv("VCS_TRACE_TELEPORT"))

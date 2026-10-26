@@ -3,11 +3,13 @@
 #include "ps2_runtime.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -26,6 +28,14 @@ namespace vcs
 #if defined(_WIN32)
     namespace
     {
+        // VCS_PROFILE_SPIKES: frame boundaries from the game thread, a slow frame's span for the sampler
+        std::atomic<int64_t> g_lastFrameNs{0}, g_spikeFromNs{0}, g_spikeToNs{0};
+        std::vector<std::string> g_threadNames; // of the sampled threads (sampler thread only)
+        int64_t g_spikeMs = 0;
+        int64_t nowNs()
+        {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
         // up to n return addresses of a suspended thread's stack from its context. A fault while unwinding (a thread
         // caught where its unwind data does not describe the stack yet) ends the walk instead of the process.
         int unwindFrames(CONTEXT u, uintptr_t *out, int n)
@@ -95,10 +105,21 @@ namespace vcs
             std::vector<HANDLE> out;
             if (!getDesc)
                 return out;
-            // VCS_PROFILE_THREAD=RenderWorker: sample the render submission worker instead of the game thread
-            std::wstring wanted = L"GameThread";
+            // VCS_PROFILE_THREAD=RenderWorker: sample the render submission worker instead of the game thread; a list
+            // (GameThread,RenderWorker) samples each (the spike reports say which)
+            std::vector<std::wstring> wanted{L"GameThread"};
             if (const char *thread = std::getenv("VCS_PROFILE_THREAD"))
-                wanted = std::wstring(thread, thread + std::strlen(thread));
+            {
+                wanted.clear();
+                for (const char *p = thread; *p;)
+                {
+                    const char *comma = std::strchr(p, ',');
+                    const char *e = comma ? comma : p + std::strlen(p);
+                    wanted.emplace_back(p, e);
+                    p = comma ? comma + 1 : e;
+                }
+            }
+            g_threadNames.clear();
             HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
             THREADENTRY32 te{sizeof(te)};
             const DWORD pid = GetCurrentProcessId();
@@ -111,13 +132,20 @@ namespace vcs
                     continue;
                 PWSTR name = nullptr;
                 bool keep = false;
+                std::string label;
                 if (SUCCEEDED(getDesc(h, &name)) && name)
                 {
-                    keep = wanted == name;
+                    for (const std::wstring &w : wanted)
+                        keep |= w == name;
+                    for (const wchar_t *c = name; *c; ++c)
+                        label += static_cast<char>(*c);
                     LocalFree(name);
                 }
                 if (keep)
+                {
                     out.push_back(h);
+                    g_threadNames.push_back(label);
+                }
                 else
                     CloseHandle(h);
             }
@@ -132,6 +160,8 @@ namespace vcs
         if (!env || !*env)
             return;
         const double reportSeconds = std::atof(env) > 0.0 ? std::atof(env) : 5.0;
+        if (const char *spikes = std::getenv("VCS_PROFILE_SPIKES"))
+            g_spikeMs = std::atoll(spikes);
 
         std::thread([&runtime, reportSeconds]()
                     {
@@ -194,18 +224,45 @@ namespace vcs
             std::unordered_map<uintptr_t, uint64_t> other;  // non-generated host RIP (page) -> samples
             uint64_t total = 0;
             auto lastReport = std::chrono::steady_clock::now();
+            struct Timed // VCS_PROFILE_SPIKES: recent samples with their time
+            {
+                int64_t ns;
+                uint32_t guest; // 0: host code
+                uintptr_t rip;
+                uint32_t thread; // index in threads
+                uint32_t chain;  // chainNames[chain - 1] (0: none)
+            };
+            std::vector<Timed> recent;
+            std::map<std::vector<uintptr_t>, uint32_t> chainIds;
+            std::vector<std::string> chainNames;
+            int spikesReported = 0;
             while (!runtime.isStopRequested())
             {
                 std::this_thread::sleep_for(std::chrono::microseconds(500));
-                if (threads.empty())
+                // until every thread asked for exists (the render worker starts after the game thread): look again each second
+                static const size_t wantedCount = [] {
+                    const char *t = std::getenv("VCS_PROFILE_THREAD");
+                    size_t n = 1;
+                    for (const char *p = t; p && *p; ++p)
+                        n += *p == ',';
+                    return n;
+                }();
+                static auto lastLook = std::chrono::steady_clock::time_point{};
+                if (threads.size() < wantedCount && std::chrono::steady_clock::now() - lastLook > std::chrono::seconds(1))
                 {
+                    lastLook = std::chrono::steady_clock::now();
+                    for (HANDLE h : threads)
+                        CloseHandle(h);
                     threads = findGameThreads();
-                    continue;
                 }
-                for (HANDLE h : threads)
+                if (threads.empty())
+                    continue;
+                for (size_t ti = 0; ti < threads.size(); ++ti)
                 {
+                    HANDLE h = threads[ti];
                     if (SuspendThread(h) == static_cast<DWORD>(-1))
                         continue;
+                    uint32_t sampleChain = 0; // (VCS_PROFILE_SPIKES with VCS_PROFILE_CALLERS: its call chain, 1-based)
                     CONTEXT c{};
                     c.ContextFlags = callersOf.empty() ? CONTEXT_CONTROL : CONTEXT_FULL;
                     const bool got = GetThreadContext(h, &c) != 0;
@@ -239,6 +296,27 @@ namespace vcs
                                     break;
                             }
                             ++stacks[frames];
+                            if (g_spikeMs > 0) // a spike's report names the chain (VCS_PROFILE_CALLERS)
+                            {
+                                auto found = chainIds.find(frames);
+                                if (found == chainIds.end())
+                                {
+                                    std::string chain;
+                                    for (size_t k = 1; k < frames.size() && k < 9; ++k)
+                                    {
+                                        auto f = std::upper_bound(map.begin(), map.end(), frames[k],
+                                                                  [](uintptr_t v, const HostFn &fn) { return v < fn.host; });
+                                        const bool gen = f != map.begin() && f != map.end() && withinGenerated(std::prev(f)->host, frames[k]);
+                                        char guest[24];
+                                        if (gen)
+                                            std::snprintf(guest, sizeof(guest), "guest 0x%08x", std::prev(f)->guest);
+                                        chain += " < " + (gen ? std::string(guest) : symbolName(frames[k]));
+                                    }
+                                    chainNames.push_back(chain);
+                                    found = chainIds.emplace(frames, static_cast<uint32_t>(chainNames.size())).first;
+                                }
+                                sampleChain = found->second;
+                            }
                         }
                     }
                     ResumeThread(h);
@@ -250,10 +328,46 @@ namespace vcs
                     // counted as that function before)
                     // (a replaced function's slot points at a host hook outside the generated code: a sample after it
                     // is host code, not that guest function - checked by the symbol name below)
-                    if (it != map.begin() && it != map.end() && withinGenerated(std::prev(it)->host, rip))
+                    const bool generated = it != map.begin() && it != map.end() && withinGenerated(std::prev(it)->host, rip);
+                    if (generated)
                         ++hits[std::prev(it)->guest];
                     else
                         ++other[rip];
+                    if (g_spikeMs > 0)
+                    {
+                        if (recent.size() >= 8192u)
+                            recent.erase(recent.begin(), recent.begin() + 4096);
+                        recent.push_back({nowNs(), generated ? std::prev(it)->guest : 0u, rip, static_cast<uint32_t>(ti), sampleChain});
+                    }
+                }
+                if (g_spikeMs > 0 && g_spikeToNs.load(std::memory_order_acquire) != 0)
+                {
+                    const int64_t from = g_spikeFromNs.load(), to = g_spikeToNs.load();
+                    g_spikeToNs.store(0, std::memory_order_release);
+                    std::unordered_map<std::string, uint64_t> by;
+                    uint64_t n = 0;
+                    for (const Timed &t : recent)
+                        if (t.ns >= from && t.ns <= to)
+                        {
+                            ++n;
+                            char key[32];
+                            if (t.guest)
+                                std::snprintf(key, sizeof(key), "guest 0x%08x", t.guest);
+                            const std::string who = threads.size() > 1 && t.thread < g_threadNames.size() ? g_threadNames[t.thread] + ": " : "";
+                            by[who + (t.guest ? std::string(key) : "host " + symbolName(t.rip)) +
+                               (t.chain && t.chain <= chainNames.size() ? chainNames[t.chain - 1] : std::string())]++;
+                        }
+                    if (n && spikesReported++ < 400)
+                    {
+                        std::vector<std::pair<std::string, uint64_t>> rows(by.begin(), by.end());
+                        std::sort(rows.begin(), rows.end(), [](auto &a, auto &b) { return a.second > b.second; });
+                        std::string line;
+                        for (size_t i = 0; i < rows.size() && i < 12; ++i)
+                            line += " | " + rows[i].first + " " + std::to_string(rows[i].second);
+                        static const int64_t startNs = nowNs();
+                        std::fprintf(stderr, "[spike] t=%.2f s: %.1f ms frame, %llu samples%s\n", (to - startNs) / 1e9, (to - from) / 1e6,
+                                     static_cast<unsigned long long>(n), line.c_str());
+                    }
                 }
                 const auto now = std::chrono::steady_clock::now();
                 if (std::chrono::duration<double>(now - lastReport).count() < reportSeconds || total == 0)
@@ -370,7 +484,19 @@ namespace vcs
             } })
             .detach();
     }
+    void profilerFrame()
+    {
+        if (g_spikeMs <= 0)
+            return;
+        const int64_t now = nowNs(), last = g_lastFrameNs.exchange(now);
+        if (last && now - last > g_spikeMs * 1000000 && g_spikeToNs.load(std::memory_order_acquire) == 0)
+        {
+            g_spikeFromNs.store(last);
+            g_spikeToNs.store(now, std::memory_order_release);
+        }
+    }
 #else
     void startProfiler(PS2Runtime &) {}
+    void profilerFrame() {}
 #endif
 }

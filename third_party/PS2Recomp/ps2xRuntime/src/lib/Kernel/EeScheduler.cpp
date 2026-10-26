@@ -11,6 +11,17 @@
 #include <limits>
 #include <stdexcept>
 
+// [gta-recomp] PS2X_WAIT_LOG (EeScheduler::logLongWait)
+namespace
+{
+    long waitLogMs()
+    {
+        static const long ms = std::getenv("PS2X_WAIT_LOG") ? std::atol(std::getenv("PS2X_WAIT_LOG")) : 0;
+        return ms;
+    }
+}
+
+
 namespace
 {
     constexpr int KE_OK = 0;
@@ -1846,6 +1857,8 @@ void EeScheduler::processDueDeadlines()
             if (now < pacingDeadline)
             {
                 ps2perf::PhaseScope waitTime(ps2perf::Phase::Wait); // [gta-recomp]
+                if (waitLogMs() > 0 && pacingDeadline - now > std::chrono::milliseconds(waitLogMs())) // [gta-recomp]
+                    logLongWait("pacing to a deadline", std::chrono::duration<double, std::milli>(pacingDeadline - now).count());
                 m_eventCv.wait_until(lock, pacingDeadline, [this]()
                                      { return !m_events.empty() ||
                                               m_stopRequested.load(std::memory_order_acquire); });
@@ -2059,8 +2072,52 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
     std::memcpy(m_rdram + physical, &value, sizeof(value));
 }
 
+// [gta-recomp] PS2X_WAIT_LOG=<ms>: a wait of the scheduler with every guest thread idle that lasts longer - each thread's
+// state, what it waits for and where (FPS spike hunting: docs/PERFORMANCE.md)
+void EeScheduler::logLongWait(const char *where, double ms) const
+{
+    static int logged = 0;
+    if (logged++ >= 300)
+        return;
+    std::fprintf(stderr, "[ee-wait] %s %.1f ms:", where, ms);
+    static const char *const status[] = {"running", "ready", "waiting", "waiting-suspended", "suspended", "dormant"};
+    static const char *const reasons[] = {"-", "sleep", "sema", "eventflag", "vsync", "external", "mpeg"};
+    for (const auto &[id, t] : m_threads)
+    {
+        if (t.status == EeThreadStatus::Dormant)
+            continue;
+        std::fprintf(stderr, " | t%d %s", id, status[static_cast<int>(t.status)]);
+        if (t.status == EeThreadStatus::Waiting || t.status == EeThreadStatus::WaitingSuspended)
+        {
+            std::fprintf(stderr, " %s", reasons[static_cast<int>(t.wait.reason)]);
+            if (const auto *sema = std::get_if<EeSemaphoreWait>(&t.wait.payload))
+                std::fprintf(stderr, " %d", sema->id);
+            else if (const auto *ext = std::get_if<EeExternalWait>(&t.wait.payload))
+                std::fprintf(stderr, " type %u", ext->type);
+        }
+        const R5900Context &c = t.activeContext();
+        std::fprintf(stderr, " pc %06x ra %06x", c.pc, getRegU32(&c, 31));
+    }
+    std::fprintf(stderr, "\n");
+}
+
 void EeScheduler::waitForEvent()
 {
+    const auto waitStart = std::chrono::steady_clock::now(); // [gta-recomp] PS2X_WAIT_LOG
+    struct WaitLog
+    {
+        const EeScheduler &s;
+        std::chrono::steady_clock::time_point t0;
+        ~WaitLog()
+        {
+            const long limit = waitLogMs();
+            if (limit <= 0)
+                return;
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (ms > double(limit))
+                s.logLongWait("idle, waiting for an event", ms);
+        }
+    } waitLog{*this, waitStart};
     std::unique_lock lock(m_eventMutex);
     if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
     {
