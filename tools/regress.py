@@ -14,7 +14,8 @@ Steps (each a tool of its own, run in turn; the game window shows):
   saves     tools/saves.py: save to slot 2, Load Game slot 1, Delete Game slot 2 through the game's menus
   shakedown tools/shakedown.py: mission 50's shop entry at 144 fps (the shopkeeper deleted by the 32-bit branch bug,
             the mission stuck on "Loading...")
-  widecull  at 16:9 and 16:10 the entity culling (CCamera's side planes) reaches the screen edges, not the 4:3 ones
+  widecull  at 16:9, 16:10, 21:9 and 32:9 the entity culling (CCamera's side planes) reaches the screen edges, not
+            the 4:3 ones
             (buildings, peds and cars vanishing at the sides in widescreen)
 
 Writes OUT/report.md and OUT/metrics.json (default OUT: build/regress/<date-time>). --set-baseline stores this
@@ -143,7 +144,7 @@ def step_widecull(out, quick):
     sys.path.insert(0, TOOLS)
     import rig  # noqa: E402
     res = {}
-    for aspect in ("169",) if quick else ("169", "1610"):
+    for aspect in ("169", "329") if quick else ("169", "1610", "219", "329"):
         g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="regress_widecull_" + aspect,
                            env={"VCS_ASPECT": aspect})
         try:

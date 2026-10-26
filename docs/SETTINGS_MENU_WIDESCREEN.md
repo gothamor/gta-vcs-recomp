@@ -114,8 +114,24 @@ pause map) are shown at 4:3, pillarboxed.
   follows" held for the world sectors only. Buildings, peds and cars go through `CCamera::IsSphereVisible`, whose
   side planes the game builds from the FOV global (4:3); they vanished in the outer eighths of a 16:9 picture.
   `vcs_display.cpp` now widens those planes to the Hor+ edge too (game-internals.md 5; `VCS_WIDE_CULL=0` = before).
-- Not done from the plan: 21:9 and "match window" (the same mechanism; streaming at the edges
-  needs a look first), separate horizontal / vertical internal scale, window mode, pausing,
+- **Ultrawide** (2026-10-27, asked for by the user): Aspect ratio 21:9 (`219`, exactly 21 / 9), 32:9 (`329`) and
+  Match window (`0`: the window's shape, clamped to 4:3 .. 32:9, followed each host frame as the window is resized or
+  goes full screen - for monitors such as 3440x1440 (2.39) or 2560x1080 (2.37) that are not exactly 21:9). Nothing
+  else had to change: the Hor+ widening, the entity culling, the presenter's letterbox, the HUD squeeze / anchoring and
+  the post effects' buffer widths all take the ratio as a number. Limits: narrower than 4:3 is shown letterboxed
+  (Hor+ only widens; a portrait window would need Vert+), wider than 32:9 is not checked. At 32:9 the horizontal view
+  is 124 degrees (tan 35 x 2.67), so near objects at the sides stretch - rectilinear projection, as in any game.
+  Checked at 21:9 (2520x1080 frame) and 32:9 (3840x1080), Internal resolution Match window, HUD Screen edges: the
+  reference scenes (flyover, cutscene with its bars inside the picture, gameplay HUD at the edges, loading screen and
+  pause map at 4:3 pillarboxed), two AI drives through the city (buildings, traffic and peds out to the edges, no
+  unstreamed cells - the streaming follows the camera's cell, not the view), entity planes at 32:9 edge 1.867 = view
+  window. Cost (tools/bench.py, 144 fps setting, GTX 1080 Ti): the game thread about the same as 16:9 1920x1080; the
+  render worker roughly doubles with the pixels and the extra draws (busiest spot city_1325_-325: worker 4.5 -> 10.3
+  ms, 131 -> 97 fps; drive 113 -> 103 fps).
+  An integer Internal resolution (1x-8x) still renders 640 x scale across the whole width: at 32:9 that is 2.67 times
+  softer horizontally than vertically; Match window renders at the window's own size (separate horizontal / vertical
+  scales for the integer modes are still open, below).
+- Not done from the plan: separate horizontal / vertical internal scale, window mode, pausing,
   control-channel `menu` / `set` commands (environment overrides cover scripted captures:
   `VCS_ASPECT=169 python tools/scenes.py capture ...`).
 - Gamepad chord: opening on the Back + Start press means the game may see Start for one frame

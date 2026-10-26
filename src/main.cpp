@@ -31,6 +31,8 @@
 #include "runtime/ps2_control.h"
 #include "util/sha1.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -153,11 +155,51 @@ namespace
 #endif
     }
 
+    // Display aspect limits: narrower than 4:3 would cut the original view (Hor+ only widens), wider than 32:9 is not
+    // checked (the horizontal view reaches 124 degrees at 32:9 with the game's 70-degree FOV).
+    constexpr float kNarrowestAspect = 4.0f / 3.0f, kWidestAspect = 32.0f / 9.0f;
+    float g_appliedAspect = 0.0f;
+
+    // The window's shape for "Match window", false while there is no window (or it is minimised).
+    bool windowAspect(float &aspect)
+    {
+        int w = 0, h = 0;
+        platform::windowSize(w, h);
+        if (w <= 0 || h <= 0)
+            return false;
+        aspect = std::clamp(static_cast<float>(w) / static_cast<float>(h), kNarrowestAspect, kWidestAspect);
+        return true;
+    }
+
+    // display.aspect: 43, 1610, 169, 219, 329, or 0 = the window's shape
+    float aspectFor(int code)
+    {
+        switch (code)
+        {
+        case 1610:
+            return 16.0f / 10.0f;
+        case 169:
+            return 16.0f / 9.0f;
+        case 219:
+            return 21.0f / 9.0f;
+        case 329:
+            return 32.0f / 9.0f;
+        case 0:
+        {
+            float a = g_appliedAspect > 0.0f ? g_appliedAspect : 4.0f / 3.0f; // no window yet: followWindowAspect
+            windowAspect(a);
+            return a;
+        }
+        default:
+            return 4.0f / 3.0f;
+        }
+    }
+
     // Display aspect: the presenter's ratio, the game camera's Hor+ widening and the HUD squeeze (game/vcs_display.h).
     void applyAspect()
     {
-        const int code = settings::value("display.aspect");
-        const float aspect = code == 169 ? 16.0f / 9.0f : code == 1610 ? 16.0f / 10.0f : 4.0f / 3.0f;
+        const float aspect = aspectFor(settings::value("display.aspect"));
+        g_appliedAspect = aspect;
         present::setDisplayAspect(aspect);
         vcs::setAspectWidening(aspect / (4.0f / 3.0f));
         gsHwSetAspectWidening(aspect / (4.0f / 3.0f)); // post effects keep their 4:3 proportions
@@ -165,6 +207,14 @@ namespace
         gsHwSetHudSqueeze(hud != 1 ? (4.0f / 3.0f) / aspect : 1.0f);
         vcs::setHudAnchoring(hud == 2); // per-element placement (game/vcs_hud.h)
         std::fprintf(stderr, "[settings] display aspect %.3f, HUD %s\n", aspect, hud == 0 ? "4:3" : hud == 2 ? "screen edges" : "stretched");
+    }
+
+    // Each host frame: "Match window" follows the window as it is resized, moved to another monitor or made full screen.
+    void followWindowAspect()
+    {
+        float aspect = 0.0f;
+        if (settings::value("display.aspect") == 0 && windowAspect(aspect) && std::fabs(aspect - g_appliedAspect) > 1e-3f)
+            applyAspect();
     }
 
     // The player settings (settings/settings.h). The menu shows pages (tabs) in the order they first appear here, each
@@ -181,9 +231,11 @@ namespace
         s.page = "Display";
         s.section = "Screen";
         s.label = "Aspect ratio";
-        s.help = "Widescreen shows more to the sides (Hor+); 4:3 is the original picture.";
+        s.help = "Widescreen and ultrawide show more to the sides (Hor+); 4:3 is the original picture. Match window "
+                 "follows the window's shape (between 4:3 and 32:9), for monitors such as 3440x1440 that are not "
+                 "exactly 21:9.";
         s.type = Type::Choice;
-        s.choices = {{"4:3 (original)", 43}, {"16:10", 1610}, {"16:9", 169}};
+        s.choices = {{"4:3 (original)", 43}, {"16:10", 1610}, {"16:9", 169}, {"21:9", 219}, {"32:9", 329}, {"Match window", 0}};
         s.defaultValue = 43;
         s.env = "VCS_ASPECT";
         s.onChange = [](int) { applyAspect(); };
@@ -469,6 +521,7 @@ int main(int argc, char *argv[])
         // the settings menu draws in the runtime's UI hook (registered before initialize(), which runs the init hook)
         runtime.setDebugUiCallbacks([](PS2Runtime &, void *) {},
                                     [](PS2Runtime &, void *) {
+                                        followWindowAspect();
                                         ui::drawSettingsMenu();
                                         ui::drawTrainerMenu();
                                         ps2control::setGameInputBlocked(ui::settingsMenuBlocksInput() || ui::trainerMenuBlocksInput());

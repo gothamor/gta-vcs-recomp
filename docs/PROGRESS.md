@@ -509,6 +509,12 @@ dropped on uploads (lazy render-target patching).
       the label: that alone makes a click do nothing.
 ## Phase 6 - enhancements
 
+- **Ultrawide** (2026-10-27, asked for by the user): Aspect ratio 21:9, 32:9 and Match window (the window's own
+  shape, 4:3 .. 32:9, followed live). Checked with the reference scenes and city drives at 21:9 / 32:9 (picture, HUD,
+  cutscene bars, culling and streaming at the edges); regress step "widecull" covers 21:9 and 32:9. At 32:9 3840x1080
+  the render worker costs about twice 16:9 1920x1080 (busiest bench spot 97 fps, drive 103) - details in
+  SETTINGS_MENU_WIDESCREEN.md "Ultrawide".
+
 - **Widescreen culling at the screen edges** (2026-10-27, reported by the user): at 16:9 / 16:10 buildings, peds and
   cars in the outer part of the picture were culled as if the screen were 4:3 - `CCamera::IsSphereVisible` tests
   side planes built from the FOV alone, not from the widened view window (game-internals.md 5). The planes are now
@@ -669,7 +675,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HLE_STATS=1` | stage tables the native handler passes over |
 | `PS2X_HLE_LIT=0` | draw skinned / lit models through the VU1 program (world stays native) |
 | **F2** (or gamepad Back + Start) | settings menu (docs/SETTINGS_MENU_WIDESCREEN.md); its values live in vcs.ini next to vcs.exe |
-| `display.aspect=43\|1610\|169` in vcs.ini, `VCS_ASPECT=...` for one run | aspect ratio (Hor+ widescreen) |
+| `display.aspect=43\|1610\|169\|219\|329\|0` in vcs.ini, `VCS_ASPECT=...` for one run | aspect ratio (Hor+ widescreen; 0 = match the window) |
 | `display.hud=0\|1` | widescreen HUD: keep 4:3 in the middle / stretch |
 | `window.*` in vcs.ini | where the window was last (monitor, position, size, maximized); written by the game, delete the lines to reset (docs/SETTINGS_MENU_WIDESCREEN.md) |
 | `python tools/rig.py start --save DIR`, `python tools/rig.py <command>` | automation rig: start from a card copy; peek / poke / findvec / dump / scm / scripts / player / pause |

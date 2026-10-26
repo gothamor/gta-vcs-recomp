@@ -365,6 +365,15 @@ checkable call for call against the original (`VCS_NATIVE_INFLATE_VERIFY`) - wit
 done as `memcpy`. A faster decoder would stop at other points and leave zlib's state different between calls (the
 final output the same); the ~20 ms an area load costs now did not justify losing the per-call check.
 
+## 2026-10-27 - Ultrawide: fixed ratios plus Match window, Hor+ between 4:3 and 32:9
+
+The user asked for 21:9 and 32:9. "21:9" monitors are 2.37 (2560x1080) or 2.39 (3440x1440), not 21 / 9 = 2.33. Chosen:
+- The menu's 21:9 is exactly 21 / 9 (the label says what it is), and a Match window choice takes the window's own
+  shape, so every monitor gets a picture without bars; it follows the window each host frame (resizing, full screen).
+- Match window is clamped to 4:3 .. 32:9: narrower than 4:3 would cut the original horizontal view (we only do Hor+),
+  wider than 32:9 is untested (triple screens would need checking: the view passes 140 degrees).
+- No separate FOV setting: the game's horizontal FOV is kept for the middle 4:3 and the sides are added.
+
 ## 2026-10-26 - The trainer: the game's script commands, nothing saved, the game's input taken while open
 
 The user asked for a trainer like RDR2's (docs/TRAINER.md). Chosen:
