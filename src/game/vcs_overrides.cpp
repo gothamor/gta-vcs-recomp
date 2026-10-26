@@ -405,6 +405,7 @@ namespace
         const uint32_t cam = GPR_U32(ctx, 4), center = GPR_U32(ctx, 5), mat = GPR_U32(ctx, 6);
         const float radius = ctx->f[12];
         const uint32_t sp = GPR_U32(ctx, 29) - 16u;
+        vcs::prepareSphereTest(rdram, cam); // this wrapper replaces the display hooks' one
         FUN_003816f8_0x3816f8(rdram, ctx, runtime);
         static uint64_t calls = 0, visible = 0;
         static int samples = 0;

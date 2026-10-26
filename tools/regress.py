@@ -14,6 +14,8 @@ Steps (each a tool of its own, run in turn; the game window shows):
   saves     tools/saves.py: save to slot 2, Load Game slot 1, Delete Game slot 2 through the game's menus
   shakedown tools/shakedown.py: mission 50's shop entry at 144 fps (the shopkeeper deleted by the 32-bit branch bug,
             the mission stuck on "Loading...")
+  widecull  at 16:9 and 16:10 the entity culling (CCamera's side planes) reaches the screen edges, not the 4:3 ones
+            (buildings, peds and cars vanishing at the sides in widescreen)
 
 Writes OUT/report.md and OUT/metrics.json (default OUT: build/regress/<date-time>). --set-baseline stores this
 run as build/regress/baseline (metrics.json + the scenes capture); later runs report what changed against it:
@@ -134,6 +136,31 @@ def step_shakedown(out, quick):
     return shakedown.check(os.path.join(out, "shakedown"))
 
 
+def step_widecull(out, quick):
+    """Widescreen culling (game-internals.md 5): CCamera::IsSphereVisible's side planes (TheCamera 0x6F44D0 + 0xB60,
+    right (cos h, -sin h)) must end where the widened view window does (tan(FOV / 2) x r at 0x742AC0), not at the
+    game's 4:3 edge. Fixed 2026-10-27 (src/game/vcs_display.cpp, prepareSphereTest)."""
+    sys.path.insert(0, TOOLS)
+    import rig  # noqa: E402
+    res = {}
+    for aspect in ("169",) if quick else ("169", "1610"):
+        g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="regress_widecull_" + aspect,
+                           env={"VCS_ASPECT": aspect})
+        try:
+            g.wait_ingame()
+            g.cmd("pause on")
+            rx, ry = g.peekf(0x6F44D0 + 0xB60, 2)
+            lx, ly = g.peekf(0x6F44D0 + 0xB70, 2)
+            window = g.peekf(0x742AC0, 1)[0]
+            g.cmd("pause off")
+        finally:
+            g.quit()
+        right, left = -ry / rx, ly / lx
+        res[aspect] = {"view_window": round(window, 4), "right_edge": round(right, 4), "left_edge": round(left, 4),
+                       "pass": abs(right - window) < 1e-3 * window and abs(left - window) < 1e-3 * window}
+    return res
+
+
 def compare(base, new):
     notes = []
     bt, nt = base.get("tour", {}), new.get("tour", {})
@@ -161,6 +188,10 @@ def compare(base, new):
             notes.append("saves: %s failed (see saves.log and the screenshots)" % k)
     if "shakedown" in new and new["shakedown"].get("pass") is not True:
         notes.append("shakedown: the shop entry failed %s (see shakedown/)" % json.dumps(new["shakedown"]))
+    for aspect, r in new.get("widecull", {}).items():
+        if isinstance(r, dict) and r.get("pass") is not True:
+            notes.append("widecull %s: entity culling edge %s, view window %s (models culled at the 4:3 edges again?)" % (
+                aspect, r.get("right_edge"), r.get("view_window")))
     for s in new.get("scenes", {}).get("compare_failed", []):
         notes.append("scene %s differs from the baseline (see scenes_compare.log, diff images)" % s)
     return notes
@@ -176,7 +207,8 @@ def main():
     os.makedirs(out, exist_ok=True)
     metrics = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "quick": a.quick}
     for name, fn in (("scenes", step_scenes), ("tour", step_tour), ("missions", step_missions), ("drive", step_drive),
-                     ("evening", step_evening), ("saves", step_saves), ("shakedown", step_shakedown)):
+                     ("evening", step_evening), ("saves", step_saves), ("shakedown", step_shakedown),
+                     ("widecull", step_widecull)):
         print("[regress] %s" % name)
         t0 = time.time()
         try:

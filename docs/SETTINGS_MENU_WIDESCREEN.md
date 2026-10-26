@@ -110,6 +110,10 @@ pause map) are shown at 4:3, pillarboxed.
   middle) instead of all towards the middle. The game names its own HUD primitives (`src/game/vcs_hud.cpp`, found by
   their vertex positions; game-internals.md 6f), so the "far plane = HUD" heuristic only covers 2D outside CHud::Draw's
   frame. `gsHwSetHudClassifier` in the renderer; the pivot is x 0 / 640 / 320 of the 640-wide frame.
+- **Entity culling** (2026-10-27): the claim "RenderWare derives the frustum from the view window, so culling
+  follows" held for the world sectors only. Buildings, peds and cars go through `CCamera::IsSphereVisible`, whose
+  side planes the game builds from the FOV global (4:3); they vanished in the outer eighths of a 16:9 picture.
+  `vcs_display.cpp` now widens those planes to the Hor+ edge too (game-internals.md 5; `VCS_WIDE_CULL=0` = before).
 - Not done from the plan: 21:9 and "match window" (the same mechanism; streaming at the edges
   needs a look first), separate horizontal / vertical internal scale, window mode, pausing,
   control-channel `menu` / `set` commands (environment overrides cover scripted captures:

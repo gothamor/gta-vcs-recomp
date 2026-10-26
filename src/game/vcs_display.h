@@ -11,7 +11,11 @@ namespace vcs
     void setAspectWidening(float r);
     float aspectWidening();
 
-    // At start-up (applyVcs): wraps the view-window setter.
+    // Game thread, before CCamera::IsSphereVisible (FUN_003816F8) runs on this camera: widens its side planes to the
+    // Hor+ view. Called by the display hooks' wrapper, and by any other wrapper of that function.
+    void prepareSphereTest(uint8_t *rdram, uint32_t camera);
+
+    // At start-up (applyVcs): wraps the view-window setter and the sphere test.
     void installDisplayHooks(PS2Runtime &runtime);
 
     // Game thread, once per game frame (testing: VCS_WIDESCREEN forces the game's own preference).

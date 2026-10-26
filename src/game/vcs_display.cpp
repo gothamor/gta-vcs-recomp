@@ -3,18 +3,26 @@
 // Widescreen is Hor+: FUN_001ab9e0 (sets the camera's view window: x = tan(FOV / 2), y = x / aspect, then
 // RwCameraSetViewWindow) is wrapped so the horizontal extent grows by r = display aspect / (4:3) while the vertical
 // one stays (both arguments times r). RenderWare derives the frustum (EE culling) and the VU matrices from the view
-// window, so the 3D, the culling and both renderers follow; the picture (still 640 wide) is presented at the wider
-// aspect and the renderer keeps the HUD at 4:3 (gsHwSetHudSqueeze).
+// window, so the 3D, the sector culling and both renderers follow; the picture (still 640 wide) is presented at the
+// wider aspect and the renderer keeps the HUD at 4:3 (gsHwSetHudSqueeze).
+//
+// Entities are culled by the game's own camera planes, which do not come from the view window:
+// CCamera::IsSphereVisible (FUN_003816F8) tests camera-space side planes that FUN_0037b2c8 builds from the FOV global
+// alone (right (cos h, -sin h) at cam+0xB60, left (-cos h, -sin h) at +0xB70, h = FOV / 2: the 4:3 view). Without a
+// fix buildings, peds and cars at the screen edges vanish in widescreen. The test is wrapped: before it runs, side
+// planes the game has rebuilt are widened to the Hor+ view (edge at tan h x r). VCS_WIDE_CULL=0: the game's planes.
 //
 // The game's own widescreen preference is Vert- (same horizontal view, vertical view cut) and stays as the game has
 // it; VCS_WIDESCREEN=0|1 forces it (testing only).
 #include "game/vcs_display.h"
 
 #include "ps2_runtime.h"
+#include "ps2_runtime_macros.h"
 #include "runtime/gs/gs_hw.h"
 #include <ps2_recompiled_functions.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -28,8 +36,24 @@ namespace vcs
         constexpr uint32_t kWidescreenField = 0x30u;    // int: 1 = the game's (Vert-) widescreen; FUN_002af658 reads it
         constexpr uint32_t kRamMask = 0x01FFFFFFu;
 
+        constexpr uint32_t kRightPlane = 0xB60u; // CCamera: camera-space frustum normals, x right, y forward, z up
+        constexpr uint32_t kLeftPlane = 0xB70u;
+
         std::atomic<float> g_widening{1.0f};
         std::atomic<int> g_gamePreference{-1}; // -1: leave the game's preference alone
+        bool g_wideCull = true;
+
+        // Per camera object, its side planes as the game built them and as they were widened (game thread only: the
+        // camera's FUN_0037b2c8 and every IsSphereVisible run there). In practice one camera (TheCamera, 0x6F44D0).
+        struct SidePlanes
+        {
+            uint32_t camera = 0;
+            float r = 1.0f;
+            float game[4] = {}; // right x, y, left x, y
+            float wide[4] = {};
+        };
+        SidePlanes g_planes[4];
+        unsigned g_nextPlanes = 0;
 
         uint32_t load32(const uint8_t *rdram, uint32_t addr)
         {
@@ -51,6 +75,70 @@ namespace vcs
             }
             FUN_001ab9e0_0x1ab9e0(rdram, ctx, runtime);
         }
+
+        float loadFloat(const uint8_t *rdram, uint32_t addr)
+        {
+            float v;
+            std::memcpy(&v, rdram + (addr & kRamMask), 4);
+            return v;
+        }
+
+        void storeFloat(uint8_t *rdram, uint32_t addr, float v) { std::memcpy(rdram + (addr & kRamMask), &v, 4); }
+
+        // A side plane (a, b) = (+-cos h, -sin h) has its edge at x / y = tan h; the Hor+ edge is at tan h x r:
+        // (a, r b), normalised (the test compares the distance with the sphere's radius).
+        void widenPlane(const float *game, float r, float *wide)
+        {
+            const float a = game[0], b = game[1] * r;
+            const float len = std::sqrt(a * a + b * b);
+            wide[0] = len > 0.0f ? a / len : game[0];
+            wide[1] = len > 0.0f ? b / len : game[1];
+        }
+    }
+
+    void prepareSphereTest(uint8_t *rdram, uint32_t camera)
+    {
+        if (!g_wideCull)
+            return;
+        const float r = g_widening.load(std::memory_order_relaxed);
+        SidePlanes *found = nullptr;
+        for (SidePlanes &e : g_planes)
+            if (e.camera == camera)
+                found = &e;
+        if (r == 1.0f && (!found || found->r == 1.0f))
+            return; // 4:3: the game's planes
+        float now[4] = {loadFloat(rdram, camera + kRightPlane), loadFloat(rdram, camera + kRightPlane + 4),
+                        loadFloat(rdram, camera + kLeftPlane), loadFloat(rdram, camera + kLeftPlane + 4)};
+        const bool ours = found && std::memcmp(now, found->wide, sizeof(now)) == 0;
+        if (ours && found->r == r)
+            return; // widened already (the game rebuilds them in FUN_0037b2c8, once per camera update)
+        SidePlanes &p = found ? *found : g_planes[g_nextPlanes++ % 4u];
+        if (!ours)
+            std::memcpy(p.game, now, sizeof(now)); // rebuilt by the game: the 4:3 planes
+        // else: the ratio changed since they were widened (r = 1: the game's planes go back)
+        p.camera = camera;
+        p.r = r;
+        if (r == 1.0f)
+            std::memcpy(p.wide, p.game, sizeof(p.wide));
+        else
+        {
+            widenPlane(p.game, r, p.wide);
+            widenPlane(p.game + 2, r, p.wide + 2);
+        }
+        storeFloat(rdram, camera + kRightPlane, p.wide[0]);
+        storeFloat(rdram, camera + kRightPlane + 4, p.wide[1]);
+        storeFloat(rdram, camera + kLeftPlane, p.wide[2]);
+        storeFloat(rdram, camera + kLeftPlane + 4, p.wide[3]);
+    }
+
+    namespace
+    {
+        // CCamera::IsSphereVisible(camera a0, centre a1, camera matrix a2, radius f12): a leaf
+        PS2_GUEST_CC void sphereVisible(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            prepareSphereTest(rdram, GPR_U32(ctx, 4));
+            FUN_003816f8_0x3816f8(rdram, ctx, runtime);
+        }
     }
 
     void setAspectWidening(float r) { g_widening.store(r, std::memory_order_relaxed); }
@@ -60,6 +148,9 @@ namespace vcs
     void installDisplayHooks(PS2Runtime &runtime)
     {
         runtime.replaceFunction(0x001AB9E0u, &setViewWindow);
+        if (const char *e = std::getenv("VCS_WIDE_CULL"); e && *e == '0')
+            g_wideCull = false;
+        runtime.replaceFunction(0x003816F8u, &sphereVisible); // VCS_TRACE_VISIBLE replaces it again, calling prepareSphereTest
         if (const char *e = std::getenv("VCS_WIDESCREEN"); e && *e) // testing: force the game's own (Vert-) preference
             g_gamePreference.store(*e == '0' ? 0 : 1, std::memory_order_relaxed);
         // VCS's render targets by what they are (game-internals.md 6g; docs/FULLY_NATIVE.md step 3d). The reflection map

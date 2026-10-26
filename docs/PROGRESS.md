@@ -509,6 +509,14 @@ dropped on uploads (lazy render-target patching).
       the label: that alone makes a click do nothing.
 ## Phase 6 - enhancements
 
+- **Widescreen culling at the screen edges** (2026-10-27, reported by the user): at 16:9 / 16:10 buildings, peds and
+  cars in the outer part of the picture were culled as if the screen were 4:3 - `CCamera::IsSphereVisible` tests
+  side planes built from the FOV alone, not from the widened view window (game-internals.md 5). The planes are now
+  widened to the Hor+ edge before each test (`src/game/vcs_display.cpp`, `VCS_WIDE_CULL=0` = the game's planes).
+  Sector culling was already right. Checked: plane edge = view window x at 16:9 (0.9336) and 16:10 (0.8402),
+  regress step "widecull" (fails with `VCS_WIDE_CULL=0`: 0.7002); spheres passing the test at 16:9 +8-25% over the
+  three bench spots; 4:3 untouched (the wrapper returns before reading memory).
+
 - **Trainer** (2026-10-26, docs/TRAINER.md): an RDR2 Native Trainer style menu (F5 / Back + RB) - god mode, never
   wanted, wanted level, money, every weapon and loadouts, unlimited ammo, no reload, spawning all 110 vehicles,
   vehicle invincibility / repair / flip / boost / paint, teleports to 13 districts and a saved position, time,
@@ -578,6 +586,8 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HLE_REDRAW=0` | 0x02c0's re-draws / shine passes and the float-image prelit packets on the VU1 |
 | `VCS_HUD_RW=0` | no HUD context at the RenderWare level (the 16:9 weapon icon goes back to the screen edge; no native HUD, no anchoring) |
 | `VCS_HUD=0/2/1` | HUD in widescreen: keep 4:3 in the middle / screen edges / stretch (the menu's Display > HUD) |
+| `VCS_WIDE_CULL=0` | widescreen: entities culled by the game's 4:3 camera planes (models vanish at the screen edges, as before 2026-10-27) |
+| `VCS_TRACE_VISIBLE=1` | CCamera::IsSphereVisible: visible ratio every 5 s, samples with the camera-space point and the planes |
 | `VCS_HUD_NATIVE=0` | the HUD drawn into the PS2 frame buffer instead of the native layer at the window's size |
 | `PS2X_HW_PIXEL_CENTRE=0` | draws without the GS pixel-centre offset (softer copies, as before 2026-10-23) |
 | `PS2X_HW_RT_FULL=0` | render targets read once per PS2 texel everywhere (higher internal resolutions lost in the copies) |

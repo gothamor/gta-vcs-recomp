@@ -230,7 +230,27 @@ the globals each frame:
   preference's 106 readers are mostly 3D-projected sprites (e.g. `0x1147e0`: a size without the 4/3
   factor).
 - RenderWare derives the frustum (EE culling) and the VU matrices from the view window, so widening
-  it (our Hor+, `vcs_display.cpp`) widens 3D, culling and both renderers at once.
+  it (our Hor+, `vcs_display.cpp`) widens 3D, sector culling and both renderers at once.
+- **Entity culling does not follow the view window** (found 2026-10-27, the user's "models at the screen edges are
+  culled as if the screen were 4:3"). `CCamera::IsSphereVisible` = `FUN_003816F8(cam, centre, camera matrix, radius)`
+  transforms the centre to camera space (x right, y forward, z up) and tests it against near / far (`0x4CD130` /
+  `0x4CD12C`) and four camera-space plane normals in the camera object: right `cam+0xB60` = (cos h, -sin h, 0),
+  left `+0xB70` = (-cos h, -sin h, 0), bottom `+0xB80` / top `+0xB90` = (0, -sin v, -+cos v); culled when
+  dot > radius. They are built in `FUN_0037b2c8` (called from `FUN_00378dd8`, the camera update) from the FOV global
+  alone: h = FOV x pi / 360 (`0x3C0EF921`), v = 0.7 x h (`0x3F333333`) - never from the aspect or the view window.
+  Found by grepping the generated code for stores to `0xB60(` (one writer) and loads of the FOV global `0x487484`
+  (13 readers; the others are a FOV < 60 branch in the sector draw `0x240ff4`, LOD / sprite scales 70 / FOV). With
+  the view window widened the planes still cut at the 4:3 edge (tan h = 0.700 vs 0.934 at 16:9): buildings, peds and
+  cars in the outer eighths of a 16:9 picture were not drawn, and the car / ped spawners (which also ask
+  IsSphereVisible) treated those parts as off screen. Fix: `vcs_display.cpp` wraps FUN_003816F8 and, before it runs,
+  widens side planes the game has rebuilt to the Hor+ edge (normal (a, r b) normalised); the vertical planes stay
+  (Hor+ keeps the vertical view). No other reader of those planes (the writes are only in FUN_0037b2c8, the reads
+  only in FUN_003816F8). Regression check: `tools/regress.py` step "widecull" (the planes' edge equals the view
+  window's x at `0x742AC0`, which holds (tan(FOV / 2) x r, aspect x r, near 0.3, far 2000)).
+- The sector test (6b) builds its clip planes in `FUN_002F7620` from that `0x742AC0` view window, so it was already
+  wide: its side planes at 16:9 are (-+0.73095, -0.68243), the same 43.0 degrees as the widened entity planes.
+- `FUN_0039fc48` (3D point to screen for sprites: coronas, light glows) only rejects by near / far; it sizes the
+  sprite with the aspect global (`0x39fd2c`: 448 / z x 1.4286 / aspect), which Hor+ leaves at the game's 4:3 value.
 
 ## 6. Renderer
 
