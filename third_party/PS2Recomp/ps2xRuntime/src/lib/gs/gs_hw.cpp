@@ -181,6 +181,9 @@ namespace
         HwState s;
         uint32_t first, count;
         uint32_t source = 0u; // [gta-recomp] gsCurrentDrawSource() when recorded (DrawSources)
+        // [gta-recomp] a HudDraw's widescreen squeeze, applied in the layer after its pixel snapping (appendHudDraw):
+        // x' = pivot + (x - pivot) * squeeze in GS pixel-centre coordinates, the scissor alike (1 = none)
+        float hudPivot = 0.0f, hudSqueeze = 1.0f;
     };
 
     struct TexCreate
@@ -1304,6 +1307,7 @@ namespace
             float scaleX = 1.0f, scaleY = 1.0f; // target pixels per PS2 pixel
             int originX = 0, originY = 0;       // the PS2 pixel at the target's top-left (vertices come shifted by it)
             float scissorScaleX = 1.0f;         // the draw's scissor x in target units (a widened native buffer)
+            float squeezePivot = 0.0f, squeeze = 1.0f; // a HUD layer draw's widescreen squeeze (DrawCmd::hudSqueeze)
             bool opaque = true;                 // alpha not written (the shown picture)
             rhi::Texture *texture = nullptr;    // read instead of the draw's texture, as a plain texture
             rhi::Buffer *vertices = nullptr;    // null: the HUD layer's
@@ -1325,11 +1329,20 @@ namespace
                 layer.vertices.resize(start + kept);
                 if (!kept)
                     return;
-                if (!layer.draws.empty() && std::memcmp(&layer.draws.back().s, &s, sizeof(HwState)) == 0 &&
-                    layer.draws.back().first + layer.draws.back().count == start)
+                if (d.hudSqueeze != 1.0f)
+                {
+                    // widescreen: squeezed after the snap, so the pieces keep the 4:3 picture's pixel edges (the
+                    // radar's mask and scissor meet), in the GS pixel-centre coordinates the scissor uses too (draw)
+                    const float o = pixelCentreOffset();
+                    for (size_t k = start; k < layer.vertices.size(); ++k)
+                        layer.vertices[k].x = d.hudPivot + (layer.vertices[k].x + o - d.hudPivot) * d.hudSqueeze - o;
+                }
+                const DrawCmd &last = layer.draws.empty() ? d : layer.draws.back();
+                if (!layer.draws.empty() && std::memcmp(&last.s, &s, sizeof(HwState)) == 0 && last.hudPivot == d.hudPivot &&
+                    last.hudSqueeze == d.hudSqueeze && last.first + last.count == start)
                     layer.draws.back().count += kept;
                 else
-                    layer.draws.push_back({s, static_cast<uint32_t>(start), kept});
+                    layer.draws.push_back({s, static_cast<uint32_t>(start), kept, d.source, d.hudPivot, d.hudSqueeze});
             };
             if (!clampable)
             {
@@ -1811,7 +1824,11 @@ namespace
             t.originY = static_cast<int>(displayY);
             m_dev.pushMarker("gs hud layer");
             for (const DrawCmd &d : layer.draws)
+            {
+                t.squeezePivot = d.hudPivot;
+                t.squeeze = d.hudSqueeze;
                 draw(d.s, d.first, d.count, nullptr, &t);
+            }
             m_dev.popMarker();
             endPass();
         }
@@ -1905,7 +1922,10 @@ namespace
                 auto edge = [&](float e, float scale, float origin, int size) {
                     return std::clamp(static_cast<int>(std::ceil((e + o - origin) * scale - 0.5f)), 0, size);
                 };
-                const int x0 = edge(s.scx0 * scw, sx, ox, tw), x1 = std::max(x0, edge((s.scx1 + 1.0f) * scw, sx, ox, tw));
+                // a squeezed HUD layer draw: its scissor edges go where its vertices went (appendHudDraw), unrounded
+                const float pv = target ? target->squeezePivot : 0.0f, sq = target ? target->squeeze : 1.0f;
+                auto edgeX = [&](float e) { return sq == 1.0f ? e : pv + (e + o - pv) * sq - o; };
+                const int x0 = edge(edgeX(s.scx0 * scw), sx, ox, tw), x1 = std::max(x0, edge(edgeX((s.scx1 + 1.0f) * scw), sx, ox, tw));
                 const int y0 = edge(static_cast<float>(s.scy0), sy, oy, th), y1 = std::max(y0, edge(s.scy1 + 1.0f, sy, oy, th));
                 m_dev.setScissor(x0, y0, x1 - x0, y1 - y0);
             }
@@ -2442,6 +2462,7 @@ namespace
             const float squeeze = g_hudSqueeze.load(std::memory_order_relaxed);
             const GSHwAnchorFn classify = g_hudClassifier.load(std::memory_order_relaxed);
             bool hud = false; // a HUD primitive for the native layer
+            float hudPivot = 0.0f, hudSqueeze = 1.0f; // its squeeze, applied in the layer (DrawCmd::hudSqueeze)
             // the classifier also names menus in frames without 3D (the pause menu); the squeeze is for 3D frames only
             const bool wide = squeeze < 0.9999f && m_showing3d.load(std::memory_order_relaxed);
             if ((wide || classify) && s.fbw == 10u)
@@ -2467,9 +2488,17 @@ namespace
                 {
                     // x' = pivot + (x - pivot) * squeeze: the pivot stays where it is (an edge or the middle)
                     const float pivot = anchor == GSHwAnchorLeft ? 0.0f : anchor == GSHwAnchorRight ? 640.0f : 320.0f;
-                    for (uint32_t i = 0; i < n; ++i)
+                    // [gta-recomp] the native layer squeezes after snapping to the PS2's pixels: squeezed first, a PS2 pixel
+                    // spans several screen pixels (6 at 32:9) and the radar's scissor and corner mask rounded to different
+                    // ones - a column of map beside the circle
+                    if (hud)
+                    {
+                        hudPivot = pivot;
+                        hudSqueeze = squeeze;
+                    }
+                    for (uint32_t i = 0; i < n && !hud; ++i)
                         out[i].x = pivot + (out[i].x - pivot) * squeeze;
-                    if (s.scx0 > 0u || s.scx1 < 639u)
+                    if (!hud && (s.scx0 > 0u || s.scx1 < 639u))
                     {
                         // the squeezed scissor passes the pixels whose sample position falls in the squeezed span of
                         // the original pixels (GS: pixel X samples at X); outward rounding let the radar map show in
@@ -2492,10 +2521,11 @@ namespace
             Frame &f = *m_frame;
             const CmdType cmdType = hud ? CmdType::HudDraw : CmdType::Draw;
             if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != cmdType || f.draws.back().source != source ||
+                f.draws.back().hudPivot != hudPivot || f.draws.back().hudSqueeze != hudSqueeze ||
                 std::memcmp(&f.draws.back().s, &s, sizeof(HwState)) != 0)
             {
                 f.cmds.push_back({cmdType, static_cast<uint32_t>(f.draws.size())});
-                f.draws.push_back({s, static_cast<uint32_t>(f.vertices.size()), 0u, source});
+                f.draws.push_back({s, static_cast<uint32_t>(f.vertices.size()), 0u, source, hudPivot, hudSqueeze});
             }
             f.vertices.insert(f.vertices.end(), out, out + n);
             f.draws.back().count += n;
@@ -3736,6 +3766,22 @@ namespace
                     m_rhi->setFrameSize(forced.first, forced.second);
                 else
                     m_rhi->setFrameSize(g_frameW.load(std::memory_order_relaxed), g_frameH.load(std::memory_order_relaxed));
+            }
+            else
+            {
+                // [gta-recomp] an integer scale in widescreen: the picture's targets as many times wider as the view is
+                // (gsHwSetAspectWidening), so the wider picture has the 4:3 picture's pixels per degree across instead
+                // of 640 x scale stretched (2.67 times softer across than down at 32:9); at most 8192 wide.
+                // PS2X_HW_WIDE_SCALE=0: every target at the plain integer scale (before 2026-10-27)
+                static const bool wide = [] {
+                    const char *e = std::getenv("PS2X_HW_WIDE_SCALE");
+                    return !(e && e[0] == '0');
+                }();
+                const float r = g_aspectWidening.load(std::memory_order_relaxed);
+                if (wide && r > 1.0001f)
+                    m_rhi->setFrameSize(std::min<uint32_t>(8192u, static_cast<uint32_t>(std::lround(640.0 * m_scale * r))), 448u * m_scale);
+                else
+                    m_rhi->setFrameSize(0u, 0u);
             }
             std::deque<std::unique_ptr<Frame>> frames;
             {

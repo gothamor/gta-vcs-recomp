@@ -385,6 +385,10 @@ The HUD, text and radar are drawn over the shown picture at the window's size in
     rectangle (REGION_CLAMP). The fonts are atlases with cells side by side; at 1080p a glyph's edge pixels sample
     within half a texel of the cell border and bilinear filtering pulled in the next cell's outline (lines under the
     clock's digits, beside its colon).
+  - Widescreen (2026-10-27): the squeeze towards an element's anchor is applied in the layer after the snap, to the
+    vertices and the scissor alike and unrounded (`DrawCmd::hudSqueeze`). Squeezed before the snap, the layer
+    rounded to PS2 pixels of the squeezed frame - 6 screen pixels each at 32:9 - and the radar's scissor and corner
+    mask landed on different ones: a column of map outside the circle (the user's report).
 - `VCS_HUD_NATIVE=0` = the HUD drawn into the frame buffer as before (with the anchoring still applied);
   `PS2X_HW_HUD_LOG=1` logs the layers every 2 s; `PS2X_HW_OUTPUT=WxH` forces the output size (a full-screen window
   in a test run, with `PS2X_CAPTURE_SIZE`).

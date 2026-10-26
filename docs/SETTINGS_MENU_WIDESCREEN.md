@@ -128,10 +128,17 @@ pause map) are shown at 4:3, pillarboxed.
   window. Cost (tools/bench.py, 144 fps setting, GTX 1080 Ti): the game thread about the same as 16:9 1920x1080; the
   render worker roughly doubles with the pixels and the extra draws (busiest spot city_1325_-325: worker 4.5 -> 10.3
   ms, 131 -> 97 fps; drive 113 -> 103 fps).
-  An integer Internal resolution (1x-8x) still renders 640 x scale across the whole width: at 32:9 that is 2.67 times
-  softer horizontally than vertically; Match window renders at the window's own size (separate horizontal / vertical
-  scales for the integer modes are still open, below).
-- Not done from the plan: separate horizontal / vertical internal scale, window mode, pausing,
+- **Integer resolutions in widescreen** (2026-10-27, the user's request): 1x-8x render the picture's targets as many
+  times wider as the view (640 x scale x r by 448 x scale: 1x at 16:9 853x448, 3x at 32:9 5120x1344, at most 8192
+  wide) through the native frame's per-target scales; before, 640 x scale was stretched across (2.67 times softer
+  across than down at 32:9). 4:3 unchanged. `PS2X_HW_WIDE_SCALE=0` = before. Cost follows the pixels: tools/bench.py
+  at 32:9 3x (4x MSAA, GTX 1080 Ti) 63-85 fps instead of 113-144 - a 32:9 3x is a 5120-wide picture; 1x / 2x stay
+  cheap, Match window renders at the window's own size.
+- **Radar streak at 32:9** (2026-10-27, reported by the user): a thin column of radar map right of the circle. The HUD
+  layer squeezed the HUD before snapping it to PS2 pixels, and at a squeeze of 0.375 a PS2 pixel is 6 screen pixels:
+  the map's scissor and its corner mask rounded to different ones. Now snapped at the 4:3 positions, then squeezed
+  with the scissor exactly (NATIVE_RENDERER.md "HUD layer"). Checked on the reference scene that showed it.
+- Not done from the plan: window mode, pausing,
   control-channel `menu` / `set` commands (environment overrides cover scripted captures:
   `VCS_ASPECT=169 python tools/scenes.py capture ...`).
 - Gamepad chord: opening on the Back + Start press means the game may see Start for one frame

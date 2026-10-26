@@ -261,8 +261,9 @@ namespace
         s.page = "Graphics";
         s.section = "Image quality";
         s.label = "Internal resolution";
-        s.help = "Renders the game at a multiple of 640x448, or at the window's own resolution (sharpest; the "
-                 "effects keep the original's look). Costs GPU time.";
+        s.help = "Renders the game at a multiple of 640x448 (in widescreen as many times wider as the view: 1x at 16:9 "
+                 "is 853x448), or at the window's own resolution (sharpest; the effects keep the original's look). "
+                 "Costs GPU time.";
         s.type = Type::Choice;
         s.choices = {{"1x (original)", 1}, {"2x", 2}, {"3x", 3}, {"4x", 4}, {"6x", 6}, {"8x", 8}, {"Match window", 0}};
         s.defaultValue = 1;
