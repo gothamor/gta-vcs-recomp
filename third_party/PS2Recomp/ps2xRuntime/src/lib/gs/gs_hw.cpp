@@ -247,6 +247,8 @@ namespace
         std::vector<uint8_t> nativeBytes; // transient native vertices
         uint64_t nativeVertices = 0;
         bool had3d = false; // [gta-recomp] any depth-tested or native draw (widescreen presentation)
+        int8_t wide3d = -1; // [gta-recomp] shown wide, its HUD squeezed (frameWide); -1: not asked yet
+        bool menu = false;  // [gta-recomp] has primitives the classifier names as the game's menu (GSHwAnchorMenu)
         uint64_t privRegs[15]{};
         // Display from CPU VRAM when no render target holds the displayed buffer.
         std::vector<uint32_t> cpuDisplay;
@@ -2343,7 +2345,7 @@ namespace
             // primitive): what recordPrimitive does per triangle - flat colour, the 3D flag - inline, then one state
             // check for the whole packet and its triangles appended at once (was a state copy + memcmp per triangle,
             // ~10% of the render worker in the city). The same draws and vertices as the per-primitive path.
-            const bool wide = g_hudSqueeze.load(std::memory_order_relaxed) < 0.9999f && m_showing3d.load(std::memory_order_relaxed);
+            const bool wide = g_hudSqueeze.load(std::memory_order_relaxed) < 0.9999f && frameWide();
             if (!classify && !s.texIsRt && !(wide && s.fbw == 10u))
             {
                 Frame &f = *m_frame;
@@ -2464,7 +2466,7 @@ namespace
             bool hud = false; // a HUD primitive for the native layer
             float hudPivot = 0.0f, hudSqueeze = 1.0f; // its squeeze, applied in the layer (DrawCmd::hudSqueeze)
             // the classifier also names menus in frames without 3D (the pause menu); the squeeze is for 3D frames only
-            const bool wide = squeeze < 0.9999f && m_showing3d.load(std::memory_order_relaxed);
+            const bool wide = squeeze < 0.9999f && frameWide();
             if ((wide || classify) && s.fbw == 10u)
             {
                 uint8_t anchor = GSHwAnchorNone;
@@ -2480,6 +2482,11 @@ namespace
                         xy[2 * i + 1] = batch->vertices[i].y - ofy;
                     }
                     anchor = classify(xy, count);
+                    if (anchor & GSHwAnchorMenu) // [gta-recomp] the game's menu: the frame may switch to 4:3 at once
+                    {
+                        m_frame->menu = true;
+                        anchor &= static_cast<uint8_t>(~GSHwAnchorMenu);
+                    }
                     hud = anchor != GSHwAnchorNone && g_hudLayer.load(std::memory_order_relaxed);
                 }
                 if (anchor == GSHwAnchorNone && far && !s.texIsRt && !(x0 <= 1.0f && x1 >= 639.0f) && wide)
@@ -3637,6 +3644,8 @@ namespace
             f.nativeBytes.clear();
             f.nativeVertices = 0;
             f.had3d = false;
+            f.wide3d = -1;
+            f.menu = false;
             std::memset(f.privRegs, 0, sizeof(f.privRegs));
             f.cpuDisplay.clear();
             f.cpuDisplayW = f.cpuDisplayH = 0;
@@ -3838,15 +3847,25 @@ namespace
                     m_lastInfo = std::move(info);
                 }
                 // 3D or not over the last 32 frames (the game draws 3D in every other VBlank at 30 fps): 3D in 4 or
-                // more of them shows 3D, none shows 2D, in between keeps the current shape (fades, loading flashes)
+                // more of them shows 3D, none shows 2D, in between keeps the current shape (fades, loading flashes).
+                // [gta-recomp] The game's menu over no 3D (the pause menu) is 2D at once: half a second of its
+                // full-width backdrop stretched across the wide picture before (PS2X_HW_MENU_SWITCH=0: as before). The shape
+                // shown is the shown frame's own (frameWide), so a frame squeezed for a wide picture is never shown at 4:3.
+                static const bool menuSwitch = [] {
+                    const char *e = std::getenv("PS2X_HW_MENU_SWITCH");
+                    return !(e && e[0] == '0');
+                }();
                 for (auto &frame : frames)
                 {
                     m_3dHistory = (m_3dHistory << 1) | (frame->had3d ? 1u : 0u);
+                    if (menuSwitch && frame->menu && !frame->had3d)
+                        m_3dHistory = 0u;
                     const int n = std::popcount(m_3dHistory);
                     if (n >= 4)
                         m_showing3d = true;
                     else if (n == 0)
                         m_showing3d = false;
+                    m_shownWide = frame->wide3d >= 0 ? frame->wide3d != 0 : m_showing3d.load(std::memory_order_relaxed);
                 }
                 m_executedFrames += frames.size();
                 if (dumpTargets)
@@ -4580,9 +4599,21 @@ namespace
         int m_dumpBatchesLeft = 0;  // [gta-recomp] PS2X_HW_DUMP_BATCHES
         uint32_t m_3dHistory = ~0u; // [gta-recomp] showing3d: had3d of the last 32 frames, newest in bit 0
         std::atomic<bool> m_showing3d{true}; // main thread writes, the game thread's Submit reads
+        std::atomic<bool> m_shownWide{true}; // [gta-recomp] the shown frame's frameWide: the presented shape (showing3d)
 
     public:
-        bool showing3d() const override { return m_showing3d.load(std::memory_order_relaxed); }
+        bool showing3d() const override { return m_shownWide.load(std::memory_order_relaxed); }
+
+        // [gta-recomp] Whether the frame being recorded is shown wide (its HUD squeezed): m_showing3d when the frame first
+        // asks, kept for the whole frame. Before, each draw read m_showing3d as the main thread updated it, and frames in
+        // flight at a switch were squeezed for a wide picture yet shown at 4:3 (the pause menu narrower for a frame).
+        bool frameWide()
+        {
+            Frame &f = *m_frame;
+            if (f.wide3d < 0)
+                f.wide3d = m_showing3d.load(std::memory_order_relaxed) ? 1 : 0;
+            return f.wide3d != 0;
+        }
         std::string lastFrameInfo() const override
         {
             std::lock_guard<std::mutex> lock(m_infoMutex);

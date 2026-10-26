@@ -37,18 +37,15 @@ namespace present
 
         std::atomic<float> g_displayAspect{4.0f / 3.0f};
 
-        // The bound pass's target is targetWidth x targetHeight; the src region is shown at display aspect `aspect`.
-        void drawPicture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int targetWidth, int targetHeight)
+        // The bound pass's target is targetWidth x targetHeight; the src region is shown at display aspect `aspect`
+        // inside the game's frame (fitRect)
+        void drawPicture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int targetWidth, int targetHeight,
+                         float frameAspect = 0.0f)
         {
             if (!picture.texture || srcWidth <= 0 || srcHeight <= 0 || targetWidth <= 0 || targetHeight <= 0 || aspect <= 0.0f)
                 return;
-            float w = static_cast<float>(targetWidth), h = w / aspect;
-            if (h > targetHeight)
-            {
-                h = static_cast<float>(targetHeight);
-                w = h * aspect;
-            }
-            const float x0 = (targetWidth - w) * 0.5f, y0 = (targetHeight - h) * 0.5f;
+            float x0 = 0.0f, y0 = 0.0f, w = 0.0f, h = 0.0f;
+            fitRect(aspect, frameAspect, static_cast<float>(targetWidth), static_cast<float>(targetHeight), x0, y0, w, h);
             auto ndcX = [&](float px) { return px / targetWidth * 2.0f - 1.0f; };
             auto ndcY = [&](float py) { return 1.0f - py / targetHeight * 2.0f; };
             const rhi::TextureDesc &td = picture.texture->desc();
@@ -144,7 +141,33 @@ namespace present
 
     float displayAspect(bool showing3d) { return showing3d ? g_displayAspect.load(std::memory_order_relaxed) : 4.0f / 3.0f; }
 
-    void drawWindow(const Picture &picture, int srcWidth, int srcHeight, float aspect, int windowWidth, int windowHeight)
+    void fitRect(float aspect, float frameAspect, float width, float height, float &x0, float &y0, float &w, float &h)
+    {
+        // the frame: the target letterboxed at the game's aspect
+        float fw = width, fh = height;
+        if (frameAspect > 0.0f)
+        {
+            fh = fw / frameAspect;
+            if (fh > height)
+            {
+                fh = height;
+                fw = fh * frameAspect;
+            }
+        }
+        // the picture: letterboxed in the frame
+        w = fw;
+        h = aspect > 0.0f ? w / aspect : fh;
+        if (h > fh)
+        {
+            h = fh;
+            w = h * aspect;
+        }
+        x0 = (width - w) * 0.5f;
+        y0 = (height - h) * 0.5f;
+    }
+
+    void drawWindow(const Picture &picture, int srcWidth, int srcHeight, float aspect, int windowWidth, int windowHeight,
+                    float frameAspect)
     {
         if (windowWidth > 0 && windowHeight > 0)
             g_device->resize(static_cast<uint32_t>(windowWidth), static_cast<uint32_t>(windowHeight));
@@ -154,7 +177,7 @@ namespace present
         pass.clearColor = true;
         pass.name = "window";
         g_device->beginPass(pass);
-        drawPicture(picture, srcWidth, srcHeight, aspect, static_cast<int>(w), static_cast<int>(h));
+        drawPicture(picture, srcWidth, srcHeight, aspect, static_cast<int>(w), static_cast<int>(h), frameAspect);
         g_device->uiRender(ImGui::GetDrawData());
         g_device->endPass();
     }
@@ -200,7 +223,8 @@ namespace present
         return true;
     }
 
-    bool capture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int width, int height, std::vector<uint8_t> &rgb)
+    bool capture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int width, int height, std::vector<uint8_t> &rgb,
+                 float frameAspect)
     {
         if (width <= 0 || height <= 0)
             return false;
@@ -221,7 +245,7 @@ namespace present
         pass.clearColor = true;
         pass.name = "capture";
         g_device->beginPass(pass);
-        drawPicture(picture, srcWidth, srcHeight, aspect, width, height);
+        drawPicture(picture, srcWidth, srcHeight, aspect, width, height, frameAspect);
         if (ImDrawData *data = ImGui::GetDrawData(); data && data->Valid && data->DisplaySize.x > 0.0f && data->DisplaySize.y > 0.0f)
         {
             ImDrawData scaled = *data; // the window's UI, stretched to the capture size

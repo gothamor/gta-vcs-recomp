@@ -138,6 +138,23 @@ pause map) are shown at 4:3, pillarboxed.
   layer squeezed the HUD before snapping it to PS2 pixels, and at a squeeze of 0.375 a PS2 pixel is 6 screen pixels:
   the map's scissor and its corner mask rounded to different ones. Now snapped at the 4:3 positions, then squeezed
   with the scissor exactly (NATIVE_RENDERER.md "HUD layer"). Checked on the reference scene that showed it.
+- **4:3 frames inside the game's frame** (2026-10-27, the user's decision): frames without 3D (the pause menu, loading
+  screens) stay 4:3 but are placed inside the rectangle the game's picture takes - the window letterboxed at the
+  chosen ratio - instead of the whole window (`present::fitRect`; the window, screenshots and the HUD layer's output
+  size use it). A 32:9 game on a 16:9 monitor shows its pause menu in the 32:9 strip between the bars, not at the
+  window's full height. Intro movies keep the whole window. At Match window or 4:3 nothing changes (the frame is the
+  window).
+- **The pause menu switches at once** (same day): before, a frame was shown 4:3 only after 32 frames without 3D, so for
+  half a second the menu's full-width backdrop was stretched across the wide picture, then the picture snapped to 4:3
+  and for a frame or a few the menu was drawn 25% narrower (62.5% at 32:9) and popped back (the user's "resizes and
+  scales up"). Why: each draw read the 3D flag as the main thread updated it, while the presenter used the newest
+  value - frames recorded for a wide picture were shown at 4:3. Now (gs_hw.cpp): a frame keeps the flag it first read
+  (`frameWide`), the presenter shows each frame with its own (`showing3d` = the shown frame's), and a frame with the
+  game's menu primitives and no 3D (the classifier ors `GSHwAnchorMenu` into the anchors of FUN_003b53f8's
+  primitives) empties the 3D history: 4:3 from the first menu frame. `PS2X_HW_MENU_SWITCH=0` = the 32-frame wait as
+  before. Leaving the menu still needs 4 frames with 3D (unchanged). Checked frame by frame (screenshots ~50 ms apart)
+  entering and leaving the pause menu at 32:9 on a 16:9 screen, 16:9 and 4:3, and the reference scenes at 32:9 on a
+  16:9 screen (loading screen and pause map in the strip).
 - Not done from the plan: window mode, pausing,
   control-channel `menu` / `set` commands (environment overrides cover scripted captures:
   `VCS_ASPECT=169 python tools/scenes.py capture ...`).

@@ -226,7 +226,7 @@ namespace vcs
                                        : centre > 360.0f && b.x1 > 480.0f            ? GSHwAnchorRight
                                                                                      : GSHwAnchorCentre;
                 for (uint32_t k = 0; k < p.keyCount; ++k)
-                    (*anchors)[g_primKeys[p.firstKey + k]] = anchor;
+                    (*anchors)[g_primKeys[p.firstKey + k]] = static_cast<uint8_t>(anchor | (p.menu ? GSHwAnchorMenu : 0u));
             }
             g_prims.clear();
             g_primKeys.clear();

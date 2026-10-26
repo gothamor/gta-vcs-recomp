@@ -365,6 +365,13 @@ checkable call for call against the original (`VCS_NATIVE_INFLATE_VERIFY`) - wit
 done as `memcpy`. A faster decoder would stop at other points and leave zlib's state different between calls (the
 final output the same); the ~20 ms an area load costs now did not justify losing the per-call check.
 
+## 2026-10-27 - 4:3 screens sit inside the game's frame, not the window
+
+The user's choice: in a ratio wider than the monitor (32:9 on 16:9) the pause menu stays 4:3 but sits in the game's
+strip between the bars, at the strip's height, rather than over the whole window. Loading screens follow the same rule
+(they are the same kind of frame: no 3D). The intro movies keep the whole window: they play before there is a game
+frame to belong to. The menu switches to 4:3 as soon as it opens rather than after the 3D history runs out.
+
 ## 2026-10-27 - Ultrawide: fixed ratios plus Match window, Hor+ between 4:3 and 32:9
 
 The user asked for 21:9 and 32:9. "21:9" monitors are 2.37 (2560x1080) or 2.39 (3440x1440), not 21 / 9 = 2.33. Chosen:

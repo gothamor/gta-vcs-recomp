@@ -34,12 +34,20 @@ namespace present
     // platform::endUiFrame(), then optional captures, then present().
     void beginFrame();
     // The window's back buffer (resized to windowWidth x windowHeight): black, the top-left src part of the picture
-    // letterboxed at display aspect `aspect` (width / height), the Dear ImGui output on top.
-    void drawWindow(const Picture &picture, int srcWidth, int srcHeight, float aspect, int windowWidth, int windowHeight);
+    // letterboxed at display aspect `aspect` (width / height) inside the game's frame (fitRect), the Dear ImGui output
+    // on top.
+    void drawWindow(const Picture &picture, int srcWidth, int srcHeight, float aspect, int windowWidth, int windowHeight,
+                    float frameAspect = 0.0f);
     void present();
 
     // The same picture and Dear ImGui output (scaled) rendered off-screen at width x height; RGB rows top-down.
-    bool capture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int width, int height, std::vector<uint8_t> &rgb);
+    bool capture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int width, int height, std::vector<uint8_t> &rgb,
+                 float frameAspect = 0.0f);
+
+    // Where a picture of display aspect `aspect` goes in a width x height target: as large as fits inside the game's
+    // frame - the target letterboxed at frameAspect (0: the whole target) - and centred. A 4:3 menu in a 32:9 game on a
+    // 16:9 monitor sits in the 32:9 strip, between the bars, not over them.
+    void fitRect(float aspect, float frameAspect, float width, float height, float &x0, float &y0, float &w, float &h);
 
     // Brightness probe (automation rig, docs/NATIVE_PORT_ROADMAP.md milestone 1): the picture's middle region
     // (HUD margins left out) shrunk to 32x24 and read back; mean luma 0..255. Stalls the GPU briefly: opt-in.

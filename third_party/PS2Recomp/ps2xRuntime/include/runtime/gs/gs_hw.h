@@ -72,6 +72,9 @@ enum : uint8_t
     GSHwAnchorLeft,
     GSHwAnchorRight,
     GSHwAnchorStretch,
+    // [gta-recomp] or'ed in: the primitive is the game's menu. A frame with menu primitives and no 3D is shown at 4:3 at
+    // once (the pause menu), not after the half-second the 3D history takes.
+    GSHwAnchorMenu = 0x80,
 };
 using GSHwAnchorFn = uint8_t (*)(const float *xy, uint32_t count);
 void gsHwSetHudClassifier(GSHwAnchorFn fn);

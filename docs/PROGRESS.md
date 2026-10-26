@@ -514,7 +514,10 @@ dropped on uploads (lazy render-target patching).
   cutscene bars, culling and streaming at the edges); regress step "widecull" covers 21:9 and 32:9. At 32:9 3840x1080
   the render worker costs about twice 16:9 1920x1080 (busiest bench spot 97 fps, drive 103) - details in
   SETTINGS_MENU_WIDESCREEN.md "Ultrawide".
-  Same day: the integer Internal resolutions render wider in widescreen (1x at 32:9 is 1707x448; `PS2X_HW_WIDE_SCALE=0`
+  Same day: the pause menu and loading screens sit inside the game's frame at 4:3 (between the bars of a 32:9 game on
+  a 16:9 monitor), the pause menu switches to 4:3 at once, and no frame is squeezed for one shape and shown in the
+  other (SETTINGS_MENU_WIDESCREEN.md).
+  Also: the integer Internal resolutions render wider in widescreen (1x at 32:9 is 1707x448; `PS2X_HW_WIDE_SCALE=0`
   = before), and the radar's streak of map beside its circle at 32:9 is gone (the HUD layer squeezed before rounding to
   PS2 pixels).
 
@@ -602,6 +605,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_RT_FULL=0` | render targets read once per PS2 texel everywhere (higher internal resolutions lost in the copies) |
 | `PS2X_HW_POSTFX=0` or letters `btc` | effects drawn as recorded / only these native: b bloom, t trails, c frame copy + motion blur |
 | `PS2X_HW_SCALE=0` | native frame: the picture's targets at the window's size (menu: Internal resolution > Match window) |
+| `PS2X_HW_MENU_SWITCH=0` | widescreen: the pause menu goes 4:3 only after 32 frames without 3D (as before 2026-10-27) |
 | `PS2X_HW_WIDE_SCALE=0` | integer scales in widescreen: the picture 640 x scale wide, stretched (as before 2026-10-27) |
 | `PS2X_HW_MSAA=2/4/8` | MSAA for the picture's targets (menu: Anti-aliasing) |
 | `PS2X_HW_ANISO=2..16`, `PS2X_HW_ANISO_LOG=1` | anisotropic filtering of the game's textures (menu: Texture filtering); count the draws per sampling path |

@@ -451,21 +451,16 @@ static bool UploadGpuFrame(present::Picture &owned, present::Picture &shown, PS2
             // [gta-recomp] the size the picture is shown at: the window's letterboxed area (the native HUD layer)
             int windowW = 0, windowH = 0;
             platform::windowSize(windowW, windowH);
-            // the window's letterboxed area at an aspect
+            // the window's letterboxed area at an aspect, inside the game's frame as the presenter places it
+            // ([gta-recomp] present::fitRect: a 4:3 menu sits in the frame, not over the window)
             auto letterbox = [&](float aspect, uint32_t &outW, uint32_t &outH) {
                 outW = outH = 0;
                 if (windowW <= 0 || windowH <= 0 || aspect <= 0.0f)
                     return;
-                if (static_cast<float>(windowW) / static_cast<float>(windowH) > aspect)
-                {
-                    outH = static_cast<uint32_t>(windowH);
-                    outW = static_cast<uint32_t>(std::lround(windowH * aspect));
-                }
-                else
-                {
-                    outW = static_cast<uint32_t>(windowW);
-                    outH = static_cast<uint32_t>(std::lround(windowW / aspect));
-                }
+                float x0 = 0.0f, y0 = 0.0f, w = 0.0f, h = 0.0f;
+                present::fitRect(aspect, present::displayAspect(true), static_cast<float>(windowW), static_cast<float>(windowH), x0, y0, w, h);
+                outW = static_cast<uint32_t>(std::lround(w));
+                outH = static_cast<uint32_t>(std::lround(h));
             };
             uint32_t outW = 0, outH = 0, frameW = 0, frameH = 0;
             letterbox(present::displayAspect(hw->presenter().showing3d()), outW, outH);
@@ -3110,6 +3105,8 @@ void PS2Runtime::run()
 
         // [gta-recomp] display aspect: 4:3 (the PS2's TV), the widescreen ratio for 3D frames (render/presenter.h)
         float aspect = present::displayAspect(!hwRenderer() || hwRenderer()->presenter().showing3d());
+        // [gta-recomp] the game's frame (the 3D frames' shape): 4:3 frames (menus, loading screens) are placed inside it
+        float frameAspect = present::displayAspect(true);
         { // [gta-recomp] a movie playing (ps2_present.h): its picture instead of the game's
             static present::Picture moviePicture;
             static uint64_t movieSequence = 0;
@@ -3127,6 +3124,7 @@ void PS2Runtime::run()
                 presentWidth = static_cast<uint32_t>(g_movieFrame.width);
                 presentHeight = static_cast<uint32_t>(g_movieFrame.height);
                 aspect = g_movieFrame.aspect;
+                frameAspect = 0.0f; // movies: the whole window, as before
             }
         }
         static float lastAspect = 0.0f; // [gta-recomp] log the presentation shape when it changes
@@ -3164,7 +3162,7 @@ void PS2Runtime::run()
                     --dumpLeft;
                     const std::string path = std::string(dumpDir) + "/black_" + std::to_string(hostFrame) + ".png";
                     std::vector<uint8_t> rgb;
-                    if (present::capture(shownTex, srcWidth, srcHeight, aspect, 640, 448, rgb))
+                    if (present::capture(shownTex, srcWidth, srcHeight, aspect, 640, 448, rgb, frameAspect))
                         platform::writePng(path.c_str(), rgb.data(), 640, 448);
                     std::fprintf(stderr, "[frames] dump host frame %llu luma %.1f (before %.1f): %s\n",
                                  static_cast<unsigned long long>(hostFrame), luma, prevLuma,
@@ -3182,7 +3180,7 @@ void PS2Runtime::run()
         platform::endUiFrame();
         int windowWidth = 0, windowHeight = 0;
         platform::windowSize(windowWidth, windowHeight);
-        present::drawWindow(shownTex, srcWidth, srcHeight, aspect, windowWidth, windowHeight);
+        present::drawWindow(shownTex, srcWidth, srcHeight, aspect, windowWidth, windowHeight, frameAspect);
 
         // [gta-recomp] control channel (runtime/ps2_control.h): screenshots render the same picture off-screen, so
         // they work with the window hidden or covered
@@ -3200,7 +3198,7 @@ void PS2Runtime::run()
                 if (fixedSize.first > 0 && fixedSize.second > 0)
                     w = fixedSize.first, h = fixedSize.second;
                 std::vector<uint8_t> rgb;
-                if (!present::capture(shownTex, srcWidth, srcHeight, aspect, w, h, rgb) || !platform::writePng(path.c_str(), rgb.data(), w, h))
+                if (!present::capture(shownTex, srcWidth, srcHeight, aspect, w, h, rgb, frameAspect) || !platform::writePng(path.c_str(), rgb.data(), w, h))
                     return {};
                 return std::to_string(w) + "x" + std::to_string(h);
             },
