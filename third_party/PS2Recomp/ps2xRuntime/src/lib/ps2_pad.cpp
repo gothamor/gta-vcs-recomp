@@ -97,7 +97,9 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     press(key(platform::KEY_THREE) || key(platform::KEY_X), PAD_R2);
     press(key(platform::KEY_C), PAD_L3);
     press(key(platform::KEY_V), PAD_R3);
-    press(key(platform::KEY_ENTER) || key(platform::KEY_KP_ENTER), PAD_START);
+    // [gta-recomp] Alt+Enter switches full screen (main.cpp), so Enter with Alt held is not Start
+    const bool alt = key(platform::KEY_LEFT_ALT) || key(platform::KEY_RIGHT_ALT);
+    press(!alt && (key(platform::KEY_ENTER) || key(platform::KEY_KP_ENTER)), PAD_START);
     press(key(platform::KEY_BACKSPACE), PAD_SELECT);
 
     auto axis = [](float current, bool negative, bool positive)

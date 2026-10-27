@@ -124,6 +124,12 @@ namespace platform
     // used for hidden windows (they are neither placed nor remembered).
     void onPlacementChanged(PlacementChanged callback);
 
+    // Main thread. Full screen: borderless at the desktop's resolution on the monitor the window is on (no display mode
+    // change, so Alt+Tab and other monitors stay as they are); off: the window as it was before. Before init: how the
+    // window opens. A hidden window only remembers it. In full screen the mouse cursor hides after 2 s without moving.
+    void setFullscreen(bool on);
+    bool fullscreen();
+
     // Main thread. Creates the window (no graphics API attached: the renderer makes its swapchain on
     // nativeWindow()) and the Dear ImGui context with its input backend; the ImGui renderer belongs to the RHI.
     bool init(const WindowDesc &desc);

@@ -49,6 +49,13 @@ namespace platform
         WindowPlacement g_reported;      // what the callback last saw (or what the window opened with)
         constexpr uint64_t kPlacementSettleNs = 500000000ull;
 
+        // full screen (setFullscreen); main thread
+        bool g_fullscreen = false;
+        bool g_hiddenWindow = false;
+        uint64_t g_mouseMovedNs = 0;
+        bool g_cursorHidden = false;
+        constexpr uint64_t kCursorIdleNs = 2000000000ull;
+
         struct ScanKey
         {
             SDL_Scancode scancode;
@@ -200,10 +207,10 @@ namespace platform
             if (!g_trackPlacement)
                 return;
             const SDL_WindowFlags flags = SDL_GetWindowFlags(g_window);
-            if (flags & SDL_WINDOW_MINIMIZED)
-                return;
+            if (flags & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_FULLSCREEN))
+                return; // full screen keeps the window it came from (vcs.ini's window.* stay the windowed place)
             g_maximized = (flags & SDL_WINDOW_MAXIMIZED) != 0;
-            if (!g_maximized && !(flags & SDL_WINDOW_FULLSCREEN))
+            if (!g_maximized)
             {
                 SDL_GetWindowPosition(g_window, &g_normalRect.x, &g_normalRect.y);
                 SDL_GetWindowSize(g_window, &g_normalRect.w, &g_normalRect.h);
@@ -277,6 +284,23 @@ namespace platform
 
     void onPlacementChanged(PlacementChanged callback) { g_placementChanged = callback; }
 
+    void setFullscreen(bool on)
+    {
+        if (on == g_fullscreen)
+            return;
+        g_fullscreen = on;
+        g_mouseMovedNs = SDL_GetTicksNS(); // the cursor stays for a moment after the switch
+        if (!g_window || g_hiddenWindow)
+            return;
+        // the fullscreen mode stays NULL: borderless at the desktop's resolution (SDL3's default)
+        if (!SDL_SetWindowFullscreen(g_window, on))
+            std::fprintf(stderr, "[platform] SDL_SetWindowFullscreen(%d): %s\n", on ? 1 : 0, SDL_GetError());
+        SDL_SyncWindow(g_window);
+        std::fprintf(stderr, "[platform] %s\n", on ? "full screen" : "windowed");
+    }
+
+    bool fullscreen() { return g_fullscreen; }
+
     bool init(const WindowDesc &desc)
     {
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
@@ -294,6 +318,7 @@ namespace platform
             std::fprintf(stderr, "[platform] SDL_CreateWindow: %s\n", SDL_GetError());
             return false;
         }
+        g_hiddenWindow = desc.hidden;
         if (!desc.hidden)
         {
             g_trackPlacement = true;
@@ -301,6 +326,12 @@ namespace platform
             if (g_hasStartPlacement && !placed)
                 std::fprintf(stderr, "[platform] monitor '%s' not found: window at the default place\n",
                              g_startPlacement.display.c_str());
+            if (g_fullscreen) // on the monitor the window was placed on; leaving it restores that place
+            {
+                SDL_SetWindowFullscreen(g_window, true);
+                std::fprintf(stderr, "[platform] full screen\n");
+            }
+            g_mouseMovedNs = SDL_GetTicksNS();
             SDL_ShowWindow(g_window);
             SDL_SyncWindow(g_window);
             if (!placed)
@@ -373,7 +404,12 @@ namespace platform
             case SDL_EVENT_WINDOW_RESIZED:
             case SDL_EVENT_WINDOW_MAXIMIZED:
             case SDL_EVENT_WINDOW_RESTORED:
+            case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
                 notePlacement();
+                break;
+            case SDL_EVENT_MOUSE_MOTION:
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                g_mouseMovedNs = SDL_GetTicksNS();
                 break;
             case SDL_EVENT_GAMEPAD_ADDED:
                 openGamepad(e.gdevice.which);
@@ -423,6 +459,19 @@ namespace platform
 
     void beginFrame()
     {
+        // full screen: the cursor hides while the mouse is still (Dear ImGui's backend would show it again each frame)
+        const bool hideCursor = g_fullscreen && !g_hiddenWindow && SDL_GetTicksNS() - g_mouseMovedNs > kCursorIdleNs;
+        if (hideCursor != g_cursorHidden)
+        {
+            g_cursorHidden = hideCursor;
+            if (ImGui::GetCurrentContext())
+            {
+                ImGuiIO &io = ImGui::GetIO();
+                io.ConfigFlags = hideCursor ? io.ConfigFlags | ImGuiConfigFlags_NoMouseCursorChange
+                                            : io.ConfigFlags & ~ImGuiConfigFlags_NoMouseCursorChange;
+            }
+            hideCursor ? SDL_HideCursor() : SDL_ShowCursor();
+        }
         if (!g_imgui)
             return;
         ImGui_ImplSDL3_NewFrame();

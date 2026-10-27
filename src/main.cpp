@@ -209,6 +209,21 @@ namespace
         std::fprintf(stderr, "[settings] display aspect %.3f, HUD %s\n", aspect, hud == 0 ? "4:3" : hud == 2 ? "screen edges" : "stretched");
     }
 
+    // Each host frame: Alt+Enter switches between full screen and the window (the game's pad leaves Enter alone while
+    // Alt is held, so it does not also press Start). An environment override (VCS_FULLSCREEN) switches for this run only.
+    void altEnter()
+    {
+        auto down = [](int k) { return platform::keyDown(k) || ps2control::keyDown(k); };
+        auto pressed = [](int k) { return platform::keyPressed(k) || ps2control::keyPressed(k); };
+        if (!(down(platform::KEY_LEFT_ALT) || down(platform::KEY_RIGHT_ALT)) ||
+            !(pressed(platform::KEY_ENTER) || pressed(platform::KEY_KP_ENTER)))
+            return;
+        const int next = platform::fullscreen() ? 0 : 1;
+        if (!settings::set("display.window", next))
+            platform::setFullscreen(next != 0);
+        std::fprintf(stderr, "[settings] Alt+Enter: %s\n", next ? "full screen" : "windowed");
+    }
+
     // Each host frame: "Match window" follows the window as it is resized, moved to another monitor or made full screen.
     void followWindowAspect()
     {
@@ -225,6 +240,21 @@ namespace
         using settings::Apply;
         using settings::Type;
         settings::Spec s;
+
+        s = {};
+        s.key = "display.window";
+        s.page = "Display";
+        s.section = "Screen";
+        s.label = "Window mode";
+        s.help = "Full screen covers the monitor the window is on, at the desktop's resolution (borderless: switching "
+                 "and Alt+Tab are instant). Alt+Enter switches too.";
+        s.type = Type::Choice;
+        s.choices = {{"Windowed", 0}, {"Full screen", 1}};
+        s.defaultValue = 0;
+        s.env = "VCS_FULLSCREEN";
+        s.onChange = [](int v) { platform::setFullscreen(v != 0); };
+        s.read = [] { return platform::fullscreen() ? 1 : 0; };
+        settings::add(s);
 
         s = {};
         s.key = "display.aspect";
@@ -476,6 +506,8 @@ int main(int argc, char *argv[])
     {
         registerSettings();
         settings::load(exeDirectory() / "vcs.ini");
+        if (ps2control::hiddenMode())
+            settings::keepFile(); // a test run never changes the player's settings
         settings::applyAll();
         restoreWindowPlacement();
         const fs::path isoPath = locateIso(argc, argv);
@@ -522,6 +554,7 @@ int main(int argc, char *argv[])
         // the settings menu draws in the runtime's UI hook (registered before initialize(), which runs the init hook)
         runtime.setDebugUiCallbacks([](PS2Runtime &, void *) {},
                                     [](PS2Runtime &, void *) {
+                                        altEnter();
                                         followWindowAspect();
                                         ui::drawSettingsMenu();
                                         ui::drawTrainerMenu();

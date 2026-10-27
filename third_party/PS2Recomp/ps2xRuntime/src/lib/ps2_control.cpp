@@ -89,6 +89,7 @@ namespace ps2control
                 {"controlkey", platform::KEY_LEFT_CONTROL}, {"circle", platform::KEY_LEFT_CONTROL}, {"escape", platform::KEY_ESCAPE}, {"esc", platform::KEY_ESCAPE},
                 {"backspace", platform::KEY_BACKSPACE}, {"back", platform::KEY_BACKSPACE}, {"select", platform::KEY_BACKSPACE}, {"tab", platform::KEY_TAB}, {"up", platform::KEY_UP},
                 {"down", platform::KEY_DOWN}, {"left", platform::KEY_LEFT}, {"right", platform::KEY_RIGHT},
+                {"alt", platform::KEY_LEFT_ALT}, // [gta-recomp] Alt+Enter (full screen)
             };
             for (const Named &n : named)
                 if (name == n.name)

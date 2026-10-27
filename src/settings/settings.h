@@ -63,6 +63,7 @@ namespace settings
     bool changedSinceStart(const std::string &key); // Restart settings: "applies after restart"
 
     void load(const std::filesystem::path &ini);
+    void keepFile(); // after load: changes last for this run only, vcs.ini is never rewritten (hidden test runs)
     void applyAll();
     void refresh(); // takes the live values of settings with `read` (the menu calls it when it opens)
 

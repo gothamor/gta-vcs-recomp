@@ -221,6 +221,27 @@ boundary gives the same layout frame after frame; clicking a toggle's label flip
 the selection and the help follows; Enter opens a list, Escape closes the list, a second Escape the menu; Q / E
 switch pages.
 
+## Full screen (2026-10-27)
+
+Display > Screen > **Window mode**: Windowed / Full screen (`display.window=0|1`, `VCS_FULLSCREEN=0|1` for one run),
+and **Alt+Enter** switches at any time, also with a menu open; the choice is saved like any setting.
+- Full screen is borderless at the desktop's resolution on the monitor the window is on (SDL3's fullscreen with no
+  display mode, `platform::setFullscreen`). No mode change: switching and Alt+Tab are instant, other monitors stay as
+  they are, and the D3D11 flip-model swapchain just resizes. The Internal resolution / Match window aspect follow the
+  new size like any resize. Exclusive full screen with a chosen display mode is not offered (DECISIONS.md).
+- The window's place (vcs.ini `window.*`) stays the windowed one: moves and resizes while in full screen are not
+  recorded, so leaving full screen, or starting windowed next time, goes back to where the window was. A start in full
+  screen places the window first, so it covers the monitor it was last on.
+- The mouse cursor hides after 2 s without moving in full screen (Dear ImGui's cursor updates paused while hidden);
+  it comes back on any move or click.
+- Enter is Start on the keyboard: with Alt held the pad leaves it out (`ps2_pad.cpp`), and the trainer does not take it
+  as "apply", so Alt+Enter only switches.
+- Hidden test runs never rewrite vcs.ini (`settings::keepFile`): before, nothing in a hidden run changed a setting;
+  Alt+Enter through the control channel (`key alt down`, `press return`) would have.
+- Checked hidden (the window itself is never made full screen in a hidden run): Alt+Enter twice from gameplay switches
+  the setting to full screen and back, the game stays in gameplay both times (no pause menu), Enter alone still opens
+  it; same with `VCS_FULLSCREEN=1` (switches for the run only); vcs.ini byte-identical afterwards.
+
 ## Part 1 - the settings menu
 
 ### What the player sees

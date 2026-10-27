@@ -134,7 +134,9 @@ namespace ui
             in.down = dir(g_down, KEY_DOWN, KEY_KP_2, GAMEPAD_DPAD_DOWN);
             in.left = dir(g_left, KEY_LEFT, KEY_KP_4, GAMEPAD_DPAD_LEFT);
             in.right = dir(g_right, KEY_RIGHT, KEY_KP_6, GAMEPAD_DPAD_RIGHT);
-            in.select = pressedKey(KEY_ENTER) || pressedKey(KEY_KP_ENTER) || pressedKey(KEY_KP_5) || padPressed[GAMEPAD_SOUTH];
+            const bool alt = heldKey(KEY_LEFT_ALT) || heldKey(KEY_RIGHT_ALT); // Alt+Enter is full screen
+            in.select = (!alt && (pressedKey(KEY_ENTER) || pressedKey(KEY_KP_ENTER))) || pressedKey(KEY_KP_5) ||
+                        padPressed[GAMEPAD_SOUTH];
             in.back = pressedKey(KEY_BACKSPACE) || pressedKey(KEY_KP_0) || pressedKey(KEY_ESCAPE) || padPressed[GAMEPAD_EAST];
             return in;
         }

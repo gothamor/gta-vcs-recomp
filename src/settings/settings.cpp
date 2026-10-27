@@ -20,6 +20,7 @@ namespace settings
         std::unordered_map<std::string, int> g_values, g_startValues;
         std::mutex g_mutex; // g_values (read from other threads)
         std::filesystem::path g_ini;
+        bool g_keepFile = false; // keepFile()
         std::unordered_set<std::string> g_overridden; // by their environment variable, at load()
         std::unordered_map<std::string, std::string> g_loaded; // every key = value of vcs.ini at load()
         std::map<std::string, std::string> g_state;            // setState() values, written by save()
@@ -50,7 +51,7 @@ namespace settings
         // Rewrites vcs.ini: our keys updated in place, missing ones appended, every other line kept as it was.
         void save()
         {
-            if (g_ini.empty())
+            if (g_ini.empty() || g_keepFile)
                 return;
             std::vector<std::string> lines;
             {
@@ -205,6 +206,8 @@ namespace settings
         g_startValues = g_values;
         g_loaded = std::move(found);
     }
+
+    void keepFile() { g_keepFile = true; }
 
     std::string state(const std::string &key)
     {

@@ -31,6 +31,10 @@ F5 (Controls > Trainer menu key) or Back + RB on a gamepad opens the trainer (do
 numpad 8 / 2 or the D-pad select, Left / Right or numpad 4 / 6 change a value, Enter / numpad 5 / A applies,
 Backspace / numpad 0 / Escape / B goes back (and closes it on the first page). The game gets no input while it is open.
 
+## Window
+Alt+Enter switches between full screen and the window (Display > Window mode; saved in vcs.ini). Enter with Alt
+held is not Start.
+
 ## Debug keys
 | Key | Effect |
 |---|---|

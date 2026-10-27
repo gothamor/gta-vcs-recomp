@@ -365,6 +365,15 @@ checkable call for call against the original (`VCS_NATIVE_INFLATE_VERIFY`) - wit
 done as `memcpy`. A faster decoder would stop at other points and leave zlib's state different between calls (the
 final output the same); the ~20 ms an area load costs now did not justify losing the per-call check.
 
+## 2026-10-27 - Full screen is borderless only; test runs never write vcs.ini
+
+Full screen covers the monitor at the desktop's resolution with no display mode change. With a flip-model swapchain
+Windows 10+ presents a window covering the monitor directly, so exclusive mode buys little, while a mode change costs
+seconds per switch, breaks Alt+Tab and moves the other monitors' windows; the game's resolution is the Internal
+resolution setting, not the monitor's mode. Exclusive full screen can come later as a third choice if someone needs a
+lower monitor mode. Hidden test runs read vcs.ini but never rewrite it, so a scripted check (Alt+Enter, the settings
+menu) cannot change the player's settings.
+
 ## 2026-10-27 - 4:3 screens sit inside the game's frame, not the window
 
 The user's choice: in a ratio wider than the monitor (32:9 on 16:9) the pause menu stays 4:3 but sits in the game's
