@@ -55,7 +55,8 @@ choices).
 python tools/build.py                       # rebuild after code changes (--reconfigure after adding files)
 python tools/build.py --recompile [ISO]     # disc -> generated C++ -> build (slow)
 python tools/build.py --iop-tests           # SPU2 unit tests (reverb, interpolation, noise, PMON)
-python tools/build.py --opt none|lto|pgo    # game optimisation, kept until changed (pgo: ThinLTO + profile, trains if needed)
+python tools/build.py --quick               # no LTO (= --opt none): fast relinks; kept until --opt lto
+python tools/build.py --opt none|lto|pgo    # game optimisation, kept until changed (lto: the default; pgo: ThinLTO + profile, trains if needed)
 python tools/bench.py [OUT]                  # game-thread benchmark: fixed city spots + an AI drive (game / worker ms)
 python tools/clean.py [--apply] [--keep-days 7]   # delete test output in build/ (lists first; builds, saves, baselines kept)
 python tools/framerate_audit.py [--steps 15,30,60,100]   # behaviour per simulated second at forced time steps
@@ -96,9 +97,13 @@ card copies to start from (never the user's live card).
 - Test output (screenshots, logs, card copies) goes under `build/<tool>/<name>`; it adds up (23 GB by 2026-10-23,
   mostly screenshots). Run `python tools/clean.py --apply --keep-days 7` after a session of test runs. A capture
   worth keeping as a reference goes to `build/scenes/reference` (scenes compare) or `build/regress/baseline`.
-- Optimisation (`--opt`): `none` for day-to-day work (fast relinks); `pgo` / `lto` relink slower (ThinLTO) and are
-  for measuring and releases. A PGO profile from older code still builds; retrain (`--opt pgo --train`, ~30 min)
-  after large changes. Never edit sources while a build or the PGO pipeline is compiling them.
+- Optimisation (`--opt`): a fresh build directory is `lto` (ThinLTO: what players get from the README). `--quick`
+  (= `none`) for day-to-day work (fast relinks); the choice stays in the CMake cache, and the last line of a build says
+  which one it is. `pgo` / `lto` relink slower and are for measuring and releases. A PGO profile from older code still
+  builds; retrain (`--opt pgo --train`, ~30 min) after large changes. Never edit sources while a build or the PGO
+  pipeline is compiling them.
+- A successful build writes `iso=<disc>` into the `vcs.ini` next to `vcs.exe` when that file has none, so the exe
+  started on its own finds the disc.
 
 ## Rules that keep things working
 

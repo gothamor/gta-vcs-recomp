@@ -220,6 +220,7 @@ The user's choices on the roadmap's open questions:
   the reference scenes; it lives in build/pgo (derived from the user's own game, never committed) and is retrained
   with `--opt pgo --train` after large changes - a stale one still builds, changed functions just lose its benefit.
 - `--opt none` stays the development setting (no ThinLTO relink); the choice is kept in the CMake cache until changed.
+  (2026-10-27: a fresh build directory is now `lto`, with `--quick` for `none` - see that entry.)
 - Calls between recompiled functions got an inline fast path in the runtime header rather than a recompiler change:
   same effect on every call site, no regenerated code, and `PS2X_FAST_DISPATCH=0` switches it off.
 
@@ -364,6 +365,16 @@ Chosen: zlib 1.2.2's own loop, so every call leaves `next_in` / `avail_in` / `ho
 checkable call for call against the original (`VCS_NATIVE_INFLATE_VERIFY`) - with only the copies that cannot overlap
 done as `memcpy`. A faster decoder would stop at other points and leave zlib's state different between calls (the
 final output the same); the ~20 ms an area load costs now did not justify losing the per-call check.
+
+## 2026-10-27 - The optimised build is the default; `--quick` for development
+The user asked for installing to be as easy as possible. A fresh build directory now configures with ThinLTO
+(`PS2X_LTO=THIN`, `--opt lto`), so `python tools/build.py --recompile` from the README gives the game to play;
+`--quick` (= `--opt none`) is the fast-relink build for changing code. Not PGO as the default: training plays the
+rig's card copies (build/rig/saves), which a new checkout does not have, and takes ~30 min more. The choice stays in
+the CMake cache as before (one build directory: switching recompiles the game, and a non-sticky default would make
+every quick build followed by a plain one cost a full rebuild); the build's last line names it so nobody plays a quick
+build by accident. The build also writes `iso=` into the vcs.ini next to vcs.exe when there is none: the exe is a
+windows-subsystem program, so started by a double click without a disc it fails with no visible message.
 
 ## 2026-10-27 - Full screen is borderless only; test runs never write vcs.ini
 

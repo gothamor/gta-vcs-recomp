@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Generated C++ from the user's own SLUS_215.90 (tools/recompile.py). Never committed.
 set(VCS_GENERATED_DIR "${CMAKE_SOURCE_DIR}/generated/ee" CACHE PATH "Recompiled EE code")
 
-set(PS2X_LTO "OFF" CACHE STRING "Link-time optimisation for the game: OFF (dev), THIN (release), FULL")
+set(PS2X_LTO "THIN" CACHE STRING "Link-time optimisation for the game: THIN (default, the game to play), OFF (quick dev builds), FULL")
 set(PS2X_PGO "" CACHE STRING "Profile-guided optimisation: empty (off), GEN (instrumented), or a .profdata path (tools/build.py --opt)")
 option(VCS_BUILD_TOOLS "Build the PS2Recomp recompiler/analyzer" ON)
 

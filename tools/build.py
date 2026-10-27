@@ -3,10 +3,15 @@
 
     python tools/build.py                       build vcs (build/release/.../ps2xRuntime/vcs[.exe])
     python tools/build.py --recompile [ISO]     recompile from your disc first, then build - the whole pipeline
+    python tools/build.py --quick               no link-time optimisation: fast rebuilds while changing code
     python tools/build.py --iop-tests           build and run the IOP / SPU2 unit tests (build/iop_tests, no disc)
-    python tools/build.py --opt none|lto|pgo    optimisation of the game, kept until changed: none (default; fast
-                                                rebuilds), lto (ThinLTO), pgo (ThinLTO + profile-guided: trains first
-                                                when build/pgo/vcs.profdata is missing or with --train)
+    python tools/build.py --opt none|lto|pgo    optimisation of the game, kept until changed: lto (default; ThinLTO,
+                                                the game to play), none (= --quick), pgo (ThinLTO + profile-guided:
+                                                trains first when build/pgo/vcs.profdata is missing or with --train;
+                                                training needs the rig's card copies, build/rig/saves)
+
+The optimisation is kept in the CMake cache: after --quick every build stays quick until `--opt lto`. Switching
+recompiles the whole game (~6-10 min). The last line of each build says which one was built.
 
 Progress: every build step shows `[build] <target> done/total %, elapsed, ~time left` (Ninja's step count; redrawn in
 place on a terminal, a line per 5% / minute otherwise); CMake configure and the recompiler show their elapsed time.
@@ -16,8 +21,9 @@ reference scenes' boot / flyover / cutscene (tools/scenes.py); the profiles go t
 from older code still works: the functions that changed are optimised as without one.
 
 ISO defaults to VCS_ISO, iso=... in vcs.ini, or a '*Vice City Stories*.iso' in the repository root.
-Windows: needs Visual Studio 2022+ with the C++ workload (clang-cl), CMake and Ninja; the Visual Studio environment
-is set up automatically.
+Windows: needs Visual Studio 2022+ (or its Build Tools) with "Desktop development with C++" and "C++ Clang tools for
+Windows"; its CMake and Ninja are used when no others are on PATH. The Visual Studio environment is set up
+automatically.
 """
 import argparse
 import os
@@ -37,8 +43,13 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true", help="show all build output")
     ap.add_argument("--iop-tests", action="store_true", help="build and run the ps2xIOP unit tests (SPU2) instead")
     ap.add_argument("--opt", choices=("none", "lto", "pgo"), help="optimisation of the game (kept until changed)")
+    ap.add_argument("--quick", action="store_true", help="same as --opt none: fast rebuilds, slower game")
     ap.add_argument("--train", action="store_true", help="with --opt pgo: train a new profile first")
     a = ap.parse_args()
+    if a.quick:
+        if a.opt not in (None, "none"):
+            ap.error("--quick is --opt none; it can't be combined with --opt " + a.opt)
+        a.opt = "none"
 
     env = tc.build_env()
     if a.iop_tests:
@@ -65,7 +76,47 @@ def main():
     if a.target == "ps2EntryRunner":
         if not os.path.isfile(tc.VCS_EXE):
             tc.fail("build finished but " + os.path.relpath(tc.VCS_EXE, tc.ROOT) + " is missing")
-        print("[build] ok: " + os.path.relpath(tc.VCS_EXE, tc.ROOT))
+        remember_iso(a.recompile or None)
+        print("[build] ok: " + os.path.relpath(tc.VCS_EXE, tc.ROOT) + " (" + built_opt() + ")")
+
+
+def remember_iso(given):
+    """Writes iso=<disc> into the vcs.ini next to vcs.exe when it has none, so the exe started on its own (a double
+    click) finds the disc the build used. An iso= already there is the player's and stays."""
+    try:
+        iso = tc.find_iso(given)
+    except SystemExit:
+        return  # no disc known here: vcs.exe looks next to itself, or is given one
+    ini = os.path.join(os.path.dirname(tc.VCS_EXE), "vcs.ini")
+    lines = []
+    if os.path.isfile(ini):
+        with open(ini, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    if any(line.strip().lower().startswith("iso=") for line in lines):
+        return
+    with open(ini, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines + ["iso=" + iso]) + "\n")
+    print("[build] disc for vcs.exe: " + iso + " (iso= in " + os.path.relpath(ini, tc.ROOT) + ")")
+
+
+def built_opt():
+    """The optimisation the CMake cache of build/release holds, for the last line of a build."""
+    cache = {}
+    try:
+        with open(os.path.join(tc.BUILD_DIR, "CMakeCache.txt"), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                key, sep, value = line.partition("=")
+                if sep and key.split(":")[0] in ("PS2X_LTO", "PS2X_PGO"):
+                    cache[key.split(":")[0]] = value.strip()
+    except OSError:
+        return "optimisation unknown"
+    if cache.get("PS2X_PGO") and cache["PS2X_PGO"] != "GEN":
+        return "optimised: ThinLTO + profile-guided"
+    if cache.get("PS2X_LTO") == "THIN":
+        return "optimised: ThinLTO"
+    if cache.get("PS2X_LTO") == "FULL":
+        return "optimised: full LTO"
+    return "quick build, not optimised - python tools/build.py --opt lto for the game to play"
 
 
 PGO_DIR = os.path.join(tc.BUILD, "pgo")
