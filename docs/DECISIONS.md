@@ -414,3 +414,19 @@ The user asked for a trainer like RDR2's (docs/TRAINER.md). Chosen:
 - Trainer scripts must never be in a save: started only while the game runs, taken back out when it pauses.
 - Models are streamed asynchronously with a time-out rather than `LOAD_ALL_MODELS_NOW`, which froze the game when the
   streaming memory was full.
+
+## 2026-10-27 - Per-frame mission meters: each instruction on the time step, not the scripts at 30 Hz
+
+PHI_A2's heat bar (and meters in eleven more missions, game-internals.md 11f) change by a fixed amount every frame,
+so they ran 4.8x fast at 144 fps. Two ways to fix it:
+- Run the script VM at the PS2's 30 Hz above 30 fps (skip CTheScripts on frames in between, with the time step summed
+  for them). Every per-frame script assumption would be as on the PS2 at once, cutscene camera moves and object
+  animations included - but everything scripts move each frame (attached objects, cameras pointed per frame, cars
+  held to a speed) would update at 30 Hz inside a 144 fps picture, script reactions would come up to 33 ms late, and
+  the timers / WAITs would have to be fed the skipped time. Changes the whole game's behaviour for a few missions.
+- Chosen: scale just the listed instructions by the frame's step over 1/30 s, the way the game's own timed opcodes
+  (0x0031 - 0x0034) do it - what the mission would have used had the PS2 not been locked to 30. Every site is in a
+  table with its mission, offset and decoded operands and is checked before it is touched, so a different build or a
+  mod's MAIN.SCM leaves it alone; the survey that found them is written down so the next one is a table row. Visual
+  per-frame animations are left at the frame rate for now (looks only).
+Off in original timing at 30 fps (the game's own handlers, bit-exact); `VCS_SCRIPT_TIMESTEP=0` turns it off elsewhere.

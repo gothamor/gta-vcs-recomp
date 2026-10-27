@@ -16,6 +16,12 @@ Scenarios (each from a fresh teleport, so earlier ones don't leak into later one
   jump    Square on foot: rise and airtime
   car     in a car (model 211), Cross held for 4 s: speed at 1 / 2 / 3 / 4 s (the car's move speed), distance
   clock   game clock ms per frame vs the step; frames per simulated second
+  heat    PHI_A2's heat bar: its floor and the heat at +1 a frame, per simulated second (starts the mission: last)
+
+    python tools/framerate_audit.py --sites
+
+checks instead that every per-frame mission meter src/game/vcs_script_timing.cpp puts on the time step is found where
+its table says (a game per mission, VCS_SCRIPT_TIMESTEP_CHECK=1).
 
 Prints, per scenario and metric, each step's value and its difference from the 30 fps result (the original frame
 rate), flagging differences over --tolerance (default 5%). Writes OUT/audit.json (OUT: build/audit/<date-time>).
@@ -25,6 +31,7 @@ import datetime
 import json
 import math
 import os
+import re
 import sys
 import time
 
@@ -189,6 +196,59 @@ def scenario_car(s):
     return {"speed_1s": at(1.0), "speed_2s": at(2.0), "speed_3s": at(3.0), "speed_4s": at(4.0), "distance_4s": distance}
 
 
+def scenario_heat(s):
+    """PHI_A2 "Boomshine Blowout": the heat's floor (+0.015 a frame in the script) and the heat at a rate of +1 a frame,
+    per simulated second (0.45 / 30 at the PS2's 30 fps). The mission is walked to its forklift state: into Phil's
+    truck, then to the warehouse's back (the state-2 marker); in state 4 the heat routine runs every frame and the
+    rate $G15AC is only recomputed once the player is on the forklift, so it can be set (game-internals.md 11f).
+    Leaves the mission running: keep it the last scenario."""
+    g, S = s.g, rig.Scm
+    space = g.u32(0x48741C)
+
+    def gv(n):
+        return space + 4 * n
+
+    state = gv(0x159E)
+    g.mission(47)
+    for i in range(240):  # the opening cutscene (skipped), then state 0's "get in the truck" loop at mission +0x3BEE..
+        base = g.u32(0x4CD3D8)
+        if any(0x3BEE <= sc[2] - base <= 0x3C40 for sc in g.scripts()):
+            break
+        if i % 6 == 3:
+            g.cmd("press Shift 150")
+        time.sleep(0.5)
+    else:
+        raise RuntimeError("PHI_A2 never reached its truck loop")
+    g.scm(S.op(S.WARP_CHAR_INTO_CAR, S.PLAYER, bytes([0xCD + 0x14, 0xEE])))  # $G14EE: Phil's truck
+    for i in range(120):  # state 1 (drive Phil to the warehouse) skipped: to state 2 once the mission is in it
+        if g.u32(state) == 2:
+            break
+        if i == 20 and g.u32(state) == 1:
+            g.cmd("poke 0x%x 02000000" % state)
+        time.sleep(0.25)
+    g.scm(S.op(S.SET_CHAR_COORDINATES, S.PLAYER, S.f(-1235.45), S.f(-278.9), S.f(11.6)))  # the warehouse's back
+    for i in range(120):
+        if g.u32(state) == 4:
+            break
+        time.sleep(0.25)
+    else:
+        raise RuntimeError("PHI_A2 never reached the forklift state (state %d)" % g.u32(state))
+    s.wait_sim(1.0)
+
+    def sample():
+        return s.clock(), g.peekf(gv(0x15AB), 1)[0], g.peekf(gv(0x15AA), 1)[0]
+
+    a = sample()
+    s.wait_sim(5.0)
+    b = sample()
+    g.cmd("pokef 0x%x 1.0" % gv(0x15AC))
+    s.wait_sim(0.2)
+    c = sample()
+    s.wait_sim(1.5)  # +45 at 30 a second: the heat stays under 100 (where the boomshine blows)
+    d = sample()
+    return {"floor_per_s": (b[1] - a[1]) / (b[0] - a[0]), "heat_per_s": (d[2] - c[2]) / (d[0] - c[0])}
+
+
 def scenario_clock(s):
     c0, f0 = s.g.u32(CLOCK_MS), s.g.u32(FRAME_COUNTER)
     s.wait_sim(5.0)
@@ -204,7 +264,42 @@ SCENARIOS = {
     "sprint": lambda s: scenario_foot(s, ["W", "Shift"]),
     "jump": scenario_jump,
     "car": scenario_car,
+    "heat": scenario_heat,  # starts a mission: last
 }
+
+
+def check_sites(port):
+    """--sites: every per-frame meter instruction src/game/vcs_script_timing.cpp scales (its kSites) is where the table
+    says, as the game decodes it: a game per listed mission with VCS_SCRIPT_TIMESTEP_CHECK=1, the mission launched, the
+    log's "check: mission N +0x.. matches" lines counted against the table."""
+    src = open(os.path.join(ROOT, "src", "game", "vcs_script_timing.cpp"), encoding="utf-8").read()
+    table = {}
+    for m, off in re.findall(r"^\s*\{(\d+), 0x([0-9A-Fa-f]+), 0x[0-9A-Fa-f]{4}, ", src, re.M):
+        table.setdefault(int(m), set()).add(int(off, 16))
+    bad = 0
+    for mission in sorted(table):
+        g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="sites_%d" % mission,
+                           port=port, data_dir=os.path.join(ROOT, "build", "audit", "sites_data"),
+                           env={"VCS_SCRIPT_TIMESTEP_CHECK": "1"})
+        try:
+            g.wait_ingame()
+            g.prime()
+            g.mission(mission)
+            found = set()
+            for _ in range(40):
+                time.sleep(0.5)
+                log = open(g.log_path, encoding="utf-8", errors="replace").read()
+                found = {int(o, 16) for o in re.findall(r"check: mission %d \+0x([0-9A-F]+) matches" % mission, log)}
+                if found >= table[mission]:
+                    break
+        finally:
+            g.quit()
+        missing = table[mission] - found
+        bad += len(missing)
+        print("[sites] mission %d: %d of %d found%s" % (mission, len(found & table[mission]), len(table[mission]),
+              ", missing " + " ".join("+0x%X" % o for o in sorted(missing)) if missing else ""), flush=True)
+    print("[sites] %s" % ("all found" if not bad else "%d missing" % bad))
+    return bad == 0
 
 
 def main():
@@ -213,7 +308,10 @@ def main():
     ap.add_argument("--steps", default="15,30,60,100")
     ap.add_argument("--only", default="", help="comma-separated scenarios (default: all)")
     ap.add_argument("--tolerance", type=float, default=0.05)
+    ap.add_argument("--sites", action="store_true", help="only check the per-frame meter sites (check_sites)")
     a = ap.parse_args()
+    if a.sites:
+        sys.exit(0 if check_sites(47670) else 1)
     out = a.out or os.path.join(ROOT, "build", "audit", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
     os.makedirs(out, exist_ok=True)
     steps = [int(x) for x in a.steps.split(",") if x]

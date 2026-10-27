@@ -40,7 +40,7 @@ choices).
 | Path | What |
 |---|---|
 | `src/main.cpp` | Launcher: ISO, settings registration, runtime start |
-| `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`) |
+| `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`), frame timing (`vcs_framerate.cpp`, per-frame mission meters `vcs_script_timing.cpp`) |
 | `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders, the RHI (D3D11 only under `rhi_d3d11/`), SDL3 platform layer |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
 | `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2), the trainer menu (F5) |
@@ -138,6 +138,8 @@ card copies to start from (never the user's live card).
 - A mission stuck after a ped should talk, or peds vanishing: check the mission audio slots and who deletes the ped
   (`VCS_TRACE_PED_REMOVE`, game-internals.md 12); Shakedown's was the recompiler's 32-bit compare-with-zero branches.
 - Something wrong only above 100 fps: a `ms_fTimeStep < 0.5` branch the PS2 never takes (game-internals.md 4).
+- A mission bar / meter / timer faster at high frame rates: the mission script adds a fixed amount every frame; add
+  the instruction to `src/game/vcs_script_timing.cpp` (game-internals.md 11f has the survey and how to read a mission).
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs

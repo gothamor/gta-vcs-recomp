@@ -13,6 +13,7 @@
 #include "game/vcs_display.h"
 #include "game/vcs_framerate.h"
 #include "game/vcs_movie.h"
+#include "game/vcs_script_timing.h"
 #include "game/vcs_inflate.h"
 #include "game/vcs_sound.h"
 #include "game/vcs_stream.h"
@@ -821,6 +822,7 @@ namespace
         vcs::installDisplayHooks(runtime); // widescreen (settings menu)
         vcs::installHudHooks(runtime);     // 2D at the RenderWare level
         vcs::installFrameRateHooks(runtime); // 30 / 60 fps (game/vcs_framerate.h)
+        vcs::installScriptTimingHooks(runtime); // per-frame mission meters on the time step (game/vcs_script_timing.h)
         vcs::installMovieHooks(runtime);     // STINGS / INTRO played natively (game/vcs_movie.h)
         const bool stream = vcs::installStreamHooks(runtime); // disc streaming without the IOP (game/vcs_stream.h)
         const bool sound = vcs::installSoundHooks(runtime);   // sound without the IOP (game/vcs_sound.h)

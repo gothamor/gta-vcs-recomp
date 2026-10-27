@@ -398,8 +398,17 @@ dropped on uploads (lazy render-target patching).
       (driving, shooting, flying, cutscenes); VRR / frame-time variance. (Phase 1 / 2 above; the user's choice over interpolation, DECISIONS.md 2026-10-23): CTimer on the host
       clock, a frame-rate cap setting, a forced-step test rig, then the audit of frame-count assumptions. Replaces
       the "60 fps fixes" item below.
+- [x] Mission meters on the time step (2026-10-27, user report: PHI_A2 "Boomshine Blowout"'s heat bar filled far
+      faster at 144 fps). The mission adds fixed amounts per frame (heat floor +0.015, heat +-1); a survey of all of
+      MAIN.SCM (disassembled: every bar's variables, every per-frame float rate, every int counter) found the same in 11
+      more: LOU_B1 girls, UMB_B2 havoc, DIA_C2 time, REN_C3 Phil, UMB_B3 stress rates, FIREHEL water / heli damage,
+      MEN_C6 pressure, the driving range / GON_C2 aim, DIA_C4 searchlights, LOU_B2 escape distances. 30 instructions
+      scaled by step / (50/30) in the script VM's arithmetic handlers (`src/game/vcs_script_timing.cpp`), only when
+      the frame isn't the PS2's. PHI_A2 at 1/144: heat floor 2.162 -> 0.4496 a second (0.450 at 1/30), heat at +1:
+      144 -> 29.5 (29.1 at 1/30). `framerate_audit.py` scenario `heat`, `--sites` (all 30 found). game-internals.md 11f.
 - [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
-      the switch; frame pacing.
+      the switch; frame pacing. Left from the script survey (game-internals.md 11f): per-frame object / camera /
+      text animations in missions (looks only).
 ## Milestone 5 - movies (2026-10-24) - done
 - [x] STINGS.PSS (the Rockstar logos) and INTRO.PSS play natively at boot (`src/game/vcs_movie.cpp`): own PSS
       demuxer, MPEG-2 video through FFmpeg, shown by the presenter at 4:3 (pillarboxed in widescreen), 48 kHz PCM
@@ -561,6 +570,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_SOUND_REPLAY=<record>`, `VCS_SOUND_REPLAY_OUT=<wav>` | replay recorded sound calls into the native driver, write its output, exit |
 | `VCS_MIN_STEP=x` | independent timing's step floor (default 50/240: the 240 fps ceiling; lower makes an unlimited cap unlimited) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
+| `VCS_SCRIPT_TIMESTEP=0` | mission meters that count per frame stay on the frame rate (game-internals.md 11f; the reference) |
+| `VCS_SCRIPT_TIMESTEP_LOG=1`, `VCS_SCRIPT_TIMESTEP_CHECK=1` | per scaled instruction every 2 s game time: runs, the game's amount vs applied; log each listed instruction found in a newly loaded mission |
 | `VCS_PERF_OVERLAY=0\|1` | the perf overlay setting for one run |
 | `VCS_PROFILE=s` | sampling profiler (guest functions + host symbols) |
 | `VCS_PROFILE_LINES=name` | with `VCS_PROFILE`: source lines of the host functions whose name contains `name` |

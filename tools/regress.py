@@ -19,6 +19,8 @@ Steps (each a tool of its own, run in turn; the game window shows):
   menushape every presented frame into and out of the pause menu at 32:9 on a 16:9 screen: a 4:3 shape shows the menu,
             a wide one the game (the shifted frame at the switch)
             (buildings, peds and cars vanishing at the sides in widescreen)
+  meters    per-frame mission meters on the time step: every scaled instruction found in its mission (not --quick),
+            PHI_A2's heat bar as fast per game second at 1/144 as at 1/30
 
 Writes OUT/report.md and OUT/metrics.json (default OUT: build/regress/<date-time>). --set-baseline stores this
 run as build/regress/baseline (metrics.json + the scenes capture); later runs report what changed against it:
@@ -164,6 +166,24 @@ def step_widecull(out, quick):
     return res
 
 
+def step_meters(out, quick):
+    """Mission meters that count per frame on the time step (game-internals.md 11f, src/game/vcs_script_timing.cpp,
+    fixed 2026-10-27): every listed instruction found in its mission (not with --quick: a game per mission), and
+    PHI_A2's heat bar per game second at 1/144 as at 1/30 (within 5%; it filled 4.8x as fast)."""
+    sys.path.insert(0, TOOLS)
+    import framerate_audit as fa  # noqa: E402
+    res = {"sites": None if quick else fa.check_sites(47670)}
+    for step in (30, 144):
+        s = fa.Session(step, "regress_meters_%d" % step, 47670)
+        try:
+            res[str(step)] = fa.scenario_heat(s)
+        finally:
+            s.quit()
+    a, b = res["30"], res["144"]
+    res["pass"] = res["sites"] is not False and all(abs(b[k] - a[k]) <= 0.05 * abs(a[k]) for k in ("floor_per_s", "heat_per_s"))
+    return res
+
+
 def step_menushape(out, quick):
     """The pause menu's shape (SETTINGS_MENU_WIDESCREEN.md): 32:9 game, 16:9 screen; every presented frame for 50 frames
     after Start, in and out (control command "burst"). Each frame's picture rectangle (4:3 or wide) has to fit its
@@ -247,6 +267,8 @@ def compare(base, new):
             notes.append("saves: %s failed (see saves.log and the screenshots)" % k)
     if "shakedown" in new and new["shakedown"].get("pass") is not True:
         notes.append("shakedown: the shop entry failed %s (see shakedown/)" % json.dumps(new["shakedown"]))
+    if "meters" in new and new["meters"].get("pass") is not True:
+        notes.append("meters: per-frame mission meters off the time step %s (PHI_A2's heat at 144 vs 30)" % json.dumps(new["meters"]))
     ms = new.get("menushape", {})
     if ms and ms.get("pass") is not True:
         notes.append("menushape: frames whose shape does not fit their picture at the pause menu %s" % json.dumps(ms))
@@ -270,7 +292,7 @@ def main():
     metrics = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "quick": a.quick}
     for name, fn in (("scenes", step_scenes), ("tour", step_tour), ("missions", step_missions), ("drive", step_drive),
                      ("evening", step_evening), ("saves", step_saves), ("shakedown", step_shakedown),
-                     ("widecull", step_widecull), ("menushape", step_menushape)):
+                     ("widecull", step_widecull), ("menushape", step_menushape), ("meters", step_meters)):
         print("[regress] %s" % name)
         t0 = time.time()
         try:

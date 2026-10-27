@@ -196,6 +196,8 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
     twoDPass / timerUpdate) - the value stays within 63 of the real counter for anything else reading it then.
     The four outside the 2D pass are not covered yet;
   - timestamps (stored, compared with frame - 1: "seen last frame"): FUN_00383028 .. 003868c0, 003ac9c8 - harmless.
+- **Mission scripts that count per frame**: a meter changed by a fixed amount each `WAIT 0` pass (PHI_A2's heat bar,
+  eleven more missions) moved with the frame rate - section 11f.
 - **Emulated time and the VBlank chain** (found when independent timing first ran at 5 fps): VBlank events are chained
   in EE cycles (+1/60 s each) and each is also held to its host-clock moment. An EE clock moved past the chain makes
   every following VBlank due at once by cycles, and the EE is held at each until its real-time moment - the game
@@ -1313,6 +1315,18 @@ vehicle-mission monitors (`paramon`, `vigmon`, `firemon`, `taximon`...), `ga_*` 
   9 float32, 10 NUL-terminated string. A byte >= 0x0B is a variable (`FUN_00254ff8`): 0x0B / 0x0C the two timers,
   0x0D-0x6C local variable (byte - 0x0D + frame base), 0x6D-0xCC local arrays, 0xCD-0xE5 global
   ((byte - 0xCD) << 8 | next byte; address ScriptSpace + 4 * index), >= 0xE6 global arrays.
+- **Arrays** (read from FUN_00254ff8, 2026-10-27): a global array is 4 bytes - (byte - 0xE6) << 8 | next byte = the
+  base global, then the number of the *local* holding the index, then the array's size; address ScriptSpace + 4 *
+  (base + index). A local array is 3 bytes - byte - 0x6D = the base local, the index local, the size; address script +
+  0x54 + 4 * (frame + base + index). An index < 0 or >= size points at a dummy word (0x50C140). A local is script +
+  0x54 + 4 * (frame (+0x1FC) + byte - 0x0D); the timers (0x0B / 0x0C) are locals 0x68 / 0x69 without the frame.
+- **CALL (0x037B) / CALL_NOT (0x037A)**: three raw bytes (in count, out count, the callee's local frame offset), the
+  label (typed int; negative = mission-relative), then the in arguments. Labels in a mission are negative offsets from
+  the mission's start; positive ones are main-script IPs (the missions call shared main-script subroutines).
+  START_NEW_SCRIPT and the other "arguments" opcodes end their variable list with a type-0 byte.
+- **Disassembler** (scratch, analysis only): with those rules, Sanny's VCS parameter counts and the argument types above,
+  all of MAIN.SCM (main + 101 missions, ~252,000 instructions) decodes without a desync; listings under
+  `build/analysis/scm/dis/` (not committed: game code).
 - Example (the rig's teleport): `EA 02 01` SET_AREA_VISIBLE 0, `53 02 09 x 09 y 09 z` LOAD_SCENE,
   `44 00 CF A5 09 x 09 y 09 z` SET_CHAR_COORDINATES $PLAYER (z <= -100 finds the ground), `23 00` terminate.
 
@@ -1345,6 +1359,65 @@ GIVE_WEAPON_TO_CHAR takes weapon types 0..39; 40 and up hang the script.
   the script at **+0x209** (with +0x20C the NOT flag and +0x206 the AND / OR count).
 - The rig's `scm` answers `ok <slot>`: the finished script's outputs (locals) are at slot + 0x54 until the game starts
   another script in that slot (reading the head of the idle list instead raced with the trainer's own scripts).
+
+### 11f. Mission meters that count per frame (2026-10-27)
+
+The user's report: in PHI_A2 "Boomshine Blowout" the heat bar fills much faster at 144 fps (independent timing). Every
+script runs once a frame and a `WAIT 0` loop does one pass a frame, so anything a script adds a fixed amount to per pass
+moves with the frame rate. On the PS2 a frame is always 1/30 s; the game's own time-based tools are the timers TIMERA /
+TIMERB, GET_GAME_TIMER and the **timed opcodes 0x0031 - 0x0034** (ADD / SUB_TIMED_VAL / FLOAT_VAR: value * ms_fTimeStep),
+which REN_C7, SRANGE, MAR_A5, LAN_C5 and DIA_C3 use for their meters. Some missions used the plain ones instead.
+
+- **PHI_A2's heat** (mission 47, the subroutine at file IP 0xCACCD = mission +0x2026, called once per pass from the
+  forklift-state loops at 0xCC655 / 0xCC771, both `WAIT 0`): `$G15AB += 0.015` (the heat's floor: it always rises,
+  0.45 a second at 30 fps - 100, the explosion, after 222 s), `$G15AA += $G15AC` (the heat; $G15AC = 0 without a crate,
+  +1 with the crate in a fire (PHI2_H5 "Keep the boomshine out of the fire!", 0xCAC5E), -1 otherwise),
+  `$G15AA = max($G15AA, $G15AB)`, at 100 `$G159E = 7` (fail); the bar is `$G15A2 = (int)$G15AA`
+  (DISPLAY_ONSCREEN_COUNTER_WITH_STRING "PHI2_TE"). Measured (`VCS_TIMESTEP`, per game second): floor 0.450 at 1/30,
+  2.162 at 1/144 - 4.8x; heat at +1: 29 / 144 a second.
+- **How the others were found**: every on-screen counter (024D / 0311) traced back to the variables that feed it
+  (CSET_VAR_INT_TO_VAR_FLOAT, copies) and their arithmetic; every non-timed float add / subtract of a constant under 1
+  (per-frame rates); every variable-rate float accumulator on a global; every int counter compared with 20 or more.
+  Each hit read in context: who calls the subroutine (a call-graph over CALL / GOSUB labels) and whether that loop
+  waits 0, whether the change is per frame or per event (a hit, a pickup), and whether it is gameplay or looks.
+- **Per frame, gameplay** (scaled by `src/game/vcs_script_timing.cpp`, its table has each instruction):
+  - 59 LOU_B1 "Hose the Hoes": the girls' bar `$G1513` -0.04 / -0.03 / -0.01 a frame (by the fires left, +0x6E2..);
+  - 67 UMB_B2 "Balls": havoc `$G14E9` +0.005 a frame per living Cholo (+0x24CF), the mission fails at 100;
+  - 97 DIA_C2 "The Exchange": the snipers' TIME bar `$G154C` -0.04 a frame from 100 (+0x1E3F; 83 s at 30 fps);
+  - 80 REN_C3 "Kill Phil": the Phil bar `$G152E` -0.25 a pass in the thugs state, a pass = two `WAIT 0`s (+0x27EC);
+  - 68 UMB_B3 "Papi Don't Screech": stress `$G15B3 += max(rate, damage this frame)`; the rates (-0.2 calm, 0.25 out of
+    the car, 0.5 airborne / over 30 / upside down, 2) are set into local 0 at +0xE8A..0xF12 - those sets are scaled,
+    the damage (an event) is not;
+  - 35 FIREHEL: the bucket's water `$G1700` -1 a frame while dropping (+0x15E3; a fire inside the bucket's box goes out
+    at once, so the drain alone is how much a bucket does), the helicopter's health -5 a frame per fire it touches
+    (+0x1B73);
+  - 77 MEN_C6 "Burning Bridges": pressure `$G1656` +1 a frame while the player is over 70 from the depot (+0x13BE;
+    the +3s are per explosion, timed with GET_GAME_TIMER);
+  - 18 (the driving range) and 93 GON_C2 "Home's on the Range": the aim `$G14F1` / `$G150E` +-0.2 a frame on the stick,
+    back to the centre at 0.05 a frame (the power bar is timed with GET_GAME_TIMER);
+  - 99 DIA_C4 "Over the Top": the searchlight targets (model -19, beams by COMMAND_0478 from the towers) step 0.3 /
+    0.15 a frame along their routes (x3 alerted): `7L *= $G1587[i]` (+0x53B7) and `8L = $G1587[i]` (+0x5478);
+  - 60 LOU_B2 "Robbing the Cradle": the distances the Welfare Man may get away (`$G1513..15`) shrink by 0.1 a frame
+    towards 300 / 150 / 600 (+0x1353..).
+- **Checked and fine**: TOUR's "Fun" (scored every 2.5 s of TIMERB), REN_C6 / LAN_C7 bars (TIMERA, GET_GAME_TIMER),
+  REN_C7 cable damage (timed opcodes) and rig stress (+25 a hit), LAN_B4 cash, DIA_C3 signal, the counters of kills /
+  pickups, health-derived bars (LAN_B6 / C3 / C8 Lance, damage bars), TAXI fares, E_RO cruise speed (set from the car's
+  speed), position offsets (set, then +-c), the golf power bar.
+- **Per frame but looks only** (not changed): text grow / scroll animations (CRASH, SRANGE), object slides and spins
+  (GON_C4, MEN_C3's barrier, camera smoothing in LAN_B6), particle bursts, the shared camera-shake helper (0.63 / 0.7 /
+  0.67 in many missions), debug tools in the main script (near clip, animation viewer). Minor: LAN_C3 counts frames
+  while a spawn point is blocked (its fallback comes sooner).
+- **The fix** (vcs_script_timing.cpp): the handlers of 0004/0005/0035/0036 (copy, 0x3B11D8), 0007 (0x3B1248), 0008/002A
+  (0x3B12C0), 0009/002B (0x3B1338), 000A/002C (0x3B13B0), 000C/002E (0x3B14A0) are wrapped; ProcessOneCommand
+  (FUN_002560d8) has moved the IP past the opcode and calls them through the table with the script in a0. At a listed
+  instruction (mission offset = IP - 2 - `*(0x4CD3D8)`, checked against its decoded opcode and operands) the wrapper
+  does the instruction with the operand scaled by ms_fTimeStep / (50/30), clamped to 0..2 (integers keep the fraction
+  for the next pass), moves the IP on and returns 0, as the handler would. Only when the frame is not the PS2's
+  (independent timing, or original timing at 60); original timing at 30 runs the game's handlers. Measured at 1/144:
+  floor 0.4496 a second, heat 29.5. `tools/framerate_audit.py` scenario `heat` and `--sites` (every listed instruction
+  found in its mission as the game decodes it).
+- The mission is read to ScriptSpace + `*(0x4CD3D8)` (an IP; 0x3CAE3, right after the main section) by
+  LOAD_AND_LAUNCH_MISSION_INTERNAL (0x3B2208), which starts it there; mission-relative labels resolve against it.
 
 ## 12. Player, areas and the world
 
