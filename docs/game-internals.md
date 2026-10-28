@@ -172,9 +172,63 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   0.864 / 0.884) - and the ped's vertical speed agrees within 1-3% between 1/30 and 1/60 through a whole fall,
   quadratic air drag included (traced at ped+0x148). Shorter frames are closer to the continuous motion, as on the
   PC GTAs; matching 1/30 exactly would need a correction term in the integration (not done: <= 6%).
-- **A `max(step, 0.5)` in ped code**: FUN_00337208 (25 KB, ped processing) divides by `max(ms_fTimeStep, 0.5) *
-  0.008` (GRAVITY) at 0x33bb2c - one of the places that assume the 0.5 minimum (found by searching the gravity
-  constant 0x3C03126F near the move speed's z, +0x14C).
+- **A `max(step, 0.5)` in the bike's lean**: FUN_00337208 is **CBike::ProcessControl** (not ped code, as first noted:
+  it calls ProcessWheel FUN_003E7618, the springs FUN_0034E0E8 / FUN_0034E1D8 / FUN_0034E348, and keeps the bike
+  fields of reVC's CBike - lean +0x680 / +0x684, wheel ratios +0x540..). At 0x33bb2c it divides the frame's sideways
+  change of speed by `max(ms_fTimeStep, 0.5) * 0.008` (GRAVITY; VC: max(step, 0.01)) for the lean angle (+0x684,
+  radians; the physics matrix stays upright, the lean is drawn and steers the wheels). Above 100 fps the bike leant
+  less: a gentle turn peaked at 22 degrees at 144 fps against 30 at 30 (yaw rate the same; hard turns hit the lean
+  limit, ~42 degrees, at both). **Patched 2026-10-28** like the ped one (0.5 -> 0.001, `lui $at` at 0x33BB10; the
+  0.5 is only the max.s operand).
+- **The same `max(step, 0.5)` elsewhere** (scan for `lwc1 -0x2EF0` then max.s / c.lt.s with a `lui 0x3F00` nearby,
+  2026-10-28): FUN_00138b68 (0x138c88, vehicles in water) and FUN_00336cb8 (0x336d78, bikes in water) divide the
+  buoyancy force by `mass * max(step, 0.5) * GRAVITY` for the share in the water (damping and thresholds); FUN_0019fda0
+  (0x1a2480, boats: CBoat::ProcessControl) scales a rudder turn force by `max(step, 0.5)` instead of the step;
+  FUN_001f4bf0 (CPed::ProcessControl, 0x1f7378 / 0x1f7474 / 0x1f7bac). Not patched yet: all above 100 fps only.
+- **Vehicle physics that acts once a frame without the step** (found 2026-10-28 from a user report: a car running
+  over a body jumped, a stolen bike flipped forward, both at high frame rates only). Fixed in
+  `src/game/vcs_physics_timing.cpp` (scaled by step / (50/30) when the frame is shorter than the PS2's;
+  `VCS_PHYSICS_TIMESTEP=0` off):
+  - **FUN_003F34F0, the bump of a body under a wheel**: called after each wheel's ProcessWheel, for cars from
+    FUN_00152E18 (a pair of wheels, from CAutomobile::ProcessControl FUN_0013A0A0 at 0x13e478 / 0x13e4cc) and for bikes
+    from CBike::ProcessControl. If the vehicle has a driver (+0x384), the player drives (FUN_0020C310), its type
+    (+0x354; 0 cars, 6 / 8 bikes) isn't 1 / 2, up.z >= 0.1 and it moves (|v|^2 >= 0.0001), it walks the driver's
+    nearby peds (driver +0x6F8, count +0x77A): one that is dead (state +0x8C4 == 0x3A) or knocked down (FUN_002192E0)
+    within 1 m horizontally of the wheel's contact point gets the vehicle `ApplyTurnForce((0, 0, mass * 0.01, * 1.5
+    for cars), contact point)` - per frame. Measured (`tools/framerate_audit.py` scenarios runover / bikebody; a dead
+    ped 14 m ahead of a Sentinel at full throttle): the car's front wheels on the body pitched it at 0.042 rad / 0.02 s
+    at 30 fps but 0.072 at 144; its rear bumper then hit the ground (CPhysical::ProcessCollisionSectorList FUN_0034FD60
+    -> ApplyCollisionAlt FUN_0034D670 against the road) and threw the car up at 3.3 m/s (1.4 at 30 fps; rise 0.55 m
+    against 0.17). A PCJ-600 rolling slowly past a body at its rear wheel ended on its nose (forward vector z -0.995)
+    at 144 fps; at 30 it pitches to -0.29 and settles. Found with the rig's `trace` (per-frame vehicle state) and write
+    watches on the car's move speed z (+0x148) and turn speed x (+0x70), summing each writer's changes (return address
+    and the callers on the stack): at 144 fps most of the extra pitch came from ApplyTurnForce called at 0x3F36CC.
+  - **ProcessWheel's rolling resistance** (FUN_003E6C18 cars, FUN_003E7618 bikes; CVehicle::ProcessWheel, args f12
+    thrust, f13 brake, f14 adhesion (multiplied by the step inside), a0 vehicle): with brake 0, thrust 0 and the gas
+    pedal (+0x25C) under 0.01, the brake becomes 0.9 / handling mass (handling +0xBC; 0.09 under 500 kg, 0.18 for the
+    RC Bandit (model 0xFC51), 0.54 / (mass + 200) for vehicle types 6 / 8, 0 for type 5; the bike version has 0.18
+    under 500 kg) and clamps the wheel's forward correction - per frame, never times the step (reVC fixes the same line
+    with `brake *= CTimer::GetTimeStepFix()` under FIX_BUGS). Coasting from 10 m/s a Sentinel slowed at 3.4 m/s^2 at
+    30 fps and 16 at 144; a PCJ-600 at 2.4 and 11, which pitched it forward. Patched (game/vcs/overrides.toml): the
+    four constants load from guest RAM 0x7FF00 / 04 / 08 / 0C (0.54, 0.09, 0.9, 0.18), which the ProcessWheel hooks
+    fill before every call - unscaled at 30 fps and below, so the PS2's values bit for bit. **Guest RAM 0x7FF00..0x7FF0F
+    is ours**: below the runtime's async callback stacks (0x80000..0x100000); a write watch on it through eight runs
+    (run-overs and coasting at 30 / 60 / 144 fps) saw no game write.
+  - **Audit** (`tools/framerate_audit.py --only coast,runover,bikebody,bikecoast,bikelean --steps 30,60,144`,
+    2026-10-28; in brackets 144 fps with `VCS_PHYSICS_TIMESTEP=0`, the lean from the build before the patch):
+
+    | | 1/30 | 1/60 | 1/144 |
+    |---|---|---|---|
+    | car coasting, m/s^2 | 3.44 | 3.45 | 3.45 (16.2) |
+    | run-over: rise m / thrown up m/s / pitch rate | 0.13 / 1.37 / 0.042 | 0.10 / 0.97 / 0.043 | 0.09 / 0.70 / 0.041 (0.59 / 3.9 / 0.072) |
+    | bike past a body: forward z at most / up z at the end | 0.53 / 1.0 | 0.39 / 1.0 | 0.31 / 1.0 (1.0 / 0.42: on its side) |
+    | bike coasting, m/s^2 | 2.38 | 2.38 | 2.37 (11) |
+    | bike lean per g of sideways acceleration | 0.56 | 0.60 | 0.64 (0.49) |
+
+    The bumps are smaller at higher frame rates: a car's collision with a body or the road is sampled in finer steps
+    (at 30 fps and 16 m/s a frame moves the car 0.55 m into it). The per-frame part is what made them grow.
+  - **Still per frame** (read in ProcessWheel, not measured or fixed): a burst tyre's wobble - a random sideways amount
+    added every frame when the wheel status (last argument) is 1.
 - **Physics read for the audit**: ped -> its vehicle at ped+0x450 (also +0x480 / +0x484; found by scanning the ped for
   the address of the car it was warped into); **CPhysical move speed (x, y, z) at +0x140** (units per 1/50 s, x 50 =
   m/s; z found at +0x148 mid-fall, y at +0x144 in a car driving north); written through a vector setter

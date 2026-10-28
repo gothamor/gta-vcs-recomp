@@ -15,6 +15,7 @@
 #include "game/vcs_movie.h"
 #include "game/vcs_input.h"
 #include "game/vcs_script_timing.h"
+#include "game/vcs_physics_timing.h"
 #include "game/vcs_inflate.h"
 #include "game/vcs_sound.h"
 #include "game/vcs_stream.h"
@@ -812,8 +813,28 @@ namespace
         Original(rdram, ctx, runtime);
     }
 
+    // VCS_COLL_LOG=1 (investigation): CPhysical::ApplyCollisionAlt (FUN_0034D670: a0 A, a1 B, a2 colpoint) for the
+    // player's vehicle
+    PS2_GUEST_CC void logCollisionAlt(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const auto rd32 = [&](uint32_t a) { uint32_t v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
+        const auto rdf = [&](uint32_t a) { float v = 0; std::memcpy(&v, rdram + (a & 0x01FFFFFFu), 4); return v; };
+        const uint32_t a = GPR_U32(ctx, 4), b = GPR_U32(ctx, 5), cp = GPR_U32(ctx, 6);
+        static int logged = 0;
+        if (a == rd32(rd32(0x004E4910u) + 0x450u) && logged++ < 4000)
+            std::fprintf(stderr, "[coll] f %u ms %u A %08x B %08x(type %u) p %.3f %.3f %.3f n %.3f %.3f %.3f depth %.3f surf %u/%u"
+                                 " v %.4f %.4f %.4f w %.4f %.4f %.4f\n",
+                         rd32(0x4CD124u), rd32(0x4CD104u), a, b, rd32(b + 0x48) & 0xEu, rdf(cp), rdf(cp + 4), rdf(cp + 8),
+                         rdf(cp + 0x20), rdf(cp + 0x24), rdf(cp + 0x28), rdf(cp + 0x34), rdram[(cp + 0x30) & 0x01FFFFFFu],
+                         rdram[(cp + 0x32) & 0x01FFFFFFu], rdf(a + 0x140), rdf(a + 0x144), rdf(a + 0x148), rdf(a + 0x70),
+                         rdf(a + 0x74), rdf(a + 0x78));
+        FUN_0034d670_0x34d670(rdram, ctx, runtime);
+    }
+
     void applyVcs(PS2Runtime &runtime)
     {
+        if (std::getenv("VCS_COLL_LOG"))
+            runtime.replaceFunction(0x0034D670u, &logCollisionAlt);
         if (std::getenv("VCS_SKID_LOG"))
         {
             runtime.replaceFunction(0x001BA600u, &logSkidding);
@@ -825,6 +846,7 @@ namespace
         vcs::installHudHooks(runtime);     // 2D at the RenderWare level
         vcs::installFrameRateHooks(runtime); // 30 / 60 fps (game/vcs_framerate.h)
         vcs::installScriptTimingHooks(runtime); // per-frame mission meters on the time step (game/vcs_script_timing.h)
+        vcs::installPhysicsTimingHooks(runtime); // per-frame vehicle pushes on the time step (game/vcs_physics_timing.h)
         vcs::installMovieHooks(runtime);     // STINGS / INTRO played natively (game/vcs_movie.h)
         const bool stream = vcs::installStreamHooks(runtime); // disc streaming without the IOP (game/vcs_stream.h)
         const bool sound = vcs::installSoundHooks(runtime);   // sound without the IOP (game/vcs_sound.h)

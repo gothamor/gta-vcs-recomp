@@ -37,6 +37,15 @@ namespace vcs::rig
         std::atomic<bool> g_paused{false};
         std::mutex g_jobsMutex;
         std::deque<std::function<void(uint8_t *, R5900Context *, PS2Runtime *)>> g_jobs;
+        FILE *g_trace = nullptr; // "trace": game thread only
+        std::vector<std::pair<uint32_t, uint32_t>> g_traceSpans;
+
+        void stopTrace()
+        {
+            if (g_trace)
+                std::fclose(g_trace);
+            g_trace = nullptr;
+        }
 
         bool parseU32(const std::string &text, uint32_t &out)
         {
@@ -258,6 +267,38 @@ namespace vcs::rig
             ps2control::addCommand("frames", [](const std::string &, ps2control::Reply reply) {
                 reply(fmt("ok %llu", static_cast<unsigned long long>(g_frames.load())));
             });
+            // trace <path> <addr> <count> [<addr> <count> ...] | trace off -> every frame (at the kick) one line to
+            // <path>: frame, game clock ms, time step, then the floats. Per-frame physics without missing frames.
+            ps2control::addCommand("trace", [](const std::string &args, ps2control::Reply reply) {
+                const auto w = words(args);
+                std::vector<std::pair<uint32_t, uint32_t>> spans;
+                if (w.size() == 1 && w[0] == "off")
+                {
+                    runOnGameThread([reply](uint8_t *, R5900Context *, PS2Runtime *) {
+                        stopTrace();
+                        reply("ok");
+                    });
+                    return;
+                }
+                for (size_t i = 1; i + 1 < w.size(); i += 2)
+                {
+                    uint32_t addr = 0, n = 0;
+                    if (!parseU32(w[i], addr) || !parseU32(w[i + 1], n) || n == 0 || n > 64)
+                        return reply("error usage: trace <path> <addr> <count<=64> [...] | trace off");
+                    spans.emplace_back(addr, n);
+                }
+                if (spans.empty() || w.size() % 2 == 0)
+                    return reply("error usage: trace <path> <addr> <count<=64> [...] | trace off");
+                const std::string path = w[0];
+                runOnGameThread([path, spans, reply](uint8_t *, R5900Context *, PS2Runtime *) {
+                    stopTrace();
+                    g_trace = std::fopen(path.c_str(), "w");
+                    if (!g_trace)
+                        return reply("error cannot write " + path);
+                    g_traceSpans = spans;
+                    reply("ok");
+                });
+            });
         }
     }
 
@@ -474,6 +515,15 @@ namespace vcs::rig
         g_rdram = rdram;
         g_frames.fetch_add(1, std::memory_order_relaxed);
         checkPendingScripts(rdram);
+        if (g_trace)
+        {
+            std::fprintf(g_trace, "%llu %u %.6g", static_cast<unsigned long long>(g_frames.load()), rd32(rdram, 0x4CD104u),
+                         loadF32(0x4CD110u)); // CTimer: ms clock, ms_fTimeStep
+            for (const auto &[addr, n] : g_traceSpans)
+                for (uint32_t i = 0; i < n; ++i)
+                    std::fprintf(g_trace, " %.6g", loadF32(addr + i * 4));
+            std::fputc('\n', g_trace);
+        }
         for (;;)
         {
             std::deque<std::function<void(uint8_t *, R5900Context *, PS2Runtime *)>> jobs;

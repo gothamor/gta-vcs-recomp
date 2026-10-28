@@ -394,7 +394,7 @@ dropped on uploads (lazy render-target patching).
       bug - game-internals.md 4); real-time pacing checked (game clock = wall clock at caps 60 / 100 / refresh,
       presents at the cap). HUD / radar flashing at the original rate above 30 fps (2D pass on a 30 Hz frame counter). Left: the four
       blinking readers outside the 2D pass;
-      what breaks below step 0.5 (FUN_00337208's max(step, 0.5) is one) to lift the 100 cap; missions at 60 / 100
+      what breaks below step 0.5 (FUN_00337208's max(step, 0.5), CBike's lean, patched 2026-10-28) to lift the 100 cap; missions at 60 / 100
       (driving, shooting, flying, cutscenes); VRR / frame-time variance. (Phase 1 / 2 above; the user's choice over interpolation, DECISIONS.md 2026-10-23): CTimer on the host
       clock, a frame-rate cap setting, a forced-step test rig, then the audit of frame-count assumptions. Replaces
       the "60 fps fixes" item below.
@@ -406,6 +406,21 @@ dropped on uploads (lazy render-target patching).
       scaled by step / (50/30) in the script VM's arithmetic handlers (`src/game/vcs_script_timing.cpp`), only when
       the frame isn't the PS2's. PHI_A2 at 1/144: heat floor 2.162 -> 0.4496 a second (0.450 at 1/30), heat at +1:
       144 -> 29.5 (29.1 at 1/30). `framerate_audit.py` scenario `heat`, `--sites` (all 30 found). game-internals.md 11f.
+- [x] Vehicle physics on the time step (2026-10-28, user report: at high frame rates a car running over someone jumped
+      far more than it should, and a stolen bike sometimes flipped forward). Two per-frame amounts without the step:
+      FUN_003F34F0 pushes a wheel up once a frame while a dead or knocked-down ped is under it (the bump of a body;
+      cars and bikes), and ProcessWheel's rolling resistance (no gas, no brake) is a fixed brake a frame (reVC fixes
+      the same line under FIX_BUGS). At 144 fps a car over a body pitched up until its rear bumper hit the road and
+      threw it up at 3.9 m/s (1.4 at 30), a bike rolling past the rider it was stolen from ended on its nose or side,
+      a car coasted down at 16 m/s^2 (3.4) and a bike at 11 (2.4, hard enough to pitch it forward). Both scaled by
+      step / (50/30) when the frame is shorter (`src/game/vcs_physics_timing.cpp`, `VCS_PHYSICS_TIMESTEP=0` off; the
+      brake's constants patched to load from guest RAM 0x7FF00..), and CBike's lean `max(step, 0.5)` patched like the
+      ped one (a gentle turn leant 22 degrees at 144 fps against 30). After: coasting 3.45 / 3.45 / 3.45 m/s^2 at 1/30
+      / 60 / 144, the run-over pitch rate 0.042 / 0.043 / 0.041, the bike past a body upright at all three.
+      `framerate_audit.py` scenarios coast, runover, bikebody, bikecoast, bikelean; game-internals.md 4. Found with the
+      rig's new `trace` (a vehicle's state every frame) and write watches attributing its speed changes to callers.
+      Left (game-internals.md 4): the same `max(step, 0.5)` in vehicles / bikes in water and a boat's rudder (above 100
+      fps only).
 - [ ] Fixes for what changes at the shorter step (physics, animations, script waits, particles, camera), each behind
       the switch; frame pacing. Left from the script survey (game-internals.md 11f): per-frame object / camera /
       text animations in missions (looks only).
@@ -582,6 +597,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_INPUT_MAP=0` | the runtime's fixed built-in key / gamepad mapping instead of the player's bindings (`ps2_pad.cpp`; the reference) |
 | `VCS_VSYNC=0\|1\|2` | Vertical sync for one run: off, on, off with tearing allowed |
 | `VCS_SCRIPT_TIMESTEP=0` | mission meters that count per frame stay on the frame rate (game-internals.md 11f; the reference) |
+| `VCS_PHYSICS_TIMESTEP=0` | the push of a body under a wheel and the rolling resistance stay per frame (game-internals.md 4; the reference) |
+| `VCS_COLL_LOG=1` | each ApplyCollisionAlt (FUN_0034D670) of the player's vehicle: the other entity, contact point, normal, speeds |
 | `VCS_SCRIPT_TIMESTEP_LOG=1`, `VCS_SCRIPT_TIMESTEP_CHECK=1` | per scaled instruction every 2 s game time: runs, the game's amount vs applied; log each listed instruction found in a newly loaded mission |
 | `VCS_PERF_OVERLAY=0\|1` | the perf overlay setting for one run |
 | `VCS_PROFILE=s` | sampling profiler (guest functions + host symbols) |

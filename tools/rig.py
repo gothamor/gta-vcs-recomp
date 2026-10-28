@@ -4,6 +4,7 @@
     python tools/rig.py start [--save DIR] [--seconds N] [--name NAME]   launch with the control channel
     python tools/rig.py peek ADDR [BYTES] | peekf ADDR [COUNT] | poke ADDR HEX | pokef ADDR F...
     python tools/rig.py findvec X Y Z TOL [LO HI] | findu32 VALUE [LO HI] | pause on|off | frames
+    python tools/rig.py trace PATH ADDR COUNT [ADDR COUNT ...] | trace off   floats every frame to PATH (+ frame, ms, step)
     python tools/rig.py <any control command ...>                        sent as it is
 
 `start` runs the game from a memory card folder (default: an empty card in build/rig/data). With --save DIR the
@@ -47,6 +48,7 @@ class Scm:
 
     # opcodes
     TERMINATE = 0x0023
+    CREATE_CHAR = 0x003E  # ped type, model, x, y, z (-100: the ground), handle out (handler 0x4120d8)
     SET_CHAR_COORDINATES = 0x0044
     CREATE_CAR = 0x0048
     SET_CAR_COORDINATES = 0x004E

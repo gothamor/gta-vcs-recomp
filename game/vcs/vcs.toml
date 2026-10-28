@@ -742,6 +742,28 @@ skip = [
 instructions = [
   { address = "0x001F2158", value = "0x3C013A83" },
   { address = "0x0031B19C", value = "0x3C013A83" },
+  { address = "0x0033BB10", value = "0x3C013A83" },
+  { address = "0x003E6EF8", value = "0x3C010008" },
+  { address = "0x003E6EFC", value = "0xC421FF00" },
+  { address = "0x003E6F00", value = "0x00000000" },
+  { address = "0x003E6F40", value = "0x3C010008" },
+  { address = "0x003E6F44", value = "0xC420FF04" },
+  { address = "0x003E6F48", value = "0x00000000" },
+  { address = "0x003E6F5C", value = "0x3C010008" },
+  { address = "0x003E6F60", value = "0xC420FF08" },
+  { address = "0x003E6F64", value = "0x00000000" },
+  { address = "0x003E6F70", value = "0x3C010008" },
+  { address = "0x003E6F74", value = "0xC420FF0C" },
+  { address = "0x003E6F78", value = "0x00000000" },
+  { address = "0x003E7900", value = "0x3C010008" },
+  { address = "0x003E7904", value = "0xC421FF00" },
+  { address = "0x003E7908", value = "0x00000000" },
+  { address = "0x003E7944", value = "0x3C010008" },
+  { address = "0x003E7948", value = "0xC420FF08" },
+  { address = "0x003E794C", value = "0x00000000" },
+  { address = "0x003E7958", value = "0x3C010008" },
+  { address = "0x003E795C", value = "0xC420FF0C" },
+  { address = "0x003E7960", value = "0x00000000" },
 ]
 
 [[jump_tables.table]]

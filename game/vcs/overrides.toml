@@ -55,3 +55,85 @@ value = "0x3C013A83"
 [[patches]]
 address = "0x0031B19C"
 value = "0x3C013A83"
+
+# FUN_00337208 (CBike::ProcessControl) turns the frame's sideways change of speed into the bike's lean:
+# `lean = dv / (max(ms_fTimeStep, 0.5) * 0.008)` (GRAVITY; VC has max(step, 0.01)). Below the floor (above 100 fps) dv
+# shrinks with the step but the divisor doesn't, so the bike leant less into turns (22 degrees at 144 fps where it
+# leans 30 at 30). The 0.5 is only the max.s operand (`lui $at, 0x3F00` at 0x33BB10, $f1 rewritten at 0x33BB58);
+# 0.001 sends every real step through. Steps >= 0.5 run exactly as before. (game-internals.md 4)
+[[patches]]
+address = "0x0033BB10"
+value = "0x3C013A83"
+
+# CVehicle::ProcessWheel (FUN_003E6C18 cars, FUN_003E7618 bikes): with neither gas nor brake the wheel's rolling
+# resistance is a brake of 0.9 / mass (0.09 under 500 kg, 0.18 for the RC Bandit, 0.54 / (mass + 200) for bikes; the
+# bike version uses 0.18 under 500 kg) - per frame, never multiplied by the time step (reVC: `brake *=
+# CTimer::GetTimeStepFix()` under FIX_BUGS). At 144 fps a car coasted down at 16 m/s^2 instead of 3.4, and a bike
+# stopped hard enough to pitch onto its nose. Each constant's `lui $at, hi; ori $at, $at, lo; mtc1 $at, $fN` becomes
+# `lui $at, 0x8; lwc1 $fN, -0x100 + 4k($at); nop`: the constant is read from guest RAM 0x7FF00 + 4k (below the
+# runtime's callback stacks at 0x80000, unused by the game), where game/vcs_physics_timing.cpp writes it scaled by the
+# frame's step over the PS2's before every ProcessWheel - the game's own value at 30 fps and below. $at is rewritten
+# before any read on every path after each block. Slots: 0x7FF00 0.54, 0x7FF04 0.09, 0x7FF08 0.9, 0x7FF0C 0.18.
+[[patches]]
+address = "0x003E6EF8"
+value = "0x3C010008"
+[[patches]]
+address = "0x003E6EFC"
+value = "0xC421FF00"
+[[patches]]
+address = "0x003E6F00"
+value = "0x00000000"
+[[patches]]
+address = "0x003E6F40"
+value = "0x3C010008"
+[[patches]]
+address = "0x003E6F44"
+value = "0xC420FF04"
+[[patches]]
+address = "0x003E6F48"
+value = "0x00000000"
+[[patches]]
+address = "0x003E6F5C"
+value = "0x3C010008"
+[[patches]]
+address = "0x003E6F60"
+value = "0xC420FF08"
+[[patches]]
+address = "0x003E6F64"
+value = "0x00000000"
+[[patches]]
+address = "0x003E6F70"
+value = "0x3C010008"
+[[patches]]
+address = "0x003E6F74"
+value = "0xC420FF0C"
+[[patches]]
+address = "0x003E6F78"
+value = "0x00000000"
+[[patches]]
+address = "0x003E7900"
+value = "0x3C010008"
+[[patches]]
+address = "0x003E7904"
+value = "0xC421FF00"
+[[patches]]
+address = "0x003E7908"
+value = "0x00000000"
+[[patches]]
+address = "0x003E7944"
+value = "0x3C010008"
+[[patches]]
+address = "0x003E7948"
+value = "0xC420FF08"
+[[patches]]
+address = "0x003E794C"
+value = "0x00000000"
+[[patches]]
+address = "0x003E7958"
+value = "0x3C010008"
+[[patches]]
+address = "0x003E795C"
+value = "0xC420FF0C"
+[[patches]]
+address = "0x003E7960"
+value = "0x00000000"

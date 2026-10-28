@@ -15,6 +15,12 @@ Scenarios (each from a fresh teleport, so earlier ones don't leak into later one
   sprint  W + Cross held for 4 s: speed over the last 3 s
   jump    Square on foot: rise and airtime
   car     in a car (model 211), Cross held for 4 s: speed at 1 / 2 / 3 / 4 s (the car's move speed), distance
+  coast   the car at full throttle for 1 s, then let go: its deceleration over the next second (rolling resistance)
+  runover the car at full throttle at a dead ped 14 m ahead: how high it rises, how fast it is thrown up
+  bikebody a PCJ-600 rolling slowly past a dead ped at its rear wheel: how far it pitches (forward vector z), whether
+          it ends upright (up z)
+  bikecoast the PCJ-600 at full throttle for 0.4 s, then let go: its deceleration
+  bikelean the PCJ-600 in a gentle left turn (0.4 s of throttle, then left for 0.25 s): its largest lean
   clock   game clock ms per frame vs the step; frames per simulated second
   heat    PHI_A2's heat bar: its floor and the heat at +1 a frame, per simulated second (starts the mission: last)
 
@@ -196,6 +202,154 @@ def scenario_car(s):
     return {"speed_1s": at(1.0), "speed_2s": at(2.0), "speed_3s": at(3.0), "speed_4s": at(4.0), "distance_4s": distance}
 
 
+DELETE_CHAR = 0x003F  # handlers next to CREATE_CHAR / CREATE_CAR, as in VC's order; checked: the pool slot frees
+DELETE_CAR = 0x0049
+BIKE = 212  # PCJ-600
+
+
+PED_STATE = 0x8C4  # 1 on foot (game-internals.md 12)
+
+
+def leave_vehicle(s):
+    """Triangle (F) until the player is on foot (a few seconds at most). Not just out of the vehicle (+0x450 clears
+    while he still climbs out): a warp into a new car then left it frozen."""
+    def on_foot():
+        ped = s.g.player()[0]
+        return not s.g.u32(ped + PED_VEHICLE) and s.g.u32(ped + PED_STATE) == 1
+    vehicle = s.g.u32(s.g.player()[0] + PED_VEHICLE)
+    for _ in range(60):  # stopped first: out of a moving car he falls (state 0x3A), and a warp from there froze the car
+        if not vehicle or math.hypot(*s.g.peekf(vehicle + MOVE_SPEED, 3)) * 50.0 < 0.3:
+            break
+        s.wait_sim(0.1)
+    for _ in range(3):
+        if on_foot():
+            return
+        if s.g.u32(s.g.player()[0] + PED_VEHICLE):
+            s.g.cmd("press F 300")
+        for _ in range(40):
+            s.wait_sim(0.1)
+            if on_foot():
+                return
+
+
+def vehicle_run(s, name, model, act, body_at=None):
+    """A vehicle scenario from CAR_SPOT, the player in a new `model`; body_at: a dead ped (fwd, right) metres from the
+    vehicle. act(s) drives it while the rig's `trace` records it every frame. Returns the trace rows (sim time s, then
+    the vehicle's matrix (16 floats), turn speed +0x70, move speed +0x140, bike lean +0x680 / +0x684). The vehicle and
+    the ped are deleted afterwards, so the next scenario starts on clear ground."""
+    g, S = s.g, rig.Scm
+    x, y, h = CAR_SPOT
+    leave_vehicle(s)  # (scenario_car leaves him in its car: a teleport would bring the car along)
+    s.place(x, y, heading=h)
+    # beside him, at the height he stands: with z = -100 (find the ground) the vehicle was sometimes put 1.6 m under the
+    # road and stayed frozen there
+    z = s.pos()[2] + 0.5
+    ints, _ = g.scm_outputs(S.op(S.REQUEST_MODEL, S.i(model)) + S.op(S.REQUEST_MODEL, S.i(55)) + S.op(S.LOAD_ALL_MODELS_NOW) +
+                            S.op(S.CREATE_CAR, S.i(model), S.f(x + 4.0), S.f(y), S.f(z), S.LOCAL0) +
+                            S.op(S.WARP_CHAR_INTO_CAR, S.PLAYER, S.LOCAL0), 1)
+    car = ints[0]
+    pool = g.u32(0x487A98)
+    vehicle = g.u32(pool) + (car >> 8) * 0x8C0  # CPool: slot = handle >> 8 (game-internals.md 12)
+    s.wait_sim(2.0)
+    for _ in range(3):  # a warp right after getting out of the last vehicle can be lost: until he sits in this one
+        if g.u32(g.player()[0] + PED_VEHICLE) == vehicle:
+            break
+        g.scm(S.op(S.WARP_CHAR_INTO_CAR, S.PLAYER, S.i(car)))
+        s.wait_sim(1.5)
+    else:
+        raise RuntimeError("not in the %s" % name)
+    ped = None
+    if body_at:
+        vx, vy, vz = g.peekf(vehicle + 0x30, 3)
+        fx, fy, _ = g.peekf(vehicle + 0x10, 3)
+        rx, ry, _ = g.peekf(vehicle + 0x00, 3)
+        ints, _ = g.scm_outputs(S.op(S.CREATE_CHAR, S.i(4), S.i(55), S.f(vx + fx * body_at[0] + rx * body_at[1]),
+                                     S.f(vy + fy * body_at[0] + ry * body_at[1]), S.f(vz), S.LOCAL0) +
+                                S.op(S.SET_CHAR_HEALTH, S.LOCAL0, S.i(0)), 1)
+        ped = ints[0]
+        s.wait_sim(2.5)  # dies and lies down
+    path = os.path.join(ROOT, "build", "audit", "trace_%d_%s.txt" % (s.step, name))
+    g.cmd("trace %s 0x%x 16 0x%x 3 0x%x 3 0x%x 2" % (path, vehicle, vehicle + 0x70, vehicle + 0x140, vehicle + 0x680))
+    try:
+        act(s)
+    finally:
+        g.cmd("trace off")
+        for k in ("Shift", "A", "D"):
+            s.key(k, False)
+    leave_vehicle(s)  # then both gone
+    g.scm(S.op(DELETE_CAR, S.i(car)) + (S.op(DELETE_CHAR, S.i(ped)) if ped is not None else b""))
+    rows = [[float(v) for v in line.split()] for line in open(path)]
+    t0 = rows[0][1]
+    return [[(r[1] - t0) / 1000.0] + r[3:] for r in rows]
+
+
+def held(key, seconds, then=0.0):
+    def act(s):
+        s.key(key, True)
+        s.wait_sim(seconds)
+        s.key(key, False)
+        s.wait_sim(then)
+    return act
+
+
+# trace row columns (after the sim time): matrix right 0-2, forward 4-6, up 8-10, position 12-14; turn speed 16-18;
+# move speed 19-21 (units per 1/50 s: x 50 = m/s); lean 23 (radians)
+def speed(r):
+    return math.hypot(r[1 + 19], r[1 + 20]) * 50.0
+
+
+def deceleration(rows):
+    """From the fastest moment: m/s^2 over the next second (or until nearly stopped)."""
+    i = max(range(len(rows)), key=lambda k: speed(rows[k]))
+    j = next((k for k in range(i, len(rows)) if rows[k][0] >= rows[i][0] + 1.0 or speed(rows[k]) < 0.5), len(rows) - 1)
+    return (speed(rows[i]) - speed(rows[j])) / max(rows[j][0] - rows[i][0], 1e-6)
+
+
+def scenario_coast(s):
+    rows = vehicle_run(s, "coast", 211, held("Shift", 1.0, then=2.0))
+    return {"peak_m_s": max(speed(r) for r in rows), "decel_m_s2": deceleration(rows)}
+
+
+def scenario_runover(s):
+    rows = [r for r in vehicle_run(s, "runover", 211, held("Shift", 3.4), body_at=(14.0, 0.0)) if r[0] <= 3.4]
+    # rise: above the lowest point of the 0.6 s before (the road isn't level)
+    rise = max(r[1 + 14] - min(q[1 + 14] for q in rows if r[0] - 0.6 <= q[0] <= r[0]) for r in rows)
+    return {"rise_m": rise, "throw_m_s": max(r[1 + 21] for r in rows) * 50.0, "pitch_rate": max(abs(r[1 + 16]) for r in rows)}
+
+
+def scenario_bikebody(s):
+    rows = vehicle_run(s, "bikebody", BIKE, held("Shift", 0.25, then=4.0), body_at=(-0.8, 0.6))
+    return {"nose_fwd_z": max(abs(r[1 + 6]) for r in rows), "end_up_z": rows[-1][1 + 10]}
+
+
+def scenario_bikecoast(s):
+    rows = vehicle_run(s, "bikecoast", BIKE, held("Shift", 0.4, then=2.0))
+    return {"decel_m_s2": deceleration(rows)}
+
+
+def scenario_bikelean(s):
+    """The lean (+0x684) for the sideways acceleration (speed x yaw rate, in g): its median over the frames of the turn
+    with more than 0.25 g. The peak lean followed how long the key was held (a frame at 30 fps is 13% of a short turn);
+    the ratio doesn't. 0.6 at any frame rate; 0.49 at 144 fps with CBike's max(step, 0.5) unpatched."""
+    def act(s):
+        s.key("Shift", True)
+        s.wait_sim(0.4)
+        s.key("A", True)
+        s.wait_sim(0.5)
+        s.key("A", False)
+        s.key("Shift", False)
+        s.wait_sim(1.0)
+    rows = vehicle_run(s, "bikelean", BIKE, act)
+    ratios = []
+    for r in rows:
+        g_side = math.hypot(r[1 + 19], r[1 + 20]) * r[1 + 18] / 0.008  # units per (1/50 s)^2 over GRAVITY 0.008
+        if abs(g_side) > 0.25:
+            ratios.append(math.sin(abs(r[1 + 23])) / abs(g_side))
+    ratios.sort()
+    return {"lean_per_g": ratios[len(ratios) // 2] if ratios else 0.0,
+            "lean_deg": max(abs(math.degrees(r[1 + 23])) for r in rows)}
+
+
 def scenario_heat(s):
     """PHI_A2 "Boomshine Blowout": the heat's floor (+0.015 a frame in the script) and the heat at a rate of +1 a frame,
     per simulated second (0.45 / 30 at the PS2's 30 fps). The mission is walked to its forklift state: into Phil's
@@ -264,6 +418,11 @@ SCENARIOS = {
     "sprint": lambda s: scenario_foot(s, ["W", "Shift"]),
     "jump": scenario_jump,
     "car": scenario_car,
+    "coast": scenario_coast,
+    "runover": scenario_runover,
+    "bikebody": scenario_bikebody,
+    "bikecoast": scenario_bikecoast,
+    "bikelean": scenario_bikelean,
     "heat": scenario_heat,  # starts a mission: last
 }
 

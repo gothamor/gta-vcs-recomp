@@ -450,3 +450,19 @@ so they ran 4.8x fast at 144 fps. Two ways to fix it:
   mod's MAIN.SCM leaves it alone; the survey that found them is written down so the next one is a table row. Visual
   per-frame animations are left at the frame rate for now (looks only).
 Off in original timing at 30 fps (the game's own handlers, bit-exact); `VCS_SCRIPT_TIMESTEP=0` turns it off elsewhere.
+
+## 2026-10-28 - Per-frame vehicle physics: scaled by the step, the brake's constants from guest RAM
+
+A car running over a body jumped and a stolen bike flipped at high frame rates (game-internals.md 4): the push of a
+body under a wheel (FUN_003F34F0) and ProcessWheel's rolling resistance act a fixed amount once a frame.
+- Scaled by the frame's step over 1/30 s, as the mission meters (2026-10-27) and reVC's FIX_BUGS
+  (`CTimer::GetTimeStepFix()`) do - only when the frame is shorter than the PS2's. Longer frames keep the game's
+  amount: the PS2 game itself applied it per frame when it dropped below 30, so 25 fps plays as it did there.
+- The push goes through ApplyTurnForce, so its hook scales the one call by return address; no recompile, and
+  `VCS_PHYSICS_TIMESTEP=0` gives back the reference.
+- The brake is built from immediates in the middle of ProcessWheel, where no hook reaches (rule 2: nothing after the
+  original returns). Reimplementing ProcessWheel natively would mean the guest RNG and two guest calls; instead the
+  four constants are patched to `lwc1` from guest RAM 0x7FF00.., which the ProcessWheel hooks write (scaled) before
+  every call. Unscaled they are the game's exact floats, so 30 fps stays bit-exact. Those 16 bytes below the runtime's
+  callback stacks are ours now (game-internals.md 4); the hooks are required by the patched code, not an option.
+- CBike's lean `max(step, 0.5)` patched to 0.001 like the ped and cutscene ones (the same class; above 100 fps only).
