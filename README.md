@@ -47,13 +47,13 @@ python tools/build.py --recompile
 This recompiles the game from your disc and builds it, optimised. The first time takes a while: the game becomes
 about 200 MB of C++ to compile. It ends with:
 ```
-[build] ok: build\release\third_party\PS2Recomp\ps2xRuntime\vcs.exe (optimised: ThinLTO)
+[build] ok: build\vcs.exe (optimised: ThinLTO)
 ```
 If your `.iso` is somewhere else, give its path: `python tools/build.py --recompile "D:\path\to\your.iso"`.
 
 ### 4. Play
 
-Start `build\release\third_party\PS2Recomp\ps2xRuntime\vcs.exe` (a shortcut to it on the desktop works well).
+Start `build\vcs.exe` (a shortcut to it on the desktop works well).
 The build already told it where your disc is.
 
 - **F2** opens the settings: presets, resolution, widescreen, frame rate, vsync, sound, and every key, mouse and

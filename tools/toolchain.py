@@ -33,7 +33,15 @@ def exe(path):
 
 
 def game_exe(build_dir):
+    """vcs.exe of a build tree: the main one (build/release) puts it at the top of build/ (CMakeLists.txt), others
+    (build/pgo-gen) in their own runtime folder."""
+    if os.path.normcase(os.path.abspath(build_dir)) == os.path.normcase(os.path.abspath(BUILD_DIR)):
+        return exe(os.path.join(BUILD, "vcs"))
     return exe(os.path.join(build_dir, "third_party", "PS2Recomp", "ps2xRuntime", "vcs"))
+
+
+# where vcs.exe was built before it moved to build/ (2026-10-29): build.py takes the player's vcs.ini from there
+OLD_GAME_DIR = os.path.join(BUILD_DIR, "third_party", "PS2Recomp", "ps2xRuntime")
 
 
 # VCS_EXE=<path>: run another build (tools/run.py and everything on top of it), e.g. the instrumented PGO build

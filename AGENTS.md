@@ -119,7 +119,7 @@ card copies to start from (never the user's live card).
 3. **Floating point**: no FP contraction in generated / VU code; VU maths rounds toward zero
    (`FE_TOWARDZERO` where reproducing it). Bit-exactness depends on both.
 4. **Never run `PS2X_GS=gpu`** (paraLLEl-GS) on the dev machine: it hangs the GTX 1080 Ti into a TDR
-   reset and blanks the user's screen. Use `PS2X_GS=hw` (default via run.py).
+   reset and blanks the user's screen. `hw` (D3D11) is vcs.exe's own default.
 5. **Patch scripts**: shell heredocs on this machine turn `\n` inside Python strings into real
    newlines and corrupt C++ string literals. Use the Edit tool, or write the script to a file first.
 6. **Scripts are Python 3, standard library only**, runnable from any shell; extend `tools/*.py`

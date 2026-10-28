@@ -5,7 +5,8 @@
     python tools/clean.py --apply              delete it
     python tools/clean.py --apply --keep-days 7    ... but keep anything changed in the last 7 days
 
-Kept always (PROTECTED): the builds (release, tools, analyzer, iop_tests), the ELF / VU1 extracts, analysis dumps,
+Kept always (PROTECTED): the game at the top of build/ (vcs.exe, its DLLs, vcs.pdb, vcs.ini), the builds (release,
+tools, analyzer, iop_tests), the ELF / VU1 extracts, analysis dumps,
 the rig's card copies (build/rig/saves), the regression baseline, the reference scenes capture
 (build/scenes/reference), the PGO profile and the cached compiler environment. Outside build/ nothing is touched:
 not the disc images, mc0 / mc1, generated/ or ghidra/. New test folders under build/ need no entry here - they are
@@ -63,6 +64,12 @@ def writable_retry(func, path, _):
     func(path)
 
 
+def is_game_file(name):
+    """The game at the top of build/: vcs.exe, its symbols, its DLLs and the player's vcs.ini (build.py)."""
+    lower = name.lower()
+    return lower in ("vcs", "vcs.exe", "vcs.pdb", "vcs.ini") or lower.endswith(".dll")
+
+
 def candidates(build, protected, keep_after):
     """(path, bytes) to delete: build/'s entries, descending into folders that hold something protected."""
     out = []
@@ -75,6 +82,8 @@ def candidates(build, protected, keep_after):
                 continue
             if any(q.startswith(p + os.sep) for q in protected):
                 visit(path)  # keep the protected part, look at the rest
+                continue
+            if folder == build and is_game_file(name):
                 continue
             if keep_after and newest(path) >= keep_after:
                 continue

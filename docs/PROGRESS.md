@@ -545,6 +545,9 @@ dropped on uploads (lazy render-target patching).
       it guards against was 4.8x). Started on its own (the README's "Play"), vcs.exe ran the software GS at ~5 fps:
       only run.py and the test tools set `PS2X_GS=hw`, the runtime's default is cpu. The launcher now defaults to hw
       (`PS2X_GS=cpu` still picks the software path); a start without run.py's environment: D3D11, movies 0 dropped.
+      The tools no longer set it either (they run the exe's own defaults), and the exe is now `build/vcs.exe` with
+      its DLLs and vcs.ini (DECISIONS.md 2026-10-29). Fort Baxter gameplay with no PS2X_* / VCS_* set: gs_draws 0,
+      vu1_programs 0, native sound, emulated IOP off, render worker on, 60 fps at the default cap.
 
 ## Phase 6 - enhancements
 

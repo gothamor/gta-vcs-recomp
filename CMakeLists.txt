@@ -50,6 +50,13 @@ add_subdirectory(third_party/PS2Recomp)
 
 if(VCS_HAVE_GENERATED)
     set_target_properties(ps2EntryRunner PROPERTIES OUTPUT_NAME "vcs")
+    # The main build tree (build/release) puts vcs.exe, its DLLs and vcs.ini at the top of build/ instead of
+    # build/release/third_party/PS2Recomp/ps2xRuntime; other trees (PGO training's build/pgo-gen) keep theirs.
+    string(TOLOWER "${CMAKE_BINARY_DIR}" _vcs_binary_dir)
+    string(TOLOWER "${CMAKE_SOURCE_DIR}/build/release" _vcs_main_tree)
+    if(_vcs_binary_dir STREQUAL _vcs_main_tree)
+        set_target_properties(ps2EntryRunner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build")
+    endif()
     target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_link_libraries(ps2EntryRunner PRIVATE vcs_host) # main.cpp: settings menu (Dear ImGui), presenter aspect
     # Our own sources aren't generated code; keep them out of the unity batches.

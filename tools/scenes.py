@@ -8,7 +8,7 @@
 Every run starts from an empty memory card (VCS_DATA_DIR = build/scenes_data, wiped first), so the boot path is
 the same each time: legal screens, loading, title, Start = new game, intro cutscene, Fort Baxter.
 Timings are seconds after the control channel answers. The game is driven over the control channel
-(tools/gamectl.py), so the window may be covered; it is shown unless --hidden. PS2X_GS defaults to hw.
+(tools/gamectl.py), so the window may be covered; it is shown unless --hidden.
 
 capture writes OUT/<scene>.png, OUT/perf.csv (PS2X_PERF_LOG, the whole run), OUT/perf_<scene>.txt (the perf
 overlay's numbers for the second before the shot), OUT/run.log and OUT/scenes.json.
@@ -62,7 +62,6 @@ def launch(out, hidden, extra_env=None):
     shutil.rmtree(data, ignore_errors=True)
     os.makedirs(data)
     env = dict(os.environ)
-    env.setdefault("PS2X_GS", "hw")
     env.setdefault("PS2X_CAPTURE_SIZE", "960x672")  # screenshots independent of the window size
     # the original display settings whatever vcs.ini says (captures compare across runs); a caller's env wins
     for key, value in (("VCS_PERF_OVERLAY", "0"), ("VCS_ASPECT", "43"), ("VCS_HUD", "0"), ("VCS_FPS", "30"),

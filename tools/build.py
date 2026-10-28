@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the game (configures CMake the first time).
 
-    python tools/build.py                       build vcs (build/release/.../ps2xRuntime/vcs[.exe])
+    python tools/build.py                       build vcs (build/vcs[.exe], with its DLLs and vcs.ini)
     python tools/build.py --recompile [ISO]     recompile from your disc first, then build - the whole pipeline
     python tools/build.py --quick               no link-time optimisation: fast rebuilds while changing code
     python tools/build.py --iop-tests           build and run the IOP / SPU2 unit tests (build/iop_tests, no disc)
@@ -26,7 +26,9 @@ Windows"; its CMake and Ninja are used when no others are on PATH. The Visual St
 automatically.
 """
 import argparse
+import filecmp
 import os
+import shutil
 import subprocess
 import sys
 
@@ -76,6 +78,7 @@ def main():
     if a.target == "ps2EntryRunner":
         if not os.path.isfile(tc.VCS_EXE):
             tc.fail("build finished but " + os.path.relpath(tc.VCS_EXE, tc.ROOT) + " is missing")
+        move_from_old_place()
         remember_iso(a.recompile or None)
         print("[build] ok: " + os.path.relpath(tc.VCS_EXE, tc.ROOT) + " (" + built_opt() + ")")
 
@@ -92,6 +95,27 @@ def configured_without_game():
             return any(line.strip() == "PS2X_BUILD_RUNTIME:BOOL=OFF" for line in f)
     except OSError:
         return False
+
+
+def move_from_old_place():
+    """vcs.exe used to be built in build/release/third_party/PS2Recomp/ps2xRuntime; it is now at the top of build/.
+    The player's vcs.ini moves with it (when build/ has none yet), and the old exe goes, so nobody starts a stale one."""
+    new_dir = os.path.dirname(tc.game_exe(tc.BUILD_DIR))
+    if os.path.normcase(new_dir) == os.path.normcase(tc.OLD_GAME_DIR):
+        return
+    old_ini, new_ini = os.path.join(tc.OLD_GAME_DIR, "vcs.ini"), os.path.join(new_dir, "vcs.ini")
+    if os.path.isfile(old_ini) and not os.path.isfile(new_ini):
+        shutil.copy2(old_ini, new_ini)
+        print("[build] settings moved: " + os.path.relpath(old_ini, tc.ROOT) + " -> " + os.path.relpath(new_ini, tc.ROOT))
+    for name in ("vcs.exe", "vcs.pdb", "vcs", "vcs.ini"):
+        path = os.path.join(tc.OLD_GAME_DIR, name)
+        # the old vcs.ini only once build/'s is the same file (a different one stays for the player to look at)
+        if os.path.isfile(path) and (name != "vcs.ini" or (os.path.isfile(new_ini) and filecmp.cmp(path, new_ini, shallow=False))):
+            try:
+                os.remove(path)
+                print("[build] removed the old " + os.path.relpath(path, tc.ROOT) + " (the game is now in build/)")
+            except OSError as e:
+                print("[build] could not remove the old " + os.path.relpath(path, tc.ROOT) + ": " + str(e))
 
 
 def remember_iso(given):

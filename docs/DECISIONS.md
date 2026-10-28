@@ -483,3 +483,18 @@ body under a wheel (FUN_003F34F0) and ProcessWheel's rolling resistance act a fi
 - CBike's lean `max(step, 0.5)` patched to 0.001 like the ped and cutscene ones (the same class; above 100 fps only),
   then the same in cars / bikes in water and a boat's rudder. Each patch was measured before and after; one that
   changed nothing measurable (the buoyancy's lift cut-off, game-internals.md 4) was taken back out.
+
+## 2026-10-29 - vcs.exe at the top of build/, native by its own defaults (the user's request)
+
+- The user found the exe "buried": `build/release/third_party/PS2Recomp/ps2xRuntime/vcs.exe`. The main build tree
+  (build/release) now links it to `build/vcs.exe`, with its DLLs (staged next to the target, so they follow) and
+  `vcs.ini` (CMakeLists.txt, `RUNTIME_OUTPUT_DIRECTORY`). Only that tree: PGO training's build/pgo-gen keeps its exe
+  in its own folder, so the two never write the same file. build.py moves a player's vcs.ini from the old folder and
+  deletes the old exe / pdb, so no stale build is left to start; clean.py never deletes the game files in build/.
+- A double-clicked vcs.exe ran the software GS at ~5 fps: only run.py / scenes.py set `PS2X_GS=hw`, so every test
+  ran a configuration players never got. The launcher now defaults to hw, and the tools no longer set it - they run
+  vcs.exe with its own defaults, as a player does. Every other native path was already on by default (each switch is
+  `=0` to go back to the reference): with no PS2X_* / VCS_* set, gameplay shows gs_draws 0, vu1_programs 0, the
+  native sound driver, the emulated IOP off and the render worker on.
+- The runtime made empty mc0 / mc1 folders in the working directory before loadELF set the card path; the launcher
+  now sets the card folder before the runtime starts.

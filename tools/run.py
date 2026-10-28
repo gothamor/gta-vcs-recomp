@@ -5,7 +5,7 @@
 
 Runs in build/run/ (so files the game or the debug switches write land there), logs stdout+stderr to
 build/run/<logname>.log and stops the game after <seconds> (0 = until it exits). Environment variables
-(PS2X_*, VCS_*) pass through; PS2X_GS defaults to hw (the D3D11 hardware renderer). Exit code 124 means the time ran out, as with `timeout`.
+(PS2X_*, VCS_*) pass through; nothing else is set for the renderer: vcs.exe runs as a double click starts it. Exit code 124 means the time ran out, as with `timeout`.
 
 The window is shown (a run started by hand). --hidden: no window on the desktop, the physical keyboard / mouse /
 gamepad ignored, sound on, the control channel open - what the test tools use (tools/rig.py passes it; the user's
@@ -39,7 +39,6 @@ def main():
     log = os.path.join(rundir, a.logname + ".log")
     with open(log, "w", encoding="utf-8") as f:
         env = dict(os.environ)
-        env.setdefault("PS2X_GS", "hw")  # the hardware (D3D11) renderer; the runtime's own default is the slow software one
         env.setdefault("PS2X_CAPTURE_SIZE", "960x672")  # control-channel screenshots independent of the window size
         env.setdefault("VCS_SKIP_MOVIES", "1")  # test runs boot straight on (VCS_SKIP_MOVIES=0 plays the intro movies)
         tc.test_window(env, visible=not a.hidden)

@@ -745,6 +745,14 @@ int main(int argc, char *argv[])
             }
         }
 
+        // the card in our data folder from the start: the runtime's default (the working directory) left empty mc0 / mc1
+        // folders next to vcs.exe, made before loadELF below set the paths
+        {
+            PS2Runtime::IoPaths early = PS2Runtime::getIoPaths();
+            early.mcRoot = data / "mc0";
+            PS2Runtime::setIoPaths(early);
+        }
+
         PS2Runtime runtime;
         // the settings menu draws in the runtime's UI hook (registered before initialize(), which runs the init hook)
         runtime.setDebugUiCallbacks([](PS2Runtime &, void *) {},
