@@ -205,6 +205,12 @@ class Check:
             self.ok("flip", up > 0.9, "up.z %.3f" % up)
             self.shot("flipped")
             self.t("paint")
+            # boost on open ground (framerate_audit.CAR_SPOT, facing north): in the garden above the car met the hedge,
+            # or a car the spawns left there, within the 0.2 s and read 0.2 / 6.6 / 26.6 in three runs (2026-10-28)
+            g.scm(S.op(S.LOAD_SCENE, S.f(-1425.0), S.f(-640.0), S.f(15.0)) + S.op(0x024B, S.PLAYER, L(0)) +
+                  S.op(S.SET_CAR_COORDINATES, L(0), S.f(-1425.0), S.f(-640.0), S.f(-100.0)) +
+                  S.op(0x00D1, L(0), S.f(0.0)))  # SET_CAR_HEADING
+            time.sleep(1.5)
             self.t("boost")
             time.sleep(0.2)
             speed = self.outputs(S.op(0x024B, S.PLAYER, L(0)) + S.op(0x01CA, L(0), L(1)), 2)[1][1]

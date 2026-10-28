@@ -171,7 +171,9 @@ def step_widecull(out, quick):
 def step_meters(out, quick):
     """Mission meters that count per frame on the time step (game-internals.md 11f, src/game/vcs_script_timing.cpp,
     fixed 2026-10-27): every listed instruction found in its mission (not with --quick: a game per mission), and
-    PHI_A2's heat bar per game second at 1/144 as at 1/30 (within 5%; it filled 4.8x as fast)."""
+    PHI_A2's heat bar per game second at 1/144 as at 1/30 (within 10%; it filled 4.8x as fast). 10%, not 5%: the 1/30
+    reference itself - the game's own per-frame rate, nothing scaled - read 30.6, 29.1 and 28.2 a second in three runs
+    of its 1.5 s window, while 1/144 read ~30 each time."""
     sys.path.insert(0, TOOLS)
     import framerate_audit as fa  # noqa: E402
     res = {"sites": None if quick else fa.check_sites(47670)}
@@ -182,7 +184,7 @@ def step_meters(out, quick):
         finally:
             s.quit()
     a, b = res["30"], res["144"]
-    res["pass"] = res["sites"] is not False and all(abs(b[k] - a[k]) <= 0.05 * abs(a[k]) for k in ("floor_per_s", "heat_per_s"))
+    res["pass"] = res["sites"] is not False and all(abs(b[k] - a[k]) <= 0.10 * abs(a[k]) for k in ("floor_per_s", "heat_per_s"))
     return res
 
 

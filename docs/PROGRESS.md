@@ -532,6 +532,18 @@ dropped on uploads (lazy render-target patching).
       mouse / keyboard input (a script moving the cursor over the window, rows' boundary, clicks, arrows, Q / E,
       Escape). Settings locked by an environment variable (tools/run.py sets `VCS_SKIP_MOVIES=1`) now name it beside
       the label: that alone makes a click do nothing.
+- [x] **Release check from a clean clone** (2026-10-28/29): the README's install (`git clone`, `build.py --recompile`)
+      failed in a fresh folder - `unknown target 'ps2EntryRunner'`: recompile.py configures before generated code exists
+      and build.py never configured again (dev trees were configured after `generated/ee` existed). Fixed in build.py.
+      The first configure took 36 min, almost all of it toml11's test / docs submodules and full histories of three
+      pinned dependencies: shallow, no submodules - a fresh configure 117 s (PS2RECOMP_PATCHES.md). The ThinLTO exe
+      from the clone: full regression suite ok (scenes but the stale baseline's `loading` / `pause_map`, tour as the
+      baseline - (-925, 1175) falling, the known spot -, 5 missions, drive, evening, saves, shakedown, widecull,
+      menushape, controls 25/25); trainer 33/33 with all 110 vehicles. Two test fixes: the trainer's boost check ran
+      into a hedge or a parked car in the Leaf Links garden (0.2 / 6.6 / 26.6 in three runs; now on open ground, 36.2
+      three times), and the meters step's 30 fps reference varies 28.2-30.6 between runs (tolerance 5% -> 10%; the bug
+      it guards against was 4.8x).
+
 ## Phase 6 - enhancements
 
 - **Player settings** (2026-10-28, asked for by the user; roadmap milestone 8): every control rebindable - keyboard and
