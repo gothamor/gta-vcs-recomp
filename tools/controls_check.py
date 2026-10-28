@@ -176,9 +176,6 @@ class Check:
             g.wait_ingame()
             # the player's own vcs.ini is read by hidden runs too (never written): start from the defaults
             self.ok("start from the defaults", self.setting("advanced.reset_all") == "pressed")
-            # the sound levels first: their save load is fine here; later in this check Load Game hung (2026-10-28,
-            # also with VCS_GAME_VOLUME=0: not the volume code)
-            self.sound_levels()
             g.prime()
             g.teleport(75.0, 175.0, -100.0)
             time.sleep(2)
@@ -269,6 +266,9 @@ class Check:
             m = re.search(r"\[input\] the game vibrates the pad \(small (\d+), large (\d+)\)", log)
             self.ok("the game's vibration reaches the host", m is not None, m.group(0) if m else "no vibration logged")
             self.ok("player bindings in use", "[input] player bindings" in log)
+            # the sound levels with their save load here, after play in the city with god mode on: the load used to hang
+            # on "Loading..." (the trainer cancelled a script the load had started in its slot, game-internals.md 11d)
+            self.sound_levels()
 
             # Start last (it opens the pause menu); Alt+Enter is full screen, not Start
             p = self.held("alt", "return")

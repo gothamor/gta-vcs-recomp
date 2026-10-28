@@ -78,7 +78,10 @@ The switches are not saved: every start is the original game (DECISIONS.md 2026-
   load in time gives the message "the game's memory for models is full here".
 - **Nothing reaches a save.** A save stores the running scripts. Trainer scripts start only while the game runs (its
   millisecond clock 0x4CD104 advanced since the last frame) and one still waiting when the game pauses (pause menu,
-  save screen) is taken back out of the active list (`vcs::rig::cancelCodeScript`) and run again after.
+  save screen) is taken back out of the active list (`vcs::rig::cancelCodeScript`) and run again after. A script
+  slot counts as the trainer's only while its IP is in the slot's own code: the game reuses a finished script's slot,
+  and a save load fills them all with the save's scripts - taking one of those for the trainer's and cancelling it
+  hung Load Game on "Loading..." (2026-10-28, game-internals.md 11d).
 - **Vehicle commands only in a vehicle.** A car command on the handle -1 stops the script for good (it never reaches
   its end), so they run only when the ped's state is 0x37 (driving) and its vehicle pointer is set. The handle comes
   from `STORE_CAR_CHAR_IS_IN_NO_SAVE` (0x024B): `STORE_CAR_CHAR_IS_IN` (0x007B) answers -1 for a car made by

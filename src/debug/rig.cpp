@@ -368,8 +368,8 @@ namespace vcs::rig
         {
             for (auto it = g_pending.begin(); it != g_pending.end();)
             {
-                // TERMINATE_THIS_SCRIPT clears +0x208 and moves the script to the idle list
-                if (ram[(it->script + 0x208) & kRamMask] == 0)
+                // TERMINATE_THIS_SCRIPT clears +0x208 and moves the script to the idle list (or a save load took the slot)
+                if (!scriptActive(ram, it->script))
                 {
                     it->reply(fmt("ok %08x", it->script)); // its outputs: locals at +0x54 of that slot
                     it = g_pending.erase(it);
@@ -447,7 +447,30 @@ namespace vcs::rig
         return s;
     }
 
-    bool scriptActive(const uint8_t *ram, uint32_t script) { return script && ram[(script + 0x208) & kRamMask] != 0; }
+    // Active, and its IP still in the slot's own code: the game reuses a finished script's slot, and a save load fills
+    // the slots afresh with the save's scripts (game-internals.md 11d), so a slot remembered from before may hold one
+    // of the game's scripts now - never to be taken for ours (cancelling it unlinked a script the load had just
+    // started: the Load Game hang).
+    bool scriptActive(const uint8_t *ram, uint32_t script)
+    {
+        if (!script || ram[(script + 0x208) & kRamMask] == 0)
+            return false;
+        uint32_t space, ip;
+        std::memcpy(&space, ram + (kScriptSpacePtr & kRamMask), 4);
+        std::memcpy(&ip, ram + ((script + 0x10) & kRamMask), 4);
+        const uint32_t at = space + ip;
+        if (at >= script + kCodeOffset && at < script + kCodeOffset + kCodeMax)
+            return true;
+        static uint32_t s_logged = 0;
+        if (s_logged != script)
+        {
+            char name[9] = {};
+            std::memcpy(name, ram + ((script + 0x20f) & kRamMask), 8);
+            std::fprintf(stderr, "[rig] script slot %08x holds the game's '%s' (ip %x) now, not our code\n", script, name, ip);
+            s_logged = script;
+        }
+        return false;
+    }
 
     void cancelCodeScript(uint8_t *ram, uint32_t s)
     {

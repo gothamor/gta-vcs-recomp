@@ -5,7 +5,8 @@
 
 One session from a copy of build/rig/saves/fortbaxter (slot 1 = "1 Soldier"):
   save    ACTIVATE_SAVE_MENU (script opcode 0x0260) -> Save Game -> slot 2 -> Yes: a "2 ..." slot file appears
-  load    pause menu -> Game -> Load Game -> slot 1 -> Yes: slot 1 is read in full, the player is back in free roam
+  load    pause menu -> Game -> Load Game -> slot 1 -> Yes, with trainer god mode on: slot 1 is read in full, the
+          player is back in free roam
   delete  pause menu -> Game -> Delete Game -> slot 2 -> Yes: the slot file and its card-order entry are gone
 Screenshots after every key press go to OUT (default build/saves); OUT/results.json holds the checks. Exit code 1
 when one fails. Menu keys (CONTROLS.md): Shift = Cross, Return = Start, arrows = D-pad.
@@ -63,19 +64,24 @@ def main():
         new = [f for f in slot_files() if f not in before]
         checks["save"] = {"ok": len(new) == 1 and new[0].startswith("2 ") and
                           os.path.getsize(os.path.join(folder, new[0])) == 98304, "new_files": new}
-        # load slot 1 (Map -> Brief -> Game tab), from the other end of the map: the load must bring the player back
+        # load slot 1 (Map -> Brief -> Game tab), from the other end of the map: the load must bring the player back.
+        # Trainer god mode on first: its tick script's slot is one the load fills with the save's scripts, which the
+        # trainer once took for its own and cancelled - the load then hung on "Loading..." (game-internals.md 11d)
         g.teleport(575.0, 175.0, -100.0)
-        time.sleep(3)
+        g.cmd("trainer toggle god 1")
+        time.sleep(4)
         mark = len(log_text())
         keys("load", "Return@3", "Right", "Right", "Shift@2", "Shift@3", "Down", "Shift@3", "Up", "Shift@15")
         # the runtime's [MC] lines reach the log through a buffered stdout (maybe only at exit): the player being
-        # back where the save put them is the check; the full read is reported when the log already has it
+        # back where the save put them is the check (a hung load leaves him at INITPLA's start); the full read is
+        # reported when the log already has it
         tail = log_text()[mark:]
         read_full = "'/BASLUS-21590GTA40001/1 Soldier' flags=0x1" in tail and "result=98300" in tail
         _, pos, mission = g.player()
         back = abs(pos[0] - saved_pos[0]) < 30 and abs(pos[1] - saved_pos[1]) < 30
         checks["load"] = {"ok": back and not mission, "back_at_save": back, "slot1_read_logged": read_full,
-                          "mission_running": mission, "pos": pos, "saved_pos": saved_pos}
+                          "trainer_slot_taken_by_load": "[rig] script slot" in tail, "mission_running": mission,
+                          "pos": pos, "saved_pos": saved_pos}
         # delete slot 2 (the Game tab again: Load, New, Delete)
         keys("delete", "Return@3", "Right", "Right", "Shift@2", "Down", "Down", "Shift@3", "Down", "Down", "Shift@3",
              "Up", "Shift@8", "Shift@3", "F@2", "F@2", "F@2")

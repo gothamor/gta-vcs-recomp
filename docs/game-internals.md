@@ -1432,6 +1432,22 @@ wrap-around, so code outside the script space works). The game's interpreter the
 with `TERMINATE_THIS_SCRIPT` and the rig answers when +0x208 drops to 0. Missions start the same way, with the
 game's own `LOAD_AND_LAUNCH_MISSION_INTERNAL` (refuse while `0x4CD3E7` is set).
 
+**A slot address is ours only while its IP is in the slot's own code** (2026-10-28, the Load Game hang). Once our
+script has terminated its slot is at the head of the idle list, so the game's next StartNewScript takes exactly that
+slot; and a save load runs `CTheScripts::Init` inside world init `FUN_00255308` (disassembly at 0x255368..0x25539C:
+both list heads cleared, every pool slot `Init`ed and added to the idle list in array order), then starts the
+save's scripts from the top of the pool downwards - into the slots the rig and the trainer last used. The trainer
+kept its tick script's slot (god mode and the other held toggles) and, on any frame the game's clock stood still,
+took a still-active script in it back out of the active list (`cancelCodeScript`, so a paused game never saves
+one of ours). During "Loading..." the clock stands still, so it unlinked the script the load had just started in
+that slot (`id151`, IP 0x2ADF7, at slot 0x73C1D0 in the reproduction): the load then never finished - "Loading..."
+for ~45 s and the game thread returned to 0x4548435F ("_CHE", text) from ProcessOneCommand's dispatch (ra
+0x256164). It needed play that left the trainer's last slot among the ones the load fills (the city after the
+Fort Baxter barracks: fewer scripts run there than the save restores). `vcs::rig::scriptActive` now also checks that
+the IP (+ ScriptSpace) is inside the slot's code area `+0x114..+0x1C4` and logs `[rig] script slot ... holds the
+game's '<name>'` when it is not; in plain play the same mix-up stopped the trainer's tick (and cancelled a game
+script on the pause menu) whenever the game reused the slot. `tools/saves.py` loads with god mode on.
+
 ### 11e. Script commands checked in the game (the trainer, 2026-10-26)
 
 Opcode numbers from the Sanny Builder Library's VCS list (`build/analysis/vcs_sanny.json`), each run from the rig

@@ -547,11 +547,15 @@ dropped on uploads (lazy render-target patching).
   native sound driver (game-internals.md 9c). controls_check: 27 checks, 0 failed (levels reach the game and its
   prefs, a save load keeps them, the pause menu's slider changes the setting, Voices halves a scream's level and 100% is
   the game's); saves.py ok.
-- [ ] **Load Game hang** (found 2026-10-28 by the controls check, open): after the check's binding / preset / menu /
-  vibration steps in the city, Load Game from the pause menu sat on "Loading..." for ~45 s and then the game thread
-  returned to 0x4548435F from the script VM (ra 0x256164). Same with `VCS_GAME_VOLUME=0` (not the volume code). Not
-  reproduced by any single step (god mode, an explosion, shooting, the key sweep, presets, settings-menu pages, the
-  levels) followed by a load. The check now loads first.
+- [x] **Load Game hang** (found 2026-10-28 by the controls check, fixed the same day): after the check's binding /
+  preset / menu / vibration steps in the city, Load Game from the pause menu sat on "Loading..." for ~45 s and then the
+  game thread returned to 0x4548435F from the script VM (ra 0x256164). The trainer's god mode (on for the vibration
+  step) kept the address of its last tick script's slot; the load fills that slot with one of the save's scripts, and
+  the trainer, seeing it active while the clock stood still, took it out of the active list mid-load. A slot is now
+  ours only while its IP is in the slot's own code (`vcs::rig::scriptActive`, game-internals.md 11d). The controls
+  check's flow with the load at its old place: stuck on "Loading..." 2 of 2 before, fine after (the trainer's slot
+  was taken by the load: logged). `tools/saves.py` (regress `saves`) now loads with god mode on: before the fix its
+  load failed (stuck on "Loading...", the player never back at the save), after it passes with the slot taken logged.
 
 - **Full screen** (2026-10-27, asked for by the user): Display > Window mode (Windowed / Full screen, borderless at
   the desktop's resolution) and Alt+Enter; the cursor hides after 2 s still in full screen; hidden test runs no longer

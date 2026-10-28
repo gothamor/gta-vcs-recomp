@@ -31,7 +31,8 @@ namespace vcs::rig
     // outputs go to locals 0..0x2F) as a new script of the game's script VM (game-internals.md 11d). Returns the
     // script's address, 0 when the engine is not running or no slot is free.
     uint32_t startCodeScript(uint8_t *ram, const uint8_t *code, size_t bytes, const char *name);
-    // the script started by startCodeScript has not terminated yet (its slot may be reused once it has)
+    // the script started by startCodeScript has not terminated yet: active, and its IP still in the slot's code (the
+    // game reuses the slot once it has, and a save load fills the slots with the save's scripts)
     bool scriptActive(const uint8_t *ram, uint32_t script);
     // Game thread, between frames: take a script started by startCodeScript out of the active list unrun (back to the
     // idle list, as TERMINATE_THIS_SCRIPT would) - so it is not written into a save made while the game is paused.

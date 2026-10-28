@@ -141,6 +141,9 @@ card copies to start from (never the user's live card).
 - Something wrong only above 100 fps: a `ms_fTimeStep < 0.5` branch the PS2 never takes (game-internals.md 4).
 - A mission bar / meter / timer faster at high frame rates: the mission script adds a fixed amount every frame; add
   the instruction to `src/game/vcs_script_timing.cpp` (game-internals.md 11f has the survey and how to read a mission).
+- Load Game stuck on "Loading..." then a return to text (`0x4548435F`) from the script VM: host code took a game
+  script for one of its own (a remembered script slot the load had refilled; game-internals.md 11d, `[rig] script
+  slot` in the log).
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs
