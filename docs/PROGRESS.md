@@ -542,11 +542,10 @@ dropped on uploads (lazy render-target patching).
   mute or pause in the background; presets (Authentic, Enhanced, Widescreen light) and Reset all settings
   (docs/CONTROLS.md, SETTINGS_MENU_WIDESCREEN.md "Player settings"). `tools/controls_check.py`: 21 checks, 0 failed;
   regress step "controls". Defaults unchanged (the old fixed mapping, mouse camera off, vibration as on the PS2).
-- **Music / sound effects / voices volume** (2026-10-28, asked for by the user): Audio > Music and Sound effects are the
-  game's own levels, in step with its pause menu both ways and kept across save loads; Voices scales speech in the
-  native sound driver (game-internals.md 9c). controls_check: 27 checks, 0 failed (levels reach the game and its
-  prefs, a save load keeps them, the pause menu's slider changes the setting, Voices halves a scream's level and 100% is
-  the game's); saves.py ok.
+- **Music / sound effects volume** (2026-10-28, asked for by the user): Audio > Music and Sound effects are the game's
+  own levels, in step with its pause menu both ways and kept across save loads (game-internals.md 9c). controls_check
+  checks that the levels reach the game and its prefs, a save load keeps them, and the pause menu's slider changes the
+  setting; saves.py ok. A Voices volume (speech scaled in the native driver) was removed again the same day.
 - [x] **Load Game hang** (found 2026-10-28 by the controls check, fixed the same day): after the check's binding /
   preset / menu / vibration steps in the city, Load Game from the pause menu sat on "Loading..." for ~45 s and then the
   game thread returned to 0x4548435F from the script VM (ra 0x256164). The trainer's god mode (on for the vibration

@@ -257,9 +257,8 @@ Audio, Game, Keyboard, Gamepad, Advanced.
   (stereo / mono / swapped). **Music volume** and **Sound effects volume** are the game's own levels (its pause menu's
   Music / SFX Volume, 0..127 as percent: defaults 63% / 88% = its 5 / 7 bars): a change here shows in the pause menu
   and a change there comes back here and into vcs.ini; a save load keeps the player's levels (game-internals.md 9c,
-  `VCS_GAME_VOLUME=0` leaves the game's levels alone). **Voices volume** scales speech and mission dialogue (the native
-  driver's special-sound voices; the game has no level for it), linear as part of the effects level; speech mixed into
-  a cutscene's soundtrack or the radio stays with it. Added 2026-10-28 (asked for by the user).
+  `VCS_GAME_VOLUME=0` leaves the game's levels alone). Added 2026-10-28 (asked for by the user); a Voices volume was
+  removed again the same day (DECISIONS.md).
 - **Game**: **In the background** - keep running (as before), mute, or pause (the game thread held at the frame kick,
   vibration stopped, sound muted).
 - **Keyboard** / **Gamepad**: the bindings and stick, mouse and vibration options (docs/CONTROLS.md).

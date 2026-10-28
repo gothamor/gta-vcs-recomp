@@ -427,7 +427,7 @@ namespace
         s.onChange = applyVolume;
         settings::add(s);
 
-        vcs::volume::registerSettings(); // music / sound effects (the game's own levels) and voices (game/vcs_volume.h)
+        vcs::volume::registerSettings(); // music / sound effects: the game's own levels (game/vcs_volume.h)
 
         s = {};
         s.key = "audio.movie_volume";

@@ -1254,10 +1254,11 @@ of every writer and caller.
 - `src/game/vcs_volume.cpp` makes them the settings Audio > Music / Sound effects volume: writes both places at the
   frame kick, takes the Audio page's changes back, and gives every other setter call the player's level (a save load
   logs `[volume] the game sets the music level 80 (ra=0x3add90): the player's 32 instead`).
-- **Speech** has no level of its own. It plays on effect voices from banks 2 and 0x43 (9a, special sounds), so the
-  native driver scales those voices (Audio > Voices). A voice's volume is sent only when it changes, and a new sound
-  can start on a voice with its old volume: the driver keeps each voice's level as the game set it and re-applies it
-  when the voice's gain changes. People near an explosion scream (`tools/controls_check.py` uses that for speech).
+- **Speech** has no level of its own: it plays on effect voices from banks 2 and 0x43 (9a, special sounds) under the
+  effects level, while speech in cutscenes and on the radio is part of their streams. The voice block sends a voice's
+  volume only when it changes, so a new sound can start on a voice with its old volume. People near an explosion
+  scream (speech sounds). A Voices volume that scaled those voices in the native driver was tried on 2026-10-28 and
+  removed (DECISIONS.md).
 
 ## 10. Memory card and saves
 

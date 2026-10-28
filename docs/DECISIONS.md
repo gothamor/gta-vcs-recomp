@@ -423,9 +423,12 @@ than extra gains on top: one value, two menus. On the PS2 a save carries the lev
 setting wins (every non-menu call of the game's setters gets the player's level), because a PC game keeps its settings
 across saves and the newest save loads at every boot - the save's levels would otherwise undo a change made without
 saving. The levels are percent of the game's 0..127 (linear, as the game's bars are); a pause-menu step is 16, so the
-setting shows the nearest percent and the game keeps its exact level. Voices has no game level: a gain on the
-speech voices in the native driver (linear, under the effects level), 100% bit-exact; with the emulated IOP it does
-nothing.
+setting shows the nearest percent and the game keeps its exact level.
+
+Voices volume was added the same day as a gain on the speech voices in the native driver (the game has no level for
+speech) and **removed on the user's decision**: it felt inconsistent, since only speech played as effect sounds
+followed it, while speech in cutscenes and on the radio is mixed into those streams. The code is gone (the driver is
+as before); game-internals.md 9c keeps what was learnt.
 
 ## 2026-10-28 - Player settings: bindings in the game layer, the mouse as stick speed, defaults as before
 

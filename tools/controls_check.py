@@ -9,7 +9,7 @@ Keypad Enter, the mouse buttons) gives its PS2 button or stick direction, Alt+En
 Vic and the old one no longer does; the walk key holds the stick at walking speed; a mouse wheel binding; a menu key
 refuses a key a control has; the presets and Reset all settings; screenshots of the settings menu's pages; Audio >
 Music / Sound effects are the game's own levels (set here, shown in its pause menu, changed there, kept by a save
-load) and Voices scales speech (src/game/vcs_volume.cpp). Results: OUT/summary.txt; screenshots OUT/*.png. Default
+load) (src/game/vcs_volume.cpp). Results: OUT/summary.txt; screenshots OUT/*.png. Default
 OUT: build/controls/<date-time>.
 """
 import argparse
@@ -95,12 +95,12 @@ class Check:
             time.sleep(float(wait or 1.5))
 
     def sound(self):
-        """soundstate: the game's music / effects levels (0..127), speech sounds started, the last speech level."""
+        """soundstate: the game's music / effects levels (0..127)."""
         self.g.wait_frames(3)
         return dict(re.findall(r"(\w+)=([0-9/]+)", self.g.cmd("soundstate")))
 
     def sound_levels(self):
-        """Audio > Music / Sound effects are the game's own levels (src/game/vcs_volume.cpp), Voices scales speech."""
+        """Audio > Music / Sound effects are the game's own levels (src/game/vcs_volume.cpp)."""
         g = self.g
         s = self.sound()
         self.ok("sound levels at the defaults", s.get("music") == "80" and s.get("effects") == "112", str(s))
@@ -129,44 +129,6 @@ class Check:
         self.keys("f", "f@2")  # Triangle: back, close
         self.setting("audio.music_volume", 63)
         self.setting("audio.sfx_volume", 88)
-
-    def voices(self):
-        """Audio > Voices: a speech voice's level (people talk on a drive through the city) at half, then at 100%."""
-        g = self.g
-
-        def level(want_half, tries):
-            s = {}
-            for _ in range(tries):
-                s = self.sound()
-                game, heard = (int(v) for v in s.get("speech_level", "0/0").split("/"))
-                if game > 0 and heard == (game * 128 // 256 if want_half else game):
-                    return True, s
-                time.sleep(5)
-            return False, s
-
-        self.setting("audio.voice_volume", 50)
-        g.teleport(75.0, 175.0, -100.0)
-        time.sleep(3)
-        before = int(self.sound().get("speech", 0))
-        # people near an explosion scream (speech sounds): three peds, a blast between them and Vic (god mode is on)
-        S = rig.Scm
-        good, s = False, {}
-        for _ in range(5):
-            x, y, z = g.player()[1]
-            code = S.op(S.REQUEST_MODEL, S.i(55)) + S.op(S.LOAD_ALL_MODELS_NOW)
-            for dx, dy in ((7.0, 0.0), (7.0, 2.0), (7.0, -2.0)):
-                code += S.op(S.CREATE_CHAR, S.i(4), S.i(55), S.f(x + dx), S.f(y + dy), S.f(-100.0), S.LOCAL0)
-            g.scm(code)
-            time.sleep(1.0)
-            g.scm(S.op(0x013C, S.f(x + 4.0), S.f(y), S.f(z), S.i(0)))
-            time.sleep(3.0)
-            good, s = level(True, 1)
-            if good and int(s.get("speech", 0)) > before:
-                break
-        self.ok("Voices scales speech", good and int(s.get("speech", 0)) > before, "%s (%d before)" % (s, before))
-        self.setting("audio.voice_volume", 100)
-        good, s = level(False, 3)
-        self.ok("Voices at 100% is the game's level", good, str(s))
 
     def run(self):
         g = self.g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="controls_check",
@@ -277,8 +239,6 @@ class Check:
                 p = self.held(key)
                 self.ok("%s is Start" % key, p["buttons"] == want, str(p))
                 time.sleep(1.0)
-            time.sleep(1.0)
-            self.voices()
             self.ok("still running", g.alive())
         finally:
             g.quit()

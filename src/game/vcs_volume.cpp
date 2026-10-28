@@ -1,5 +1,4 @@
-// The game's own Music / SFX volume as settings, kept in step with its pause menu, and a Voices level for speech
-// (docs/game-internals.md 9c).
+// The game's own Music / SFX volume as settings, kept in step with its pause menu (docs/game-internals.md 9c).
 //
 // The game keeps each level, 0..127, twice: in cSampleManager (0x4CDA08: +4 effects, +5 music), which the sound code
 // uses and the pause menu's Audio page draws as eight bars (16 a step, the last step to 127), and in the menu's prefs
@@ -12,11 +11,9 @@
 // taken into the setting and vcs.ini. Every other call of the setters gets the setting's level, so loading a save or
 // a new game keeps the player's levels, as PC games keep their settings across saves.
 //
-// Voices has no level in the game: the native sound driver scales the voices playing special sounds (vcs_sound.cpp).
-// VCS_GAME_VOLUME=0 leaves the game's levels alone (no hooks, no sync): the settings then do nothing but Voices.
+// VCS_GAME_VOLUME=0 leaves the game's levels alone (no hooks, no sync): the settings then do nothing.
 #include "game/vcs_volume.h"
 
-#include "game/vcs_sound.h"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/ps2_control.h"
@@ -114,21 +111,6 @@ namespace vcs::volume
         s.defaultValue = toPercent(0x70); // the game's default (7 bars)
         s.onChange = [](int v) { onLevelChange(g_levels[1], v); };
         settings::add(s);
-
-        s = {};
-        s.key = "audio.voice_volume";
-        s.page = "Audio";
-        s.section = "Volume";
-        s.label = "Voices volume";
-        s.help = "People talking and mission dialogue, as a part of the sound effects volume. The game has no level of its "
-                 "own for them. Speech that is part of a cutscene's soundtrack or the radio stays with it.";
-        s.type = Type::Integer;
-        s.min = 0;
-        s.max = 100;
-        s.format = "%d%%";
-        s.defaultValue = 100;
-        s.onChange = [](int v) { setSpeechVolume(v / 100.0f); };
-        settings::add(s);
     }
 
     void install(PS2Runtime &runtime)
@@ -149,14 +131,10 @@ namespace vcs::volume
             hook(g_levels[0], &setter<0>);
             hook(g_levels[1], &setter<1>);
         }
-        // soundstate -> ok music=<0..127> effects=<0..127> speech=<speech sounds started> speech_level=<the last speech
-        // voice's volume as the game set it>/<after Voices> (the game's levels at the last frame kick;
-        // tools/controls_check.py)
+        // soundstate -> ok music=<0..127> effects=<0..127> (the game's levels at the last frame kick; tools/controls_check.py)
         ps2control::addCommand("soundstate", [](const std::string &, ps2control::Reply reply) {
-            char text[128];
-            const uint32_t level = speechLevel();
-            std::snprintf(text, sizeof(text), "ok music=%d effects=%d speech=%u speech_level=%u/%u", g_levels[0].seen.load(),
-                          g_levels[1].seen.load(), speechKeyOns(), level >> 16, level & 0xFFFF);
+            char text[64];
+            std::snprintf(text, sizeof(text), "ok music=%d effects=%d", g_levels[0].seen.load(), g_levels[1].seen.load());
             reply(text);
         });
     }
