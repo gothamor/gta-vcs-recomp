@@ -181,10 +181,23 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   limit, ~42 degrees, at both). **Patched 2026-10-28** like the ped one (0.5 -> 0.001, `lui $at` at 0x33BB10; the
   0.5 is only the max.s operand).
 - **The same `max(step, 0.5)` elsewhere** (scan for `lwc1 -0x2EF0` then max.s / c.lt.s with a `lui 0x3F00` nearby,
-  2026-10-28): FUN_00138b68 (0x138c88, vehicles in water) and FUN_00336cb8 (0x336d78, bikes in water) divide the
-  buoyancy force by `mass * max(step, 0.5) * GRAVITY` for the share in the water (damping and thresholds); FUN_0019fda0
-  (0x1a2480, boats: CBoat::ProcessControl) scales a rudder turn force by `max(step, 0.5)` instead of the step;
-  FUN_001f4bf0 (CPed::ProcessControl, 0x1f7378 / 0x1f7474 / 0x1f7bac). Not patched yet: all above 100 fps only.
+  2026-10-28). **Patched 2026-10-28** (0.5 -> 0.001 as the others, game/vcs/overrides.toml; above 100 fps only):
+  - FUN_00138b68 (cars in water; the 0.5 loaded on two paths, 0x138c48 / 0x138c6c, max.s at 0x138c88) and FUN_00336cb8
+    (bikes in water, 0x336d60 / 0x336d78) divide the buoyancy impulse's z by `mass * max(step, 0.5) * GRAVITY` for the
+    share under water, which sets the water's drag (`pow(1 - share * 0.05, step)`) and the sinking thresholds. Measured
+    (a vehicle dropped from 8 m into the sea at (-675, -75), water at z ~5.9, with 15 m/s forwards): a Sentinel kept
+    1.6 m/s one second into the water at 144 fps, 0.6 at 30; a PCJ-600 sank to the bottom (z 1.2 on average over 3-8 s)
+    where it settles at 3.2. After: 0.75 / 0.69 / 0.76 m/s and depth 2.75 / 2.9 / 2.95 m at 1/30 / 60 / 144
+    (`framerate_audit.py` carwater, bikewater).
+  - FUN_0019fda0 (CBoat::ProcessControl, 0x1a2468 / 0x1a2480) multiplies one rudder turn force by `max(step, 0.5)` where
+    the others use the step. A Speeder steered for 1.5 s: turn rate the same (42 degrees/s), speed after the turn 19.7
+    m/s at 144 fps against 21.4 at 30, 21.1 after the patch - within the waves' noise, patched on the code.
+  - Left: FUN_001f4bf0 (CPed::ProcessControl, 0x1f7378 / 0x1f7474 / 0x1f7bac).
+- **The buoyancy's lift cut-off is per frame on paper, but no effect measured**: FUN_00369950 (from FUN_00369450, the
+  buoyancy for cars, bikes and boats) makes the lift impulse `share * buoyancy * step` and drops it to
+  `max(lift - momentum, 0)` when the vehicle rises with more than 4 times that impulse (`lui $at, 0x4080` at
+  0x369994) - 4 frames of lift. Patched to scale the 4 with the step and measured: a Sentinel floats at z 6.02 on
+  average at 30 fps and 5.96 at 144 with or without it (bobbing +-0.3 m). Not kept.
 - **Vehicle physics that acts once a frame without the step** (found 2026-10-28 from a user report: a car running
   over a body jumped, a stolen bike flipped forward, both at high frame rates only). Fixed in
   `src/game/vcs_physics_timing.cpp` (scaled by step / (50/30) when the frame is shorter than the PS2's;

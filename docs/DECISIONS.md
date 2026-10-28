@@ -465,4 +465,6 @@ body under a wheel (FUN_003F34F0) and ProcessWheel's rolling resistance act a fi
   four constants are patched to `lwc1` from guest RAM 0x7FF00.., which the ProcessWheel hooks write (scaled) before
   every call. Unscaled they are the game's exact floats, so 30 fps stays bit-exact. Those 16 bytes below the runtime's
   callback stacks are ours now (game-internals.md 4); the hooks are required by the patched code, not an option.
-- CBike's lean `max(step, 0.5)` patched to 0.001 like the ped and cutscene ones (the same class; above 100 fps only).
+- CBike's lean `max(step, 0.5)` patched to 0.001 like the ped and cutscene ones (the same class; above 100 fps only),
+  then the same in cars / bikes in water and a boat's rudder. Each patch was measured before and after; one that
+  changed nothing measurable (the buoyancy's lift cut-off, game-internals.md 4) was taken back out.

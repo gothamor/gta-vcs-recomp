@@ -20,7 +20,10 @@ Scenarios (each from a fresh teleport, so earlier ones don't leak into later one
   bikebody a PCJ-600 rolling slowly past a dead ped at its rear wheel: how far it pitches (forward vector z), whether
           it ends upright (up z)
   bikecoast the PCJ-600 at full throttle for 0.4 s, then let go: its deceleration
-  bikelean the PCJ-600 in a gentle left turn (0.4 s of throttle, then left for 0.25 s): its largest lean
+  bikelean the PCJ-600 in a gentle left turn (0.4 s of throttle, then left for 0.5 s): its lean per g of sideways
+          acceleration
+  carwater the car dropped into the sea at 15 m/s: its speed 1 s after it reaches the water (the water's drag)
+  bikewater the PCJ-600 dropped into the sea: how deep it settles
   clock   game clock ms per frame vs the step; frames per simulated second
   heat    PHI_A2's heat bar: its floor and the heat at +1 a frame, per simulated second (starts the mission: last)
 
@@ -350,6 +353,49 @@ def scenario_bikelean(s):
             "lean_deg": max(abs(math.degrees(r[1 + 23])) for r in rows)}
 
 
+SEA_SPOT = (-675.0, -75.0)  # open sea; the player swims there, at the water's surface
+
+
+def water_run(s, name, model):
+    """A vehicle (no driver) dropped from 8 m into the sea with 15 m/s forwards; 8 s of trace rows (as vehicle_run) and
+    the water's height. The player swims beside it and goes back to land afterwards."""
+    g, S = s.g, rig.Scm
+    leave_vehicle(s)
+    g.teleport(SEA_SPOT[0], SEA_SPOT[1], -100.0)
+    s.wait_sim(2.0)
+    px, py, water = s.pos()
+    ints, _ = g.scm_outputs(S.op(S.REQUEST_MODEL, S.i(model)) + S.op(S.LOAD_ALL_MODELS_NOW) +
+                            S.op(S.CREATE_CAR, S.i(model), S.f(px + 10.0), S.f(py - 20.0), S.f(water + 8.0), S.LOCAL0), 1)
+    vehicle = g.u32(g.u32(0x487A98)) + (ints[0] >> 8) * 0x8C0
+    path = os.path.join(ROOT, "build", "audit", "trace_%d_%s.txt" % (s.step, name))
+    g.cmd("trace %s 0x%x 16 0x%x 3 0x%x 3" % (path, vehicle, vehicle + 0x70, vehicle + 0x140))
+    g.cmd("pokef 0x%x 0 0.3 0" % (vehicle + MOVE_SPEED))  # 0.3 units per 1/50 s = 15 m/s north
+    s.wait_sim(8.0)
+    g.cmd("trace off")
+    g.scm(S.op(DELETE_CAR, S.i(ints[0])))
+    x, y, h = FOOT_SPOT
+    s.place(x, y, heading=h)
+    rows = [[float(v) for v in line.split()] for line in open(path)]
+    t0 = rows[0][1]
+    return [[(r[1] - t0) / 1000.0] + r[3:] for r in rows], water
+
+
+def scenario_carwater(s):
+    """Above 100 fps CAutomobile's in-water code (FUN_00138b68) took the share under water as step / 0.5 too small
+    (max(step, 0.5)): less drag, 1.6 m/s left after 1 s at 144 fps against 0.6."""
+    rows, water = water_run(s, "carwater", 211)
+    entry = next(r[0] for r in rows if r[1 + 14] < water + 0.5)
+    r = min(rows, key=lambda r: abs(r[0] - (entry + 1.0)))
+    return {"speed_1s_in_m_s": speed(r)}
+
+
+def scenario_bikewater(s):
+    """The bike's (FUN_00336cb8): it sank to the bottom at 144 fps (z 1.2) where it settles at 3.2."""
+    rows, water = water_run(s, "bikewater", BIKE)
+    zs = [r[1 + 14] for r in rows if 3.0 <= r[0] <= 8.0]
+    return {"depth_m": water - sum(zs) / len(zs)}
+
+
 def scenario_heat(s):
     """PHI_A2 "Boomshine Blowout": the heat's floor (+0.015 a frame in the script) and the heat at a rate of +1 a frame,
     per simulated second (0.45 / 30 at the PS2's 30 fps). The mission is walked to its forklift state: into Phil's
@@ -423,6 +469,8 @@ SCENARIOS = {
     "bikebody": scenario_bikebody,
     "bikecoast": scenario_bikecoast,
     "bikelean": scenario_bikelean,
+    "carwater": scenario_carwater,
+    "bikewater": scenario_bikewater,
     "heat": scenario_heat,  # starts a mission: last
 }
 

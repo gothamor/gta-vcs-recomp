@@ -65,6 +65,29 @@ value = "0x3C013A83"
 address = "0x0033BB10"
 value = "0x3C013A83"
 
+# Vehicles in water: FUN_00138B68 (cars) and FUN_00336CB8 (bikes) divide the buoyancy impulse's z (from the buoyancy
+# code, a force times the step) by `mass * max(ms_fTimeStep, 0.5) * GRAVITY` for the share of the vehicle under water,
+# which sets the water's drag (pow(1 - share * 0.05, step)) and the sinking / engine-off thresholds. Above 100 fps the
+# share came out step / 0.5 too small: at 144 fps a car kept 1.6 m/s a second into the water (0.6 at 30) and a bike
+# sank to the bottom. The 0.5 is only the max.s operand: cars load it on two paths (`lui $at, 0x3F00` at 0x138C48 and 0x138C6C, into $f2, max.s
+# at 0x138C88, $f2 rewritten at 0x138C94), bikes once (0x336D60, $f1, rewritten at 0x336D9C). 0.001 as the others.
+[[patches]]
+address = "0x00138C48"
+value = "0x3C013A83"
+[[patches]]
+address = "0x00138C6C"
+value = "0x3C013A83"
+[[patches]]
+address = "0x00336D60"
+value = "0x3C013A83"
+
+# Boats: FUN_0019FDA0 (CBoat::ProcessControl) applies part of the rudder's turn force times `max(ms_fTimeStep, 0.5)`
+# where the rest of it is times the step, so above 100 fps that part acted more per second (at 144 fps a boat lost 1.7
+# m/s more in a turn). `lui $at, 0x3F00` at 0x1A2468, $f1 only the max.s operand (0x1A2480; a call before its next use).
+[[patches]]
+address = "0x001A2468"
+value = "0x3C013A83"
+
 # CVehicle::ProcessWheel (FUN_003E6C18 cars, FUN_003E7618 bikes): with neither gas nor brake the wheel's rolling
 # resistance is a brake of 0.9 / mass (0.09 under 500 kg, 0.18 for the RC Bandit, 0.54 / (mass + 200) for bikes; the
 # bike version uses 0.18 under 500 kg) - per frame, never multiplied by the time step (reVC: `brake *=
