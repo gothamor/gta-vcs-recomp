@@ -69,7 +69,7 @@ def main():
         if a.train or not os.path.isfile(PROFDATA):
             train(env, a.verbose)
         defines = {"PS2X_LTO": "THIN", "PS2X_PGO": PROFDATA.replace(os.sep, "/")}
-    tc.configure(env, force=a.reconfigure, defines=defines)
+    tc.configure(env, force=a.reconfigure or configured_without_game(), defines=defines)
     print(f"[build] building {a.target}")
     if not tc.cmake_build(env, a.target, "build.log", a.verbose):
         sys.exit(1)
@@ -78,6 +78,20 @@ def main():
             tc.fail("build finished but " + os.path.relpath(tc.VCS_EXE, tc.ROOT) + " is missing")
         remember_iso(a.recompile or None)
         print("[build] ok: " + os.path.relpath(tc.VCS_EXE, tc.ROOT) + " (" + built_opt() + ")")
+
+
+def configured_without_game():
+    """True when build/release was configured before the generated code existed. A first --recompile does that
+    (recompile.py configures to build the recompiler), and CMake then leaves the game out (VCS_HAVE_GENERATED in
+    CMakeLists.txt) until a configure sees generated/ee - without one the build stops at "unknown target
+    'ps2EntryRunner'"."""
+    if not os.path.isfile(os.path.join(tc.ROOT, "generated", "ee", "register_functions.cpp")):
+        return False
+    try:
+        with open(os.path.join(tc.BUILD_DIR, "CMakeCache.txt"), encoding="utf-8", errors="replace") as f:
+            return any(line.strip() == "PS2X_BUILD_RUNTIME:BOOL=OFF" for line in f)
+    except OSError:
+        return False
 
 
 def remember_iso(given):
