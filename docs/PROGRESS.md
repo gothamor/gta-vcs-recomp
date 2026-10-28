@@ -542,7 +542,9 @@ dropped on uploads (lazy render-target patching).
       menushape, controls 25/25); trainer 33/33 with all 110 vehicles. Two test fixes: the trainer's boost check ran
       into a hedge or a parked car in the Leaf Links garden (0.2 / 6.6 / 26.6 in three runs; now on open ground, 36.2
       three times), and the meters step's 30 fps reference varies 28.2-30.6 between runs (tolerance 5% -> 10%; the bug
-      it guards against was 4.8x).
+      it guards against was 4.8x). Started on its own (the README's "Play"), vcs.exe ran the software GS at ~5 fps:
+      only run.py and the test tools set `PS2X_GS=hw`, the runtime's default is cpu. The launcher now defaults to hw
+      (`PS2X_GS=cpu` still picks the software path); a start without run.py's environment: D3D11, movies 0 dropped.
 
 ## Phase 6 - enhancements
 
@@ -603,7 +605,7 @@ dropped on uploads (lazy render-target patching).
 ## Useful switches
 | Env var | Effect |
 |---|---|
-| `PS2X_GS=cpu\|hw\|gpu\|null` | GS renderer (default cpu) |
+| `PS2X_GS=cpu\|hw\|gpu\|null` | GS renderer (vcs.exe: default hw, set by src/main.cpp; the runtime's own default cpu) |
 | `PS2X_HW_SCALE=n`, `PS2X_HW_DEBUG=1` | hardware renderer scale / stats |
 | `VCS_FPS_LOG=1` | VBlanks and flips per second (was `VCS_FPS=1`; `VCS_FPS` is the frame rate cap) |
 | `VCS_TIMING=0\|1`, `VCS_FPS=30\|60\|120\|144\|-1\|0` | game timing original / frame-rate independent; frame rate cap (-1 display refresh, 0 unlimited) |

@@ -695,6 +695,10 @@ int main(int argc, char *argv[])
     vcs::installCrashHandlers();
     try
     {
+        // the hardware (D3D11) renderer unless PS2X_GS says otherwise: the runtime's own default is the software GS
+        // (~5 fps), which only tools/run.py and the test tools used to override - vcs.exe started on its own got it
+        if (const char *gs = std::getenv("PS2X_GS"); !gs || !*gs)
+            setEnv("PS2X_GS", "hw");
         registerSettings();
         settings::load(exeDirectory() / "vcs.ini");
         if (ps2control::hiddenMode())
