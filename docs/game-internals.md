@@ -1499,6 +1499,21 @@ which REN_C7, SRANGE, MAR_A5, LAN_C5 and DIA_C3 use for their meters. Some missi
   peds), a watch on every ped's +0x1C8 armed at the door (`VCS_WATCH_STRIDE`, rig `watch`: no store ever set bit 63)
   and the flag word logged at the removal (bit 63 clear, bit 31 set). It hung at every frame rate and timing mode.
 
+### 12a. The pad and its vibration (2026-10-28)
+
+- The game reads port 0 slot 0 once per frame (`scePadRead` at 0x449488, called from FUN_002843d8 = the pad update,
+  0x2848a8) in analog mode: buttons active low, then rx, ry, lx, ly. The runtime's stub asks its pad backend for the
+  report; our bindings fill it (`PSPadBackend::setReader`, src/game/vcs_input.cpp).
+- **Vibration** (found reading FUN_002843d8 in the generated C++): at start-up it asks for the motors
+  (`scePadInfoAct(port, 0, -1)`, 0x28470c; the stub answers 2), then aligns them with `scePadSetActAlign` (0x284770)
+  from a 6-byte table at 0x514958 = {0, 1, 0xFF, 0xFF, 0xFF, 0xFF} - act 0 the small motor, act 1 the large one, the
+  DualShock 2's usual layout. While the pad's shake timer (`pad + 0x94`, s16, counted down each frame) runs it calls
+  `scePadSetActDirect(port, 0, 0x514950)` (0x284898) with byte 0 = 0 (the small motor is never used) and byte 1 =
+  `pad + 0x99` (the large motor's level 0..255); when it reaches 0, once more with both 0 (0x284870). A second caller
+  is FUN_00285258 (0x285294). A grenade's explosion 2 m from Vic gives level 128 (`tools/controls_check.py`).
+  The host maps the large motor to the gamepad's low-frequency rumble and the small one to the high-frequency one,
+  scaled by Gamepad > Vibration.
+
 ## 13. Open questions / next research targets
 
 - Main loop, frame limiter, CTimer (section 4) - milestone 4 (60 fps).

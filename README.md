@@ -56,8 +56,9 @@ If your `.iso` is somewhere else, give its path: `python tools/build.py --recomp
 Start `build\release\third_party\PS2Recomp\ps2xRuntime\vcs.exe` (a shortcut to it on the desktop works well).
 The build already told it where your disc is.
 
-- **F2** opens the settings (resolution, widescreen, frame rate, ...). The defaults match the PS2; every
-  improvement is an option you turn on. Settings are saved in `vcs.ini` next to `vcs.exe`.
+- **F2** opens the settings: presets, resolution, widescreen, frame rate, vsync, sound, and every key, mouse and
+  gamepad binding. The defaults match the PS2; every improvement is an option you turn on (Display > Presets >
+  Enhanced turns on the usual ones at once). Settings are saved in `vcs.ini` next to `vcs.exe`.
 - **Alt+Enter** switches between full screen and the window.
 - **F5** opens the trainer ([docs/TRAINER.md](docs/TRAINER.md)).
 - Keyboard, mouse and gamepads (Xbox, PlayStation, Switch Pro, ...) all work: [docs/CONTROLS.md](docs/CONTROLS.md).

@@ -518,6 +518,15 @@ dropped on uploads (lazy render-target patching).
       the label: that alone makes a click do nothing.
 ## Phase 6 - enhancements
 
+- **Player settings** (2026-10-28, asked for by the user; roadmap milestone 8): every control rebindable - keyboard and
+  mouse buttons / wheel with two slots per PS2 button and stick direction, a walk key, the gamepad's button map, stick
+  deadzones, camera speed, trigger point, swapped sticks, inverted camera, a mouse camera (mouse speed as the right
+  stick) with sensitivity / invert; the game's own vibration on the gamepad (it was dropped by the pad stub; 0-200%);
+  master / movie volume and mono / swapped output; vertical sync (off / on / tearing for VRR); a frame-rate counter;
+  mute or pause in the background; presets (Authentic, Enhanced, Widescreen light) and Reset all settings
+  (docs/CONTROLS.md, SETTINGS_MENU_WIDESCREEN.md "Player settings"). `tools/controls_check.py`: 21 checks, 0 failed;
+  regress step "controls". Defaults unchanged (the old fixed mapping, mouse camera off, vibration as on the PS2).
+
 - **Full screen** (2026-10-27, asked for by the user): Display > Window mode (Windowed / Full screen, borderless at
   the desktop's resolution) and Alt+Enter; the cursor hides after 2 s still in full screen; hidden test runs no longer
   write vcs.ini (SETTINGS_MENU_WIDESCREEN.md "Full screen").
@@ -570,6 +579,8 @@ dropped on uploads (lazy render-target patching).
 | `VCS_SOUND_REPLAY=<record>`, `VCS_SOUND_REPLAY_OUT=<wav>` | replay recorded sound calls into the native driver, write its output, exit |
 | `VCS_MIN_STEP=x` | independent timing's step floor (default 50/240: the 240 fps ceiling; lower makes an unlimited cap unlimited) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
+| `VCS_INPUT_MAP=0` | the runtime's fixed built-in key / gamepad mapping instead of the player's bindings (`ps2_pad.cpp`; the reference) |
+| `VCS_VSYNC=0\|1\|2` | Vertical sync for one run: off, on, off with tearing allowed |
 | `VCS_SCRIPT_TIMESTEP=0` | mission meters that count per frame stay on the frame rate (game-internals.md 11f; the reference) |
 | `VCS_SCRIPT_TIMESTEP_LOG=1`, `VCS_SCRIPT_TIMESTEP_CHECK=1` | per scaled instruction every 2 s game time: runs, the game's amount vs applied; log each listed instruction found in a newly loaded mission |
 | `VCS_PERF_OVERLAY=0\|1` | the perf overlay setting for one run |

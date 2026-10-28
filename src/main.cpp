@@ -23,15 +23,21 @@
 #include "game/vcs_framerate.h"
 #include "game/vcs_movie.h"
 #include "game/vcs_hud.h"
+#include "game/vcs_input.h"
 #include "platform/platform.h"
 #include "render/presenter.h"
 #include "settings/settings.h"
 #include "ui/settings_menu.h"
 #include "ui/trainer_menu.h"
+#include "runtime/ps2_audio_out.h"
 #include "runtime/ps2_control.h"
 #include "util/sha1.h"
 
+#include "imgui.h"
+
 #include <algorithm>
+#include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -232,6 +238,69 @@ namespace
             applyAspect();
     }
 
+    // Display / Graphics presets: the settings each one sets (the rest stay as they are). Authentic is their defaults.
+    struct Preset
+    {
+        const char *key;
+        int value;
+    };
+    const Preset kEnhanced[] = {{"display.aspect", 0},   {"display.hud", 2},    {"display.scale", 0},
+                                {"display.msaa", 4},     {"display.aniso", 16}, {"display.timing", 1},
+                                {"display.fps", vcs::kCapRefresh}, {"display.vsync", 0}};
+    const Preset kLight[] = {{"display.aspect", 0}, {"display.hud", 2},    {"display.scale", 1},  {"display.msaa", 1},
+                             {"display.aniso", 4},  {"display.timing", 1}, {"display.fps", 60}, {"display.vsync", 0}};
+    const char *const kPresetKeys[] = {"display.aspect", "display.hud", "display.scale", "display.msaa",
+                                       "display.aniso",  "display.timing", "display.fps", "display.vsync"};
+
+    template <size_t N> void applyPreset(const char *name, const Preset (&values)[N])
+    {
+        for (const Preset &p : values)
+            settings::set(p.key, p.value);
+        std::fprintf(stderr, "[settings] preset %s\n", name);
+    }
+
+    void applyAuthentic()
+    {
+        for (const char *key : kPresetKeys)
+            for (const settings::Spec &s : settings::all())
+                if (s.key == key)
+                    settings::set(s.key, s.defaultValue);
+        std::fprintf(stderr, "[settings] preset Authentic\n");
+    }
+
+    // Each host frame: the frame-rate counter (Display > Show frame rate) - game frames per second, measured over half
+    // a second, in the corner the setting names.
+    void drawFrameRateCounter()
+    {
+        const int corner = settings::value("display.fps_counter");
+        if (corner == 0 || ps2control::hiddenMode())
+            return;
+        static auto since = std::chrono::steady_clock::now();
+        static uint64_t framesThen = vcs::rig::gameFrames();
+        static float fps = 0.0f;
+        const auto now = std::chrono::steady_clock::now();
+        const double seconds = std::chrono::duration<double>(now - since).count();
+        if (seconds >= 0.5)
+        {
+            const uint64_t frames = vcs::rig::gameFrames();
+            fps = static_cast<float>((frames - framesThen) / seconds);
+            framesThen = frames;
+            since = now;
+        }
+        char text[32];
+        std::snprintf(text, sizeof(text), "%.0f fps", fps);
+        const ImGuiViewport *vp = ImGui::GetMainViewport();
+        const float size = std::max(16.0f, vp->Size.y / 40.0f);
+        ImFont *font = ImGui::GetFont();
+        const ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+        const float margin = size * 0.6f;
+        const float x = corner == 1 || corner == 3 ? vp->Pos.x + margin : vp->Pos.x + vp->Size.x - margin - extent.x;
+        const float y = corner == 1 || corner == 2 ? vp->Pos.y + margin : vp->Pos.y + vp->Size.y - margin - extent.y;
+        ImDrawList *draw = ImGui::GetForegroundDrawList();
+        draw->AddText(font, size, ImVec2(x + 1.5f, y + 1.5f), IM_COL32(0, 0, 0, 200), text);
+        draw->AddText(font, size, ImVec2(x, y), IM_COL32(255, 255, 160, 255), text);
+    }
+
     // The player settings (settings/settings.h). The menu shows pages (tabs) in the order they first appear here, each
     // page's sections likewise, and the rows of a section in this order. vcs.ini next to vcs.exe holds them along
     // with iso=; a setting's vcs.ini key stays the same when it moves to another page.
@@ -240,6 +309,43 @@ namespace
         using settings::Apply;
         using settings::Type;
         settings::Spec s;
+
+        s = {};
+        s.key = "presets.authentic";
+        s.page = "Display";
+        s.section = "Presets";
+        s.label = "Authentic (PS2)";
+        s.help = "The PS2's picture and timing: 4:3, original resolution, no anti-aliasing, 30 fps. Sets the Display and "
+                 "Graphics pages; controls, sound and the window mode stay as they are.";
+        s.type = Type::Action;
+        s.button = "Apply";
+        s.onChange = [](int) { applyAuthentic(); };
+        settings::add(s);
+
+        s = {};
+        s.key = "presets.enhanced";
+        s.page = "Display";
+        s.section = "Presets";
+        s.label = "Enhanced";
+        s.help = "Widescreen in the window's shape with the HUD at the screen edges, rendered at the window's resolution, "
+                 "4x anti-aliasing, 16x texture filtering and frame-rate independent timing at the display's refresh rate. "
+                 "Needs a reasonably modern graphics card; resolution, anti-aliasing and timing apply after a restart.";
+        s.type = Type::Action;
+        s.button = "Apply";
+        s.onChange = [](int) { applyPreset("Enhanced", kEnhanced); };
+        settings::add(s);
+
+        s = {};
+        s.key = "presets.light";
+        s.page = "Display";
+        s.section = "Presets";
+        s.label = "Widescreen, light";
+        s.help = "Widescreen and 60 fps for older PCs and integrated graphics: the original resolution, no anti-aliasing, "
+                 "4x texture filtering. Resolution and timing apply after a restart.";
+        s.type = Type::Action;
+        s.button = "Apply";
+        s.onChange = [](int) { applyPreset("Widescreen, light", kLight); };
+        settings::add(s);
 
         s = {};
         s.key = "display.window";
@@ -302,6 +408,52 @@ namespace
         s.onChange = [](int v) { setEnv("PS2X_HW_SCALE", std::to_string(v)); }; // read when the renderer starts
         settings::add(s);
 
+        auto applyVolume = [](int) {
+            auto gain = [](int percent) { return (percent / 100.0f) * (percent / 100.0f); }; // even steps to the ear
+            ps2AudioSetVolume(gain(settings::value("audio.volume")), gain(settings::value("audio.movie_volume")));
+        };
+        s = {};
+        s.key = "audio.volume";
+        s.page = "Audio";
+        s.section = "Volume";
+        s.label = "Master volume";
+        s.help = "Everything the game plays. Music, sound effects and dialogue have their own levels in the game's pause "
+                 "menu (Audio).";
+        s.type = Type::Integer;
+        s.min = 0;
+        s.max = 100;
+        s.format = "%d%%";
+        s.defaultValue = 100;
+        s.onChange = applyVolume;
+        settings::add(s);
+
+        s = {};
+        s.key = "audio.movie_volume";
+        s.page = "Audio";
+        s.section = "Volume";
+        s.label = "Movie volume";
+        s.help = "The intro movie and the other full-motion videos, relative to the master volume.";
+        s.type = Type::Integer;
+        s.min = 0;
+        s.max = 100;
+        s.format = "%d%%";
+        s.defaultValue = 100;
+        s.onChange = applyVolume;
+        settings::add(s);
+
+        s = {};
+        s.key = "audio.output";
+        s.page = "Audio";
+        s.section = "Output";
+        s.label = "Speakers";
+        s.help = "Mono mixes left and right together (one speaker or ear); Swapped exchanges them (headphones worn the other "
+                 "way round).";
+        s.type = Type::Choice;
+        s.choices = {{"Stereo", 0}, {"Mono", 1}, {"Stereo, swapped", 2}};
+        s.defaultValue = 0;
+        s.onChange = [](int v) { ps2AudioSetOutputMode(v); };
+        settings::add(s);
+
         s = {};
         s.key = "display.timing";
         s.page = "Display";
@@ -342,6 +494,32 @@ namespace
         settings::add(s);
 
         s = {};
+        s.key = "display.vsync";
+        s.page = "Display";
+        s.section = "Frame rate";
+        s.label = "Vertical sync";
+        s.help = "Off: each frame is shown as soon as it is ready, never torn. On: frames wait for the monitor's refresh "
+                 "(smoothest with a cap of Display refresh, at a little more input delay). Off, allow tearing: the lowest "
+                 "delay, and for G-Sync / FreeSync monitors (with a cap a few fps below the refresh rate).";
+        s.type = Type::Choice;
+        s.choices = {{"Off", 0}, {"On", 1}, {"Off, allow tearing (VRR)", 2}};
+        s.defaultValue = 0;
+        s.env = "VCS_VSYNC";
+        s.onChange = [](int v) { present::setPresentMode(v); };
+        settings::add(s);
+
+        s = {};
+        s.key = "display.fps_counter";
+        s.page = "Display";
+        s.section = "Frame rate";
+        s.label = "Show frame rate";
+        s.help = "The game's frames per second in a corner of the screen (F3 shows the full performance overlay).";
+        s.type = Type::Choice;
+        s.choices = {{"Off", 0}, {"Top left", 1}, {"Top right", 2}, {"Bottom left", 3}, {"Bottom right", 4}};
+        s.defaultValue = 0;
+        settings::add(s);
+
+        s = {};
         s.key = "display.skip_intro";
         s.page = "Game";
         s.section = "Start-up";
@@ -352,6 +530,18 @@ namespace
         s.defaultValue = 0;
         s.env = "VCS_SKIP_MOVIES";
         s.onChange = [](int v) { vcs::setSkipIntroMovies(v != 0); };
+        settings::add(s);
+
+        s = {};
+        s.key = "game.background";
+        s.page = "Game";
+        s.section = "Window";
+        s.label = "In the background";
+        s.help = "When another window is in front (Alt+Tab): the game keeps running and playing sound as on a console, runs "
+                 "silently, or pauses until you come back.";
+        s.type = Type::Choice;
+        s.choices = {{"Keep running", 0}, {"Mute", 1}, {"Pause", 2}};
+        s.defaultValue = 0;
         settings::add(s);
 
         s = {};
@@ -384,26 +574,7 @@ namespace
         s.onChange = [](int v) { setEnv("PS2X_HW_ANISO", std::to_string(v)); };
         settings::add(s);
 
-        s = {};
-        s.key = "controls.menu_key";
-        s.page = "Controls";
-        s.section = "Menu";
-        s.label = "Settings menu key";
-        s.help = "Opens and closes this menu. On a gamepad: press Back + Start together.";
-        s.type = Type::Key;
-        s.defaultValue = platform::KEY_F2;
-        settings::add(s);
-
-        s = {};
-        s.key = "controls.trainer_key";
-        s.page = "Controls";
-        s.section = "Menu";
-        s.label = "Trainer menu key";
-        s.help = "Opens and closes the trainer (god mode, weapons, vehicles, teleports...). On a gamepad: press Back + RB "
-                 "together.";
-        s.type = Type::Key;
-        s.defaultValue = platform::KEY_F5;
-        settings::add(s);
+        vcs::input::registerSettings(); // the Keyboard & mouse and Gamepad pages (game/vcs_input.h)
 
         s = {};
         s.key = "graphics.perf_overlay";
@@ -415,6 +586,24 @@ namespace
         s.env = "VCS_PERF_OVERLAY";
         s.onChange = [](int v) { ps2perf::setOverlay(v != 0); };
         s.read = [] { return ps2perf::overlayOn() ? 1 : 0; };
+        settings::add(s);
+
+        s = {};
+        s.key = "advanced.reset_all";
+        s.page = "Advanced";
+        s.section = "Reset";
+        s.label = "Reset all settings";
+        s.help = "Every setting on every page back to its default (the PS2's picture and timing, the default controls). "
+                 "The disc path and the window's place are kept.";
+        s.type = Type::Action;
+        s.button = "Reset everything";
+        s.confirm = true;
+        s.onChange = [](int) {
+            for (const settings::Spec &each : settings::all())
+                if (each.type != Type::Action)
+                    settings::set(each.key, each.defaultValue);
+            std::fprintf(stderr, "[settings] all reset to defaults\n");
+        };
         settings::add(s);
     }
 
@@ -559,6 +748,8 @@ int main(int argc, char *argv[])
                                         ui::drawSettingsMenu();
                                         ui::drawTrainerMenu();
                                         ps2control::setGameInputBlocked(ui::settingsMenuBlocksInput() || ui::trainerMenuBlocksInput());
+                                        vcs::input::onHostFrame(ui::settingsMenuOpen() || ui::trainerMenuBlocksInput());
+                                        drawFrameRateCounter();
                                     },
                                     nullptr, nullptr);
         if (!runtime.initialize("GTA: Vice City Stories"))
@@ -581,6 +772,33 @@ int main(int argc, char *argv[])
 
         vcs::rig::install(runtime); // control-channel automation commands (debug/rig.h)
         vcs::trainer::install(runtime); // the trainer's control-channel command (game/vcs_trainer.h)
+        vcs::input::install();          // the player's bindings feed the pad (game/vcs_input.h)
+        // setting <key> [value] -> ok <value>: a setting read or changed (a hidden run never writes vcs.ini)
+        ps2control::addCommand("setting", [](const std::string &args, ps2control::Reply reply) {
+            const size_t space = args.find(' ');
+            const std::string key = args.substr(0, space);
+            const auto spec = std::find_if(settings::all().begin(), settings::all().end(), [&](const settings::Spec &s) { return s.key == key; });
+            if (spec == settings::all().end())
+                return reply("error unknown setting " + key);
+            if (spec->type == settings::Type::Action) // a button: pressed (presets, reset)
+            {
+                spec->onChange(0);
+                return reply("ok pressed");
+            }
+            if (space != std::string::npos && !settings::set(key, std::atoi(args.c_str() + space + 1)))
+                return reply("error refused");
+            reply("ok " + std::to_string(settings::value(key)));
+        });
+        // menu <page>|close|scroll <0..1> -> ok: the settings menu opened on a page (screenshots of it in hidden runs)
+        ps2control::addCommand("menu", [](const std::string &args, ps2control::Reply reply) {
+            if (args == "close")
+                ui::closeSettingsMenu();
+            else if (args.rfind("scroll ", 0) == 0)
+                ui::scrollSettingsMenu(static_cast<float>(std::atof(args.c_str() + 7)));
+            else
+                ui::openSettingsMenu(args);
+            reply("ok");
+        });
         vcs::configureWatch(runtime.memory().getRDRAM());
         vcs::runSelfTest(runtime);
         vcs::startWatchdog(runtime);

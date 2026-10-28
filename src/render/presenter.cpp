@@ -182,7 +182,11 @@ namespace present
         g_device->endPass();
     }
 
-    void present() { g_device->present(false); }
+    rhi::Device::PresentMode g_presentMode = rhi::Device::PresentMode::Immediate;
+
+    void setPresentMode(int mode) { g_presentMode = static_cast<rhi::Device::PresentMode>(mode); }
+
+    void present() { g_device->present(g_presentMode); }
 
     bool frameLuma(const Picture &picture, int srcWidth, int srcHeight, float &mean)
     {

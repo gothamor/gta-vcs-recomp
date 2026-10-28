@@ -25,6 +25,21 @@ namespace
     constexpr uint16_t PAD_L2 = 0x0100u;
 }
 
+namespace
+{
+    PSPadBackend::Reader g_reader = nullptr;             // [gta-recomp] setReader
+    PSPadBackend::ActuatorSink g_actuatorSink = nullptr; // [gta-recomp] setActuatorSink
+}
+
+void PSPadBackend::setReader(Reader reader) { g_reader = reader; }
+void PSPadBackend::setActuatorSink(ActuatorSink sink) { g_actuatorSink = sink; }
+
+void PSPadBackend::actuators(uint8_t small, uint8_t large)
+{
+    if (g_actuatorSink)
+        g_actuatorSink(small, large);
+}
+
 // [gta-recomp] Keyboard, mouse and gamepad all feed one DualShock 2. Keyboard layout (see docs/CONTROLS.md):
 //   WASD left stick, IJKL right stick, arrows D-pad, Shift Cross, Space Square, F Triangle, Ctrl/LMB Circle,
 //   RMB/E R1, Q L1, 1/Z L2, 3/X R2, C L3, V R3, Enter Start, Backspace Select.
@@ -36,6 +51,13 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     std::memset(data, 0, 32);
     data[0] = 0x01;
     data[1] = kPadAnalogMarker;
+    if (g_reader) // [gta-recomp] the player's bindings (setReader)
+    {
+        data[2] = data[3] = 0xFF;
+        data[4] = data[5] = data[6] = data[7] = 0x80;
+        if (g_reader(data))
+            return true;
+    }
 
     uint16_t btns = 0xFFFFu;
     auto press = [&btns](bool down, uint16_t mask)

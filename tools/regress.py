@@ -21,6 +21,8 @@ Steps (each a tool of its own, run in turn; the game window shows):
             (buildings, peds and cars vanishing at the sides in widescreen)
   meters    per-frame mission meters on the time step: every scaled instruction found in its mission (not --quick),
             PHI_A2's heat bar as fast per game second at 1/144 as at 1/30
+  controls  tools/controls_check.py: every default key binding, rebinding, walk, wheel, presets, Reset all settings,
+            the game's vibration reaching the host
 
 Writes OUT/report.md and OUT/metrics.json (default OUT: build/regress/<date-time>). --set-baseline stores this
 run as build/regress/baseline (metrics.json + the scenes capture); later runs report what changed against it:
@@ -184,6 +186,18 @@ def step_meters(out, quick):
     return res
 
 
+def step_controls(out, quick):
+    """The player's controls and settings (docs/CONTROLS.md, src/game/vcs_input.cpp, 2026-10-28): tools/controls_check.py
+    (the bindings in the pad report and the game, presets, reset, vibration, menu screenshots)."""
+    sys.path.insert(0, TOOLS)
+    import controls_check as cc  # noqa: E402
+    d = os.path.abspath(os.path.join(out, "controls"))
+    os.makedirs(d, exist_ok=True)
+    c = cc.Check(d, 47673)
+    good = c.run()
+    return {"pass": good, "failed": [name for name, ok, _ in c.results if not ok], "checks": len(c.results)}
+
+
 def step_menushape(out, quick):
     """The pause menu's shape (SETTINGS_MENU_WIDESCREEN.md): 32:9 game, 16:9 screen; every presented frame for 50 frames
     after Start, in and out (control command "burst"). Each frame's picture rectangle (4:3 or wide) has to fit its
@@ -267,6 +281,8 @@ def compare(base, new):
             notes.append("saves: %s failed (see saves.log and the screenshots)" % k)
     if "shakedown" in new and new["shakedown"].get("pass") is not True:
         notes.append("shakedown: the shop entry failed %s (see shakedown/)" % json.dumps(new["shakedown"]))
+    if "controls" in new and new["controls"].get("pass") is not True:
+        notes.append("controls: failed checks %s (tools/controls_check.py)" % new["controls"].get("failed"))
     if "meters" in new and new["meters"].get("pass") is not True:
         notes.append("meters: per-frame mission meters off the time step %s (PHI_A2's heat at 144 vs 30)" % json.dumps(new["meters"]))
     ms = new.get("menushape", {})
@@ -292,7 +308,7 @@ def main():
     metrics = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "quick": a.quick}
     for name, fn in (("scenes", step_scenes), ("tour", step_tour), ("missions", step_missions), ("drive", step_drive),
                      ("evening", step_evening), ("saves", step_saves), ("shakedown", step_shakedown),
-                     ("widecull", step_widecull), ("menushape", step_menushape), ("meters", step_meters)):
+                     ("widecull", step_widecull), ("menushape", step_menushape), ("meters", step_meters), ("controls", step_controls)):
         print("[regress] %s" % name)
         t0 = time.time()
         try:

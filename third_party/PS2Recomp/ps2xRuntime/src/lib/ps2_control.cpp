@@ -90,6 +90,11 @@ namespace ps2control
                 {"backspace", platform::KEY_BACKSPACE}, {"back", platform::KEY_BACKSPACE}, {"select", platform::KEY_BACKSPACE}, {"tab", platform::KEY_TAB}, {"up", platform::KEY_UP},
                 {"down", platform::KEY_DOWN}, {"left", platform::KEY_LEFT}, {"right", platform::KEY_RIGHT},
                 {"alt", platform::KEY_LEFT_ALT}, // [gta-recomp] Alt+Enter (full screen)
+                // [gta-recomp] the mouse as keys (control bindings, game/vcs_input.cpp), the right-hand modifiers
+                {"mouseleft", platform::KEY_MOUSE_LEFT}, {"mouseright", platform::KEY_MOUSE_RIGHT},
+                {"mousemiddle", platform::KEY_MOUSE_MIDDLE}, {"mouse4", platform::KEY_MOUSE_X1}, {"mouse5", platform::KEY_MOUSE_X2},
+                {"wheelup", platform::KEY_WHEEL_UP}, {"wheeldown", platform::KEY_WHEEL_DOWN},
+                {"rshift", platform::KEY_RIGHT_SHIFT}, {"rctrl", platform::KEY_RIGHT_CONTROL}, {"kpenter", platform::KEY_KP_ENTER},
             };
             for (const Named &n : named)
                 if (name == n.name)

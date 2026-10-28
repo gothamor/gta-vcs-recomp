@@ -13,6 +13,7 @@
 #include "game/vcs_display.h"
 #include "game/vcs_framerate.h"
 #include "game/vcs_movie.h"
+#include "game/vcs_input.h"
 #include "game/vcs_script_timing.h"
 #include "game/vcs_inflate.h"
 #include "game/vcs_sound.h"
@@ -762,6 +763,7 @@ namespace
         vcs::profilerFrame(); // VCS_PROFILE_SPIKES (debug/profiler.h)
         vcs::applyDisplay(rdram); // widescreen preference / aspect (settings menu)
         vcs::rig::onGameFrame(rdram, ctx, runtime); // automation rig jobs (debug/rig.h)
+        vcs::input::holdInBackground(runtime);      // paused while the window is in the background (game/vcs_input.h)
         vcs::trainer::onGameFrame(rdram);           // the trainer's actions and held toggles (game/vcs_trainer.h)
         vcs::onFrameKick();                         // the HUD context ends (game/vcs_hud.h)
         vcs::rsltrace::onFrameKick(rdram);          // VCS_TRACE_RSL (debug/rsl_trace.h)

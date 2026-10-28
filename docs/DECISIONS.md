@@ -415,6 +415,26 @@ The user asked for a trainer like RDR2's (docs/TRAINER.md). Chosen:
 - Models are streamed asynchronously with a time-out rather than `LOAD_ALL_MODELS_NOW`, which froze the game when the
   streaming memory was full.
 
+## 2026-10-28 - Player settings: bindings in the game layer, the mouse as stick speed, defaults as before
+
+The user asked for flexible settings players can change. Choices:
+- **Where the bindings live**: in the game layer (src/game/vcs_input.cpp), feeding the runtime's pad backend through a
+  reader hook; the runtime keeps its fixed mapping as the reference (`VCS_INPUT_MAP=0`), as the rules want for any
+  replaced path. Injected (control-channel) keys go through the bindings too, so every scripted check exercises them.
+- **Two slots per action**, any key / mouse button / wheel notch, Shift / Ctrl / Alt without a side (one slot holds
+  "Shift" where the old mapping needed two). One key, one control: binding steals it from the other control, and the
+  menu keys can neither take nor lose theirs - a silent double binding was judged more confusing than the steal.
+- **Mouse camera**: the PS2 game has only a stick camera, so the mouse's speed becomes the right stick's tilt (not its
+  distance per frame), which keeps the turn per hand movement the same at any frame rate; the stick's top speed caps
+  flicks. True mouse look would mean writing the camera's angles in the game's memory - later, if the stick feel is
+  not good enough. Off by default (it holds the cursor in the window).
+- **Vibration**: the game's own motor levels (it already shook the pad; the stub dropped them), 100% = as on the PS2.
+- **Defaults**: exactly the old fixed mapping and behaviour (keep running in the background, vsync off as the flip
+  model presented before), so nothing changes for a player who opens no menu. The Authentic preset is the Display /
+  Graphics defaults; presets never touch controls or sound.
+- **Volume** squared (the slider's middle is about -12 dB), master after the mix so the game's own levels and the
+  SPU2 output stay bit-identical for the checks (`PS2X_AUDIO_DUMP` records before it).
+
 ## 2026-10-27 - Per-frame mission meters: each instruction on the time step, not the scripts at 30 Hz
 
 PHI_A2's heat bar (and meters in eleven more missions, game-internals.md 11f) change by a fixed amount every frame,

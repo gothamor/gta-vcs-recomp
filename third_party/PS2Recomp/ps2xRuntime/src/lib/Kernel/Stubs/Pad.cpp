@@ -706,8 +706,11 @@ namespace ps2_stubs
 
     void scePadSetActDirect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        (void)rdram;
         (void)runtime;
+        // [gta-recomp] the motor levels go to the host's vibration (PSPadBackend::setActuatorSink)
+        if (getRegU32(ctx, 4) == 0 && getRegU32(ctx, 5) == 0)
+            if (const uint8_t *data = getMemPtr(rdram, getRegU32(ctx, 6)))
+                PSPadBackend::actuators(data[0], data[1]);
         setReturnS32(ctx, 1);
     }
 

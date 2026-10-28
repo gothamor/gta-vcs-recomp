@@ -2,7 +2,8 @@
 // vcs.exe), and change notifications. The settings menu (ui/settings_menu.h) is generated from the registry: a new
 // setting is one add() plus its apply callback.
 //
-// Order at start-up: add() everything, load(ini), applyAll(). Values are ints (toggles, choices, integers, keys).
+// Order at start-up: add() everything, load(ini), applyAll(). Values are ints (toggles, choices, integers, keys;
+// actions have none).
 // Threads: add / load / applyAll / set from the main thread (menu); value() from any thread.
 #pragma once
 
@@ -19,7 +20,8 @@ namespace settings
         Toggle,  // 0 / 1
         Choice,  // one of `choices` (their values)
         Integer, // min..max
-        Key,     // a platform::Key (the menu offers the keys it knows)
+        Key,     // a platform::Key, mouse buttons and wheel included (the menu offers the keys it knows)
+        Action,  // a button: onChange(0) when pressed (presets, reset); no value, nothing in vcs.ini
     };
 
     enum class Apply
@@ -51,6 +53,18 @@ namespace settings
         std::string env;               // an environment variable that overrides it (testing), shown as such
         std::function<void(int)> onChange; // the new value; also called once by applyAll()
         std::function<int()> read;     // optional: the live value, when something else changes it too (a hotkey)
+
+        // Key: 0 (unbound) is a valid value. A control binding; the menu clears one with a right click.
+        bool optional = false;
+        // Key: keys of one group are exclusive - binding a key another setting of the group has takes it from that
+        // setting when that one is optional, and is refused otherwise (e.g. the menu key).
+        std::string group;
+        // Key: a second binding of the same action, drawn in this row beside the first (its own Spec, `hidden`).
+        std::string partner;
+        bool hidden = false; // no row of its own (a partner); still saved, reset with its page
+        // Action: the button's text, and whether it asks for a second click first.
+        std::string button;
+        bool confirm = false;
     };
 
     void add(Spec spec);

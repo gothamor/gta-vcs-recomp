@@ -49,6 +49,11 @@ namespace
     size_t g_movieRead = 0, g_movieWrite = 0, g_movieQueued = 0;
     std::atomic<uint64_t> g_moviePlayed{0};
 
+    // [gta-recomp] player settings (ps2AudioSetVolume / SetOutputMode / SetMuted): gains in 1/65536
+    std::atomic<int> g_masterGain{65536}, g_movieGain{65536};
+    std::atomic<int> g_outputMode{0};
+    std::atomic<bool> g_muted{false};
+
     void writeWavHeader(FILE *f, uint32_t frames)
     {
         const uint32_t dataBytes = frames * 4u;
@@ -122,18 +127,36 @@ namespace
             ++g_playedFrames;
         }
         // [gta-recomp] movie sound on top
+        const int movieGain = g_movieGain.load(std::memory_order_relaxed);
         uint32_t mixed = 0;
         for (; mixed < frames && g_movieQueued; ++mixed)
         {
             for (int c = 0; c < 2; ++c)
             {
-                const int v = out[mixed * 2u + c] + g_movieRing[g_movieRead * 2u + c];
+                const int v = out[mixed * 2u + c] +
+                              static_cast<int>((static_cast<int64_t>(g_movieRing[g_movieRead * 2u + c]) * movieGain) >> 16);
                 out[mixed * 2u + c] = static_cast<int16_t>(std::clamp(v, -32768, 32767));
             }
             g_movieRead = (g_movieRead + 1u) % kCapacityFrames;
             --g_movieQueued;
         }
         g_moviePlayed.fetch_add(mixed, std::memory_order_relaxed);
+
+        // [gta-recomp] the player's volume and output mode, last (the state above runs on unchanged when muted)
+        const int gain = g_muted.load(std::memory_order_relaxed) ? 0 : g_masterGain.load(std::memory_order_relaxed);
+        const int mode = g_outputMode.load(std::memory_order_relaxed);
+        if (gain == 65536 && mode == 0)
+            return;
+        for (uint32_t i = 0; i < frames; ++i)
+        {
+            int l = out[i * 2u], r = out[i * 2u + 1u];
+            if (mode == 1)
+                l = r = (l + r) / 2;
+            else if (mode == 2)
+                std::swap(l, r);
+            out[i * 2u] = static_cast<int16_t>((static_cast<int64_t>(l) * gain) >> 16);
+            out[i * 2u + 1u] = static_cast<int16_t>((static_cast<int64_t>(r) * gain) >> 16);
+        }
     }
 
     void reportStats()
@@ -156,6 +179,17 @@ namespace
         g_playedFrames = g_underruns = g_underrunFrames = g_droppedFrames = g_pushedFrames = 0;
     }
 }
+
+void ps2AudioSetVolume(float master, float movies)
+{
+    auto gain = [](float v) { return static_cast<int>(std::clamp(v, 0.0f, 1.0f) * 65536.0f + 0.5f); };
+    g_masterGain.store(gain(master), std::memory_order_relaxed);
+    g_movieGain.store(gain(movies), std::memory_order_relaxed);
+}
+
+void ps2AudioSetOutputMode(int mode) { g_outputMode.store(std::clamp(mode, 0, 2), std::memory_order_relaxed); }
+
+void ps2AudioSetMuted(bool muted) { g_muted.store(muted, std::memory_order_relaxed); }
 
 void ps2AudioInit()
 {

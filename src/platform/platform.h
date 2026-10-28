@@ -45,8 +45,14 @@ namespace platform
         KEY_PAGE_DOWN = 267,
         KEY_HOME = 268,
         KEY_END = 269,
+        KEY_CAPS_LOCK = 280,
         KEY_F1 = 290, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12,
         KEY_KP_0 = 320, KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4, KEY_KP_5, KEY_KP_6, KEY_KP_7, KEY_KP_8, KEY_KP_9,
+        KEY_KP_DECIMAL = 330,
+        KEY_KP_DIVIDE = 331,
+        KEY_KP_MULTIPLY = 332,
+        KEY_KP_SUBTRACT = 333,
+        KEY_KP_ADD = 334,
         KEY_KP_ENTER = 335,
         KEY_LEFT_SHIFT = 340,
         KEY_LEFT_CONTROL = 341,
@@ -54,6 +60,15 @@ namespace platform
         KEY_RIGHT_SHIFT = 344,
         KEY_RIGHT_CONTROL = 345,
         KEY_RIGHT_ALT = 346,
+        // Mouse buttons and wheel notches as keys, so a control binding can be either (keyDown works for them; a wheel
+        // notch is a short press: down 50 ms, then up 50 ms before the next one).
+        KEY_MOUSE_LEFT = 400,
+        KEY_MOUSE_RIGHT = 401,
+        KEY_MOUSE_MIDDLE = 402,
+        KEY_MOUSE_X1 = 403,
+        KEY_MOUSE_X2 = 404,
+        KEY_WHEEL_UP = 405,
+        KEY_WHEEL_DOWN = 406,
         KEY_COUNT = 512,
     };
 
@@ -154,6 +169,7 @@ namespace platform
     void delayPrecise(uint64_t ns); // sleep with sub-millisecond precision (any thread)
 
     void windowSize(int &width, int &height); // drawable pixels
+    bool windowFocused(); // the window has the keyboard focus (main thread; false for a hidden window)
 
     // Input (any thread; snapshot from the last pumpEvents).
     bool keyDown(int key);
@@ -162,6 +178,20 @@ namespace platform
     bool gamepadConnected();
     bool gamepadButton(GamepadButton button);
     float gamepadAxis(GamepadAxis axis);
+    const char *gamepadName(); // "" without a gamepad (main thread)
+    // Vibration, motors 0..1 (low = the large, slow motor; high = the small, fast one). Any thread; applied at the next
+    // pumpEvents and held until changed (0, 0 stops).
+    void gamepadRumble(float low, float high);
+
+    // Mouse capture (main thread): the cursor hidden and held in the window, motion reported as relative counts. Off
+    // while the window is in the background.
+    void setMouseCaptured(bool on);
+    bool mouseCaptured();
+    // Mouse motion since the last call, in mouse counts (any thread; one consumer).
+    void takeMouseMotion(float &dx, float &dy);
+
+    // A key's name for menus ("A", "F2", "Left Shift", "Mouse 4", "Wheel up"); "?" for codes without one.
+    const char *keyName(int key);
 
     // Audio output: interleaved 16-bit stereo at `rate`, pulled by `fill` on the audio thread.
     using AudioFill = void (*)(int16_t *stereo, uint32_t frames);

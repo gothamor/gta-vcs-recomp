@@ -664,9 +664,10 @@ namespace rhi
                 makeBackbufferView();
             }
 
-            void present(bool vsync) override
+            void present(PresentMode mode) override
             {
-                const HRESULT hr = m_swapchain->Present(vsync ? 1u : 0u, 0u);
+                const bool tearing = mode == PresentMode::Tearing && (m_swapFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING);
+                const HRESULT hr = m_swapchain->Present(mode == PresentMode::Vsync ? 1u : 0u, tearing ? DXGI_PRESENT_ALLOW_TEARING : 0u);
                 if ((hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) && !m_lostReported)
                 {
                     m_lostReported = true;

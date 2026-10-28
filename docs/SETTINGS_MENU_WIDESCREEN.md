@@ -242,6 +242,42 @@ and **Alt+Enter** switches at any time, also with a menu open; the choice is sav
   the setting to full screen and back, the game stays in gameplay both times (no pause menu), Enter alone still opens
   it; same with `VCS_FULLSCREEN=1` (switches for the run only); vcs.ini byte-identical afterwards.
 
+## Player settings (2026-10-28): controls, sound, presets
+
+Asked for by the user ("substantially flexible settings that players can change"). Pages now: Display, Graphics,
+Audio, Game, Keyboard, Gamepad, Advanced.
+- **Display**: *Presets* first - Authentic (PS2) (the Display / Graphics defaults), Enhanced (Match window aspect,
+  HUD at the screen edges, Match window resolution, 4x MSAA, 16x AF, independent timing at the display's refresh) and
+  Widescreen, light (Match window, 1x, no MSAA, 4x AF, independent at 60). A preset sets only those keys; window
+  mode, controls and sound stay. *Frame rate*: **Vertical sync** (`display.vsync`: Off = the flip model's present
+  at once, never torn, as before; On = sync interval 1; Off, allow tearing = `DXGI_PRESENT_ALLOW_TEARING` for VRR and
+  the lowest delay, Off where the system can't; `VCS_VSYNC`), **Show frame rate** (game frames per second over half a
+  second, in a chosen corner).
+- **Audio**: **Master volume**, **Movie volume** (0-100%, squared to a gain so the steps sound even), **Speakers**
+  (stereo / mono / swapped). The game's own music / effects / dialogue levels stay in its pause menu.
+- **Game**: **In the background** - keep running (as before), mute, or pause (the game thread held at the frame kick,
+  vibration stopped, sound muted).
+- **Keyboard** / **Gamepad**: the bindings and stick, mouse and vibration options (docs/CONTROLS.md).
+- **Advanced**: **Reset all settings** (asks for a second click).
+
+Registry additions (`settings::Spec`): `Type::Action` (a button: `button` text, `confirm` for a second click; no
+value, nothing in vcs.ini, skipped by applyAll and the page reset); Key `optional` (0 = unbound; right-click clears),
+`group` (exclusive keys: a control's binding takes the key from another control, a menu key refuses keys a control
+has and is never taken), `partner` (a second slot drawn in the same row; the partner Spec is `hidden`). Binding
+capture waits until every key / button is let go, then takes any named key, mouse button or wheel notch; while it
+waits, and until the bound button is released, Dear ImGui gets no mouse (`ImGuiConfigFlags_NoMouse`), so a mouse
+button bound on its press doesn't click what is under the cursor when released.
+
+Layout: the help area is the longest help's height but at most four lines; a longer help is drawn smaller (down to
+60%) to fit, so the rows keep about two thirds of the window whatever the texts. The "Keyboard & mouse" tab was cut
+off at 4:3: the page is "Keyboard" (its "Mouse" section holds the mouse settings).
+
+Checked: `tools/controls_check.py` (hidden; 21 checks: every default binding in the pad report, Vic moving on a
+rebound key and not on the old one, walk, a wheel binding, the presets, Reset all settings, input back after the
+menu, the game's vibration reaching the host) and screenshots of every page (`menu <page>`, `menu scroll`); regress
+step "controls". Not checkable hidden (no window): the mouse camera's feel, the background pause / mute, vertical
+sync, the menu driven by a real mouse.
+
 ## Part 1 - the settings menu
 
 ### What the player sees

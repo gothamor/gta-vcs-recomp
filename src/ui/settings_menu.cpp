@@ -31,58 +31,70 @@ namespace ui
         bool g_focusWindow = false;
         int g_page = 0, g_selectPage = -1;
         std::string g_capturing;  // the Key setting waiting for a key press
+        bool g_captureArmed = false; // every key / button was let go since the capture started (the click that began it)
+        bool g_mouseHold = false;    // a binding was just made: the menu ignores the mouse until everything is let go
+        std::string g_confirming;    // the Action setting waiting for its second click
+        double g_confirmUntil = 0.0;
+        float g_scrollTo = -1.0f;    // scrollSettingsMenu, at the next frame
         std::string g_helpKey;    // the row whose help shows: the last one hovered or navigated to (kept in between)
         std::string g_navFocused; // the row whose control had keyboard / gamepad focus last frame
 
-        const char *keyName(int key)
-        {
-            static char buffer[16];
-            using namespace platform;
-            if (key >= KEY_A && key <= KEY_Z)
-                return (buffer[0] = static_cast<char>(key), buffer[1] = 0, buffer);
-            if (key >= KEY_ZERO && key <= KEY_NINE)
-                return (buffer[0] = static_cast<char>(key), buffer[1] = 0, buffer);
-            if (key >= KEY_F1 && key <= KEY_F12)
-                return (std::snprintf(buffer, sizeof(buffer), "F%d", key - KEY_F1 + 1), buffer);
-            if (key >= KEY_KP_0 && key <= KEY_KP_9)
-                return (std::snprintf(buffer, sizeof(buffer), "Keypad %d", key - KEY_KP_0), buffer);
-            switch (key)
-            {
-            case KEY_SPACE: return "Space";
-            case KEY_GRAVE: return "`";
-            case KEY_MINUS: return "-";
-            case KEY_EQUAL: return "=";
-            case KEY_LEFT_BRACKET: return "[";
-            case KEY_RIGHT_BRACKET: return "]";
-            case KEY_BACKSLASH: return "\\";
-            case KEY_SEMICOLON: return ";";
-            case KEY_APOSTROPHE: return "'";
-            case KEY_COMMA: return ",";
-            case KEY_PERIOD: return ".";
-            case KEY_SLASH: return "/";
-            case KEY_TAB: return "Tab";
-            case KEY_INSERT: return "Insert";
-            case KEY_DELETE: return "Delete";
-            case KEY_HOME: return "Home";
-            case KEY_END: return "End";
-            case KEY_PAGE_UP: return "Page Up";
-            case KEY_PAGE_DOWN: return "Page Down";
-            default: return "?";
-            }
-        }
+        using platform::keyName;
 
-        // Keys the menu key may not take: the menu's own (Escape, Enter, arrows, Q / E), the game's (ps2_pad.cpp) and
-        // the modifiers.
+        // Keys the menu keys may not take: the menu's own (Escape, Enter, arrows, Q / E, Backspace, Space), the
+        // modifiers and the mouse. Clashes with control bindings are the group's business (settings::Spec::group).
         bool bindable(int key)
         {
             using namespace platform;
-            static constexpr int kTaken[] = {KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER, KEY_BACKSPACE, KEY_SPACE, KEY_W, KEY_A, KEY_S,
-                                             KEY_D, KEY_Q, KEY_E, KEY_F, KEY_Z, KEY_X, KEY_C, KEY_V, KEY_I, KEY_J, KEY_K, KEY_L,
-                                             KEY_ONE, KEY_THREE};
+            static constexpr int kTaken[] = {KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER, KEY_BACKSPACE, KEY_SPACE, KEY_Q, KEY_E};
             if (std::find(std::begin(kTaken), std::end(kTaken), key) != std::end(kTaken) || (key >= KEY_RIGHT && key <= KEY_UP) ||
                 key >= KEY_LEFT_SHIFT)
                 return false;
             return std::string(keyName(key)) != "?";
+        }
+
+        // A control binding takes any key, mouse button or wheel notch with a name but Escape (which cancels). Either
+        // Shift / Ctrl / Alt is stored as the left one and Keypad Enter as Enter: the bindings take both sides
+        // (game/vcs_input.cpp).
+        int bindingKey(int key)
+        {
+            using namespace platform;
+            switch (key)
+            {
+            case KEY_RIGHT_SHIFT: return KEY_LEFT_SHIFT;
+            case KEY_RIGHT_CONTROL: return KEY_LEFT_CONTROL;
+            case KEY_RIGHT_ALT: return KEY_LEFT_ALT;
+            case KEY_KP_ENTER: return KEY_ENTER;
+            default: return key == KEY_ESCAPE || std::string(keyName(key)) == "?" ? 0 : key;
+            }
+        }
+
+        const settings::Spec *findSpec(const std::string &key)
+        {
+            for (const settings::Spec &s : settings::all())
+                if (s.key == key)
+                    return &s;
+            return nullptr;
+        }
+
+        // Binds `key` to `s`, keeping the keys of its group exclusive: an optional setting that had it loses it, a
+        // required one (the menu keys) refuses the change. False (with the reason in g_refusal) when refused.
+        std::string g_refusal;
+        bool bindKey(const settings::Spec &s, int key)
+        {
+            if (key != 0 && !s.group.empty())
+                for (const settings::Spec &o : settings::all())
+                    if (&o != &s && o.type == settings::Type::Key && o.group == s.group && settings::value(o.key) == key)
+                    {
+                        if (!o.optional || !s.optional) // a menu key never takes a control's key, nor gives its own
+                        {
+                            g_refusal = std::string(keyName(key)) + " is already \"" + o.label + "\" (" + o.page + ").";
+                            return false;
+                        }
+                        settings::set(o.key, 0);
+                    }
+            g_refusal.clear();
+            return settings::set(s.key, key);
         }
 
         bool gamepadDown(platform::GamepadButton b) { return platform::gamepadConnected() && platform::gamepadButton(b); }
@@ -104,6 +116,8 @@ namespace ui
             g_open = true;
             g_focusWindow = true;
             g_capturing.clear();
+            g_confirming.clear();
+            g_refusal.clear();
             g_helpKey.clear();
             g_navFocused.clear();
             ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
@@ -128,6 +142,8 @@ namespace ui
             if (settings::overridden(s.key))
                 text += " Locked: the environment variable " + s.env + " sets it for this run (tools/run.py sets some for "
                         "test runs); start the game without it to change it here.";
+            if (s.type == settings::Type::Key && s.optional)
+                text += " Click, then press a key or mouse button or turn the wheel (Esc: cancel). Right-click: clear.";
             return text;
         }
 
@@ -136,9 +152,55 @@ namespace ui
         {
             std::vector<std::string> out;
             for (const settings::Spec &s : settings::all())
-                if (s.page == page && std::find(out.begin(), out.end(), s.section) == out.end())
+                if (s.page == page && !s.hidden && std::find(out.begin(), out.end(), s.section) == out.end())
                     out.push_back(s.section);
             return out;
+        }
+
+        // One key button: its key's name, or "Press a key..." while it waits for one. `note` runs right after the button.
+        template <typename Note> void keySlot(const settings::Spec &s, float width, Note note)
+        {
+            const int v = settings::value(s.key);
+            if (g_capturing == s.key)
+            {
+                ImGui::Button(s.optional ? "Press a key or button... (Esc)###k" : "Press a key... (Esc: cancel)###k", ImVec2(width, 0));
+                note();
+                if (!g_captureArmed)
+                {
+                    g_captureArmed = !anyInputHeld(); // the click / Enter that started it is let go first
+                    return;
+                }
+                const bool clickedAway = !s.optional && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsItemHovered();
+                if (platform::keyPressed(platform::KEY_ESCAPE) || clickedAway || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+                {
+                    g_capturing.clear();
+                    return;
+                }
+                for (int k = 1; k < platform::KEY_COUNT; ++k)
+                {
+                    if (!platform::keyPressed(k))
+                        continue;
+                    const int key = s.optional ? bindingKey(k) : (bindable(k) ? k : 0);
+                    if (key == 0)
+                        continue;
+                    bindKey(s, key);
+                    g_capturing.clear();
+                    g_mouseHold = s.optional;
+                    break;
+                }
+                return;
+            }
+            const char *name = v == 0 ? "-" : keyName(v);
+            const bool pressed = ImGui::Button((std::string(name) + "###k").c_str(), ImVec2(width, 0));
+            note();
+            if (pressed)
+            {
+                g_capturing = s.key;
+                g_captureArmed = false;
+                g_refusal.clear();
+            }
+            if (s.optional && ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                settings::set(s.key, 0);
         }
 
         // The label, then the setting's control. A row is hovered when the mouse is anywhere across it (label, control or
@@ -210,31 +272,46 @@ namespace ui
                 break;
             }
             case settings::Type::Key:
-                if (g_capturing == s.key)
+            {
+                const settings::Spec *second = s.partner.empty() ? nullptr : findSpec(s.partner);
+                const float gap = style.ItemSpacing.x;
+                const float width = second ? (ImGui::GetContentRegionAvail().x - gap) * 0.5f : -FLT_MIN;
+                keySlot(s, width, noteItem);
+                if (second)
                 {
-                    ImGui::Button("Press a key... (Esc: cancel)", ImVec2(-FLT_MIN, 0));
-                    noteItem();
-                    const bool clickedAway = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsItemHovered();
-                    if (platform::keyPressed(platform::KEY_ESCAPE) || clickedAway ||
-                        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
-                        g_capturing.clear();
-                    else
-                        for (int k = 1; k < platform::KEY_COUNT; ++k)
-                            if (platform::keyPressed(k) && bindable(k))
-                            {
-                                settings::set(s.key, k);
-                                g_capturing.clear();
-                                break;
-                            }
-                }
-                else
-                {
-                    const bool pressed = ImGui::Button(keyName(v), ImVec2(-FLT_MIN, 0));
-                    noteItem();
-                    if (pressed)
-                        g_capturing = s.key;
+                    ImGui::SameLine(0.0f, gap);
+                    ImGui::PushID(1);
+                    keySlot(*second, -FLT_MIN, [&] {
+                        overItem = overItem || ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+                        if (ImGui::IsItemFocused())
+                            focusedNow = s.key;
+                    });
+                    ImGui::PopID();
                 }
                 break;
+            }
+            case settings::Type::Action:
+            {
+                const bool confirming = g_confirming == s.key && ImGui::GetTime() < g_confirmUntil;
+                const std::string text = confirming ? "Click again to confirm" : s.button.empty() ? s.label : s.button;
+                const bool pressed = ImGui::Button((text + "###v").c_str(), ImVec2(-FLT_MIN, 0));
+                noteItem();
+                if (pressed)
+                {
+                    if (s.confirm && !confirming)
+                    {
+                        g_confirming = s.key;
+                        g_confirmUntil = ImGui::GetTime() + 3.0;
+                    }
+                    else
+                    {
+                        g_confirming.clear();
+                        if (s.onChange)
+                            s.onChange(0);
+                    }
+                }
+                break;
+            }
             }
             ImGui::EndDisabled();
             ImGui::PopID();
@@ -256,12 +333,33 @@ namespace ui
     }
 
     bool settingsMenuOpen() { return g_open; }
+
+    void openSettingsMenu(const std::string &page)
+    {
+        const std::vector<std::string> pages = settings::pages();
+        for (size_t i = 0; i < pages.size(); ++i)
+            if (pages[i] == page)
+                g_selectPage = static_cast<int>(i);
+        if (!g_open)
+            open();
+    }
+
+    void scrollSettingsMenu(float fraction) { g_scrollTo = std::clamp(fraction, 0.0f, 1.0f); }
+
+    void closeSettingsMenu()
+    {
+        if (g_open)
+            close();
+    }
     bool settingsMenuBlocksInput() { return g_open || g_releaseWait; }
 
     void drawSettingsMenu()
     {
-        if (ps2control::hiddenMode())
+        if (ps2control::hiddenMode() && !g_open) // a hidden run opens it only through openSettingsMenu
+        {
+            g_releaseWait = false; // no physical input to wait for
             return;
+        }
 
         const bool chord = gamepadDown(platform::GAMEPAD_BACK) && gamepadDown(platform::GAMEPAD_START);
         const bool chordPressed = chord && !g_chordWasDown;
@@ -278,6 +376,17 @@ namespace ui
 
         if (g_releaseWait && !anyInputHeld())
             g_releaseWait = false;
+        // While a control binding waits for its key, and until the button that was bound is let go, the mouse is the
+        // binding's, not the menu's: a mouse button bound on its press would otherwise click what is under the cursor
+        // when released.
+        if (g_mouseHold && !anyInputHeld())
+            g_mouseHold = false;
+        const settings::Spec *capturing = g_capturing.empty() ? nullptr : findSpec(g_capturing);
+        ImGuiIO &io = ImGui::GetIO();
+        if (g_open && ((capturing && capturing->optional) || g_mouseHold))
+            io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+        else
+            io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
         if (!g_open)
             return;
 
@@ -316,11 +425,14 @@ namespace ui
                     g_selectPage = (g_page + 1) % n;
             }
 
-            // the help area fits the longest help of any page, so it is the same height whatever is selected
+            // the help area fits the longest help of any page, so it is the same height whatever is selected - but at
+            // most four lines (a quarter of the window or so), so the rows keep the room: a longer help is drawn smaller
             const float wrap = ImGui::GetContentRegionAvail().x;
-            float helpHeight = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
+            const float line = ImGui::GetTextLineHeightWithSpacing();
+            float helpHeight = line * 2.0f;
             for (const settings::Spec &s : settings::all())
                 helpHeight = std::max(helpHeight, ImGui::CalcTextSize(helpText(s).c_str(), nullptr, false, wrap).y);
+            helpHeight = std::min(helpHeight, line * 4.0f);
             const float footer = (1.0f + style.ItemSpacing.y) + (helpHeight + style.ItemSpacing.y) +
                                  (ImGui::GetTextLineHeight() + style.ItemSpacing.y) + ImGui::GetFrameHeight() + style.ItemSpacing.y +
                                  2.0f;
@@ -348,6 +460,11 @@ namespace ui
             ImGui::PushID(page.c_str());
             if (ImGui::BeginChild("rows", ImVec2(0.0f, -footer), ImGuiChildFlags_NavFlattened))
             {
+                if (g_scrollTo >= 0.0f && ImGui::GetScrollMaxY() > 0.0f)
+                {
+                    ImGui::SetScrollY(g_scrollTo * ImGui::GetScrollMaxY());
+                    g_scrollTo = -1.0f;
+                }
                 for (const std::string &section : sections(page))
                 {
                     if (!section.empty())
@@ -357,7 +474,7 @@ namespace ui
                         ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthStretch, 0.45f);
                         ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.55f);
                         for (const settings::Spec &s : settings::all())
-                            if (s.page == page && s.section == section)
+                            if (s.page == page && s.section == section && !s.hidden)
                                 row(s, focusedNow);
                         ImGui::EndTable();
                     }
@@ -383,8 +500,20 @@ namespace ui
             if (ImGui::BeginChild("help", ImVec2(0.0f, helpHeight), ImGuiChildFlags_None, ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar))
             {
                 ImGui::PushTextWrapPos(0.0f);
-                if (helpSpec)
-                    ImGui::TextUnformatted(helpText(*helpSpec).c_str());
+                if (!g_refusal.empty())
+                    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Not changed: %s", g_refusal.c_str());
+                else if (helpSpec)
+                {
+                    const std::string text = helpText(*helpSpec);
+                    const float base = ImGui::GetFontSize();
+                    float size = base; // the largest size, down to 60%, at which the help fits
+                    while (size > base * 0.6f &&
+                           ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, ImGui::GetContentRegionAvail().x, text.c_str()).y > helpHeight)
+                        size -= base * 0.05f;
+                    ImGui::PushFont(nullptr, size);
+                    ImGui::TextUnformatted(text.c_str());
+                    ImGui::PopFont();
+                }
                 else
                     ImGui::TextDisabled("Point at or select a setting to see what it does.");
                 ImGui::PopTextWrapPos();
@@ -397,10 +526,10 @@ namespace ui
 
             if (ImGui::Button("Reset page to defaults"))
                 for (const settings::Spec &s : settings::all())
-                    if (s.page == page)
+                    if (s.page == page && s.type != settings::Type::Action)
                         settings::set(s.key, s.defaultValue);
             char hint[96];
-            std::snprintf(hint, sizeof(hint), "%s / Back+Start: close    Q / E, LB / RB: page", keyName(settings::value("controls.menu_key")));
+            std::snprintf(hint, sizeof(hint), "%s / Back+Start: close  Q/E, LB/RB: page", keyName(settings::value("controls.menu_key")));
             ImGui::SameLine();
             if (const float room = ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(hint).x; room > 0.0f)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + room); // right-aligned

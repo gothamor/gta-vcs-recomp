@@ -33,7 +33,8 @@ namespace settings
             case Type::Integer: return v >= s.min && v <= s.max;
             case Type::Choice:
                 return std::any_of(s.choices.begin(), s.choices.end(), [&](const Choice &c) { return c.value == v; });
-            case Type::Key: return v > 0 && v < 512;
+            case Type::Key: return (v > 0 || (v == 0 && s.optional)) && v < 512;
+            case Type::Action: return v == 0;
             }
             return false;
         }
@@ -231,7 +232,7 @@ namespace settings
     void applyAll()
     {
         for (const Spec &s : g_specs)
-            if (s.onChange)
+            if (s.onChange && s.type != Type::Action)
                 s.onChange(value(s.key));
     }
 

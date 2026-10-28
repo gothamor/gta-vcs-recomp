@@ -9,10 +9,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 namespace platform
@@ -56,6 +58,25 @@ namespace platform
         bool g_cursorHidden = false;
         constexpr uint64_t kCursorIdleNs = 2000000000ull;
 
+        // mouse capture and wheel notches (main thread); motion for takeMouseMotion (any thread)
+        bool g_wantCapture = false;
+        bool g_captured = false;
+        std::mutex g_motionMutex;
+        float g_motionX = 0.0f, g_motionY = 0.0f;
+        struct WheelPulses // one direction's notches, played out as short presses
+        {
+            int pending = 0;
+            uint64_t phaseEndNs = 0; // end of the current down or up half
+            bool down = false;
+        };
+        WheelPulses g_wheel[2]; // up, down
+        constexpr uint64_t kWheelHalfNs = 50000000ull;
+
+        // vibration (gamepadRumble): wanted motor levels 0..65535, applied by pumpEvents
+        std::atomic<uint32_t> g_rumbleWanted{0}; // low << 16 | high
+        uint32_t g_rumbleSent = 0;
+        uint64_t g_rumbleSentNs = 0;
+
         struct ScanKey
         {
             SDL_Scancode scancode;
@@ -79,7 +100,10 @@ namespace platform
                     {SDL_SCANCODE_HOME, KEY_HOME}, {SDL_SCANCODE_END, KEY_END}, {SDL_SCANCODE_KP_ENTER, KEY_KP_ENTER},
                     {SDL_SCANCODE_LSHIFT, KEY_LEFT_SHIFT}, {SDL_SCANCODE_LCTRL, KEY_LEFT_CONTROL}, {SDL_SCANCODE_LALT, KEY_LEFT_ALT},
                     {SDL_SCANCODE_RSHIFT, KEY_RIGHT_SHIFT}, {SDL_SCANCODE_RCTRL, KEY_RIGHT_CONTROL}, {SDL_SCANCODE_RALT, KEY_RIGHT_ALT},
-                    {SDL_SCANCODE_0, KEY_ZERO},
+                    {SDL_SCANCODE_0, KEY_ZERO}, {SDL_SCANCODE_CAPSLOCK, KEY_CAPS_LOCK},
+                    {SDL_SCANCODE_KP_PERIOD, KEY_KP_DECIMAL}, {SDL_SCANCODE_KP_DIVIDE, KEY_KP_DIVIDE},
+                    {SDL_SCANCODE_KP_MULTIPLY, KEY_KP_MULTIPLY}, {SDL_SCANCODE_KP_MINUS, KEY_KP_SUBTRACT},
+                    {SDL_SCANCODE_KP_PLUS, KEY_KP_ADD},
                 };
                 for (int i = 0; i < 26; ++i)
                     k.push_back({static_cast<SDL_Scancode>(SDL_SCANCODE_A + i), KEY_A + i});
@@ -408,8 +432,34 @@ namespace platform
                 notePlacement();
                 break;
             case SDL_EVENT_MOUSE_MOTION:
+                g_mouseMovedNs = SDL_GetTicksNS();
+                if (g_captured)
+                {
+                    std::lock_guard<std::mutex> lock(g_motionMutex);
+                    g_motionX += e.motion.xrel;
+                    g_motionY += e.motion.yrel;
+                }
+                break;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 g_mouseMovedNs = SDL_GetTicksNS();
+                break;
+            case SDL_EVENT_MOUSE_WHEEL:
+            {
+                const float y = e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e.wheel.y : e.wheel.y;
+                const int notches = static_cast<int>(y > 0.0f ? std::ceil(y - 0.01f) : std::floor(y + 0.01f));
+                if (notches != 0)
+                {
+                    WheelPulses &p = g_wheel[notches > 0 ? 0 : 1];
+                    p.pending = std::min(8, p.pending + std::abs(notches));
+                }
+                break;
+            }
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+                if (g_captured) // Alt+Tab: the cursor is free while the window is in the background
+                {
+                    SDL_SetWindowRelativeMouseMode(g_window, false);
+                    g_captured = false;
+                }
                 break;
             case SDL_EVENT_GAMEPAD_ADDED:
                 openGamepad(e.gdevice.which);
@@ -444,6 +494,8 @@ namespace platform
                 now[k.key] = true;
         for (int k = 0; k < KEY_COUNT; ++k)
         {
+            if (k >= KEY_MOUSE_LEFT && k <= KEY_WHEEL_DOWN)
+                continue; // below
             g_keysPressed[k] = now[k] && !g_keysPrev[k];
             g_keysPrev[k] = now[k];
             g_keys[k].store(now[k], std::memory_order_relaxed);
@@ -452,7 +504,58 @@ namespace platform
         g_mouse[MOUSE_LEFT].store((mouse & SDL_BUTTON_LMASK) != 0, std::memory_order_relaxed);
         g_mouse[MOUSE_RIGHT].store((mouse & SDL_BUTTON_RMASK) != 0, std::memory_order_relaxed);
         g_mouse[MOUSE_MIDDLE].store((mouse & SDL_BUTTON_MMASK) != 0, std::memory_order_relaxed);
+        std::array<bool, KEY_WHEEL_DOWN + 1> pseudo{}; // the mouse buttons and wheel notches as keys
+        pseudo[KEY_MOUSE_LEFT] = (mouse & SDL_BUTTON_LMASK) != 0;
+        pseudo[KEY_MOUSE_RIGHT] = (mouse & SDL_BUTTON_RMASK) != 0;
+        pseudo[KEY_MOUSE_MIDDLE] = (mouse & SDL_BUTTON_MMASK) != 0;
+        pseudo[KEY_MOUSE_X1] = (mouse & SDL_BUTTON_X1MASK) != 0;
+        pseudo[KEY_MOUSE_X2] = (mouse & SDL_BUTTON_X2MASK) != 0;
+        const uint64_t nowNs = SDL_GetTicksNS();
+        for (int w = 0; w < 2; ++w)
+        {
+            WheelPulses &p = g_wheel[w];
+            if (nowNs >= p.phaseEndNs)
+            {
+                if (p.down) // an up half before the next notch, so each one is a press of its own
+                {
+                    p.down = false;
+                    p.phaseEndNs = nowNs + kWheelHalfNs;
+                }
+                else if (p.pending > 0)
+                {
+                    --p.pending;
+                    p.down = true;
+                    p.phaseEndNs = nowNs + kWheelHalfNs;
+                }
+            }
+            pseudo[w == 0 ? KEY_WHEEL_UP : KEY_WHEEL_DOWN] = p.down;
+        }
+        for (int k = KEY_MOUSE_LEFT; k <= KEY_WHEEL_DOWN; ++k)
+        {
+            g_keysPressed[k] = pseudo[k] && !g_keysPrev[k];
+            g_keysPrev[k] = pseudo[k];
+            g_keys[k].store(pseudo[k], std::memory_order_relaxed);
+        }
         snapshotGamepad();
+
+        // capture follows the wish while the window has the focus (it was let go on focus loss)
+        const bool capture = g_wantCapture && windowFocused();
+        if (capture != g_captured && g_window)
+        {
+            SDL_SetWindowRelativeMouseMode(g_window, capture);
+            g_captured = capture;
+            std::lock_guard<std::mutex> lock(g_motionMutex);
+            g_motionX = g_motionY = 0.0f;
+        }
+
+        // vibration: sent on a change, and renewed while it lasts (SDL ends a rumble after its duration)
+        const uint32_t rumble = g_rumbleWanted.load(std::memory_order_relaxed);
+        if (g_gamepad && (rumble != g_rumbleSent || (rumble && nowNs - g_rumbleSentNs > 500000000ull)))
+        {
+            SDL_RumbleGamepad(g_gamepad, static_cast<Uint16>(rumble >> 16), static_cast<Uint16>(rumble & 0xFFFF), rumble ? 1000 : 0);
+            g_rumbleSent = rumble;
+            g_rumbleSentNs = nowNs;
+        }
     }
 
     bool quitRequested() { return g_quit; }
@@ -517,12 +620,101 @@ namespace platform
             SDL_GetWindowSizeInPixels(g_window, &width, &height);
     }
 
+    bool windowFocused()
+    {
+        return g_window && !g_hiddenWindow && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+    }
+
     bool keyDown(int key) { return key >= 0 && key < KEY_COUNT && g_keys[key].load(std::memory_order_relaxed); }
     bool keyPressed(int key) { return key >= 0 && key < KEY_COUNT && g_keysPressed[key]; }
     bool mouseDown(MouseButton button) { return g_mouse[button].load(std::memory_order_relaxed); }
     bool gamepadConnected() { return g_padConnected.load(std::memory_order_relaxed); }
     bool gamepadButton(GamepadButton button) { return g_padButtons[button].load(std::memory_order_relaxed); }
     float gamepadAxis(GamepadAxis axis) { return g_padAxes[axis].load(std::memory_order_relaxed); }
+
+    const char *gamepadName()
+    {
+        const char *name = g_gamepad ? SDL_GetGamepadName(g_gamepad) : nullptr;
+        return name ? name : "";
+    }
+
+    void gamepadRumble(float low, float high)
+    {
+        auto level = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 65535.0f + 0.5f); };
+        g_rumbleWanted.store(level(low) << 16 | level(high), std::memory_order_relaxed);
+    }
+
+    void setMouseCaptured(bool on) { g_wantCapture = on && !g_hiddenWindow; }
+    bool mouseCaptured() { return g_captured; }
+
+    void takeMouseMotion(float &dx, float &dy)
+    {
+        std::lock_guard<std::mutex> lock(g_motionMutex);
+        dx = g_motionX;
+        dy = g_motionY;
+        g_motionX = g_motionY = 0.0f;
+    }
+
+    const char *keyName(int key)
+    {
+        static thread_local char buffer[16];
+        if ((key >= KEY_A && key <= KEY_Z) || (key >= KEY_ZERO && key <= KEY_NINE))
+            return (buffer[0] = static_cast<char>(key), buffer[1] = 0, buffer);
+        if (key >= KEY_F1 && key <= KEY_F12)
+            return (std::snprintf(buffer, sizeof(buffer), "F%d", key - KEY_F1 + 1), buffer);
+        if (key >= KEY_KP_0 && key <= KEY_KP_9)
+            return (std::snprintf(buffer, sizeof(buffer), "Keypad %d", key - KEY_KP_0), buffer);
+        switch (key)
+        {
+        case KEY_SPACE: return "Space";
+        case KEY_GRAVE: return "`";
+        case KEY_MINUS: return "-";
+        case KEY_EQUAL: return "=";
+        case KEY_LEFT_BRACKET: return "[";
+        case KEY_RIGHT_BRACKET: return "]";
+        case KEY_BACKSLASH: return "\\";
+        case KEY_SEMICOLON: return ";";
+        case KEY_APOSTROPHE: return "'";
+        case KEY_COMMA: return ",";
+        case KEY_PERIOD: return ".";
+        case KEY_SLASH: return "/";
+        case KEY_ESCAPE: return "Escape";
+        case KEY_ENTER: return "Enter";
+        case KEY_TAB: return "Tab";
+        case KEY_BACKSPACE: return "Backspace";
+        case KEY_INSERT: return "Insert";
+        case KEY_DELETE: return "Delete";
+        case KEY_RIGHT: return "Right";
+        case KEY_LEFT: return "Left";
+        case KEY_DOWN: return "Down";
+        case KEY_UP: return "Up";
+        case KEY_HOME: return "Home";
+        case KEY_END: return "End";
+        case KEY_PAGE_UP: return "Page Up";
+        case KEY_PAGE_DOWN: return "Page Down";
+        case KEY_CAPS_LOCK: return "Caps Lock";
+        case KEY_KP_DECIMAL: return "Keypad .";
+        case KEY_KP_DIVIDE: return "Keypad /";
+        case KEY_KP_MULTIPLY: return "Keypad *";
+        case KEY_KP_SUBTRACT: return "Keypad -";
+        case KEY_KP_ADD: return "Keypad +";
+        case KEY_KP_ENTER: return "Keypad Enter";
+        case KEY_LEFT_SHIFT: return "Shift"; // control bindings take either side (game/vcs_input.cpp)
+        case KEY_LEFT_CONTROL: return "Ctrl";
+        case KEY_LEFT_ALT: return "Alt";
+        case KEY_RIGHT_SHIFT: return "Right Shift";
+        case KEY_RIGHT_CONTROL: return "Right Ctrl";
+        case KEY_RIGHT_ALT: return "Right Alt";
+        case KEY_MOUSE_LEFT: return "Left mouse";
+        case KEY_MOUSE_RIGHT: return "Right mouse";
+        case KEY_MOUSE_MIDDLE: return "Middle mouse";
+        case KEY_MOUSE_X1: return "Mouse 4";
+        case KEY_MOUSE_X2: return "Mouse 5";
+        case KEY_WHEEL_UP: return "Wheel up";
+        case KEY_WHEEL_DOWN: return "Wheel down";
+        default: return "?";
+        }
+    }
 
     bool audioAvailable() { return (SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) != 0; }
 

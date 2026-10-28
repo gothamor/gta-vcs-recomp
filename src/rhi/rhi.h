@@ -279,7 +279,16 @@ namespace rhi
         // ---- swapchain --------------------------------------------------------------------------------------------
         virtual void backbufferSize(uint32_t &width, uint32_t &height) const = 0;
         virtual void resize(uint32_t width, uint32_t height) = 0;
-        virtual void present(bool vsync) = 0;
+        // Immediate: as soon as it is drawn, never torn (flip model: a newer frame replaces one not shown yet);
+        // Vsync: waits for the display's refresh; Tearing: at once, mid-refresh if need be (lowest latency, VRR - falls
+        // back to Immediate where the system can't).
+        enum class PresentMode : uint8_t
+        {
+            Immediate,
+            Vsync,
+            Tearing,
+        };
+        virtual void present(PresentMode mode) = 0;
 
         // ---- Dear ImGui renderer (the ImGui context belongs to the platform layer) ---------------------------------
         virtual bool uiInit() = 0;
