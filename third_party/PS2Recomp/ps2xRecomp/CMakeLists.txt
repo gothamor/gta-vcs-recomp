@@ -21,6 +21,8 @@ FetchContent_Declare(
     toml11
     GIT_REPOSITORY https://github.com/ToruNiina/toml11.git
     GIT_TAG v4.4.0
+    GIT_SHALLOW TRUE # [gta-recomp] tag only, not the history: toml11's is 348 MB (PS2RECOMP_PATCHES.md)
+    GIT_SUBMODULES "" # [gta-recomp] its submodules are its tests' and docs' (344 MB); TOML11_BUILD_TESTS is off
 )
 FetchContent_MakeAvailable(toml11)
 
@@ -28,6 +30,7 @@ FetchContent_Declare(
     fmt
     GIT_REPOSITORY https://github.com/fmtlib/fmt.git
     GIT_TAG 12.1.0
+    GIT_SHALLOW TRUE # [gta-recomp] tag only, not the history: toml11's is 348 MB (PS2RECOMP_PATCHES.md)
 )
 FetchContent_MakeAvailable(fmt)
  
@@ -53,6 +56,7 @@ FetchContent_Declare(
     rabbitizer
     GIT_REPOSITORY https://github.com/Decompollaborate/rabbitizer.git
     GIT_TAG 1.14.3
+    GIT_SHALLOW TRUE # [gta-recomp] tag only, not the history: toml11's is 348 MB (PS2RECOMP_PATCHES.md)
 )
 FetchContent_MakeAvailable(rabbitizer)
 
