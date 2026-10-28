@@ -37,6 +37,7 @@ namespace vcs::trainer
         constexpr uint32_t kModelGameName = 0x158u;       // vehicle model info: the game name / text key (8 chars)
         constexpr uint32_t kStreaming = 0x00489FF8u;      // -> CStreaming; +200 -> the models' streaming info (0x18 each,
                                                           // +0xC load state, 1 = loaded): HAS_MODEL_LOADED's test
+        constexpr uint32_t kCameraLooksAtPlayer = 0x006F44D0u + 0x888u; // TheCamera: 1 unless a script camera holds it
         constexpr int kVehicleFirst = 171, kVehicleLast = 280;
         // ped fields
         constexpr uint32_t kPedPosition = 0x30u;
@@ -77,6 +78,7 @@ namespace vcs::trainer
             MARK_MODEL_AS_NO_LONGER_NEEDED = 0x0162,
             SET_CHAR_PROOFS = 0x01B1,
             SET_CAR_PROOFS = 0x01B2,
+            RESTORE_CAMERA_JUMPCUT = 0x01CF,
             SET_PLAYER_NEVER_GETS_TIRED = 0x01FB,
             SET_PLAYER_FAST_RELOAD = 0x01FC,
             ADD_ARMOUR_TO_CHAR = 0x0213,
@@ -1029,6 +1031,11 @@ namespace vcs::trainer
                 if (inCar)
                     code.op(WARP_CHAR_FROM_CAR_TO_COORD).player().local(1).local(2).local(3);
                 code.op(WARP_CHAR_INTO_CAR).player().local(0);
+                // From one vehicle straight into another the camera keeps following the old one (the new target is
+                // set, the active camera's is not). The game's RestoreWithJumpCut hands it the new one
+                // (game-internals.md 12) - unless a mission's script camera holds it.
+                if (inCar && rd32(ram, kCameraLooksAtPlayer) != 0)
+                    code.op(RESTORE_CAMERA_JUMPCUT);
             }
             // handed back to the game: it stays while it is near or used, like any car
             code.op(MARK_MODEL_AS_NO_LONGER_NEEDED).i(model);

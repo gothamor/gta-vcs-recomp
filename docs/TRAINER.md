@@ -46,7 +46,7 @@ place.
 | | Fast reload | `SET_PLAYER_FAST_RELOAD` |
 | | Remove all weapons | `REMOVE_ALL_CHAR_WEAPONS` |
 | Vehicles | Spawn vehicle | all 110 vehicle models (ids 171..280: cars, bikes, boats, helicopters, planes), sorted by the game's names; ahead of the player, facing his way |
-| | Get in spawned vehicles | (on by default) puts the player behind the wheel; when already driving, the new vehicle appears 8 m ahead of the old one and he moves over |
+| | Get in spawned vehicles | (on by default) puts the player behind the wheel; when already driving, the new vehicle appears 8 m ahead of the old one and he moves over (the camera is handed the new one with `RESTORE_CAMERA_JUMPCUT`, unless a mission's script camera holds it: from car to car it stays on the old one otherwise) |
 | | Vehicle invincible | proofs, no visible damage, no upside-down fire, health kept at 1000 - for whatever the player drives |
 | | Repair / Flip upright / Boost / Random paint | health 1000 / back on its wheels facing the same way / a push forward / two random colours |
 | Teleport | 13 districts | Escobar International, Fort Baxter Air Base, Ocean Beach, Washington Beach, Vice Point, Downtown, Little Haiti, Little Havana, Starfish Island, Prawn Island, Leaf Links, Viceport, Junkyard - with his vehicle when driving |
@@ -109,8 +109,9 @@ The switches are not saved: every start is the original game (DECISIONS.md 2026-
 `python tools/trainer_check.py [OUT] [--vehicles all|N]` loads the Fort Baxter rig save (a copy, hidden) and checks,
 in the game's memory: the name lists; god mode (health refilled, an explosion at his feet survived); wanted level set,
 cleared, never wanted; money; weapon, loadout, unlimited ammo, no reload; spawning (`--vehicles all`: all 110, in
-batches at eight places in the city) and getting in; repair, flip, boost, paint, vehicle invincibility; a teleport
+batches at eight places in the city) and getting in, the camera following the new vehicle; repair, flip, boost, paint, vehicle invincibility; a teleport
 while driving and to every district on foot; save / return; time, freeze, weather, speed; no trainer script in the
 script list while paused; the menu opened and a row toggled with keys while the game behind it keeps running; the
 mission lists, a side job launched on foot (he ends up in its vehicle, the job running) and a second launch refused.
-2026-10-26: 30 checks, 0 failed (all 110 vehicles); with missions 33 checks, 0 failed.
+2026-10-26: 30 checks, 0 failed (all 110 vehicles); with missions 33 checks, 0 failed. 2026-10-28 (camera check
+added): 33 checks, 0 failed (12 vehicles).

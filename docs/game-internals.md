@@ -1537,6 +1537,18 @@ which REN_C7, SRANGE, MAR_A5, LAN_C5 and DIA_C3 use for their meters. Some missi
   walked (`findvec`), then the pointers to the object (`findu32`).
 - **TheCamera** `0x6F44D0`: +0x30 is the point it follows (the player); it also holds pointers to the player ped
   (+0xE0, +0x350, +0x7F8).
+  - **+0x7F8 = pTargetEntity** (what the camera should follow: the player's vehicle while he drives, else the ped)
+    and **+0xE0 = the active camera's target** (what it does follow). Getting into a car on foot moves both to the
+    car. **Warped from one vehicle straight into another** (`WARP_CHAR_FROM_CAR_TO_COORD` + `WARP_CHAR_INTO_CAR` in
+    one script frame: the trainer's spawn while driving) +0x7F8 moves to the new vehicle but **+0xE0 stays on the old
+    one**, and the camera keeps showing the old car while the player drives off (the user's report, 2026-10-28).
+    `SET_CAMERA_BEHIND_PLAYER` (0x0221) does not fix it; `RESTORE_CAMERA_JUMPCUT` (0x01CF, handler `0x287BD8` ->
+    `FUN_0037C0E8(&TheCamera)` = RestoreWithJumpCut) does: it resets the script camera flags, sets +0x60 / +0x820 /
+    +0x888 to 1 and +0x7F8 from the player's state, and the next frame +0xE0 follows. Found by listing TheCamera's
+    words equal to the ped / vehicle pointers after each spawn (rig, `trainer spawn`).
+  - **+0x888 = m_bLookingAtPlayer**: 1 in normal play on foot and driving, 0 under a script camera
+    (`SET_FIXED_CAMERA_POSITION` + `POINT_CAMERA_AT_POINT`, `POINT_CAMERA_AT_CHAR`), 1 again after `RESTORE_CAMERA`
+    (0x00B6). +0x840 is 1 while a script points the camera; +0x60 / +0x820 are one-frame requests (read back 0).
 - **Current area** (interior): `CGame::currArea` = `0x489F7C`, set by `SET_AREA_VISIBLE` (opcode 0x02EA, handler
   `0x1e31a8`, then `FUN_003cc0d0`). 0 = outdoors. The Fort Baxter save loads with **area 2** (the barracks), so a
   teleport outside must set area 0 first (the user's guess, confirmed by reading the global). VCS has no

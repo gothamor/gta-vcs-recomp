@@ -27,6 +27,7 @@ S = rig.Scm
 PED_HEALTH, PED_VEHICLE, PED_STATE, PED_WEAPONS = 0x4E4, 0x480, 0x8C4, 0x578
 CAR_HEALTH = 0x278
 CLOCK = 0x4CD148
+CAMERA_TARGET = 0x6F44D0 + 0xE0  # TheCamera: what the active camera follows (game-internals.md 12)
 # open streets far apart (the landmarks, docs/TRAINER.md), for the vehicle batches
 SPOTS = [(75.0, 175.0), (-1446.2, -820.2), (571.0, -640.8), (-834.4, 1403.7), (-978.2, -570.1), (351.4, 339.0),
          (-958.2, 85.6), (83.8, -1284.7)]
@@ -180,6 +181,8 @@ class Check:
                 got = struct.unpack("<H", got)[0] if car else -1
                 if not self.driving() or got != model:
                     bad.append((model, names[model], "driving=%s model=%d" % (self.driving(), got)))
+                elif g.u32(CAMERA_TARGET) != car:  # from car to car the camera stayed on the old one (2026-10-28)
+                    bad.append((model, names[model], "camera follows %x, not %x" % (g.u32(CAMERA_TARGET), car)))
                 if n < 3 or vehicles == "all" and n % 15 == 0:
                     self.shot("spawn_%d" % model)
             self.ok("spawn vehicles", not bad, "%d spawned; problems: %s" % (len(ids), bad))
@@ -323,7 +326,8 @@ def main():
     ap.add_argument("--vehicles", default="12", help="all, or how many to sample")
     ap.add_argument("--port", type=int, default=47672)
     a = ap.parse_args()
-    out = a.out or os.path.join(ROOT, "build", "trainer", time.strftime("%Y%m%d-%H%M%S"))
+    # absolute: the game writes the screenshots, from its own working directory
+    out = os.path.abspath(a.out or os.path.join(ROOT, "build", "trainer", time.strftime("%Y%m%d-%H%M%S")))
     os.makedirs(out, exist_ok=True)
     sys.exit(0 if Check(out, a.port).run(a.vehicles) else 1)
 
