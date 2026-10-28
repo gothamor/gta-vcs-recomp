@@ -542,6 +542,16 @@ dropped on uploads (lazy render-target patching).
   mute or pause in the background; presets (Authentic, Enhanced, Widescreen light) and Reset all settings
   (docs/CONTROLS.md, SETTINGS_MENU_WIDESCREEN.md "Player settings"). `tools/controls_check.py`: 21 checks, 0 failed;
   regress step "controls". Defaults unchanged (the old fixed mapping, mouse camera off, vibration as on the PS2).
+- **Music / sound effects / voices volume** (2026-10-28, asked for by the user): Audio > Music and Sound effects are the
+  game's own levels, in step with its pause menu both ways and kept across save loads; Voices scales speech in the
+  native sound driver (game-internals.md 9c). controls_check: 27 checks, 0 failed (levels reach the game and its
+  prefs, a save load keeps them, the pause menu's slider changes the setting, Voices halves a scream's level and 100% is
+  the game's); saves.py ok.
+- [ ] **Load Game hang** (found 2026-10-28 by the controls check, open): after the check's binding / preset / menu /
+  vibration steps in the city, Load Game from the pause menu sat on "Loading..." for ~45 s and then the game thread
+  returned to 0x4548435F from the script VM (ra 0x256164). Same with `VCS_GAME_VOLUME=0` (not the volume code). Not
+  reproduced by any single step (god mode, an explosion, shooting, the key sweep, presets, settings-menu pages, the
+  levels) followed by a load. The check now loads first.
 
 - **Full screen** (2026-10-27, asked for by the user): Display > Window mode (Windowed / Full screen, borderless at
   the desktop's resolution) and Alt+Enter; the cursor hides after 2 s still in full screen; hidden test runs no longer
@@ -595,6 +605,7 @@ dropped on uploads (lazy render-target patching).
 | `VCS_SOUND_REPLAY=<record>`, `VCS_SOUND_REPLAY_OUT=<wav>` | replay recorded sound calls into the native driver, write its output, exit |
 | `VCS_MIN_STEP=x` | independent timing's step floor (default 50/240: the 240 fps ceiling; lower makes an unlimited cap unlimited) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
+| `VCS_GAME_VOLUME=0` | Audio > Music / Sound effects leave the game's own levels alone (no setter hooks, no sync; the reference) |
 | `VCS_INPUT_MAP=0` | the runtime's fixed built-in key / gamepad mapping instead of the player's bindings (`ps2_pad.cpp`; the reference) |
 | `VCS_VSYNC=0\|1\|2` | Vertical sync for one run: off, on, off with tearing allowed |
 | `VCS_SCRIPT_TIMESTEP=0` | mission meters that count per frame stay on the frame rate (game-internals.md 11f; the reference) |

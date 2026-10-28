@@ -415,6 +415,18 @@ The user asked for a trainer like RDR2's (docs/TRAINER.md). Chosen:
 - Models are streamed asynchronously with a time-out rather than `LOAD_ALL_MODELS_NOW`, which froze the game when the
   streaming memory was full.
 
+## 2026-10-28 - Music / effects volume: the game's own levels, kept across loads
+
+The user asked for music, sound effects and voices volume, with the music / effects changes shown in the game's own
+menu. The game has exactly two levels (its pause menu's Music / SFX Volume), so those two settings *are* them rather
+than extra gains on top: one value, two menus. On the PS2 a save carries the levels and a load restores them; here the
+setting wins (every non-menu call of the game's setters gets the player's level), because a PC game keeps its settings
+across saves and the newest save loads at every boot - the save's levels would otherwise undo a change made without
+saving. The levels are percent of the game's 0..127 (linear, as the game's bars are); a pause-menu step is 16, so the
+setting shows the nearest percent and the game keeps its exact level. Voices has no game level: a gain on the
+speech voices in the native driver (linear, under the effects level), 100% bit-exact; with the emulated IOP it does
+nothing.
+
 ## 2026-10-28 - Player settings: bindings in the game layer, the mouse as stick speed, defaults as before
 
 The user asked for flexible settings players can change. Choices:

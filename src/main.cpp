@@ -24,6 +24,7 @@
 #include "game/vcs_movie.h"
 #include "game/vcs_hud.h"
 #include "game/vcs_input.h"
+#include "game/vcs_volume.h"
 #include "platform/platform.h"
 #include "render/presenter.h"
 #include "settings/settings.h"
@@ -417,8 +418,7 @@ namespace
         s.page = "Audio";
         s.section = "Volume";
         s.label = "Master volume";
-        s.help = "Everything the game plays. Music, sound effects and dialogue have their own levels in the game's pause "
-                 "menu (Audio).";
+        s.help = "Everything the game plays, movies included.";
         s.type = Type::Integer;
         s.min = 0;
         s.max = 100;
@@ -426,6 +426,8 @@ namespace
         s.defaultValue = 100;
         s.onChange = applyVolume;
         settings::add(s);
+
+        vcs::volume::registerSettings(); // music / sound effects (the game's own levels) and voices (game/vcs_volume.h)
 
         s = {};
         s.key = "audio.movie_volume";
@@ -749,6 +751,7 @@ int main(int argc, char *argv[])
                                         ui::drawTrainerMenu();
                                         ps2control::setGameInputBlocked(ui::settingsMenuBlocksInput() || ui::trainerMenuBlocksInput());
                                         vcs::input::onHostFrame(ui::settingsMenuOpen() || ui::trainerMenuBlocksInput());
+                                        vcs::volume::onHostFrame();
                                         drawFrameRateCounter();
                                     },
                                     nullptr, nullptr);
@@ -773,6 +776,7 @@ int main(int argc, char *argv[])
         vcs::rig::install(runtime); // control-channel automation commands (debug/rig.h)
         vcs::trainer::install(runtime); // the trainer's control-channel command (game/vcs_trainer.h)
         vcs::input::install();          // the player's bindings feed the pad (game/vcs_input.h)
+        vcs::volume::install(runtime);  // the game's music / effects levels follow the settings (game/vcs_volume.h)
         // setting <key> [value] -> ok <value>: a setting read or changed (a hidden run never writes vcs.ini)
         ps2control::addCommand("setting", [](const std::string &args, ps2control::Reply reply) {
             const size_t space = args.find(' ');

@@ -1233,6 +1233,32 @@ below are module offsets (CDSTREAM loads at IOP 0x1D600 on the emulated IOP); "d
 - Boot to gameplay from the rig card: 4.9-6.1 s with the IOP off, on with the native paths, or fully emulated (the
   game is the limit). IOP time per frame: 0.2 ms off, 0.3-0.4 ms emulated.
 
+### 9c. The game's music / effects levels (2026-10-28)
+
+How it was found: RAM dumps (rig `dump`) before and after steps of the pause menu's sliders (Audio page: Music
+Volume, SFX Volume - 8 bars each; no dialogue level; then Speaker Setup and Radio Station), then a write watch
+(`VCS_WATCH=4cda0c,4cda0e`, `VCS_WATCH_STACK=1`) from boot through a save load and the sliders, then the generated C++
+of every writer and caller.
+- **cSampleManager at 0x4CDA08**: +4 effects level, +5 music level (u8, 0..127; +6 / +7 / +8 = 0x7F, likely the fade
+  levels). Its constructor FUN_0010D718 sets 0x70 / 0x50 (the defaults: 7 and 5 bars). The setters are one store each:
+  FUN_0010E2B8 (+4) / FUN_0010E2C0 (+5), reached through DMAudio (0x514A90) FUN_002A6C10 / FUN_002A6C38. The sound
+  code reads them (0x1C7110 effects, 0x189B54 / 0x2AE9B8 music); the menu draws its bars from them (FUN_002AE958).
+  A slider step is 16; up from 112 the setter's signed-byte test turns 128 into 127.
+- **The menu's prefs**: an object at `*0x48F3D0` (heap, 0x1FB5800 in the rig run) with +0x38 effects, +0x3C music (u32),
+  getters FUN_002AF320 / FUN_002AF310, setters FUN_002AF328 / FUN_002AF318. Saves carry these.
+- **The menu's setters FUN_002FA538 (effects) / FUN_002FA5B0 (music)** (a0 = 0x520D60, a1 = level; a negative byte
+  becomes 0x7F) call DMAudio's setter, then the prefs setter. Callers: the Audio page (FUN_002AEF38: return addresses
+  0x2AEF84 music, 0x2AEF9C effects), the save load FUN_003ADAE0 at its end (0x3ADD88 / 0x3ADDB0, the prefs' values
+  just read from the save by FUN_003ACEF0; at boot too), and FUN_003163D8 (from FUN_003157E0), which sets the defaults
+  0x50 / 0x70. The effects RPC 0xA0F00 is not used for this (no call in play): the levels act on the EE side.
+- `src/game/vcs_volume.cpp` makes them the settings Audio > Music / Sound effects volume: writes both places at the
+  frame kick, takes the Audio page's changes back, and gives every other setter call the player's level (a save load
+  logs `[volume] the game sets the music level 80 (ra=0x3add90): the player's 32 instead`).
+- **Speech** has no level of its own. It plays on effect voices from banks 2 and 0x43 (9a, special sounds), so the
+  native driver scales those voices (Audio > Voices). A voice's volume is sent only when it changes, and a new sound
+  can start on a voice with its old volume: the driver keeps each voice's level as the game set it and re-applies it
+  when the voice's gain changes. People near an explosion scream (`tools/controls_check.py` uses that for speech).
+
 ## 10. Memory card and saves
 
 libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`); files live in `%LOCALAPPDATA%/VCSRecomp/mc0`

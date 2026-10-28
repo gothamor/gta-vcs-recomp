@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -49,6 +50,12 @@ namespace vcs
         constexpr uint32_t kBankBuffer = 0x20000; // the IOP buffer bank data passes through
         constexpr uint32_t kStreamBuffer = 0x40000;
         constexpr uint32_t kMusicThreadId = 13; // the IOP thread id music init returns on the emulated IOP (non-zero = ok)
+
+        // Audio > Voices: the gain (256 = 1, the original) of effect voices playing a special sound (banks 2 and 0x43:
+        // speech and mission dialogue, game-internals.md 9a); a host addition, not in the IRX
+        std::atomic<int32_t> g_speechGain{256};
+        std::atomic<uint32_t> g_speechKeyOns{0}; // speech sounds started (the `soundstate` command)
+        std::atomic<uint32_t> g_speechLevel{0};  // the last speech voice volume set: game's << 16 | after the gain
 
         // First sound of each bank in the sound table (CDSTREAM 0x3B10's constants, module data 0x9FC0)
         constexpr uint32_t kBankFirstSound[kBanks] = {
@@ -279,6 +286,9 @@ namespace vcs
                 m_slotCursor = 0;
                 m_specialSound = m_specialLoad = -1;
                 m_typedSound.fill(-1);
+                m_speech.fill(false);
+                m_voiceLevel.fill({-1, -1});
+                m_voiceGain.fill(256);
                 m_buildingSel = -1;
                 m_buildingSlot = {0x45, 0x45};
                 m_sfxReady = true;
@@ -383,6 +393,9 @@ namespace vcs
                     const int32_t id = blockWord(9 + v), bank = blockWord(9 + kVoices + v);
                     if (id != -1 && bank != -1)
                     {
+                        m_speech[v] = bank == 2 || bank == 0x43;
+                        if (m_speech[v] && (blockWord(3 + core) >> index & 1))
+                            g_speechKeyOns.fetch_add(1, std::memory_order_relaxed);
                         if (bank < 0 || bank >= static_cast<int32_t>(kBanks) || m_bankLoaded[bank] != 1)
                         {
                             blocked[core] |= 1u << index;
@@ -425,13 +438,18 @@ namespace vcs
                     if (rate != -1)
                         m_sd.setParam(entry | 0x200, static_cast<uint16_t>((rate << 12) / 48000));
                     const int32_t volume = blockWord(9 + 6 * kVoices + v), pan = blockWord(9 + 5 * kVoices + v);
+                    const int32_t gain = m_speech[v] ? g_speechGain.load(std::memory_order_relaxed) : 256;
                     if (volume != -1 && pan != -1)
                     {
                         const int32_t left = std::min(((volume * (127 - pan)) / 127) * 2, volume);
                         const int32_t right = std::min(((volume * pan) / 127) * 2, volume);
-                        m_sd.setParam(entry, static_cast<uint16_t>(left * m_sfxVolume));
-                        m_sd.setParam(entry | 0x100, static_cast<uint16_t>(right * m_sfxVolume));
+                        m_voiceLevel[v] = {left * m_sfxVolume, right * m_sfxVolume};
+                        setVoiceVolume(v, entry, gain);
                     }
+                    // the game sends a volume only when it changes: Voices moved, or speech started on a voice whose
+                    // volume stayed, gets the level the game set with the new gain (never at 100%: bit-exact)
+                    else if (gain != m_voiceGain[v] && m_voiceLevel[v][0] >= 0)
+                        setVoiceVolume(v, entry, gain);
                 }
                 for (uint32_t core = 0; core < 2; ++core)
                 {
@@ -497,6 +515,19 @@ namespace vcs
                 m_loading = m_loadingBank = static_cast<int32_t>(bank);
                 loadBank();
                 return 1;
+            }
+
+            void setVoiceVolume(uint32_t v, uint32_t entry, int32_t gain) // host: m_voiceLevel[v] with Voices' gain
+            {
+                m_voiceGain[v] = gain;
+                m_sd.setParam(entry, static_cast<uint16_t>(m_voiceLevel[v][0] * gain / 256));
+                m_sd.setParam(entry | 0x100, static_cast<uint16_t>(m_voiceLevel[v][1] * gain / 256));
+                if (m_speech[v])
+                {
+                    const int32_t level = std::max(m_voiceLevel[v][0], m_voiceLevel[v][1]);
+                    g_speechLevel.store(static_cast<uint32_t>(level) << 16 | static_cast<uint32_t>(level * gain / 256),
+                                        std::memory_order_relaxed);
+                }
             }
 
             int32_t maxVolume(int32_t bank) const
@@ -1283,6 +1314,9 @@ namespace vcs
             uint32_t m_specialLsn = 0;                   // 0x81A0
             int32_t m_loading = -1, m_loadingBank = -1;  // 0x8110, 0x8114
             int32_t m_slotCursor = 0;                    // 0x8118
+            std::array<bool, kVoices> m_speech{};        // the voice plays a special sound (host: Audio > Voices)
+            std::array<std::array<int32_t, 2>, kVoices> m_voiceLevel{}; // host: volume L / R as the game set it (-1: none)
+            std::array<int32_t, kVoices> m_voiceGain{};  // host: the gain it was set with (256 = 1)
             int32_t m_specialSound = -1, m_specialLoad = -1; // 0x811C, 0x8120
             std::array<int32_t, 5> m_typedSound{};       // 0x8124
             int32_t m_specialType = 0xFF;                // 0x8138
@@ -1450,6 +1484,14 @@ namespace vcs
             std::_Exit(0);
         }
     }
+
+    void setSpeechVolume(float gain)
+    {
+        g_speechGain.store(static_cast<int32_t>(std::clamp(gain, 0.0f, 1.0f) * 256.0f + 0.5f), std::memory_order_relaxed);
+    }
+
+    uint32_t speechKeyOns() { return g_speechKeyOns.load(std::memory_order_relaxed); }
+    uint32_t speechLevel() { return g_speechLevel.load(std::memory_order_relaxed); }
 
     bool installSoundHooks(PS2Runtime &)
     {
