@@ -32,6 +32,7 @@ namespace vcs::trainer
         constexpr uint32_t kClockHours = 0x004CD148u;     // CClock: hours, minutes (bytes)
         constexpr uint32_t kCurrArea = 0x00489F7Cu;       // CGame::currArea (0 outdoors)
         constexpr uint32_t kMissionRunning = 0x004CD3E7u; // u8, set by LOAD_AND_LAUNCH_MISSION_INTERNAL
+        constexpr uint32_t kActiveScripts = 0x004CD3C4u;  // CRunningScript active list (+0 next, +0x10 IP)
         constexpr uint32_t kTextTable = 0x0048A2A0u;      // -> -> {entries, count, ...}; entry {u32 UTF-16 text, char key[8]}
         constexpr uint32_t kModelInfos = 0x00486518u;     // -> CModelInfo::ms_modelInfoPtrs
         constexpr uint32_t kModelGameName = 0x158u;       // vehicle model info: the game name / text key (8 chars)
@@ -270,6 +271,24 @@ namespace vcs::trainer
         std::vector<std::string> g_missionKeys; // per mission index: its text name (LOAD_MISSION_TEXT), "" if none
         std::atomic<bool> g_missionRunning{false};
         std::atomic<int> g_vehicleModel{0}; // the model the player drives (as of the last frame kick), 0 on foot
+
+        // Last Stand (DIA_C5) launched from here (game-internals.md 11g). Its pass plays the final cutscene and leaves the
+        // screen faded out for the credits - which the story starts only when every chapter is done. Out of story order
+        // nothing fades it in again ("Loading..." over black for good), so the trainer rolls the game's credits itself.
+        struct Finale // game thread
+        {
+            bool armed = false;    // the launch is queued
+            bool started = false;  // the mission has run
+            bool passed = false;   // its script was seen in the final cutscene
+            uint32_t endTime = 0;  // game ms when it ended
+            uint32_t ped = 0;
+        };
+        Finale g_finale;
+        constexpr const char *kFinaleKey = "DIA_C5";
+        constexpr uint32_t kCutsceneFrom = 0x00022F5Eu, kCutsceneTo = 0x00022F97u; // main script: load, play, clear it
+        constexpr uint32_t kCredits = 0x00024DC3u;    // main script: the credits subroutine (its locals 0..42)
+        constexpr uint32_t kCreditsReturn = 0x00016E90u; // main script: a TERMINATE_THIS_SCRIPT to return onto
+        constexpr uint32_t kCreditsDelayMs = 5500u;   // the story waits 5 s (WAIT 5000) after the mission's end
 
         // The side jobs the launcher offers (their script names; the game's text names most of them).
         // Each runs only with the player in its vehicle ("You have 39 seconds to return to your vehicle"): the
@@ -726,6 +745,58 @@ namespace vcs::trainer
             }
         }
 
+        // Every frame while a launched Last Stand is armed (g_finale). The pass is the final cutscene: the mission script
+        // in the main script's cutscene subroutine (it calls no other). The story's own end (main script 0x2F9C9, after
+        // each mission) waits 5 s and calls the credits when chapter $G82 is 2, $G296 (credits seen) is 0 and the
+        // chapter flags $G16 $G19 $G1A $G1B $G1D are 1; then it is left to the story.
+        void watchFinale(uint8_t *ram, uint32_t ped, uint32_t time, bool running)
+        {
+            if (!g_finale.armed)
+                return;
+            if (ram[kMissionRunning])
+            {
+                g_finale.started = true;
+                for (uint32_t s = rd32(ram, kActiveScripts), n = 0; s && n < 256 && !g_finale.passed; s = rd32(ram, s), ++n)
+                {
+                    const uint32_t ip = rd32(ram, s + 0x10);
+                    g_finale.passed = ip >= kCutsceneFrom && ip <= kCutsceneTo;
+                }
+                return;
+            }
+            if (!g_finale.started)
+                return;
+            if (!g_finale.passed) // failed, or a game was loaded
+            {
+                g_finale = {};
+                return;
+            }
+            if (!g_finale.endTime)
+            {
+                g_finale.endTime = time;
+                g_finale.ped = ped;
+                return;
+            }
+            if (time < g_finale.endTime || ped != g_finale.ped || !alive(ram, ped)) // a load, a new game
+            {
+                g_finale = {};
+                return;
+            }
+            if (!running || time - g_finale.endTime < kCreditsDelayMs)
+                return;
+            g_finale = {};
+            const uint32_t space = rd32(ram, kScriptSpacePtr);
+            const auto global = [&](uint32_t n) { return static_cast<int32_t>(rd32(ram, space + 4 * n)); };
+            if (global(0x82) == 2 && global(0x296) == 0 && global(0x16) == 1 && global(0x19) == 1 && global(0x1A) == 1 &&
+                global(0x1B) == 1 && global(0x1D) == 1)
+                return;
+            // a script of its own at the credits, returning onto a TERMINATE_THIS_SCRIPT of the main script; both checked
+            const auto opcodeAt = [&](uint32_t ip) { return static_cast<uint16_t>(rd32(ram, space + ip) & 0xFFFF); };
+            if (opcodeAt(kCredits) != 0x0004 || opcodeAt(kCreditsReturn) != TERMINATE)
+                return post("Last Stand out of story order: the credits are not where expected");
+            if (vcs::rig::startScriptAt(ram, kCredits, "credits", kCreditsReturn))
+                post("Last Stand out of story order: the game's credits");
+        }
+
         std::vector<std::string> words(const std::string &args)
         {
             std::istringstream in(args);
@@ -897,6 +968,8 @@ namespace vcs::trainer
             vcs::rig::cancelCodeScript(ram, g_loading.script);
             g_loading.requested = false;
         }
+        if (inGame)
+            watchFinale(ram, ped, time, running);
         if (!running || !inGame || !g_pending.empty())
             return;
         ++g_runFrames;
@@ -1264,11 +1337,14 @@ namespace vcs::trainer
                 vehicle = j.vehicle;
         if (vehicle && !missionRunning() && g_vehicleModel != vehicle) // not in the job's vehicle: one to do it in
             spawnVehicleAs(vehicle, true);
-        queue([index, name, vehicle](uint8_t *ram, Scm &code, std::string &notice) {
+        const bool finale = index < static_cast<int>(g_missionKeys.size()) && g_missionKeys[index] == kFinaleKey;
+        queue([index, name, vehicle, finale](uint8_t *ram, Scm &code, std::string &notice) {
             if (ram[kMissionRunning])
                 return (notice = "A mission is running: finish or fail it first", false);
             if (vehicle && !driving(ram, rd32(ram, kPlayerPed)))
                 return (notice = "Could not get into the job's vehicle", false);
+            if (finale)
+                g_finale = {true};
             code.op(LOAD_AND_LAUNCH_MISSION_INTERNAL).i(index);
             notice = "Mission: " + name;
             return true;

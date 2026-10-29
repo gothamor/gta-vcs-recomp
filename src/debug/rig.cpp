@@ -435,6 +435,19 @@ namespace vcs::rig
         }
     }
 
+    uint32_t startScriptAt(uint8_t *ram, uint32_t ip, const char *name, uint32_t returnIp)
+    {
+        if (!rd32(ram, kScriptSpacePtr) || !rd32(ram, kIdleScripts))
+            return 0;
+        const uint32_t s = startScript(ram, ip, name);
+        if (s && returnIp) // the GOSUB stack (+0x14) holds a GOSUB's return IP as it is; +0x204 (u16) is its depth
+        {
+            wr32(ram, s + 0x14, returnIp);
+            ram[(s + 0x204) & kRamMask] = 1;
+        }
+        return s;
+    }
+
     uint32_t startCodeScript(uint8_t *ram, const uint8_t *code, size_t bytes, const char *name)
     {
         const uint32_t space = rd32(ram, kScriptSpacePtr);

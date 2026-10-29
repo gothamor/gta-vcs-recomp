@@ -1386,7 +1386,15 @@ below (e.g. 0x0023 terminates, 0x0289 loads a mission, 0x0238 names a script).
 `CRunningScript` (0x218 bytes, pool around `0x738948`): +0 next, +4 prev, +8 id, +0x10 IP, +0x14 16-word stack
 (gosub), +0x54 0x6A-word local variables (timers at locals 0x68 / 0x69), +0x1FC local frame base, +0x200 wake
 time, +0x208 active, +0x20A mission script, +0x20C NOT flag of the current condition, +0x20D, +0x20F name (8
-chars; `Init` writes `"id%02i"`), +0x217 "is the mission" (cleared by terminate).
+chars; `Init` writes `"id%02i"`), +0x217 "is the mission" (cleared by terminate). **The stack** (read from a running
+mission's slot, 2026-10-29): a GOSUB pushes its return IP as it is, a CALL a packed word (not a plain IP: the caller's
+frame goes with it, e.g. 0x0884077D); **+0x204 (u16) is the depth**, and a CALL adds its frame offset to +0x1FC.
+Setting IP, depth 1, frame 0 and local 0 between frames (rig `pause on`, `poke`) puts a mission back at its state
+dispatch in another state - how `tools/finale_check.py` skips Last Stand to its roof (11g). **A CALL from rig
+bytecode does not come back**: the return IP of code in a slot's locals lies outside ScriptSpace (11d: it works by
+32-bit wrap-around) and does not survive the packing - the subroutine's RETURN went on at 0x17CFFE, garbage, and the
+game loop stopped answering. To run a main-script subroutine the host starts a script at it with a GOSUB stack of one
+entry, a TERMINATE_THIS_SCRIPT of the main script (`vcs::rig::startScriptAt`).
 
 `FUN_00255188(id)` returns the index of `id` in that model-id table (count at 0x4CD3CC, table at *0x487420) or -1, by a
 linear scan; `FUN_0025A348` calls it for each entry of a list every 30 s of game time (millions of iterations: a
@@ -1528,6 +1536,46 @@ which REN_C7, SRANGE, MAR_A5, LAN_C5 and DIA_C3 use for their meters. Some missi
   found in its mission as the game decodes it).
 - The mission is read to ScriptSpace + `*(0x4CD3D8)` (an IP; 0x3CAE3, right after the main section) by
   LOAD_AND_LAUNCH_MISSION_INTERNAL (0x3B2208), which starts it there; mission-relative labels resolve against it.
+
+### 11g. The end: Last Stand and the credits (2026-10-29)
+
+The user's report: in Last Stand, once Vic reaches the roof and the final cutscene has played, the game goes to a loading
+screen and never comes out. Read from the disassembly (IPs below are MAIN.SCM IPs as the disassembler prints them; a
+mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
+
+- **Last Stand** is mission 100, `DIA_C5` (text `DIA_C05`; starts at IP 0x1C291E). Local 0 is its state, 1..12, run by
+  a dispatch at 0x1C6202 (one GOSUB per state): 11 (0x1C945C) the roof scene with Martinez and Mendez (`SDAC5EA`..`EK`,
+  scripted, camera by `SET_FIXED_CAMERA_POSITION`), 12 (0x1C9DF1) the fight, which ends 2.5 s after both `$G16CA` /
+  `$G16CB` are dead with state 0 -> the pass at 0x1CA12A: pickups removed, both deleted, `CALL 0x24137 (55)` - the main
+  script's mission-cutscene helper, whose table entry 55 is cutscene `DIA_C5` (audio `\AUDIO\CUTSCENE\DIAC5B.VB`, Lance
+  arriving on the roof, `MDAC501`..`522`, about 95 s) - then the mission-passed subroutine `0x2FB30 ("DIA_C05", 5000)`
+  and the cleanup. The helper waits in **0x22F5E..0x22F97** (`HAS_CUTSCENE_LOADED`, `START_CUTSCENE`,
+  `HAS_CUTSCENE_FINISHED`, `CLEAR_CUTSCENE`); only the pass path calls it. The cutscene ends with the screen faded out.
+- **The credits** are the main-script subroutine **0x24DC3** (CALLed; locals 0..22, its callees' frames up to local
+  42): `$G2AC` (on a mission) = 1, the clock to 21:00, the player hidden and frozen at (269.5, -1158.7, 10.9),
+  widescreen, no HUD, ped and car density x10, `WAIT 2000`, `PLAY_END_OF_GAME_TUNE`, `START_CREDITS`, a loop of
+  camera GOSUBs over traffic until `ARE_CREDITS_FINISHED` (several minutes), then everything back, the player at
+  (-948.0, 1336.7, 10.1) below the Mendez building, `DO_FADE 1000 1` - the only fade in after the cutscene.
+- **Who calls them**: after every mission `storysc` (0x2FC69) runs `0x2F9C9`, the story's chapter step: chapter `$G82`
+  0 / 1 advance when their flags are set, and for chapter 2 with `$G296` (credits seen) 0 and the chapter flags `$G1B
+  $G16 $G1A $G1D $G19` all 1 it waits 5 s (`WAIT 5000`), CALLs the credits, then sets `$G296` and `$G104` and calls
+  four more story subroutines. The flags are set only by the story's own progression (0x2AA16..0x2AA52,
+  0x39A70..0x39C9F). Nothing else references 0x24DC3 (a search of MAIN.SCM's bytes for the label found that one CALL).
+- **The "loading screen"**: with Last Stand played out of story order - the trainer's mission launcher, the user's
+  newest save being `LOU_A3` - the check fails, nothing fades in, and the game keeps running behind the faded screen
+  (clock, scripts, the world: `storysc` back in its idle loop at 0x2FCD2). Each frame it draws only the copy of FBP
+  140 into FBP 0, a black full-screen quad and the text **"Loading..."** (key `LOADIN2`, the frontend's string next to
+  `WRONGCD` / `NOCD` / `CDERROR`) at the top right - an F12 dump of the stuck frame; the LoadingScreen function
+  (FUN_0021E170) and the menu draw are not called. So it is the game's own picture, which the original would show the
+  same way. With the flags set (rig `poke` of the globals) the same run rolls the credits and ends at the building.
+- The fix is in the trainer (docs/TRAINER.md): a Last Stand it launched that passes (its script seen in 0x22F5E..
+  0x22F97) and ends without the story's condition gets the credits 5.5 s after the end: a script `credits` started at
+  0x24DC3 whose RETURN lands on the main script's TERMINATE_THIS_SCRIPT at 0x16E90 (11b); story globals are left as
+  they are. `tools/finale_check.py` plays the end both ways (`--story`).
+- How it was found: the mission's state from its slot (rig `peek`; the scripts list showed it waiting in 0x22F8E for
+  the cutscene's 95 s), the frames still advancing and `CTimer`'s ms moving (not a hang), the active scripts after the
+  end (no credits script), the main script's references to `START_CREDITS`, the raw label search, the LoadingScreen /
+  menu hooks traced (not called), and the F12 draw log.
 
 ## 12. Player, areas and the world
 

@@ -31,6 +31,11 @@ namespace vcs::rig
     // outputs go to locals 0..0x2F) as a new script of the game's script VM (game-internals.md 11d). Returns the
     // script's address, 0 when the engine is not running or no slot is free.
     uint32_t startCodeScript(uint8_t *ram, const uint8_t *code, size_t bytes, const char *name);
+    // Game thread, between frames: a new script at `ip` in the game's own code (an IP into ScriptSpace). With
+    // `returnIp`, as if GOSUBed from there: a subroutine's RETURN goes on at `returnIp` (e.g. a TERMINATE_THIS_SCRIPT).
+    // Our code cannot be the return: a CALL keeps its return IP packed with the frame, and an IP outside ScriptSpace
+    // (startCodeScript's) comes back as garbage (game-internals.md 11b).
+    uint32_t startScriptAt(uint8_t *ram, uint32_t ip, const char *name, uint32_t returnIp = 0);
     // the script started by startCodeScript has not terminated yet: active, and its IP still in the slot's code (the
     // game reuses the slot once it has, and a save load fills the slots with the save's scripts)
     bool scriptActive(const uint8_t *ram, uint32_t script);

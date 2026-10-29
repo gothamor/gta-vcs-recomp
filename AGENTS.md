@@ -73,6 +73,7 @@ python tools/soak.py [OUT] --hours 3                          # hours of autodri
 python tools/shakedown.py [OUT]                               # mission 50: cutscene + shop entry (the "Loading..." hang)
 python tools/soundcheck.py all OUT [--mission N]             # native sound vs the emulated IOP: record, replay, compare
 python tools/trainer_check.py [OUT] [--vehicles all]          # every trainer feature, checked in the game's memory
+python tools/finale_check.py [OUT] [--story] [--full]         # Last Stand's end from the trainer: final cutscene, credits
 python tools/controls_check.py [OUT]                          # bindings, presets, reset, vibration, volume levels; menu screenshots
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
@@ -144,6 +145,9 @@ card copies to start from (never the user's live card).
 - Load Game stuck on "Loading..." then a return to text (`0x4548435F`) from the script VM: host code took a game
   script for one of its own (a remembered script slot the load had refilled; game-internals.md 11d, `[rig] script
   slot` in the log).
+- "Loading..." over black after a mission's last cutscene, the game running behind it (clock and scripts move): the
+  screen left faded out for a script that never comes - Last Stand out of story order waits for the credits
+  (game-internals.md 11g). F12's draw log shows the black quad and the text; the active scripts show who is missing.
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs

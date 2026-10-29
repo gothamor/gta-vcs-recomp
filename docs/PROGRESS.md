@@ -548,6 +548,16 @@ dropped on uploads (lazy render-target patching).
       The tools no longer set it either (they run the exe's own defaults), and the exe is now `build/vcs.exe` with
       its DLLs and vcs.ini (DECISIONS.md 2026-10-29). Fort Baxter gameplay with no PS2X_* / VCS_* set: gs_draws 0,
       vu1_programs 0, native sound, emulated IOP off, render worker on, 60 fps at the default cap.
+- [x] Last Stand (DIA_C5, the story's last mission): after the roof and the final cutscene, "Loading..." over black for
+      good (user report 2026-10-29) - **fixed 2026-10-29** in the trainer. Not a hang: the game ran on behind a screen
+      left faded out for the credits, which the story starts only when every chapter is done; the mission had been
+      started from the trainer's list (the user's newest save is LOU_A3), so nothing faded it in. "Loading..." is the
+      game's own text over the fade (F12 draw log), the same on a PS2. The trainer now rolls the game's credits after a
+      Last Stand it launched (game-internals.md 11g, TRAINER.md); story flags untouched. A first version CALLed the
+      credits from trainer bytecode: the CALL's packed return IP cannot point outside ScriptSpace, the RETURN went to
+      garbage and the game loop stopped - now a script of its own at the subroutine (`vcs::rig::startScriptAt`). Check:
+      `python tools/finale_check.py --full` (9 checks, 0 failed: credits, back below the Mendez building, faded in) and
+      `--story` (the story's own credits, one copy only).
 
 ## Phase 6 - enhancements
 

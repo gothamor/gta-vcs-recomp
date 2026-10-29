@@ -101,6 +101,14 @@ The switches are not saved: every start is the original game (DECISIONS.md 2026-
 - With a wanted level the police pull the player out of a stopped vehicle, spawned or not.
 - A mission started out of turn plays as usual; passing it sets what passing it sets, and saving afterwards keeps
   that (the story's own order may then be odd). A running mission cannot be cancelled from the trainer.
+- **Last Stand** (the story's last mission) ends with its final cutscene and the screen faded out for the credits,
+  which the story starts only once every chapter is done (game-internals.md 11g). Launched from here before that,
+  nothing would fade the screen in again - the game's "Loading..." over black for good (the user's report,
+  2026-10-29). So when a Last Stand launched from the trainer passes and the story does not roll the credits, the
+  trainer runs the game's own credits subroutine (main script 0x24DC3, as a script of its own named `credits`) 5.5 s
+  after the end, as the story would; at
+  their end the player is back in control below the Mendez building. Story flags are not touched (no "credits
+  seen", no chapter change). `python tools/finale_check.py [--story] [--full]` plays the end.
 - Boats and planes appear where the player stands, on land too; helicopters and the Airliner can be flown.
 - The developer performance overlay (F3) and the trainer share the top left corner.
 
@@ -115,3 +123,7 @@ script list while paused; the menu opened and a row toggled with keys while the 
 mission lists, a side job launched on foot (he ends up in its vehicle, the job running) and a second launch refused.
 2026-10-26: 30 checks, 0 failed (all 110 vehicles); with missions 33 checks, 0 failed. 2026-10-28 (camera check
 added): 33 checks, 0 failed (12 vehicles).
+
+`python tools/finale_check.py [OUT] [--story] [--full]` (~5 min, `--full` ~15): Last Stand launched from the trainer,
+skipped to its roof, the fight won, then the final cutscene, the mission's end and the credits - started by the trainer,
+or with `--story` (the chapter flags set) by the story itself and only once; `--full` waits for the credits' end.
