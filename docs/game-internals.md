@@ -614,6 +614,16 @@ calls (`VCS_TRACE_IM2D=<n>`, `VCS_TRACE_IM2D_MARKERS=5`):
   FUN_0025cd98 (messages / text when shown); the frame's display list goes out after (FUN_002723e8).
 - The radar map is masked to its circle by **depth**: its HUD draws are depth-tested and their z matters.
 
+**Weapon icon and ammo count** (2026-10-29, FUN_0031f478, called from CHud::Draw; decompiled, Im2D vertices with
+`VCS_TRACE_IM2D`). The layout is the PSP's, in 480x272 units scaled by 4/3 x 1.647: the icon is a 72x72 quad
+(FUN_003a03a8: centre in f12/f13, half sizes in f15/f16) over the rect 416..470 x 16..60 (465 with FUN_002af658), at
+x 554..626. The ammo is text in rects: a single number centred in 411..462; "total-clip" as the total right-aligned in
+414..438 (justify 0x14), the separator centred in 438..444 (0x12; "." with x - 4 for weapon types 0x22 / 0x23) and the
+clip left-aligned from 444 (0x11). The icon texture's dark box is not centred in its quad: it covers about u 0.06..0.70
+(centre ~436.5 PSP units, where the single number is centred), so the separator sits at ~63% of the box's width and a
+short total ("95-29") looks right of centre. **The PS2 original does the same** (a PS2 capture on Grand Theft Wiki's
+HUD page, "9993-6": separator at ~65%); not a port bug.
+
 The **16:9 weapon-icon bug** (the icon at the right edge, away from its ammo count): the renderer's widescreen placement
 treats far-plane 2D as HUD, and the icon is not at the far plane. Fixed at the source: from CHud::Draw to the frame's
 end, Im2D primitives drawn with the depth test off get the HUD's z (`VCS_HUD_RW=0` = off).
