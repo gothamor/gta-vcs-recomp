@@ -708,6 +708,7 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_GATHER=0` / `verify` | bilinear game textures through four loads with the wrap per tap (before 2026-10-30) / both paths, a pixel whose texels differ drawn magenta |
 | `PS2X_GPU_TIMING=1` | GPU time per frame by marker (D3D11 timestamp queries; a marker per draw, named by kind, target and texture), every 5 s |
 | `PS2X_RHI_LOG_CREATES=1` | each texture of 256x256 or more as it is created (a target re-created every frame shows as a stream) |
+| `PS2X_HW_RT_REUSE=0` | render targets re-created as before 2026-10-30: a new texture at every drop and growth, FBP 420 scaled by each draw's width |
 | `VCS_FPS=60` | 60 fps: the game's limiter waits one VBlank a frame instead of two (menu: Frame rate) |
 | `PS2X_HW_FRAME=WxH` | the native frame's size whatever the window (tests) |
 | `PS2X_HW_DUMP_ALLVERTS=1` | the F12 draw log prints every vertex of every draw |

@@ -331,10 +331,24 @@ real part of the rest and stays.
 Away from the dust the GPU frame at 3x is unchanged (6-7 ms). What is left is the fill itself: ~9 ms for ~206 Mpixels with
 the exact Z; anisotropic filtering (the hardware's sampling, an option) or a lower internal resolution take it lower.
 
-**Seen on the way, not fixed here:** the effect buffers FBP 420 / 384 are re-created ~4 times every frame, helicopter or
+**Seen on the way, fixed after** (below): the effect buffers FBP 420 / 384 were re-created ~4 times every frame, helicopter or
 not (game-internals.md 6j: a CLUT upload inside them drops both; FBP 420 then flips between the reflection map's window
 scale and the bloom write-back's integer scale) - new textures of up to 1536x1536 at 3x, each with a rescaling blit.
 `PS2X_RHI_LOG_CREATES=1` shows them.
+
+**The effect buffers' re-creation** (the same day; `PS2X_HW_RT_REUSE=0` = before). What a target holds is unchanged -
+the drop stays, a re-made target starts cleared as before:
+- one scale per FBP: any windowScale role at the FBP (FBP 420's reflection map) scales every draw into it, the native
+  bloom's write-back (width 4) included - no flip, no rescaling blit;
+- a dropped or outgrown colour target's texture is kept (up to 8) and taken by the next target of its size, cleared;
+- a dropped target is re-made at the size it had, not grown again a step at a time (a copy each).
+
+Result (3x 16:9, MSAA 2x, the helicopter run, two alternating rounds): `gs target` textures created per run ~2,000 (the
+log's cap, reached within seconds) -> 7, all at start-up; the main thread's submit time ~1.1 -> ~1.05 ms before the
+helicopter, ~1.85 -> ~1.6 ms with it; 60 fps either way. A clean-up more than a speed-up on this machine: the
+allocations were cheap here, but they were ~200 a second of up to 9 MB each. Checked: the evening step of
+`tools/regress.py` (12:00 / 20:00 / 21:00 at the hospital, at 3x: no black frames), reference scenes reuse off / on at
+1x and 3x 16:9 (below).
 
 ## Next
 

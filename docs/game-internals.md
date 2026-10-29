@@ -1082,7 +1082,13 @@ Seen on the way (not the helicopter's doing - the same before it arrives, every 
 buffers FBP 420 and 384 are re-created ~4 times a frame. A 16x16 CLUT upload at block 13588 (page 424, inside both
 buffers' pages) drops both targets every frame (`PS2X_HW_LOG_DROPS=1`); FBP 420 is then made at the window scale for
 the reflection map's 128-wide draws (role windowScale, 4.0 x 3.0 at 3x 16:9), regrown at 3x for the bloom's write-back
-(fbw 4), and back again - each a new texture plus a rescaling blit (`PS2X_RHI_LOG_CREATES=1` lists them).
+(fbw 4), and back again - each a new texture plus a rescaling blit (`PS2X_RHI_LOG_CREATES=1` lists them). The CLUT is only
+the first of many: with patching on (`PS2X_HW_PATCH_TARGETS=1`, every upload kept in the target) ~75 uploads a frame
+land in the pages of FBP 420 / 384 - the game streams textures into its effect buffers' memory, which is why patching
+them all costs so much and why they are dropped. Fixed 2026-10-30 without changing what a target holds (PERFORMANCE.md section 15): one scale per FBP (any
+windowScale role there), a dropped or outgrown target's texture reused by the next target of its size (cleared as a new
+one), a dropped target re-made at the size it had. The drop itself stays (the reflection map starts from cleared each
+frame, as before).
 
 ## 7. Textures: `.XTX`
 

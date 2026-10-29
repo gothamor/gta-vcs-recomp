@@ -139,7 +139,9 @@ point at (-925, 1175) classed "water" this run - the same fall, landing in a wat
 - **The reflection map at the window's resolution**: with "Internal resolution: Match window" it takes the frame's
   scale (1080p: 384 x 309 texels instead of 128 x 128) - it is only ever sampled (vehicles' paint), never copied 1:1;
   kept at 1x when the GS bloom shares its memory (`PS2X_HW_POSTFX` without b) and with
-  `PS2X_HW_REFLECTION_SCALE=0`. At 1x nothing changes. The reflection is faint by design (the game blends it in at
+  `PS2X_HW_REFLECTION_SCALE=0`. At 1x nothing changes. (2026-10-30: the scale goes by the FBP, not the draw's width -
+  the native bloom's write-back into FBP 420 at width 4 had flipped the target back to the integer scale every frame;
+  PERFORMANCE.md section 15.) The reflection is faint by design (the game blends it in at
   ~5%), so the picture changes little.
 - **The radar** needed nothing: a frame dump at Fort Baxter shows it drawn straight into the HUD layer from 128x128 T4
   tile textures under a scissor - at the window's resolution already (game-internals.md 6f corrected: the 128x128 at

@@ -52,6 +52,15 @@ namespace
                 return &g_targetRoles[i];
         return nullptr;
     }
+    // [gta-recomp] any role at fbp (whatever its width) wants the window's scale
+    bool windowScaleAt(uint32_t fbp)
+    {
+        const uint32_t n = g_targetRoleCount.load(std::memory_order_acquire);
+        for (uint32_t i = 0; i < n; ++i)
+            if (g_targetRoles[i].fbp == fbp && g_targetRoles[i].windowScale)
+                return true;
+        return false;
+    }
 }
 
 namespace
@@ -437,6 +446,16 @@ namespace
         static const bool on = std::getenv("PS2X_HW_LOG_DROPS") != nullptr;
         return on;
     }
+    // [gta-recomp] PS2X_HW_RT_REUSE=0: render targets re-created as before - a new texture at every drop and growth, the
+    // reflection map's FBP scaled by each draw's width (HwBackend::makeTarget, scaleFor)
+    bool reuseTargets()
+    {
+        static const bool on = [] {
+            const char *e = std::getenv("PS2X_HW_RT_REUSE");
+            return !(e && e[0] == '0');
+        }();
+        return on;
+    }
     // [gta-recomp] PS2X_GPU_TIMING (the RHI's GPU timer): a marker around each draw, named by its kind and target
     bool gpuTimingMarkers()
     {
@@ -749,7 +768,7 @@ namespace
                     break;
                 case CmdType::RtDrop:
                     endPass();
-                    m_rts.erase(f.rtDrops[c.index]);
+                    dropRt(f.rtDrops[c.index]);
                     m_hud.erase(f.rtDrops[c.index]);
                     break;
                 case CmdType::RtUpload:
@@ -1028,7 +1047,10 @@ namespace
 
         // the picture's targets (640 wide: the drawn frame, the shown copy, the Z buffer) take the native frame's scale;
         // [gta-recomp] so do the targets the game names windowScale (gsHwSetTargetRole: the reflection map), unless the GS
-        // bloom draws into the same memory (its look is its 1x buffers)
+        // bloom draws into the same memory (its look is its 1x buffers). One scale per FBP (the GPU target is one per FBP):
+        // the native bloom's write-back into FBP 420 at width 4 takes the reflection map's scale too - by its own width's
+        // role it flipped the target between the two scales, a new texture and a rescaling blit each time, several times a
+        // frame (PS2X_HW_RT_REUSE=0: by the draw's width as before)
         Scale scaleFor(uint32_t fbp, uint32_t fbw) const
         {
             if (m_frameScale.x > 0.0f && fbw == 10u)
@@ -1038,8 +1060,13 @@ namespace
                 return !(e && e[0] == '0');
             }();
             if (m_frameScale.x > 0.0f && roles && (postNative() & 1u))
-                if (const TargetRole *r = targetRole(fbp, fbw); r && r->windowScale)
+            {
+                if (reuseTargets() ? windowScaleAt(fbp) : [&] {
+                        const TargetRole *r = targetRole(fbp, fbw);
+                        return r && r->windowScale;
+                    }())
                     return m_frameScale;
+            }
             return {static_cast<float>(m_scale), static_cast<float>(m_scale)};
         }
         // [gta-recomp] MSAA (GSHwOptions::msaa): the picture's targets and their depth buffers are multisampled; reads
@@ -1158,7 +1185,23 @@ namespace
             d.format = depth ? rhi::Format::D32F : rhi::Format::RGBA8;
             d.usage = depth ? rhi::UsageDepth : (rhi::UsageRenderTarget | rhi::UsageSampled);
             d.name = depth ? "gs depth" : "gs target";
-            auto t = m_dev.createTexture(d);
+            // [gta-recomp] a colour target of this size given back by a drop or a growth (spareTarget), cleared below like
+            // a new one: VCS drops its effect buffers every frame (a CLUT uploaded into them), and each re-creation was a
+            // new texture of up to 1536x1536 at 3x
+            std::unique_ptr<rhi::Texture> t;
+            if (!depth && reuseTargets())
+                for (auto it = m_spareTargets.begin(); it != m_spareTargets.end(); ++it)
+                {
+                    const rhi::TextureDesc &sd = (*it)->desc();
+                    if (sd.width == d.width && sd.height == d.height && sd.samples == d.samples)
+                    {
+                        t = std::move(*it);
+                        m_spareTargets.erase(it);
+                        break;
+                    }
+                }
+            if (!t)
+                t = m_dev.createTexture(d);
             endPass();
             rhi::PassDesc p;
             p.name = "gs target clear";
@@ -1203,14 +1246,46 @@ namespace
                 blit(old, {0.0f, 0.0f, 1.0f, 1.0f}, *grown.color, 0, 0, same ? ow : px(static_cast<float>(rt.w), s.x),
                      same ? oh : px(static_cast<float>(rt.h), s.y), !same, false);
             }
+            spareTarget(std::move(rt.color)); // [gta-recomp] its texture for the next target of its size
             rt = std::move(grown);
         }
 
         Rt &rtFor(uint32_t fbp, uint32_t fbw, uint32_t minH)
         {
             Rt &rt = m_rts[fbp];
-            growRt(rt, std::max<uint32_t>(fbw, 1u) * 64u, std::max<uint32_t>(minH, 512u), scaleFor(fbp, fbw), samplesFor(fbw));
+            uint32_t w = std::max<uint32_t>(fbw, 1u) * 64u, h = std::max<uint32_t>(minH, 512u);
+            const Scale s = scaleFor(fbp, fbw);
+            // [gta-recomp] re-made after a drop: at the size it had (the frame grows it there anyway, a copy at each step)
+            if (!rt.color && reuseTargets())
+                if (auto it = m_droppedSize.find(fbp); it != m_droppedSize.end() && it->second.scale == s)
+                {
+                    w = std::max(w, it->second.w);
+                    h = std::max(h, it->second.h);
+                }
+            growRt(rt, w, h, s, samplesFor(fbw));
             return rt;
+        }
+
+        // [gta-recomp] a colour target no longer used (dropped, outgrown) kept for makeTarget; a few, the oldest let go
+        void spareTarget(std::unique_ptr<rhi::Texture> t)
+        {
+            if (!t || !reuseTargets() || t->desc().format != rhi::Format::RGBA8)
+                return;
+            m_spareTargets.push_back(std::move(t));
+            if (m_spareTargets.size() > 8u)
+                m_spareTargets.erase(m_spareTargets.begin());
+        }
+
+        // [gta-recomp] a dropped target: its texture kept for reuse, its size remembered for its re-creation
+        void dropRt(uint32_t fbp)
+        {
+            auto it = m_rts.find(fbp);
+            if (it == m_rts.end())
+                return;
+            if (it->second.color)
+                m_droppedSize[fbp] = {it->second.w, it->second.h, it->second.scale};
+            spareTarget(std::move(it->second.color));
+            m_rts.erase(it);
         }
 
         // grows (recreated, cleared to 0) to at least w x h at scale s; one depth buffer per scale (the picture's
@@ -2123,6 +2198,13 @@ namespace
         std::unique_ptr<rhi::Pipeline> m_blit, m_fillColor, m_fillDepth;
         std::unordered_map<uint32_t, std::unique_ptr<rhi::Pipeline>> m_drawPipelines;
         std::unordered_map<uint32_t, Rt> m_rts;
+        std::vector<std::unique_ptr<rhi::Texture>> m_spareTargets; // [gta-recomp] spareTarget / makeTarget
+        struct DroppedSize
+        {
+            uint32_t w = 0, h = 0;
+            Scale scale;
+        };
+        std::unordered_map<uint32_t, DroppedSize> m_droppedSize; // [gta-recomp] dropRt / rtFor
         std::unordered_map<uint32_t, Depth> m_depth;
         std::unordered_map<uint64_t, std::unique_ptr<rhi::Texture>> m_textures;
         std::unique_ptr<rhi::Texture> m_display, m_feedback;
