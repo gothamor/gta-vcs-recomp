@@ -16,9 +16,13 @@
 #include "imgui_impl_dx11.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -305,6 +309,16 @@ namespace rhi
                     return nullptr;
                 }
                 setName(t->texture.Get(), desc.name);
+                // PS2X_RHI_LOG_CREATES=1: textures of 256x256 and more as they are created (a target re-created every
+                // frame shows as a stream of these)
+                static const bool logCreates = std::getenv("PS2X_RHI_LOG_CREATES") != nullptr;
+                if (logCreates && td.Width * td.Height >= 256u * 256u)
+                {
+                    static uint64_t created = 0;
+                    if (++created <= 2000u)
+                        std::fprintf(stderr, "[rhi] create %ux%u x%u '%s'\n", td.Width, td.Height, td.SampleDesc.Count,
+                                     desc.name ? desc.name : "");
+                }
                 if (desc.usage & UsageSampled)
                 {
                     D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
@@ -631,12 +645,16 @@ namespace rhi
             {
                 if (m_annotation)
                     m_annotation->BeginEvent(wide(name).c_str());
+                if (gpuTiming())
+                    m_timer.push(*this, name);
             }
 
             void popMarker() override
             {
                 if (m_annotation)
                     m_annotation->EndEvent();
+                if (gpuTiming())
+                    m_timer.pop(*this);
             }
 
             // ---- swapchain ----------------------------------------------------------------------------------------
@@ -675,6 +693,8 @@ namespace rhi
                                  static_cast<unsigned>(m_device->GetDeviceRemovedReason()));
                 }
                 m_pipeline = nullptr; // flip model unbinds the back buffer; state is set again next frame
+                if (gpuTiming())
+                    m_timer.endFrame(*this);
             }
 
             // ---- Dear ImGui ---------------------------------------------------------------------------------------
@@ -706,6 +726,121 @@ namespace rhi
             }
 
         private:
+            // PS2X_GPU_TIMING=1: GPU time between each pushMarker / popMarker pair (timestamp queries), summed per marker
+            // name and reported every 5 s as ms per frame - which passes a frame's GPU time goes to. A marker's time
+            // includes the markers inside it.
+            static bool gpuTiming()
+            {
+                static const bool on = std::getenv("PS2X_GPU_TIMING") != nullptr;
+                return on;
+            }
+            struct GpuTimer
+            {
+                struct Span
+                {
+                    std::string name;
+                    ComPtr<ID3D11Query> begin, end;
+                };
+                struct FrameQueries
+                {
+                    ComPtr<ID3D11Query> disjoint;
+                    std::vector<Span> spans;
+                };
+                std::vector<ComPtr<ID3D11Query>> pool;
+                std::vector<Span> open;
+                FrameQueries current;
+                std::vector<FrameQueries> pending;
+                std::unordered_map<std::string, std::pair<double, uint64_t>> totals; // ms, spans
+                uint64_t frames = 0;
+                std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+
+                ComPtr<ID3D11Query> timestamp(D3D11Device &d)
+                {
+                    ComPtr<ID3D11Query> q;
+                    if (!pool.empty())
+                    {
+                        q = std::move(pool.back());
+                        pool.pop_back();
+                        return q;
+                    }
+                    const D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP, 0};
+                    d.m_device->CreateQuery(&qd, &q);
+                    return q;
+                }
+                void push(D3D11Device &d, const char *name)
+                {
+                    if (!current.disjoint)
+                    {
+                        const D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+                        d.m_device->CreateQuery(&qd, &current.disjoint);
+                        if (current.disjoint)
+                            d.m_context->Begin(current.disjoint.Get());
+                    }
+                    Span sp;
+                    sp.name = name ? name : "?";
+                    sp.begin = timestamp(d);
+                    if (sp.begin)
+                        d.m_context->End(sp.begin.Get());
+                    open.push_back(std::move(sp));
+                }
+                void pop(D3D11Device &d)
+                {
+                    if (open.empty())
+                        return;
+                    Span sp = std::move(open.back());
+                    open.pop_back();
+                    sp.end = timestamp(d);
+                    if (sp.end)
+                        d.m_context->End(sp.end.Get());
+                    if (sp.begin && sp.end)
+                        current.spans.push_back(std::move(sp));
+                }
+                void endFrame(D3D11Device &d)
+                {
+                    if (current.disjoint && open.empty())
+                    {
+                        d.m_context->End(current.disjoint.Get());
+                        pending.push_back(std::move(current));
+                        current = {};
+                    }
+                    while (!pending.empty()) // finished frames, oldest first
+                    {
+                        FrameQueries &f = pending.front();
+                        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+                        if (d.m_context->GetData(f.disjoint.Get(), &dj, sizeof(dj), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+                            break;
+                        ++frames;
+                        for (Span &sp : f.spans)
+                        {
+                            UINT64 t0 = 0, t1 = 0;
+                            if (!dj.Disjoint && dj.Frequency &&
+                                d.m_context->GetData(sp.begin.Get(), &t0, sizeof(t0), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+                                d.m_context->GetData(sp.end.Get(), &t1, sizeof(t1), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK && t1 >= t0)
+                            {
+                                auto &t = totals[sp.name];
+                                t.first += static_cast<double>(t1 - t0) * 1000.0 / static_cast<double>(dj.Frequency);
+                                ++t.second;
+                            }
+                            pool.push_back(std::move(sp.begin));
+                            pool.push_back(std::move(sp.end));
+                        }
+                        pending.erase(pending.begin());
+                    }
+                    if (!frames || std::chrono::steady_clock::now() - lastReport < std::chrono::seconds(5))
+                        return;
+                    lastReport = std::chrono::steady_clock::now();
+                    std::vector<std::pair<std::string, std::pair<double, uint64_t>>> rows(totals.begin(), totals.end());
+                    std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) { return a.second.first > b.second.first; });
+                    std::fprintf(stderr, "[gpu-timing] %llu frames, GPU ms per frame by marker:\n", static_cast<unsigned long long>(frames));
+                    for (const auto &[name, t] : rows)
+                        std::fprintf(stderr, "[gpu-timing] %8.3f ms %8.1f spans  %s\n", t.first / frames,
+                                     static_cast<double>(t.second) / frames, name.c_str());
+                    totals.clear();
+                    frames = 0;
+                }
+            };
+            GpuTimer m_timer;
+
             bool makeBackbufferView()
             {
                 ComPtr<ID3D11Texture2D> back;

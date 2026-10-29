@@ -289,6 +289,53 @@ city (1325, -325) 196 / 203 -> 216 / 222 (render worker 5.0 -> 3.3 ms), the othe
   (three rounds of the same 8 spots: +260, +89, +45 MB): caches filling (texture and mesh caches are LRU-bounded; the
   RSL recordings ~115 MB of it), not a leak.
 
+### 15. The helicopter's dust at high internal resolutions (2026-10-30)
+
+**The report.** At 3x internal resolution with 2x MSAA, a helicopter flying low made the frame time spike (the overlay's
+graph: the render phase). Reproduced with the rig: the Fort Baxter save, `trainer setwanted 4`, the police helicopter
+hovering over the player (a script for it: 3x, 16:9, MSAA 2x, perf every 0.5 s). Game 60 -> ~47 fps, presented frames
+60 -> ~16 a second; at 1x nothing (60 fps throughout); MSAA on or off the same.
+
+**The cause** (game-internals.md 6j): the rotor dust is one GS-path draw of ~1,040 large additive triangles, 60-66
+screens of overdraw - ~206 Mpixels a frame at 2560x1344 through the GS-emulating pixel shader. Every CPU thread was
+waiting (render worker, GS stage ~85%, main thread ~90% in `ZwWaitForSingleObject`): the GPU. The overlay's "GPU" is
+the main thread's submit time, so it showed 1.7 ms. New: `PS2X_GPU_TIMING=1` (D3D11 timestamp queries around a marker
+per draw, ms per frame by kind / target / texture every 5 s) - 46 of 61 ms of a presented frame on that draw kind, ~14 ms
+a game frame on the dust's one 32x32 texture. Ruled out on the way: MSAA resolves and the self-copy (the dust samples no
+render target), early Z (declaring conservative depth changed nothing), the shader's tail (a lean early-out path:
+-1.2 ms). Dropping its depth test entirely took it to ~5.7 ms - the late, per-pixel depth test of the GS's exact Z is a
+real part of the rest and stays.
+
+**What was done** (bit-exact; `PS2X_HW_GATHER=0` = the four loads):
+- REPEAT wrapping by a mask for power-of-two sizes instead of `((c % size) + size) % size` - two integer divisions per
+  coordinate, eight per bilinear tap set.
+- **Bilinear by Gather**: for a game texture (power-of-two, plain REPEAT / CLAMP, no mip chain, not a render target) the
+  shader wraps / clamps the top-left texel itself and gathers the 2x2 block at that texel corner through a nearest sampler
+  with the texture's wrapping; the GS's weights as before. 96% of textured draws take it (`PS2X_HW_ANISO_LOG=1` counts:
+  4.04M gather, 0.16M region wrap in the helicopter run).
+- **A pixel shader built for that path alone** (`GATHER_ONLY`: 10 temporaries / 119 instruction slots against the full
+  shader's 16 / 1,234 - the render-target paths' registers held occupancy down), chosen per pipeline.
+- Checked: `PS2X_HW_GATHER=verify` computes both and paints a pixel magenta where any of its four texels differ - 0
+  magenta pixels over the reference scenes and 12 shots of the helicopter scene at 3x (a positive control, comparing
+  against the wrong texel, marks ~29% of the screen). Reference scenes four loads vs gather: static scenes 0.00.
+
+**Result** (3x 16:9, MSAA 2x, GTX 1080 Ti, `--opt none`; two alternating rounds each, from 35 s on, the dust on screen):
+
+| | game fps | dust GPU ms / game frame | presented / s |
+|---|---|---|---|
+| before (first runs) | ~47 | ~14.4 | ~16 |
+| mask only (`PS2X_HW_GATHER=0`) | 52.9 / 53.1 | 11.8 / 12.3 | 18 / 18 |
+| gather, full shader | 60.0 / 60.0 | 9.7 / 9.5 | 36 / 30 |
+| gather, its own shader (now) | 60.0 / 60.0 | 8.9 / 8.9 | 46 / 56 |
+
+Away from the dust the GPU frame at 3x is unchanged (6-7 ms). What is left is the fill itself: ~9 ms for ~206 Mpixels with
+the exact Z; anisotropic filtering (the hardware's sampling, an option) or a lower internal resolution take it lower.
+
+**Seen on the way, not fixed here:** the effect buffers FBP 420 / 384 are re-created ~4 times every frame, helicopter or
+not (game-internals.md 6j: a CLUT upload inside them drops both; FBP 420 then flips between the reflection map's window
+scale and the bloom write-back's integer scale) - new textures of up to 1536x1536 at 3x, each with a rescaling blit.
+`PS2X_RHI_LOG_CREATES=1` shows them.
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker

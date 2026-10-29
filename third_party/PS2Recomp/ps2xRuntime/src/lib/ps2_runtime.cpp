@@ -3051,6 +3051,7 @@ void PS2Runtime::run()
     m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
 
     RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
+    ThreadNaming::SetCurrentThreadName("MainThread"); // [gta-recomp] window, presenting, the HW backend's frames (VCS_PROFILE_THREAD)
 
     // A blank image to use as a framebuffer
     present::Picture frameTex = present::createPicture(FB_WIDTH, FB_HEIGHT, false);

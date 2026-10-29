@@ -4,6 +4,8 @@
 using BYTE = unsigned char; // fxc's /Fh headers declare `const BYTE name[]`
 #include "gs_draw_ps.h"
 #include "gs_draw_ps_dual.h"
+#include "gs_draw_ps_gather.h"
+#include "gs_draw_ps_gather_dual.h"
 #include "gs_draw_vs.h"
 #include "gs_world_vs.h"
 #include "gs_lit_vs.h"
@@ -22,6 +24,8 @@ namespace render
             {kGsLitVS, sizeof(kGsLitVS)},
             {kGsDrawPS, sizeof(kGsDrawPS)},
             {kGsDrawPSDual, sizeof(kGsDrawPSDual)},
+            {kGsDrawPSGather, sizeof(kGsDrawPSGather)},
+            {kGsDrawPSGatherDual, sizeof(kGsDrawPSGatherDual)},
             {kGsQuadVS, sizeof(kGsQuadVS)},
             {kGsBlitPS, sizeof(kGsBlitPS)},
             {kGsFillColorPS, sizeof(kGsFillColorPS)},

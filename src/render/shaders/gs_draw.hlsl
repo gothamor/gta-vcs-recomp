@@ -131,12 +131,19 @@ VSOut vs_lit(LitIn i)
 }
 
 Texture2D<float4> tex : register(t0);
-SamplerState hwSampler : register(s0); // anisotropic filtering (linearIipFgeAte.x == 2)
+SamplerState hwSampler : register(s0); // anisotropic filtering (linearIipFgeAte.x == 2); the gather path's wrapping (3)
 
 int wrapc(int c, int size, int mode, int mn, int mx)
 {
     int r = (c & mn) | mx;                       // REGION_REPEAT
-    if (mode == 0) r = ((c % size) + size) % size; // REPEAT (GS sizes are powers of two; native effect buffers need not be)
+    // REPEAT. GS sizes are powers of two: a mask, the same result as the modulo for every c; native effect buffers need
+    // not be. The modulo is two integer divisions per coordinate and tap (~2 ms of the helicopter's dust at 3x,
+    // docs/PERFORMANCE.md section 15)
+    [branch] if (mode == 0)
+    {
+        [branch] if ((size & (size - 1)) == 0) r = c & (size - 1);
+        else r = ((c % size) + size) % size;
+    }
     else if (mode == 1) r = clamp(c, 0, size - 1); // CLAMP
     else if (mode == 2) r = clamp(c, mn, mx);    // REGION_CLAMP
     return r;
@@ -189,8 +196,44 @@ float4 sampleRtFull(float2 uv)
     return lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
 }
 
+static bool g_gatherMismatch = false; // PS2X_HW_GATHER=verify (sampleTex mode 4)
+
+// The GS's bilinear (its texels, its weights) with the 2x2 texels fetched by Gather (linearIipFgeAte.x 3 / 4): a
+// power-of-two texture with plain REPEAT / CLAMP wrapping, bound with a nearest sampler of the same wrapping (gs_hw.cpp
+// m_gatherSampler). The top-left texel is wrapped / clamped here, so the gather point is a texel corner inside the
+// texture, where the hardware's footprint is exact; the right / bottom neighbour wraps or clamps in the sampler. The
+// same values as fetchTexel's four loads, without their per-tap wrap arithmetic (the helicopter's dust: ~60 screens of
+// textured overdraw a frame, docs/game-internals.md 6j).
+float4 sampleGather(float2 uv)
+{
+    const float2 p = uv - 0.5;
+    const int2 i = int2(floor(p));
+    const float2 f = p - floor(p);
+    const int2 size = texSizeWrap.xy;
+    int2 w;
+    w.x = texSizeWrap.z == 0 ? (i.x & (size.x - 1)) : clamp(i.x, -1, size.x - 1);
+    w.y = texSizeWrap.w == 0 ? (i.y & (size.y - 1)) : clamp(i.y, -1, size.y - 1);
+    const float2 at = (float2(w) + 1.0) / float2(size);
+    // Gather order: x (u0, v1), y (u1, v1), z (u1, v0), w (u0, v0)
+    const float4 gr = tex.GatherRed(hwSampler, at), gg = tex.GatherGreen(hwSampler, at);
+    const float4 gb = tex.GatherBlue(hwSampler, at), ga = tex.GatherAlpha(hwSampler, at);
+    const float4 c00 = float4(gr.w, gg.w, gb.w, ga.w) * 255.0, c10 = float4(gr.z, gg.z, gb.z, ga.z) * 255.0;
+    const float4 c01 = float4(gr.x, gg.x, gb.x, ga.x) * 255.0, c11 = float4(gr.y, gg.y, gb.y, ga.y) * 255.0;
+#if !GATHER_ONLY
+    // mode 4 (PS2X_HW_GATHER=verify, the full shader): the four loads as well; a texel that differs paints the pixel magenta
+    [branch] if (linearIipFgeAte.x == 4)
+        g_gatherMismatch = any(c00 != fetchTexel(i)) || any(c10 != fetchTexel(i + int2(1, 0))) ||
+                           any(c01 != fetchTexel(i + int2(0, 1))) || any(c11 != fetchTexel(i + int2(1, 1)));
+#endif
+    return lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
+}
+
 float4 sampleTex(float2 uv)
 {
+#if GATHER_ONLY
+    // the gather variant (gs_hw.cpp: draws with linearIipFgeAte.x == 3): without the other paths' registers
+    return sampleGather(uv);
+#else
     float4 r;
     [branch] if (atstArefAfailRt.w == 2)
     {
@@ -200,6 +243,10 @@ float4 sampleTex(float2 uv)
     {
         // a game texture with plain wrapping, sampled by the hardware (trilinear, anisotropic); the option
         r = tex.Sample(hwSampler, uv / float2(texSizeWrap.xy)) * 255.0;
+    }
+    else if (linearIipFgeAte.x >= 3)
+    {
+        r = sampleGather(uv);
     }
     else if (linearIipFgeAte.x == 0)
     {
@@ -215,6 +262,7 @@ float4 sampleTex(float2 uv)
         r = lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
     }
     return r;
+#endif
 }
 
 struct PSOut
@@ -271,6 +319,8 @@ PSOut ps_main(VSOut i)
     if (blendCPremul.y == 1) rgb *= cf;
     else if (blendCPremul.y == 2) rgb *= (1.0 + cf);
     o.color = float4(rgb / 255.0, c.a / 255.0);
+    if (g_gatherMismatch)
+        o.color = float4(1.0, 0.0, 1.0, 1.0);
 #if DUAL_SOURCE
     o.blend = min(cf, 1.0).xxxx;
 #endif

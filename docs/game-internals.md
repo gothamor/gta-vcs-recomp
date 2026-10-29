@@ -1061,6 +1061,29 @@ state ops since FULLY_NATIVE.md step 5a):
   through a null pointer (never seen). While driving ~9% of flushes have plug-in callbacks (skinned / effect
   plug-ins) and ~1% bit 0x4; those still run the original.
 
+### 6j. The helicopter's dust: the heaviest fill in the game (2026-10-30)
+
+Found from a user report (frame time spiking at 3x internal resolution while a helicopter flew low): a 4-star wanted
+level brings the police helicopter, and while it hovers near the ground the game draws its rotor dust as **one GS-path
+draw a frame of ~1,040 large triangles** (~3,100 vertices, quads as triangle pairs; texture 32x32, bilinear, REPEAT;
+blend `Cs*FIX + Cd` with FIX 128 - additive - colour 0x03-0x13; ZTST GEQUAL, no Z write). Measured from an F12 draw log
+with every vertex (`PS2X_HW_DUMP_ALLVERTS=1`, triangles clipped to the screen): **60-66 full screens of overdraw**,
+~18 Mpixels at 640x448 - on the PS2's GS (~1.2 Gpixel/s textured) about 15 ms, so the effect is heavy on the console
+too. A few smaller draws with other 32x32 textures (the same blend, up to ~6 screens) go with it. At 3x internal
+resolution in 16:9 (2560x1344) it is ~206 Mpixels a frame through the GS-emulating pixel shader: that, not the CPU, was
+the spike (NATIVE_RENDERER.md "The GS bilinear by Gather", PERFORMANCE.md section 15).
+
+How it was found: the perf line showed the render worker and the GS stage mostly waiting (sampling profiles of both
+threads: ~85% in a wait), the main thread too (~90% in `ZwWaitForSingleObject`: on the GPU); the overlay's "GPU" figure
+is the main thread's submit time, not GPU time. `PS2X_GPU_TIMING=1` (timestamp queries per draw) then put 46 of 61 ms
+of a presented frame on `gs draw fbp 140 tex blend`, and per texture key on this one 32x32 texture.
+
+Seen on the way (not the helicopter's doing - the same before it arrives, every frame): the GPU targets of the effect
+buffers FBP 420 and 384 are re-created ~4 times a frame. A 16x16 CLUT upload at block 13588 (page 424, inside both
+buffers' pages) drops both targets every frame (`PS2X_HW_LOG_DROPS=1`); FBP 420 is then made at the window scale for
+the reflection map's 128-wide draws (role windowScale, 4.0 x 3.0 at 3x 16:9), regrown at 3x for the bloom's write-back
+(fbw 4), and back again - each a new texture plus a rescaling blit (`PS2X_RHI_LOG_CREATES=1` lists them).
+
 ## 7. Textures: `.XTX`
 
 Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):

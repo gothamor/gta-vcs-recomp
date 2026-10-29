@@ -437,6 +437,12 @@ namespace
         static const bool on = std::getenv("PS2X_HW_LOG_DROPS") != nullptr;
         return on;
     }
+    // [gta-recomp] PS2X_GPU_TIMING (the RHI's GPU timer): a marker around each draw, named by its kind and target
+    bool gpuTimingMarkers()
+    {
+        static const bool on = std::getenv("PS2X_GPU_TIMING") != nullptr;
+        return on;
+    }
 
     void pageSize(uint32_t psm, uint32_t &w, uint32_t &h)
     {
@@ -634,6 +640,10 @@ namespace
             m_worldCb = m_dev.createBuffer({128u * sizeof(float), rhi::BufferUsage::Constant, true, "gs native draw constants"});
             m_point = m_dev.createSampler({rhi::Filter::Nearest, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
             m_linear = m_dev.createSampler({rhi::Filter::Linear, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
+            for (int u = 0; u < 2; ++u) // [gta-recomp] the GS bilinear's texels by Gather, per wrap mode (U, V: repeat / clamp)
+                for (int v = 0; v < 2; ++v)
+                    m_gatherSampler[u][v] = m_dev.createSampler({rhi::Filter::Nearest, u ? rhi::Wrap::Repeat : rhi::Wrap::Clamp,
+                                                                 v ? rhi::Wrap::Repeat : rhi::Wrap::Clamp});
             if (m_anisotropy) // [gta-recomp] per wrap mode (U, V: repeat / clamp)
                 for (int u = 0; u < 2; ++u)
                     for (int v = 0; v < 2; ++v)
@@ -785,7 +795,21 @@ namespace
                     if (skip && (((skip & 1u) && ds.texIsRt) || (skip & 4u)))
                         break;
                     sources.gsDraw(f, f.draws[c.index]);
+                    const bool timed = gpuTimingMarkers();
+                    if (timed)
+                    {
+                        char name[96];
+                        std::snprintf(name, sizeof(name), "gs draw fbp %u%s%s tex %llx %ux%u", ds.fbp,
+                                      ds.tme ? (ds.texIsRt ? " tex=rt" : " tex") : "", ds.abe ? " blend" : "",
+                                      static_cast<unsigned long long>(ds.tme ? ds.texKey : 0u), ds.tw, ds.th);
+                        m_dev.pushMarker(name);
+                    }
                     draw(ds, f.draws[c.index].first, f.draws[c.index].count, nullptr);
+                    if (timed)
+                    {
+                        endPass();
+                        m_dev.popMarker();
+                    }
                     // [gta-recomp] PS2X_HW_DUMP_STEPS=1: while draws are logged, write the target after every draw that
                     // covers the whole screen or reads a render target (where a frame goes black, step by step)
                     static const bool steps = std::getenv("PS2X_HW_DUMP_STEPS") != nullptr;
@@ -826,7 +850,20 @@ namespace
                                      (unsigned long long)n.meshKey, n.s.fbp, n.s.zbp, n.s.tme, n.s.abe, n.s.fge);
                     hudSceneDraw(n.s.fbp);
                     sources.nativeDraw();
+                    const bool timed = gpuTimingMarkers();
+                    if (timed)
+                    {
+                        char name[96];
+                        std::snprintf(name, sizeof(name), "native kind %u fbp %u%s%s%s", n.kind, n.s.fbp, n.s.tme ? " tex" : "",
+                                      n.s.abe ? " blend" : "", n.s.zte ? "" : " noz");
+                        m_dev.pushMarker(name);
+                    }
                     draw(n.s, 0, n.drawCount, &n);
+                    if (timed)
+                    {
+                        endPass();
+                        m_dev.popMarker();
+                    }
                     break;
                 }
                 }
@@ -1229,19 +1266,22 @@ namespace
                 std::fprintf(stderr, "[draw] depth fill zbp=%u rows %u..%u width %u value %.6f\n", f.zbp, f.y0, f.y1, f.width, f.value);
         }
 
-        rhi::Pipeline &drawPipeline(const GsBlend &b, uint8_t mask, bool depthTest, uint32_t ztst, bool zwrite, uint8_t mode)
+        rhi::Pipeline &drawPipeline(const GsBlend &b, uint8_t mask, bool depthTest, uint32_t ztst, bool zwrite, uint8_t mode,
+                                    bool gather = false)
         {
             const bool dual = b.enable && (b.src == rhi::BlendFactor::Src1Alpha || b.src == rhi::BlendFactor::InvSrc1Alpha ||
                                            b.dst == rhi::BlendFactor::Src1Alpha || b.dst == rhi::BlendFactor::InvSrc1Alpha);
             const uint32_t key = (b.enable ? 1u : 0u) | (static_cast<uint32_t>(b.src) << 1) | (static_cast<uint32_t>(b.dst) << 5) |
                                  (static_cast<uint32_t>(b.op) << 9) | (uint32_t(mask & 0xF) << 12) | ((depthTest ? 1u : 0u) << 16) |
-                                 ((ztst & 3u) << 17) | ((zwrite ? 1u : 0u) << 19) | (uint32_t(mode & 7u) << 20) | ((dual ? 1u : 0u) << 23);
+                                 ((ztst & 3u) << 17) | ((zwrite ? 1u : 0u) << 19) | (uint32_t(mode & 7u) << 20) | ((dual ? 1u : 0u) << 23) |
+                                 ((gather ? 1u : 0u) << 24);
             std::unique_ptr<rhi::Pipeline> &p = m_drawPipelines[key];
             if (!p)
             {
                 const render::GsShaders &sh = render::gsShaders();
                 rhi::PipelineDesc d;
-                d.pixel = dual ? sh.drawPSDual : sh.drawPS;
+                // [gta-recomp] gather: the pixel shader built for the Gather path alone (gs_draw.hlsl GATHER_ONLY)
+                d.pixel = gather ? (dual ? sh.drawPSGatherDual : sh.drawPSGather) : (dual ? sh.drawPSDual : sh.drawPS);
                 if (mode == 4)
                 {
                     // [gta-recomp] native VCS lit model (GSNativeDraw::VcsLit): skinned on the CPU, lit / transformed here
@@ -1961,14 +2001,31 @@ namespace
                 if (hwSampler)
                     c.linearIipFgeAte[0] = 2;
             }
+            // [gta-recomp] the same bilinear-filtered textures (power-of-two, no mip chain) on the exact path: the 2x2 texels by
+            // Gather through a nearest sampler with their wrapping instead of four loads with the wrap worked out per tap -
+            // the same values, a fraction of the shader (gs_draw.hlsl mode 3). PS2X_HW_GATHER=0: the four loads; =verify: both,
+            // a pixel whose texels differ drawn magenta (mode 4)
+            static const int gather = [] {
+                const char *e = std::getenv("PS2X_HW_GATHER");
+                return (e && e[0] == '0') ? 0 : (e && e[0] == 'v') ? 4 : 3;
+            }();
+            if (gather && !hwSampler && s.tme && s.linear && !s.texIsRt && !plainTexture && tex && s.wms <= 1u && s.wmt <= 1u &&
+                tex->desc().mipLevels == 1u && tex->desc().width == s.tw && tex->desc().height == s.th && s.tw &&
+                !(s.tw & (s.tw - 1u)) && s.th && !(s.th & (s.th - 1u)))
+            {
+                hwSampler = m_gatherSampler[s.wms == 0u ? 1 : 0][s.wmt == 0u ? 1 : 0].get();
+                if (hwSampler)
+                    c.linearIipFgeAte[0] = gather;
+            }
             static const bool afLog = std::getenv("PS2X_HW_ANISO_LOG") != nullptr; // which textured draws take it
             if (afLog && s.tme && !s.texIsRt)
             {
-                static uint64_t n[4] = {}, total = 0;
-                ++n[hwSampler ? 0 : !s.linear ? 1 : (s.wms > 1u || s.wmt > 1u) ? 2 : 3];
+                static uint64_t n[5] = {}, total = 0;
+                ++n[c.linearIipFgeAte[0] == 2 ? 0 : c.linearIipFgeAte[0] >= 3 ? 4 : !s.linear ? 1 : (s.wms > 1u || s.wmt > 1u) ? 2 : 3];
                 if (++total % 20000u == 0u)
-                    std::fprintf(stderr, "[gs-hw] aniso: hw %llu, nearest %llu, region wrap %llu, other %llu\n", (unsigned long long)n[0],
-                                 (unsigned long long)n[1], (unsigned long long)n[2], (unsigned long long)n[3]);
+                    std::fprintf(stderr, "[gs-hw] aniso: hw %llu, gather %llu, nearest %llu, region wrap %llu, other %llu\n",
+                                 (unsigned long long)n[0], (unsigned long long)n[4], (unsigned long long)n[1], (unsigned long long)n[2],
+                                 (unsigned long long)n[3]);
             }
             c.linearIipFgeAte[1] = s.iip;
             c.linearIipFgeAte[2] = s.fge;
@@ -2026,7 +2083,7 @@ namespace
             if (s.ate && s.atst != 1u && s.afail != 0u)
             {
                 // AFAIL other than KEEP: draw the passing pixels normally, the failing ones with the AFAIL mask
-                submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode));
+                submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode, c.linearIipFgeAte[0] == 3));
                 c.atstArefAfailRt[2] = 1;
                 if (s.afail == 1u) zwrite = false;                      // FB_ONLY
                 else if (s.afail == 2u) mask = 0;                       // ZB_ONLY
@@ -2036,7 +2093,7 @@ namespace
             {
                 c.linearIipFgeAte[3] = 0; // no alpha test (ATST ALWAYS)
             }
-            submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode));
+            submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode, c.linearIipFgeAte[0] == 3));
         }
 
         // a draw that samples its own target reads a copy (D3D cannot sample a bound render target)
@@ -2062,6 +2119,7 @@ namespace
         std::unique_ptr<rhi::Sampler> m_point, m_linear;
         uint32_t m_msaa = 1, m_anisotropy = 0;           // [gta-recomp] GSHwOptions
         std::unique_ptr<rhi::Sampler> m_anisoSampler[2][2]; // [gta-recomp] [U repeat][V repeat]
+        std::unique_ptr<rhi::Sampler> m_gatherSampler[2][2]; // [gta-recomp] nearest, [U repeat][V repeat]: gs_draw.hlsl mode 3
         std::unique_ptr<rhi::Pipeline> m_blit, m_fillColor, m_fillDepth;
         std::unordered_map<uint32_t, std::unique_ptr<rhi::Pipeline>> m_drawPipelines;
         std::unordered_map<uint32_t, Rt> m_rts;

@@ -12,6 +12,8 @@ namespace render
         rhi::ShaderCode litVS;        // native VCS lit / skinned models
         rhi::ShaderCode drawPS;       // one colour output
         rhi::ShaderCode drawPSDual;   // + blend factor as the second output (Src1Alpha blending)
+        rhi::ShaderCode drawPSGather; // drawPS for bilinear game textures fetched by Gather only (GATHER_ONLY: fewer registers)
+        rhi::ShaderCode drawPSGatherDual;
         rhi::ShaderCode quadVS;
         rhi::ShaderCode blitPS;
         rhi::ShaderCode fillColorPS;

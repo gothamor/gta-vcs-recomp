@@ -463,6 +463,12 @@ it is 1920x1080, 3 x 2.41 pixels per PS2 pixel.
   wrapping (about 90% of textured draws outside the barracks) are sampled by the hardware - trilinear, anisotropic -
   instead of the GS's own bilinear (`linearIipFgeAte.x == 2`, `hwSampler`); region wraps, render targets and nearest
   filtering keep the exact GS path. `PS2X_HW_ANISO_LOG=1` counts which path textured draws take.
+- **The GS bilinear by Gather** (2026-10-30, PERFORMANCE.md section 15): with filtering off, the same draws (power-of-two
+  textures without a mip chain) keep the GS's bilinear but fetch its 2x2 texels with `Gather` through a nearest sampler
+  of their wrapping (`linearIipFgeAte.x == 3`, `m_gatherSampler`), drawn with a pixel shader built for that path alone
+  (`GATHER_ONLY`, `drawPSGather*`, pipeline key bit 24). The same texels and weights as the four loads (`PS2X_HW_GATHER=0`;
+  `=verify` draws both and marks a differing pixel magenta). It made the helicopter's dust - 60 screens of textured
+  overdraw - hold 60 fps at 3x.
 - RHI: texture sample counts and mip levels, `resolveTexture`, `generateMips`, sampler anisotropy (D3D11).
 - Checked at 16:9 1080p native frame: MSAA 4x smooths the polygon edges (poles, roofs), AF 16x keeps the paving and
   ground decals sharp into the distance; reference scenes all run, static scenes unchanged (loading 0.55, pause map
