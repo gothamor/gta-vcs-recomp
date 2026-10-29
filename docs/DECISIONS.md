@@ -498,3 +498,31 @@ body under a wheel (FUN_003F34F0) and ProcessWheel's rolling resistance act a fi
   native sound driver, the emulated IOP off and the render worker on.
 - The runtime made empty mc0 / mc1 folders in the working directory before loadELF set the card path; the launcher
   now sets the card folder before the runtime starts.
+
+## 2026-10-29 - Mouse look on foot, driving keys (the user's request)
+
+The user asked for the mouse to move the camera while walking, right click to lock on to peds, and W / S / Space as
+accelerate / brake / handbrake while driving.
+- **Mouse camera on by default** now: the user wants the mouse to steer the camera, and with it off a new player's
+  mouse did nothing but click. It is a control binding, not a change to the game's look or rules, so the
+  "authentic by default" rule does not hold it back; it stays a toggle (Keyboard > Mouse camera).
+- **True mouse look on foot** (the "later" of the 2026-10-28 entry above): the follow camera's heading is written in the
+  game at the pad read, and its source points turned with it - the camera otherwise pulls the heading back to where it
+  stands (game-internals.md 12b). The pitch cannot be written that way (the camera rebuilds it from where it stands), so
+  it goes through the stick's own pitch speed with the game's stick curve undone and the excess over its top speed
+  carried to the next frames: the angle is exact, only very fast vertical flicks arrive a little late. Writing the
+  pitch directly would mean moving the source points up / down and their collision with the world - not worth it for
+  the ~0.1 s it would save on the fastest flicks.
+- Every other camera (vehicles, sniper / first person, lock-on) keeps the stick path: each has its own code, and the
+  stick is what they were made for. The stick path now aims past the game's dead third of the stick (FUN_002842e8),
+  so slow mouse movements turn those cameras too - before, under a third of full speed did nothing.
+- Mouse forward now looks up. The old stick path sent it the other way (the game looks up for a stick pulled back) while
+  the menu said "forward looks up".
+- **Right click** was already R1 (target / lock-on); checked that it locks on with fists and a pistol and that the mouse
+  moving meanwhile does not break the lock. Nothing to change but the check.
+- **Driving keys** are a section of their own with their own key group: a key may be W on foot and Accelerate in a car,
+  which the one-key-one-control rule of the 2026-10-28 entry would have refused. While the player drives (ped +0x480
+  set and state 0x37) the driving bindings apply and the on-foot bindings of the same keys do not (W must not also tilt
+  the stick: on a bike that leans, in a helicopter it pitches). The menu keys stay exclusive across groups. Lean
+  forward / back (bikes, aircraft) moved to Keypad 8 / 5, since W / S no longer do it in a vehicle. The gamepad keeps
+  the game's own layout.

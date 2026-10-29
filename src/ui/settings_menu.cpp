@@ -78,13 +78,16 @@ namespace ui
         }
 
         // Binds `key` to `s`, keeping the keys of its group exclusive: an optional setting that had it loses it, a
-        // required one (the menu keys) refuses the change. False (with the reason in g_refusal) when refused.
+        // required one (the menu keys) refuses the change. A required key is exclusive across groups too (the driving
+        // keys, a group of their own, may share the on-foot keys but not the menu keys). False (with the reason in
+        // g_refusal) when refused.
         std::string g_refusal;
         bool bindKey(const settings::Spec &s, int key)
         {
             if (key != 0 && !s.group.empty())
                 for (const settings::Spec &o : settings::all())
-                    if (&o != &s && o.type == settings::Type::Key && o.group == s.group && settings::value(o.key) == key)
+                    if (&o != &s && o.type == settings::Type::Key && !o.group.empty() &&
+                        (o.group == s.group || !o.optional || !s.optional) && settings::value(o.key) == key)
                     {
                         if (!o.optional || !s.optional) // a menu key never takes a control's key, nor gives its own
                         {

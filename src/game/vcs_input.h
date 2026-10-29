@@ -10,8 +10,9 @@ namespace vcs::input
     void registerSettings();
 
     // Feeds the game's pad reads from the bindings (PSPadBackend::setReader) and its motor levels to the gamepad's
-    // vibration (setActuatorSink). VCS_INPUT_MAP=0 keeps the runtime's built-in fixed mapping (the reference).
-    void install();
+    // vibration (setActuatorSink). VCS_INPUT_MAP=0 keeps the runtime's built-in fixed mapping (the reference). The pad
+    // reads look at the game's memory: driving or on foot, and the on-foot camera the mouse turns.
+    void install(PS2Runtime &runtime);
 
     // Main thread, once per host frame: the mouse camera captures the mouse while the game has it (no menu open, the
     // window in front); with the window in the background the sound is muted or the game paused (the Game page's "In

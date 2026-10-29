@@ -9,7 +9,7 @@ menu (F2): the **Keyboard** and **Gamepad** pages (src/game/vcs_input.cpp).
 | PS2 | Keyboard / mouse | Gamepad |
 |---|---|---|
 | Left stick | W A S D | Left stick |
-| Right stick (camera) | I J K L (and the mouse, with Mouse camera on) | Right stick |
+| Right stick (camera) | I J K L, the mouse | Right stick |
 | D-pad | Arrow keys | D-pad |
 | Cross | Shift | A / Cross |
 | Square | Space | X / Square |
@@ -24,9 +24,23 @@ menu (F2): the **Keyboard** and **Gamepad** pages (src/game/vcs_input.cpp).
 | Select | Backspace | Back / View |
 | Walk (hold) | - (unbound) | - (a small stick tilt) |
 
-The game's own PS2 controls apply on top (e.g. driving: Cross accelerates, Square brakes). Start or Cross (Enter /
-Shift) skips the intro movie; the Rockstar logos before it can't be skipped, as on the PS2 (Game > Skip intro movies
-skips both).
+**While driving** (Keyboard page, Driving) these keys do what a PC driving game does, and nothing else meanwhile; on
+foot they keep their bindings above (W walks, Space jumps):
+
+| Driving | Keyboard | PS2 |
+|---|---|---|
+| Accelerate | W | Cross |
+| Brake / reverse | S | Square |
+| Handbrake | Space | R1 |
+| Lean forward / nose down (bikes, aircraft) | Keypad 8 | Left stick up |
+| Lean back / nose up | Keypad 5 | Left stick down |
+
+Steering stays on A / D (the left stick); Shift still accelerates and E / the right mouse button is still R1. The
+game's own PS2 controls apply on top. Start or Cross (Enter / Shift) skips the intro movie; the Rockstar logos before
+it can't be skipped, as on the PS2 (Game > Skip intro movies skips both).
+
+**Right mouse button = R1**: on foot it locks on to the ped nearest in front while held (with fists or a weapon), as R1
+does on the PS2; left mouse button (Circle) attacks / fires.
 
 ## Keyboard page
 
@@ -38,11 +52,15 @@ skips both).
   has it.
 - **Walk (hold)**: the left stick at the **Walking speed** (45% by default) while held - GTA walks below about half
   a tilt, which keys can't do otherwise.
-- **Mouse camera** (off by default): mouse movement turns the camera as the right stick does, and the mouse is held in
-  the window while playing (free in the menus and when the window is in the background). The mouse's speed (counts
-  per second) becomes the stick's tilt, so a movement turns the camera as far at any frame rate; the stick has a top
-  speed, so very fast flicks turn no faster. **Mouse sensitivity** (100%: 1,500 counts a second is full tilt) and
-  **Invert mouse up / down**.
+- **A driving key** may share its key with an on-foot control (W is Move forward on foot and Accelerate in a car); within
+  the Driving section a key does one thing, and the menu keys stay out of both.
+- **Mouse camera** (on by default): the mouse turns the camera, and the mouse is held in the window while playing (free
+  in the menus and when the window is in the background). **On foot** it turns the camera itself, as in a PC game:
+  every movement turns it by the same angle at any speed and frame rate (100%: 400 counts - half an inch at 800 DPI -
+  a radian), moving the mouse forward looks up. Looking up / down goes through the game's own stick pitch, which has a
+  top speed (about 1.5 rad/s at 100%); a faster movement still arrives, a few frames later. **In vehicles, aiming and
+  locked on** the mouse's speed becomes the right stick's tilt (1,500 counts a second is full tilt), so very fast
+  flicks there turn no faster. **Mouse sensitivity** and **Invert mouse up / down**. (game-internals.md 12b)
 
 ## Gamepad page
 
@@ -80,8 +98,8 @@ keyboard / mouse / gamepad ignored (`PS2X_HIDDEN=1`). It listens on 127.0.0.1:47
 `tools/gamectl.py`: `screenshot out.png` (the picture plus the perf overlay, rendered off-screen), `press Return 150`,
 `key W down` / `up` (also `mouseleft`, `mouseright`, `wheelup`, `rshift`, `kpenter`, ...), `perf`, `quit`, and from
 the game layer `setting <key> [value]` (a setting read or changed; an action setting is pressed), `menu <page>` /
-`menu scroll <0..1>` / `menu close` (the settings menu for screenshots) and `padstate` (the last pad report the
-bindings made). `--control` (`PS2X_CONTROL=1`) opens the same channel with the window shown; `PS2X_INPUT=injected`
+`menu scroll <0..1>` / `menu close` (the settings menu for screenshots), `padstate` (the last pad report the
+bindings made, and the pad reads so far) and `mouse <dx> <dy>` (mouse motion in counts, y down, as the mouse sends it). `--control` (`PS2X_CONTROL=1`) opens the same channel with the window shown; `PS2X_INPUT=injected`
 ignores physical input with the window shown. Injected keys go through the bindings like physical ones:
 `tools/controls_check.py` checks them (also a `regress.py` step). `VCS_INPUT_MAP=0` falls back to the runtime's fixed
 built-in mapping (`ps2_pad.cpp`, the old defaults).

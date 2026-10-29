@@ -1,7 +1,9 @@
 // See vcs_input.h.
 //
 // The game reads the pad once per game frame (scePadRead, game thread). The bindings live in the settings registry
-// (main thread); every change rebuilds one Map, which the game thread copies under a mutex at each read.
+// (main thread); every change rebuilds one Map, which the game thread copies under a mutex at each read. The read also
+// looks at the game (game-internals.md 12b): whether the player drives (the Driving keys) and which camera is active
+// (the mouse turns the on-foot camera itself).
 #include "game/vcs_input.h"
 
 #include "platform/platform.h"
@@ -18,6 +20,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -52,6 +55,7 @@ namespace vcs::input
             int axis, sign;
             int key1, key2;       // default keys
             int pad;              // default gamepad source (buttons only)
+            bool driving = false; // only while the player drives; its keys then do nothing else
         };
 
         using namespace platform;
@@ -81,16 +85,78 @@ namespace vcs::input
             {"dpad_down", "D-pad down", "D-pad", Target::Button, kDown, 0, 0, KEY_DOWN, 0, GAMEPAD_DPAD_DOWN},
             {"dpad_left", "D-pad left", "D-pad", Target::Button, kLeft, 0, 0, KEY_LEFT, 0, GAMEPAD_DPAD_LEFT},
             {"dpad_right", "D-pad right", "D-pad", Target::Button, kRight, 0, 0, KEY_RIGHT, 0, GAMEPAD_DPAD_RIGHT},
+            // the game's driving buttons (Cross accelerates, Square brakes / reverses, R1 is the handbrake; checked in
+            // game), on the keys a PC driving game uses
+            {"drive_accelerate", "Accelerate (Cross)", "Driving", Target::Button, kCross, 0, 0, KEY_W, 0, kPadNone, true},
+            {"drive_brake", "Brake / reverse (Square)", "Driving", Target::Button, kSquare, 0, 0, KEY_S, 0, kPadNone, true},
+            {"drive_handbrake", "Handbrake (R1)", "Driving", Target::Button, kR1, 0, 0, KEY_SPACE, 0, kPadNone, true},
+            {"drive_lean_forward", "Lean forward / nose down", "Driving", Target::Stick, 0, 1, -1, KEY_KP_8, 0, kPadNone, true},
+            {"drive_lean_back", "Lean back / nose up", "Driving", Target::Stick, 0, 1, 1, KEY_KP_5, 0, kPadNone, true},
         };
         constexpr size_t kControlCount = sizeof(kControls) / sizeof(kControls[0]);
+
+        // ---- The game (game-internals.md 12, 12b) --------------------------------------------------------------------
+        constexpr uint32_t kRamMask = 0x01FFFFFFu;
+        constexpr uint32_t kPlayerPed = 0x004E4910u;   // CWorld::Players[0].m_pPed
+        constexpr uint32_t kPedVehicle = 0x480u;       // the vehicle it is in (0 on foot)
+        constexpr uint32_t kPedState = 0x8C4u;         // 0x37 driving
+        constexpr uint32_t kTheCamera = 0x006F44D0u;
+        constexpr uint32_t kLooksAtPlayer = kTheCamera + 0x888u; // 0 under a script camera
+        constexpr uint32_t kCam = kTheCamera + 0x70u;  // the active CCam: +0 mode, +0x78 alpha (pitch), +0x7C beta (heading),
+                                                       // +0x134 FOV
+        constexpr uint32_t kCamModeFollowPed = 4;      // on foot (11 locked on, 18 in a vehicle)
+        constexpr uint32_t kPad0 = 0x005147A8u;        // CPad 0: +0x96 DisablePlayerControls (s16)
+        constexpr uint32_t kCamStickLocked = 0x00488EB4u; // the follow camera ignores the stick's turn while set
+        constexpr uint32_t kInvertLook = 0x00487A58u;  // the game's own: the right stick's y negated
+        constexpr uint32_t kTimeStep = 0x004CD110u;    // CTimer::ms_fTimeStep (1.0 = 1/50 s)
+        constexpr uint32_t kFrameCounter = 0x004CD124u; // CTimer::m_FrameCounter
+        constexpr uint32_t kUserPause = 0x004CD2ACu;   // CTimer::m_UserPause (the pause menu), m_CodePause: bytes
+        constexpr uint32_t kCodePause = 0x004CD11Cu;
+        uint8_t *g_rdram = nullptr;
+
+        uint32_t rd32(uint32_t a)
+        {
+            uint32_t v;
+            std::memcpy(&v, g_rdram + (a & kRamMask), 4);
+            return v;
+        }
+        float rdf(uint32_t a)
+        {
+            float v;
+            std::memcpy(&v, g_rdram + (a & kRamMask), 4);
+            return v;
+        }
+        void wrf(uint32_t a, float v) { std::memcpy(g_rdram + (a & kRamMask), &v, 4); }
+
+        struct GameState
+        {
+            bool driving = false;
+            bool footCamera = false; // the on-foot follow camera, turned by the player (no script camera, controls on)
+        };
+
+        GameState gameState()
+        {
+            GameState s;
+            if (!g_rdram)
+                return s;
+            const uint32_t ped = rd32(kPlayerPed);
+            s.driving = ped && rd32(ped + kPedVehicle) && rd32(ped + kPedState) == 0x37;
+            int16_t disabled;
+            std::memcpy(&disabled, g_rdram + kPad0 + 0x96, 2);
+            const bool paused = g_rdram[kUserPause] || g_rdram[kCodePause];
+            s.footCamera = ped && !s.driving && !paused && rd32(kCam) == kCamModeFollowPed && rd32(kLooksAtPlayer) == 1 &&
+                           disabled == 0 && rd32(kCamStickLocked) == 0;
+            return s;
+        }
 
         // Everything a pad read needs, rebuilt from the settings on every change.
         struct Map
         {
             std::array<std::array<int, 2>, kControlCount> keys{};
             std::array<int, kControlCount> pad{};
-            bool mouseCamera = false;
-            float mouseScale = 1.0f; // stick deflection per mouse count per second
+            bool mouseCamera = true;
+            float mouseScale = 1.0f; // stick deflection per mouse count per second (the cameras the stick turns)
+            float mouseLook = 0.0025f; // radians per mouse count (the on-foot camera, turned directly)
             bool mouseInvertY = false;
             bool swapSticks = false, invertX = false, invertY = false;
             float deadzoneLeft = 0.12f, deadzoneRight = 0.12f, cameraScale = 1.0f, trigger = 0.3f;
@@ -103,6 +169,7 @@ namespace vcs::input
         bool g_enabled = true; // VCS_INPUT_MAP
         std::atomic<bool> g_backgroundPause{false}; // game.background = Pause and the window is behind others
         std::atomic<uint64_t> g_lastReport{0};       // buttons | rx << 16 | ry << 24 | lx << 32 | ly << 40 ("padstate")
+        std::atomic<uint32_t> g_reads{0};            // pad reads so far ("padstate")
 
         std::string keyId(const Control &c, int slot) { return std::string("keys.") + c.id + (slot ? "2" : ""); }
         std::string padId(const Control &c) { return std::string("pad.") + c.id; }
@@ -114,11 +181,13 @@ namespace vcs::input
             {
                 m.keys[i][0] = settings::value(keyId(kControls[i], 0));
                 m.keys[i][1] = settings::value(keyId(kControls[i], 1));
-                m.pad[i] = kControls[i].target == Target::Button ? settings::value(padId(kControls[i])) : kPadNone;
+                m.pad[i] = kControls[i].target == Target::Button && !kControls[i].driving ? settings::value(padId(kControls[i])) : kPadNone;
             }
             m.mouseCamera = settings::value("mouse.camera") != 0;
-            // 100%: a mouse moving 1,500 counts a second (a steady turn at 800 DPI) is a full stick
+            // 100%: a mouse moving 1,500 counts a second (a steady turn at 800 DPI) is a full stick; on foot 400 counts
+            // (half an inch at 800 DPI) turn a radian, as the PC GTAs' default
             m.mouseScale = settings::value("mouse.sensitivity") / 100.0f / 1500.0f;
+            m.mouseLook = settings::value("mouse.sensitivity") / 100.0f * 0.0025f;
             m.mouseInvertY = settings::value("mouse.invert_y") != 0;
             m.swapSticks = settings::value("pad.swap_sticks") != 0;
             m.invertX = settings::value("pad.invert_x") != 0;
@@ -181,13 +250,43 @@ namespace vcs::input
             return static_cast<uint8_t>(v < 0.0f ? 128.0f + v * 128.0f : 128.0f + v * 127.0f);
         }
 
-        // The mouse camera: mouse speed (counts per second) as the right stick, so the camera turns as far for the
-        // same hand movement at any frame rate.
+        // The mouse camera. On foot the mouse turns the follow camera itself: its heading is written in the game, its
+        // pitch (which the camera rebuilds from where it stands every frame) goes through the stick's pitch speed, with
+        // the game's squared stick curve undone. Every other camera (vehicles, aiming) gets the mouse's speed (counts
+        // per second) as the right stick, so it turns as far for the same hand movement at any frame rate.
         struct MouseCamera
         {
             std::chrono::steady_clock::time_point last{};
-            float x = 0.0f, y = 0.0f;
+            uint32_t frame = 0;        // the game frame (m_FrameCounter) it was worked out for
+            float x = 0.0f, y = 0.0f;  // the right stick's deflection from the mouse
+            float pitch = 0.0f;        // on foot: radians still to turn up (+) or down
         } g_mouse;
+
+        std::mutex g_injectedMutex;
+        float g_injectedX = 0.0f, g_injectedY = 0.0f; // "mouse <dx> <dy>" (tests): counts, as from the mouse
+
+        // The game's stick curve (FUN_002842e8, game-internals.md 12a): v = byte - 128; |v| <= 42 is 0, past that
+        // (|v| - 42) 127 / 85, truncated - the first third of the travel does nothing.
+        int gameStick(int v)
+        {
+            const int a = std::abs(v);
+            const int g = a <= 42 ? 0 : (a - 42) * 127 / 85;
+            return v < 0 ? -g : g;
+        }
+        // The smallest deflection (byte - 128) the game reads as `g` (-127..127) or a little more, and that deflection
+        // as the float toByte turns back into exactly that byte.
+        int rawFor(int g)
+        {
+            if (g == 0)
+                return 0;
+            const int a = std::min(42 + (std::abs(g) * 85 + 126) / 127, g < 0 ? 128 : 127);
+            return g < 0 ? -a : a;
+        }
+        float stickFloat(int raw) { return raw == 0 ? 0.0f : (raw + 0.5f) / (raw > 0 ? 127.0f : 128.0f); }
+
+        // The follow camera's pitch speed for the game's stick value y (-127..127) is |y| y 4.9e-5 0.000536 FOV per
+        // time step (FUN_0029dab0, game-internals.md 12b).
+        float pitchSpeed(int y, float fov) { return std::abs(y) * y * 4.9e-5f * 0.0005357144f * fov; }
 
         bool readPad(uint8_t *data)
         {
@@ -220,16 +319,28 @@ namespace vcs::input
                 ry *= (m.invertY ? -1.0f : 1.0f) * m.cameraScale;
             }
 
-            // keyboard and mouse buttons (blocked while a menu has the input, injected keys included)
+            // keyboard and mouse buttons (blocked while a menu has the input, injected keys included). While the player
+            // drives the Driving keys apply, and other bindings of the same keys do not (W accelerates, not also the
+            // stick).
+            const GameState game = gameState();
             const bool blocked = ps2control::gameInputBlocked();
             const bool alt = !blocked && (ps2control::keyDown(KEY_LEFT_ALT) || ps2control::keyDown(KEY_RIGHT_ALT));
+            auto drivingKey = [&](int key) {
+                for (size_t i = 0; i < kControlCount; ++i)
+                    if (kControls[i].driving && key > 0 && (m.keys[i][0] == key || m.keys[i][1] == key))
+                        return true;
+                return false;
+            };
             std::array<int, 4> neg{}, pos{}; // per axis: a bound key toward each side is down
             bool walk = false;
             for (size_t i = 0; i < kControlCount && !blocked; ++i)
             {
-                if (!bound(m.keys[i][0], alt) && !bound(m.keys[i][1], alt))
-                    continue;
                 const Control &c = kControls[i];
+                if (c.driving && !game.driving)
+                    continue;
+                auto active = [&](int key) { return bound(key, alt) && !(game.driving && !c.driving && drivingKey(key)); };
+                if (!active(m.keys[i][0]) && !active(m.keys[i][1]))
+                    continue;
                 if (c.target == Target::Button)
                     buttons |= c.mask;
                 else if (c.target == Target::Stick)
@@ -251,17 +362,72 @@ namespace vcs::input
                 }
             }
 
-            // the mouse camera, on top of the right stick
-            float dx = 0.0f, dy = 0.0f;
-            takeMouseMotion(dx, dy);
+            // the mouse camera, on top of the right stick: worked out once per game frame (the game reads the pad three
+            // times a frame; the frame's other reads repeat the deflection)
             const auto now = std::chrono::steady_clock::now();
             const float dt = g_mouse.last.time_since_epoch().count() ? std::chrono::duration<float>(now - g_mouse.last).count() : 0.0f;
-            if (dt >= 0.002f || dt == 0.0f) // a second read in the same frame keeps the last deflection
+            const uint32_t frame = g_rdram ? rd32(kFrameCounter) : 0;
+            if (frame != g_mouse.frame || dt >= 0.25f || dt == 0.0f)
             {
                 g_mouse.last = now;
-                const bool on = physical && m.mouseCamera && !blocked && dt > 0.0f && dt < 0.25f;
-                g_mouse.x = on ? dx / dt * m.mouseScale : 0.0f;
-                g_mouse.y = on ? dy / dt * m.mouseScale * (m.mouseInvertY ? -1.0f : 1.0f) : 0.0f;
+                g_mouse.frame = frame;
+                float dx = 0.0f, dy = 0.0f;
+                takeMouseMotion(dx, dy);
+                if (!physical)
+                    dx = dy = 0.0f;
+                {
+                    std::lock_guard<std::mutex> lock(g_injectedMutex);
+                    dx += g_injectedX;
+                    dy += g_injectedY;
+                    g_injectedX = g_injectedY = 0.0f;
+                }
+                const bool on = m.mouseCamera && !blocked;
+                // up (+) for a mouse moved forward (SDL: y grows downwards); the game looks up for a stick pulled
+                // back (y > 0)
+                const float up = -dy * (m.mouseInvertY ? -1.0f : 1.0f);
+                g_mouse.x = g_mouse.y = 0.0f;
+                if (on && game.footCamera)
+                {
+                    // heading: right turns clockwise (the angle falls), kept in 0..2 pi as the game keeps it. The camera
+                    // eases its heading back toward where it stands (its source points, +0x220 / +0x230, placed around
+                    // the player from the heading at the end of each update), so those turn with it.
+                    const float turn = -dx * m.mouseLook;
+                    if (turn != 0.0f)
+                    {
+                        float beta = std::fmod(rdf(kCam + 0x7C) + turn, 6.2831855f);
+                        wrf(kCam + 0x7C, beta < 0.0f ? beta + 6.2831855f : beta);
+                        const uint32_t ped = rd32(kPlayerPed);
+                        const float px = rdf(ped + 0x30), py = rdf(ped + 0x34), c = std::cos(turn), s = std::sin(turn);
+                        for (uint32_t at : {kCam + 0x220u, kCam + 0x230u})
+                        {
+                            const float ox = rdf(at) - px, oy = rdf(at + 4) - py;
+                            wrf(at, px + ox * c - oy * s);
+                            wrf(at + 4, py + ox * s + oy * c);
+                        }
+                    }
+                    // pitch: as the stick's speed (the game's curve undone), at most its top speed a step; the rest the
+                    // next frames
+                    g_mouse.pitch = std::clamp(g_mouse.pitch + up * m.mouseLook, -0.6f, 0.6f);
+                    const float step = std::clamp(rdf(kTimeStep), 0.05f, 3.4f);
+                    float fov = rdf(kCam + 0x134);
+                    fov = fov >= 10.0f && fov <= 130.0f ? fov : 70.0f;
+                    const float want = std::min(127.0f, std::sqrt(std::fabs(g_mouse.pitch / step) / pitchSpeed(1, fov)));
+                    const int raw = rawFor(static_cast<int>(want + 0.5f) * (g_mouse.pitch < 0.0f ? -1 : 1));
+                    g_mouse.pitch -= pitchSpeed(gameStick(raw), fov) * step;
+                    // a stick pulled back (y > 0) looks up; the game's own invert flips it
+                    g_mouse.y = stickFloat(rd32(kInvertLook) ? -raw : raw);
+                }
+                else
+                {
+                    g_mouse.pitch = 0.0f;
+                    if (on && dt > 0.0f && dt < 0.25f)
+                    {
+                        // the mouse's speed as the game's stick value, past its dead third
+                        auto tilt = [](float t) { return stickFloat(rawFor(static_cast<int>(std::lround(std::clamp(t, -1.0f, 1.0f) * 127.0f)))); };
+                        g_mouse.x = tilt(dx / dt * m.mouseScale);
+                        g_mouse.y = tilt(up / dt * m.mouseScale);
+                    }
+                }
             }
             rx += g_mouse.x;
             ry += g_mouse.y;
@@ -273,6 +439,7 @@ namespace vcs::input
             data[5] = toByte(ry);
             data[6] = toByte(lx);
             data[7] = toByte(ly);
+            g_reads.fetch_add(1, std::memory_order_relaxed);
             g_lastReport.store(static_cast<uint64_t>(word) | static_cast<uint64_t>(data[4]) << 16 | static_cast<uint64_t>(data[5]) << 24 |
                                    static_cast<uint64_t>(data[6]) << 32 | static_cast<uint64_t>(data[7]) << 40,
                                std::memory_order_relaxed);
@@ -339,11 +506,11 @@ namespace vcs::input
                 s.page = kKeys;
                 s.section = "Mouse";
                 s.label = "Mouse camera";
-                s.help = "Moving the mouse turns the camera (as the right stick does), and the mouse is held in the window "
-                         "while you play (free again in the menus and when the window is in the background). Off: the "
-                         "mouse only clicks.";
+                s.help = "Moving the mouse turns the camera, and the mouse is held in the window while you play (free again "
+                         "in the menus and when the window is in the background). On foot it turns the camera itself, as "
+                         "in a PC game; in vehicles and while aiming it moves the right stick. Off: the mouse only clicks.";
                 s.type = Type::Toggle;
-                s.defaultValue = 0;
+                s.defaultValue = 1;
                 s.onChange = onChange;
                 settings::add(s);
 
@@ -352,8 +519,9 @@ namespace vcs::input
                 s.page = kKeys;
                 s.section = "Mouse";
                 s.label = "Mouse sensitivity";
-                s.help = "How far the camera turns for a mouse movement. The camera has a top speed (the stick's), so very fast "
-                         "flicks turn no faster.";
+                s.help = "How far the camera turns for a mouse movement (100%: 400 counts, half an inch at 800 DPI, turn the "
+                         "camera on foot a radian). Looking up / down and the cameras the stick turns have a top speed "
+                         "(the stick's), so very fast flicks there turn no faster.";
                 s.type = Type::Integer;
                 s.min = 10;
                 s.max = 400;
@@ -379,13 +547,20 @@ namespace vcs::input
             s.page = kKeys;
             s.section = c.section;
             s.label = c.label;
-            s.help = c.target == Target::Walk
-                         ? "While held, you walk instead of running (the left stick at a small tilt, as on the PS2)."
-                         : c.target == Target::Stick ? "The PS2's analog stick in this direction, all the way."
-                                                     : std::string("Presses the PS2's ") + c.label + ".";
+            s.help = c.driving ? (c.target == Target::Stick
+                                      ? "While you drive: the left stick in this direction (bikes lean, aircraft pitch). "
+                                        "While you drive this key does nothing else."
+                                      : std::string("While you drive: ") + c.label + ". While you drive this key does nothing "
+                                                                                    "else; on foot it does what its on-foot "
+                                                                                    "binding says.")
+                 : c.target == Target::Walk
+                     ? "While held, you walk instead of running (the left stick at a small tilt, as on the PS2)."
+                 : c.target == Target::Stick ? "The PS2's analog stick in this direction, all the way."
+                                             : std::string("Presses the PS2's ") + c.label + ".";
             s.type = Type::Key;
             s.optional = true;
-            s.group = "keys";
+            // the driving keys are a group of their own: they may share keys with the on-foot bindings
+            s.group = c.driving ? "drive" : "keys";
             s.partner = keyId(c, 1);
             s.defaultValue = c.key1;
             s.onChange = onChange;
@@ -441,7 +616,7 @@ namespace vcs::input
         // ---- Gamepad ---------------------------------------------------------------------------------------------
         for (const Control &c : kControls)
         {
-            if (c.target != Target::Button)
+            if (c.target != Target::Button || c.driving)
                 continue;
             s = {};
             s.key = padId(c);
@@ -526,8 +701,9 @@ namespace vcs::input
         settings::add(s);
     }
 
-    void install()
+    void install(PS2Runtime &runtime)
     {
+        g_rdram = runtime.memory().getRDRAM();
         const char *env = std::getenv("VCS_INPUT_MAP");
         g_enabled = !(env && env[0] == '0');
         rebuild();
@@ -535,14 +711,27 @@ namespace vcs::input
             PSPadBackend::setReader(&readPad);
         PSPadBackend::setActuatorSink(&actuators);
         std::fprintf(stderr, "[input] %s\n", g_enabled ? "player bindings" : "built-in mapping (VCS_INPUT_MAP=0)");
-        // padstate -> ok buttons=<pressed, hex> lx= ly= rx= ry= (the last report the bindings made; tools/controls_check.py)
+        // padstate -> ok buttons=<pressed, hex> rx= ry= lx= ly= reads= (the last report the bindings made, the reads so
+        // far; tools/controls_check.py)
         ps2control::addCommand("padstate", [](const std::string &, ps2control::Reply reply) {
             const uint64_t r = g_lastReport.load(std::memory_order_relaxed);
-            char text[96];
-            std::snprintf(text, sizeof(text), "ok buttons=%04x rx=%u ry=%u lx=%u ly=%u", static_cast<unsigned>(~r & 0xFFFF),
+            char text[128];
+            std::snprintf(text, sizeof(text), "ok buttons=%04x rx=%u ry=%u lx=%u ly=%u reads=%u", static_cast<unsigned>(~r & 0xFFFF),
                           static_cast<unsigned>(r >> 16 & 0xFF), static_cast<unsigned>(r >> 24 & 0xFF),
-                          static_cast<unsigned>(r >> 32 & 0xFF), static_cast<unsigned>(r >> 40 & 0xFF));
+                          static_cast<unsigned>(r >> 32 & 0xFF), static_cast<unsigned>(r >> 40 & 0xFF),
+                          g_reads.load(std::memory_order_relaxed));
             reply(text);
+        });
+        // mouse <dx> <dy> -> ok: mouse motion (counts; y grows downwards) for the next pad read, physical input or not
+        // (the mouse camera's checks in tools/controls_check.py)
+        ps2control::addCommand("mouse", [](const std::string &args, ps2control::Reply reply) {
+            float dx = 0.0f, dy = 0.0f;
+            if (std::sscanf(args.c_str(), "%f %f", &dx, &dy) != 2)
+                return reply("error usage: mouse <dx> <dy>");
+            std::lock_guard<std::mutex> lock(g_injectedMutex);
+            g_injectedX += dx;
+            g_injectedY += dy;
+            reply("ok");
         });
     }
 

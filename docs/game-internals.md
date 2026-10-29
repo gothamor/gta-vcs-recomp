@@ -1584,7 +1584,7 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   each row with a word after it. Found by searching RAM for vectors near the camera that moved when the player
   walked (`findvec`), then the pointers to the object (`findu32`).
 - **TheCamera** `0x6F44D0`: +0x30 is the point it follows (the player); it also holds pointers to the player ped
-  (+0xE0, +0x350, +0x7F8).
+  (+0xE0, +0x350, +0x7F8). Its active CCam is at +0x70 (12b).
   - **+0x7F8 = pTargetEntity** (what the camera should follow: the player's vehicle while he drives, else the ped)
     and **+0xE0 = the active camera's target** (what it does follow). Getting into a car on foot moves both to the
     car. **Warped from one vehicle straight into another** (`WARP_CHAR_FROM_CAR_TO_COORD` + `WARP_CHAR_INTO_CAR` in
@@ -1683,6 +1683,50 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   is FUN_00285258 (0x285294). A grenade's explosion 2 m from Vic gives level 128 (`tools/controls_check.py`).
   The host maps the large motor to the gamepad's low-frequency rumble and the small one to the high-frequency one,
   scaled by Gamepad > Vibration.
+- **The pad's stick curve** (2026-10-29, FUN_002842e8, called for the four stick bytes in FUN_002843d8; decompiled):
+  v = byte - 128; |v| <= 42 is 0, past that (|v| - 42) * 127 / 85 (integer, truncated), sign kept - **a third of the
+  stick's travel is dead** on top of any gamepad deadzone. The results are CPad 0 (`0x5147A8`, 0xD4 bytes per pad,
+  FUN_002852a8(n)) +2 / +4 left x / y, +6 / +8 right x / y (s16); **+0x96 = DisablePlayerControls** (the right-stick
+  getters FUN_00286af0 / FUN_00286b20 return 0 while it is set; FUN_00286b20 negates y when the game's own invert flag
+  `0x487A58` is set). Found when mouse pitch below about half a tilt came out a third short.
+- **scePadRead runs three times per game frame** (366 reads in 122 frames, counted with the `reads=` of `padstate`).
+  vcs_input.cpp works the mouse out once per `m_FrameCounter` 0x4CD124 and repeats that report for the frame's other
+  reads, so whichever read the game keeps carries it (not measured which one that is).
+- **Driving buttons**, measured with a car on a straight street (575, 175): Cross accelerates (forward speed 0.28 after
+  2 s), R1 is the handbrake (0.12 to 0 in 0.7 s; coasting 0.28 to 0.20), Square brakes, then reverses. Vehicle +0x140
+  is its velocity (units per 1/50 s), +0x10 its forward vector.
+
+### 12b. The camera and the mouse (2026-10-29)
+
+- **TheCamera `0x6F44D0` + 0x70 is the active CCam** (Cams[0]; Cams[1] / [2] at +0x2E0 / +0x550, 0x270 apart; still
+  [0] after a lock-on and after getting out of a car). Fields (relative to the CCam): **+0 mode** (4 follow ped on
+  foot, 11 locked on with R1 - with fists too -, 18 behind a vehicle; VC's numbering), +0x10 front, **+0x78 alpha
+  (pitch; negative looks down, about -1.48 .. 0.79)**, **+0x7C beta (heading, 0..2 pi; the stick to the right makes it
+  fall)**, +0x130 / +0x140 pitch / heading speeds, +0x134 FOV (70), +0x1A0 the target point, **+0x220 / +0x230 the
+  source points** (where the camera stands). Found by diffing TheCamera while the right stick turned it, poking each
+  candidate, then a write watch on alpha / beta (`watch`): the writer is **FUN_0029dab0 = the follow-ped camera**
+  (decompiled with `tools/eedecomp.py`).
+- How FUN_0029dab0 turns (k = pow(0.8, step), 0.8 from the table at `0x487B30` + 0x3C per outdoor / interior): the
+  heading's speed = k x the last speed + (1 - k) x (the stick's term |x| x 4.9e-5 x 0.000893 x FOV + a pull toward
+  where the camera stands + the swing behind a walking player), capped at 0.1 a step; beta += speed x step. The source
+  points are put back around the target from beta and the pitch at the end of each update. Pitch: the speed = k x the
+  stick's term (|y| x 4.9e-5 x 0.000536 x FOV, y > 0 looks up) + (1 - k) x the last one, and it **moves the source
+  points**, and alpha only
+  eases toward the pitch the camera stands at (limits from the table: 0.785 up, 1.4835 down). So a heading written
+  alone is pulled back (by ~0.1 a frame for many frames) unless the source points turn with it, and an alpha written
+  alone is undone in a few frames; the stick's pitch speed integrates exactly (the smoothing sums to 1). The stick's
+  top speeds: heading 0.05, pitch 0.03 radians a step (2.5 / 1.5 rad/s).
+- The follow camera ignores the stick while `0x488EB4` is set (FUN_002a2e30) and while CPad +0x96 is set; under a
+  script camera TheCamera + 0x888 is 0 (section 12).
+- **Mouse look** (src/game/vcs_input.cpp, Keyboard > Mouse camera): on foot (mode 4, no script camera, controls on, not
+  paused: the pause menu leaves the mode at 4, `m_UserPause` 0x4CD2AC / `m_CodePause` 0x4CD11C are bytes) the
+  pad read adds the mouse's turn to beta and turns +0x220 / +0x230 about the player by the same angle (exact: 300
+  counts in 30 moves -> -0.750 rad, 400 counts a radian), and sends the pitch as the stick's pitch speed with the curve
+  above undone, carrying what is over the stick's top speed to the next frames (90 counts -> +0.225 rad). Other
+  cameras (vehicles, aiming, lock-on) get the mouse's speed as the right stick, past the dead third. Checked by
+  `tools/controls_check.py` (the `mouse dx dy` control command moves the mouse in hidden runs).
+- Teleported to (575, 175) the camera ends up at its lowest pitch (-1.483, straight down) - the game's own doing (the
+  same with `VCS_INPUT_MAP=0`).
 
 ## 13. Open questions / next research targets
 

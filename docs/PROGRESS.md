@@ -569,6 +569,15 @@ dropped on uploads (lazy render-target patching).
   mute or pause in the background; presets (Authentic, Enhanced, Widescreen light) and Reset all settings
   (docs/CONTROLS.md, SETTINGS_MENU_WIDESCREEN.md "Player settings"). `tools/controls_check.py`: 21 checks, 0 failed;
   regress step "controls". Defaults unchanged (the old fixed mapping, mouse camera off, vibration as on the PS2).
+- **Mouse look and driving keys** (2026-10-29, asked for by the user): on foot the mouse turns the follow camera itself
+  (heading written in the game with the camera's source points, pitch through the stick's pitch speed with the game's
+  stick curve undone; exact amounts, no top speed for the heading), in other cameras it is the right stick past the
+  game's dead third; Mouse camera on by default, forward looks up. While driving W / S / Space are Cross / Square / R1
+  (accelerate, brake, handbrake) and do nothing else; lean on Keypad 8 / 5 (Keyboard > Driving, a key group of its own).
+  Right click (R1) locks on, checked. game-internals.md 12a / 12b (the stick curve, three pad reads a frame, the
+  follow camera FUN_0029dab0), DECISIONS.md. `tools/controls_check.py`: 36 checks, 0 failed (11 new: mouse heading /
+  pitch / invert / off, the pause menu, lock-on, driving keys, lean rebind, W drives and Space stops the car, the mouse
+  on the vehicle camera, mouse look after leaving the car).
 - **Music / sound effects volume** (2026-10-28, asked for by the user): Audio > Music and Sound effects are the game's
   own levels, in step with its pause menu both ways and kept across save loads (game-internals.md 9c). controls_check
   checks that the levels reach the game and its prefs, a save load keeps them, and the pause menu's slider changes the

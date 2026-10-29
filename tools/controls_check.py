@@ -6,7 +6,10 @@ report they make and in the game, plus the settings registry's presets and reset
 
 Loads the Fort Baxter rig save (a copy, hidden), then: every default key binding (both slots, either Shift / Ctrl,
 Keypad Enter, the mouse buttons) gives its PS2 button or stick direction, Alt+Enter is not Start; a rebound key moves
-Vic and the old one no longer does; the walk key holds the stick at walking speed; a mouse wheel binding; a menu key
+Vic and the old one no longer does; the walk key holds the stick at walking speed; the mouse turns the on-foot camera
+by the amount asked (heading and pitch, inverted, off), right click locks on to a ped, the Driving keys (W / S / Space
+accelerate, brake, handbrake in a car, and nothing else there), the mouse on the vehicle camera, on foot again after
+leaving the car; a mouse wheel binding; a menu key
 refuses a key a control has; the presets and Reset all settings; screenshots of the settings menu's pages; Audio >
 Music / Sound effects are the game's own levels (set here, shown in its pause menu, changed there, kept by a save
 load) (src/game/vcs_volume.cpp). Results: OUT/summary.txt; screenshots OUT/*.png. Default
@@ -130,6 +133,119 @@ class Check:
         self.setting("audio.music_volume", 63)
         self.setting("audio.sfx_volume", 88)
 
+    CAM = 0x6F44D0 + 0x70  # TheCamera's active CCam: +0 mode (4 on foot, 11 locked on, 18 vehicle), +0x78 pitch, +0x7C heading
+
+    def cam(self):
+        """(mode, pitch, heading) of the active camera."""
+        pitch, heading = self.g.peekf(self.CAM + 0x78, 2)
+        return self.g.u32(self.CAM), pitch, heading
+
+    def mouse_moves(self, n, dx, dy):
+        """Mouse motion in n small moves (as a real mouse sends it); (heading, pitch) turned once the camera settled."""
+        _, p0, h0 = self.cam()
+        for _ in range(n):
+            self.g.cmd("mouse %d %d" % (dx, dy))
+        self.g.wait_frames(20)
+        _, p1, h1 = self.cam()
+        return (h1 - h0 + math.pi) % (2 * math.pi) - math.pi, p1 - p0
+
+    def mouse_and_driving(self):
+        """The mouse camera on foot (heading written in the game, pitch through the stick), right-click lock-on, and the
+        Driving keys (W / S / Space as Cross / Square / R1 while driving only), checked in the camera and the car."""
+        g = self.g
+        S = rig.Scm
+        g.teleport(575.0, 175.0, -100.0, 0.0)  # a straight street (the camera starts at its lowest here)
+        time.sleep(4.0)
+        g.cmd("mouse 0 -150")
+        g.wait_frames(30)
+        mode = self.cam()[0]
+        turn, up = self.mouse_moves(30, 10, -3)  # 400 counts a radian at 100%: -0.75 heading (right), +0.225 pitch (up)
+        self.ok("mouse turns the camera on foot", mode == 4 and abs(turn + 0.75) < 0.03 and abs(up - 0.225) < 0.02,
+                "mode %d heading %+.3f pitch %+.3f" % (mode, turn, up))
+        self.setting("mouse.invert_y", 1)
+        _, up = self.mouse_moves(10, 0, -4)
+        self.setting("mouse.invert_y", 0)
+        self.ok("invert mouse up / down", abs(up + 0.1) < 0.01, "pitch %+.3f" % up)
+        self.setting("mouse.camera", 0)
+        turn, up = self.mouse_moves(10, 20, 5)
+        self.setting("mouse.camera", 1)
+        self.ok("mouse camera off", abs(turn) < 0.005 and abs(up) < 0.005, "heading %+.3f pitch %+.3f" % (turn, up))
+        self.keys("Return@3")  # the game's pause menu: the camera stays
+        _, _, h0 = self.cam()
+        g.cmd("mouse 400 0")
+        time.sleep(1.0)
+        _, _, h1 = self.cam()
+        self.keys("Return@3")
+        self.ok("the mouse leaves the camera in the pause menu", abs(h1 - h0) < 0.001, "heading %.3f -> %.3f" % (h0, h1))
+
+        # right click locks on to a ped next to Vic (the game's lock-on camera, mode 11), and the mouse does not break it
+        _, (x, y, _), _ = g.player()
+        g.scm(S.op(S.REQUEST_MODEL, S.i(55)) + S.op(S.LOAD_ALL_MODELS_NOW) +
+              S.op(S.CREATE_CHAR, S.i(4), S.i(55), S.f(x + 2.0), S.f(y + 2.0), S.f(-100.0), S.LOCAL0))
+        time.sleep(1.5)
+        g.cmd("key mouseright down")
+        time.sleep(1.0)
+        locked = self.cam()[0]
+        g.cmd("mouse 400 0")
+        time.sleep(0.5)
+        still = self.cam()[0]
+        g.cmd("key mouseright up")
+        time.sleep(1.0)
+        self.ok("right click locks on", locked == 11 and still == 11 and self.cam()[0] == 4,
+                "held %d, mouse moved %d, released %d" % (locked, still, self.cam()[0]))
+
+        # driving: the Driving keys, and nothing else on those keys
+        g.teleport(575.0, 175.0, -100.0, 0.0)
+        time.sleep(3.0)
+        g.spawn_car(ahead=0.0)
+        time.sleep(3.0)
+        ped = g.player()[0]
+        car = g.u32(ped + 0x480)
+        self.ok("in a car", car != 0 and g.u32(ped + 0x8C4) == 0x37 and self.cam()[0] == 18, "car 0x%x mode %d" % (car, self.cam()[0]))
+        got = {k: self.held(k) for k in ("w", "s", "space", "a", "shift", "mouseright")}
+        want = {"w": CROSS, "s": SQUARE, "space": R1, "a": 0, "shift": CROSS, "mouseright": R1}
+        bad = ["%s -> %s" % (k, p) for k, p in got.items() if p["buttons"] != want[k] or p["ly"] != 128 or
+               p["lx"] != (0 if k == "a" else 128)]
+        self.ok("driving keys", not bad, "; ".join(bad))
+        self.setting("keys.drive_lean_forward", KEY_G)
+        p = self.held("g")
+        self.setting("keys.drive_lean_forward", 0)
+        self.ok("lean forward rebound", p["ly"] == 0 and p["buttons"] == 0, str(p))
+
+        def forward():
+            v, f = g.peekf(car + 0x140, 3), g.peekf(car + 0x10, 3)
+            return sum(a * b for a, b in zip(v, f))
+        g.cmd("key w down")
+        time.sleep(2.0)
+        fast = forward()
+        g.cmd("key w up")
+        g.cmd("key space down")
+        time.sleep(1.6)
+        stopped = forward()
+        g.cmd("key space up")
+        self.ok("W drives, Space is the handbrake", fast > 0.15 and abs(stopped) < 0.05, "%.3f then %.3f" % (fast, stopped))
+        _, _, h0 = self.cam()
+        for _ in range(20):  # the vehicle camera turns at the stick's speed: a steady movement over 0.6 s
+            g.cmd("mouse 20 0")
+            time.sleep(0.03)
+        g.wait_frames(20)
+        _, _, h1 = self.cam()
+        self.ok("mouse turns the vehicle camera", abs(h1 - h0) > 0.1, "heading %.3f -> %.3f" % (h0, h1))
+
+        # out of the car: the on-foot keys and the mouse look again
+        g.cmd("key space down")
+        time.sleep(1.0)
+        g.cmd("key space up")
+        g.cmd("press f 300")
+        t0 = time.time()
+        while time.time() - t0 < 8 and (g.u32(ped + 0x8C4) == 0x37 or self.cam()[0] != 4):
+            time.sleep(0.25)
+        time.sleep(3.0)  # the camera's move back behind Vic sets its heading itself meanwhile
+        turn, _ = self.mouse_moves(30, 10, 0)
+        p = self.held("w")
+        self.ok("on foot again", self.cam()[0] == 4 and abs(turn + 0.75) < 0.03 and p["ly"] == 0 and p["buttons"] == 0,
+                "mode %d heading %+.3f, W %s" % (self.cam()[0], turn, p))
+
     def run(self):
         g = self.g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="controls_check",
                                     port=self.port, data_dir=os.path.join(ROOT, "build", "controls", "data"),
@@ -180,6 +296,8 @@ class Check:
             self.ok("walk key", abs(p["ly"] - want) <= 1, "ly %d (want %d)" % (p["ly"], want))
             walk = self.setting("keys.walk", 0)
             self.ok("walk unbound", walk == "0", walk)
+
+            self.mouse_and_driving()
 
             # a wheel notch as L1 (second slot); the menu key keeps F2 (the menu refuses keys a control has)
             self.setting("keys.l12", KEY_WHEEL_UP)
