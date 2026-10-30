@@ -1,6 +1,6 @@
 # GTA: Vice City Stories — Native PC port (PS2 static recompilation)
 
-A native Windows port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
+A native Windows (and, in progress, Linux) port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
 recompiling the game's PS2 executable into C++.
 
 **This repository contains no game code or game data.** You need your own copy of the game as an `.iso`.
@@ -63,6 +63,18 @@ The build already told it where your disc is.
 - **F5** opens the trainer ([docs/TRAINER.md](docs/TRAINER.md)).
 - Keyboard, mouse and gamepads (Xbox, PlayStation, Switch Pro, ...) all work: [docs/CONTROLS.md](docs/CONTROLS.md).
 - Saves (the memory card) live in `%LOCALAPPDATA%\VCSRecomp`.
+
+## Linux (in progress)
+
+The same source builds natively on Linux with clang and draws with Vulkan ([docs/LINUX.md](docs/LINUX.md)). It is
+not tested in the game yet. The steps are the Windows ones with the distro's packages instead of Visual Studio:
+```bash
+python3 tools/build.py --check-deps      # lists what is missing and prints the install command (apt / dnf / pacman)
+python3 tools/build.py --recompile "Grand Theft Auto - Vice City Stories (USA).iso"
+python3 tools/run.py 0 play              # or start build/vcs
+```
+Needed: clang 19 or newer with lld, CMake, Ninja, glslang, the FFmpeg and SDL3 development packages, and a Vulkan 1.3
+driver. Saves go to `~/.local/share/VCSRecomp`.
 
 ## Features
 

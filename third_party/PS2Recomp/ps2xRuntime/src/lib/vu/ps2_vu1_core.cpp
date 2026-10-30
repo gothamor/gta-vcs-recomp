@@ -3,8 +3,7 @@
 #include <vector>
 #include <mutex>
 #include <unordered_map>
-#include <intrin.h>
-#include <bit>
+#include <bit> // [gta-recomp] std::countr_zero instead of MSVC's <intrin.h> _BitScanForward (Linux)
 #include <string>
 #include <memory>
 #include "runtime/ps2_host_profile.h"
@@ -1283,8 +1282,7 @@ uint64_t VU1Interpreter::calculatePairReadyCycle(const DecodedInstructionPair &d
     }
     for (uint32_t reads = decoded.stallViReads; reads != 0u; reads &= reads - 1u)
     {
-        unsigned long reg = 0;
-        _BitScanForward(&reg, reads);
+        const unsigned reg = static_cast<unsigned>(std::countr_zero(reads));
         ready = std::max(ready, m_viReady[reg]);
     }
     if (decoded.stallAccReads != 0u)
@@ -1345,8 +1343,7 @@ void VU1Interpreter::markPairWrites(const DecodedInstructionPair &decoded)
     }
     for (uint32_t writes = decoded.markViWrites; writes != 0u; writes &= writes - 1u)
     {
-        unsigned long reg = 0;
-        _BitScanForward(&reg, writes);
+        const unsigned reg = static_cast<unsigned>(std::countr_zero(writes));
         m_viReady[reg] = m_cycle + decoded.markViLatency;
     }
     if (decoded.markAccWrites != 0u)

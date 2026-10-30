@@ -1,17 +1,27 @@
-// Crash reporting: uncaught C++ exceptions, abort() and SEH exceptions print the
-// reason and a symbolized host stack to stderr before the process dies.
+// Crash reporting: uncaught C++ exceptions, abort() and SEH exceptions (Windows) / fatal signals (Linux) print the
+// reason and the host stack to stderr before the process dies. Windows symbolizes with dbghelp; Linux prints each
+// frame as module + offset (and the symbol dladdr knows: the exe is linked -rdynamic) and an llvm-symbolizer command
+// for file and line (docs/LINUX.md).
 #include "crash.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <csignal>
+#include <cstdint>
 #include <exception>
+#include <initializer_list>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <dbghelp.h>
+#elif defined(__linux__)
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <ucontext.h>
+#include <unistd.h>
+#include <sys/syscall.h>
 #endif
 
 namespace vcs
@@ -95,6 +105,78 @@ namespace vcs
             printStack(info->ContextRecord);
             return EXCEPTION_CONTINUE_SEARCH;
         }
+#elif defined(__linux__)
+        // Frames as "module+0xoffset (symbol+0xoffset)", then one llvm-symbolizer line per module seen. Called from
+        // signal handlers: no allocation; dladdr is not async-signal-safe in theory, but the process is ending anyway.
+        void printStack(void *faultPc)
+        {
+            void *frames[64];
+            int n = backtrace(frames, 64);
+            int first = 0;
+            if (faultPc) // skip the handler and the signal trampoline: start at the faulting instruction
+                for (int i = 0; i < n; ++i)
+                    if (frames[i] == faultPc)
+                    {
+                        first = i;
+                        break;
+                    }
+            const char *modules[8] = {};
+            for (int i = first; i < n; ++i)
+            {
+                Dl_info info{};
+                const bool known = dladdr(frames[i], &info) != 0 && info.dli_fname;
+                const unsigned long long off = known ? reinterpret_cast<uintptr_t>(frames[i]) - reinterpret_cast<uintptr_t>(info.dli_fbase) : 0;
+                std::fprintf(stderr, "[crash]   #%02d %016llx %s+0x%llx", i - first,
+                             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(frames[i])), known ? info.dli_fname : "?", off);
+                if (known && info.dli_sname)
+                    std::fprintf(stderr, " (%s+0x%llx)", info.dli_sname,
+                                 static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(frames[i]) - reinterpret_cast<uintptr_t>(info.dli_saddr)));
+                std::fprintf(stderr, "\n");
+                for (const char *&m : modules)
+                    if (known && (!m || m == info.dli_fname))
+                    {
+                        m = info.dli_fname;
+                        break;
+                    }
+            }
+            for (const char *m : modules)
+            {
+                if (!m)
+                    break;
+                std::fprintf(stderr, "[crash] file and line: llvm-symbolizer -e %s", m);
+                for (int i = first; i < n; ++i)
+                {
+                    Dl_info info{};
+                    if (dladdr(frames[i], &info) && info.dli_fname == m)
+                        // the return address minus one: the call, not the instruction after it (not for the fault)
+                        std::fprintf(stderr, " 0x%llx",
+                                     static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(frames[i]) - reinterpret_cast<uintptr_t>(info.dli_fbase) -
+                                                                     (i == first && faultPc ? 0 : 1)));
+                }
+                std::fprintf(stderr, "\n");
+            }
+            std::fflush(stderr);
+        }
+
+        void onFatalSignal(int sig, siginfo_t *info, void *context)
+        {
+            static volatile sig_atomic_t inside = 0;
+            if (inside) // a fault while reporting one: just go
+                _exit(128 + sig);
+            inside = 1;
+            const ucontext_t *uc = static_cast<const ucontext_t *>(context);
+            void *pc = uc ? reinterpret_cast<void *>(uc->uc_mcontext.gregs[REG_RIP]) : nullptr;
+            const char *name = sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" : sig == SIGILL ? "SIGILL" : sig == SIGFPE ? "SIGFPE" : "signal";
+            std::fprintf(stderr, "[crash] %s at %p", name, pc);
+            if ((sig == SIGSEGV || sig == SIGBUS) && info)
+                std::fprintf(stderr, " %s address %p", info->si_code == SEGV_ACCERR ? "no access to" : "bad", info->si_addr);
+            std::fprintf(stderr, " (thread %ld)\n", static_cast<long>(syscall(SYS_gettid)));
+            printStack(pc);
+            // the default action: the exit status (and a core dump where enabled) say what happened
+            signal(sig, SIG_DFL);
+            raise(sig);
+        }
+
 #endif
 
         void onTerminate()
@@ -116,7 +198,7 @@ namespace vcs
                 }
             }
             std::fprintf(stderr, "\n");
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__linux__)
             printStack(nullptr);
 #endif
             std::_Exit(3);
@@ -125,7 +207,7 @@ namespace vcs
         void onAbort(int)
         {
             std::fprintf(stderr, "[crash] abort()\n");
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__linux__)
             printStack(nullptr);
 #endif
             std::_Exit(3);
@@ -142,6 +224,22 @@ namespace vcs
         _set_invalid_parameter_handler(&onInvalidParameter);
         if (std::getenv("VCS_CRASH_FIRST_CHANCE"))
             AddVectoredExceptionHandler(1, &onFirstChance);
+#elif defined(__linux__)
+        // the handler runs on its own stack, so a stack overflow is reported too (the main thread's; other threads
+        // report on their own stack)
+        static char altStack[64 * 1024];
+        stack_t ss{};
+        ss.ss_sp = altStack;
+        ss.ss_size = sizeof(altStack);
+        sigaltstack(&ss, nullptr);
+        void *warm[1];
+        backtrace(warm, 1); // loads the unwinder now, not inside a signal handler
+        struct sigaction sa{};
+        sa.sa_sigaction = &onFatalSignal;
+        sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+        sigemptyset(&sa.sa_mask);
+        for (int sig : {SIGSEGV, SIGBUS, SIGILL, SIGFPE})
+            sigaction(sig, &sa, nullptr);
 #endif
     }
 }

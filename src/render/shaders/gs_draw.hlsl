@@ -34,6 +34,9 @@ struct VSOut
     noperspective float fog : TEXCOORD1;
     noperspective float depth : TEXCOORD2;
     float2 clip : SV_ClipDistance0; // native draws: the PS2 clip test's near / far planes
+#if VCS_SPIRV
+    [[vk::builtin("PointSize")]] float psize : PSIZE; // Vulkan points need one (D3D11's are always 1 pixel)
+#endif
 };
 
 VSOut vs_main(VSIn i)
@@ -47,6 +50,9 @@ VSOut vs_main(VSIn i)
     o.colFlat = i.col;
     o.fog = i.fog;
     o.clip = float2(1.0, 1.0);
+#if VCS_SPIRV
+    o.psize = 1.0;
+#endif
     return o;
 }
 
@@ -77,6 +83,9 @@ void nativePosition(float4 S, float4 C, float3 st, inout VSOut o)
     o.depth = depth;
     o.clip = float2(C.z + C.w, C.w - C.z); // the PS2 clip test's near / far planes
     o.stq = st * q;
+#if VCS_SPIRV
+    o.psize = 1.0;
+#endif
 }
 
 float nativeFog(float4 fog, float w)

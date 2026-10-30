@@ -4,7 +4,7 @@
 // instruction pointer ~2000x per second and maps it back to the guest function
 // whose recompiled body contains it (nearest lower host function pointer in the
 // generated function table). Prints the hottest guest functions every report.
-// Works without debug symbols. Windows only.
+// Works without debug symbols. Windows (SuspendThread) and Linux (a SIGPROF per sample).
 #pragma once
 
 class PS2Runtime;

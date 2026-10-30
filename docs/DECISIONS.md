@@ -197,7 +197,8 @@ The user's choices on the roadmap's open questions:
 - Movies: FFmpeg as the decoder.
 - 60 fps: a settings-menu option, off by default (30 fps stays the authentic default).
 - IOP retirement (milestone 6): do it.
-- Windows only for now; milestone 9 (portability / distribution) is out of scope until further notice.
+- Windows only for now; milestone 9 (portability / distribution) is out of scope until further notice. (Superseded
+  2026-10-30: native Linux, see that entry.)
 - Game knowledge goes into docs/game-internals.md (successor of ENGINE.md, each fact with how it was
   found); AGENTS.md is the working contract for agents.
 
@@ -551,3 +552,32 @@ stands), Hide HUD as a switch of its own, on / off from a trainer row and a hotk
 - **Hide HUD** skips CHud::Draw (the hook vcs_hud.cpp already had, now installed with `VCS_HUD_RW=0` too): radar, clock,
   money, weapon, stars. Text drawn after it (zone names, help, subtitles) stays - hiding that too would mean picking
   which text is the HUD's.
+
+## 2026-10-30 - Native Linux (the user's request); the Steam Deck postponed
+
+The user asked for Linux to be as native as Windows, first with Steam Deck support, then (the same day) without it:
+"just have strong support for linux for now". Their choices: a **plain host build** (the distro's own compiler and
+libraries through the same `tools/build.py`; no container, Flatpak or Steam Runtime), tested on their Linux laptop
+(i5 Skylake, HD 520, 7 GB) with the Windows PC kept as the reference. The working list is docs/LINUX.md.
+- **clang only** (19+, for `preserve_none` in PS2_GUEST_CC): the same compiler as clang-cl, so the same code and
+  numerics. GCC would need its own checks of every bit-exact path and lacks preserve_none.
+- **Flags as clang-cl's**, written out: `-march=x86-64-v3 -ffp-contract=off -fno-math-errno`, and `-fno-strict-aliasing`,
+  which clang-cl implies (MSVC compatibility) and plain clang does not - the runtime and generated code read guest memory
+  through casts. No stack protector / CET, as `/GS-`.
+- **Vulkan**, a new RHI backend (`src/rhi/vulkan`), rather than OpenGL or a translation layer: the RHI was shaped for it
+  (immutable pipelines, explicit passes), and it can be checked against D3D11 on the same Windows PC
+  (`-DVCS_RHI_VULKAN=ON`). D3D11 stays the Windows default and the reference. Vulkan 1.3 with dynamic rendering,
+  synchronization2 and push descriptors; volk, VMA and the headers from source (no SDK).
+- **Shaders stay one HLSL source**: glslang (a distro package) compiles them to SPIR-V through `tools/hlsl_spirv.py`.
+  DXC was the plan, but no distro ships it here and a downloaded binary is a tool the user didn't install; glslang
+  handles every shader, and the script fixes the one thing it gets wrong (dual-source output: Location 0 Index 1).
+- **Dear ImGui through the RHI** (`render/ui_renderer.cpp`) for Vulkan instead of `imgui_impl_vulkan`: one pipeline
+  works for every target format the backend draws to (the swapchain's BGRA and the RGBA captures), and it uses only
+  the RHI. D3D11 keeps `imgui_impl_dx11` (the reference stays as it was).
+- **Hidden test runs make no swapchain** on Vulkan: the back buffer is a texture. A FIFO present to a hidden Wayland
+  window can wait forever, and tests take screenshots off-screen anyway.
+- **A null backend** (`VCS_RHI=null`) to bring up and check the CPU side without the renderer.
+- The Windows-only debug tools got Linux versions where cheap (crash handler on signals, a SIGPROF sampling profiler);
+  `perf` / `gdb` cover the rest. The write watch has no Linux equivalent yet (correct without it, slower); whether it is
+  worth userfaultfd is to be measured first.
+

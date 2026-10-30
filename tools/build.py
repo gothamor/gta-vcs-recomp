@@ -5,6 +5,7 @@
     python tools/build.py --recompile [ISO]     recompile from your disc first, then build - the whole pipeline
     python tools/build.py --quick               no link-time optimisation: fast rebuilds while changing code
     python tools/build.py --iop-tests           build and run the IOP / SPU2 unit tests (build/iop_tests, no disc)
+    python tools/build.py --check-deps          Linux: list the missing packages and the command that installs them
     python tools/build.py --opt none|lto|pgo    optimisation of the game, kept until changed: lto (default; ThinLTO,
                                                 the game to play), none (= --quick), pgo (ThinLTO + profile-guided:
                                                 trains first when build/pgo/vcs.profdata is missing or with --train;
@@ -24,6 +25,8 @@ ISO defaults to VCS_ISO, iso=... in vcs.ini, or a '*Vice City Stories*.iso' in t
 Windows: needs Visual Studio 2022+ (or its Build Tools) with "Desktop development with C++" and "C++ Clang tools for
 Windows"; its CMake and Ninja are used when no others are on PATH. The Visual Studio environment is set up
 automatically.
+Linux: clang 19+ with lld, CMake, Ninja, glslang and the development packages SDL3 and FFmpeg need (docs/LINUX.md);
+--check-deps lists what is missing. The first configure checks them too.
 """
 import argparse
 import filecmp
@@ -47,6 +50,7 @@ def main():
     ap.add_argument("--opt", choices=("none", "lto", "pgo"), help="optimisation of the game (kept until changed)")
     ap.add_argument("--quick", action="store_true", help="same as --opt none: fast rebuilds, slower game")
     ap.add_argument("--train", action="store_true", help="with --opt pgo: train a new profile first")
+    ap.add_argument("--check-deps", action="store_true", help="Linux: check the build dependencies and stop")
     a = ap.parse_args()
     if a.quick:
         if a.opt not in (None, "none"):
@@ -54,6 +58,10 @@ def main():
         a.opt = "none"
 
     env = tc.build_env()
+    if a.check_deps:
+        sys.exit(0 if tc.IS_WINDOWS or tc.check_linux_deps(env) else 1)
+    if not tc.IS_WINDOWS and not os.path.isfile(os.path.join(tc.BUILD_DIR, "build.ninja")) and not tc.check_linux_deps(env):
+        tc.fail("missing build dependencies (above)")
     if a.iop_tests:
         sys.exit(iop_tests(env))
     if a.recompile is not None:
@@ -196,8 +204,8 @@ def iop_tests(env):
     out = os.path.join(tc.BUILD, "iop_tests")
     if not os.path.isfile(os.path.join(out, "build.ninja")):
         subprocess.check_call(["cmake", "-S", os.path.join(tc.ROOT, "third_party", "PS2Recomp", "ps2xIOP"), "-B", out,
-                               "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_IOP_BUILD_TESTS=ON",
-                               "-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl"], env=env)
+                               "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_IOP_BUILD_TESTS=ON"]
+                              + tc.compiler_defines(env), env=env)
     if not tc.cmake_build(env, "ps2_iop_spu2_tests", "build_iop_tests.log", build_dir=out):
         return 1
     return subprocess.call([tc.exe(os.path.join(out, "ps2_iop_spu2_tests"))])

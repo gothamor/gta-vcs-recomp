@@ -653,7 +653,7 @@ namespace
         RhiExecutor(rhi::Device &device, uint32_t scale, uint32_t msaa, uint32_t anisotropy)
             : m_dev(device), m_scale(scale), m_msaa(msaa), m_anisotropy(anisotropy > 1u ? anisotropy : 0u)
         {
-            const render::GsShaders &sh = render::gsShaders();
+            const render::GsShaders &sh = render::gsShaders(m_dev.backend()); // [gta-recomp] the device's backend (DXBC / SPIR-V)
             m_drawCb = m_dev.createBuffer({sizeof(DrawConstants), rhi::BufferUsage::Constant, true, "gs draw constants"});
             m_quadCb = m_dev.createBuffer({sizeof(QuadConstants), rhi::BufferUsage::Constant, true, "gs quad constants"});
             m_worldCb = m_dev.createBuffer({128u * sizeof(float), rhi::BufferUsage::Constant, true, "gs native draw constants"});
@@ -1353,7 +1353,7 @@ namespace
             std::unique_ptr<rhi::Pipeline> &p = m_drawPipelines[key];
             if (!p)
             {
-                const render::GsShaders &sh = render::gsShaders();
+                const render::GsShaders &sh = render::gsShaders(m_dev.backend()); // [gta-recomp] the device's backend (DXBC / SPIR-V)
                 rhi::PipelineDesc d;
                 // [gta-recomp] gather: the pixel shader built for the Gather path alone (gs_draw.hlsl GATHER_ONLY)
                 d.pixel = gather ? (dual ? sh.drawPSGatherDual : sh.drawPSGather) : (dual ? sh.drawPSDual : sh.drawPS);

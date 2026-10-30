@@ -21,6 +21,15 @@
 #include <tlhelp32.h>
 #include <dbghelp.h>
 #include <string>
+#elif defined(__linux__)
+#include <csignal>
+#include <cxxabi.h>
+#include <dirent.h>
+#include <dlfcn.h>
+#include <link.h>
+#include <ucontext.h>
+#include <unistd.h>
+#include <sys/syscall.h>
 #endif
 
 namespace vcs
@@ -484,6 +493,301 @@ namespace vcs
             } })
             .detach();
     }
+    void profilerFrame()
+    {
+        if (g_spikeMs <= 0)
+            return;
+        const int64_t now = nowNs(), last = g_lastFrameNs.exchange(now);
+        if (last && now - last > g_spikeMs * 1000000 && g_spikeToNs.load(std::memory_order_acquire) == 0)
+        {
+            g_spikeFromNs.store(last);
+            g_spikeToNs.store(now, std::memory_order_release);
+        }
+    }
+#elif defined(__linux__)
+    // Linux: the sampler thread sends SIGPROF to each sampled thread (tgkill); the handler hands its RIP back. Same reports
+    // as on Windows (guest functions, host symbols, [spike] frames, VCS_PROFILE_GUEST_FILE); VCS_PROFILE_CALLERS and
+    // VCS_PROFILE_LINES are Windows only - `perf record -g` covers them here (docs/LINUX.md).
+    namespace
+    {
+        std::atomic<int64_t> g_lastFrameNs{0}, g_spikeFromNs{0}, g_spikeToNs{0};
+        int64_t g_spikeMs = 0;
+        std::atomic<uintptr_t> g_sampledRip{0};
+        std::atomic<bool> g_sampleReady{false};
+
+        int64_t nowNs()
+        {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+
+        void onSample(int, siginfo_t *, void *context)
+        {
+            const ucontext_t *uc = static_cast<const ucontext_t *>(context);
+            g_sampledRip.store(static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RIP]), std::memory_order_relaxed);
+            g_sampleReady.store(true, std::memory_order_release);
+        }
+
+        struct HostFn
+        {
+            uintptr_t host;
+            uint32_t guest; // lowest guest address mapped to this host function = its start
+        };
+
+        std::vector<HostFn> buildHostMap()
+        {
+            std::unordered_map<uintptr_t, uint32_t> lowest;
+            for (uint32_t slot = 0; slot < g_ps2RecompiledFunctionTableSlotCount; ++slot)
+                if (auto fn = g_ps2RecompiledFunctionTable[slot])
+                {
+                    const uintptr_t host = reinterpret_cast<uintptr_t>(fn);
+                    const uint32_t guest = g_ps2RecompiledFunctionTableBase + slot * 4u;
+                    auto [it, inserted] = lowest.emplace(host, guest);
+                    if (!inserted && guest < it->second)
+                        it->second = guest;
+                }
+            std::vector<HostFn> map;
+            for (const auto &[host, guest] : lowest)
+                map.push_back({host, guest});
+            std::sort(map.begin(), map.end(), [](const HostFn &a, const HostFn &b) { return a.host < b.host; });
+            return map;
+        }
+
+        // the threads named in VCS_PROFILE_THREAD (default GameThread), by /proc/self/task/*/comm
+        std::vector<std::pair<pid_t, std::string>> findThreads()
+        {
+            std::vector<std::string> wanted{"GameThread"};
+            if (const char *thread = std::getenv("VCS_PROFILE_THREAD"))
+            {
+                wanted.clear();
+                for (const char *p = thread; *p;)
+                {
+                    const char *comma = std::strchr(p, ',');
+                    const char *e = comma ? comma : p + std::strlen(p);
+                    wanted.emplace_back(p, e);
+                    p = comma ? comma + 1 : e;
+                }
+            }
+            std::vector<std::pair<pid_t, std::string>> out;
+            DIR *dir = opendir("/proc/self/task");
+            if (!dir)
+                return out;
+            while (dirent *e = readdir(dir))
+            {
+                if (e->d_name[0] == '.')
+                    continue;
+                char path[64], name[32] = {};
+                std::snprintf(path, sizeof(path), "/proc/self/task/%s/comm", e->d_name);
+                if (FILE *f = std::fopen(path, "r"))
+                {
+                    if (std::fgets(name, sizeof(name), f))
+                        name[std::strcspn(name, "\n")] = 0;
+                    std::fclose(f);
+                }
+                for (const std::string &w : wanted)
+                    if (w == name)
+                        out.emplace_back(static_cast<pid_t>(std::atoi(e->d_name)), name);
+            }
+            closedir(dir);
+            return out;
+        }
+
+        // A host address's symbol (demangled) and its function's size, from the exe's dynamic symbols (-rdynamic)
+        bool hostSymbol(uintptr_t addr, std::string *name, uintptr_t *start, uint64_t *size)
+        {
+            Dl_info info{};
+            void *entry = nullptr;
+            if (!dladdr1(reinterpret_cast<void *>(addr), &info, &entry, RTLD_DL_SYMENT) || !info.dli_sname)
+                return false;
+            const ElfW(Sym) *sym = static_cast<const ElfW(Sym) *>(entry);
+            if (name)
+            {
+                int status = 0;
+                char *plain = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
+                *name = status == 0 && plain ? plain : info.dli_sname;
+                std::free(plain);
+            }
+            if (start)
+                *start = reinterpret_cast<uintptr_t>(info.dli_saddr);
+            if (size)
+                *size = sym ? sym->st_size : 0;
+            return true;
+        }
+    }
+
+    void startProfiler(PS2Runtime &runtime)
+    {
+        const char *env = std::getenv("VCS_PROFILE");
+        if (!env || !*env)
+            return;
+        const double reportSeconds = std::atof(env) > 0.0 ? std::atof(env) : 5.0;
+        if (const char *spikes = std::getenv("VCS_PROFILE_SPIKES"))
+            g_spikeMs = std::atoll(spikes);
+        if (std::getenv("VCS_PROFILE_CALLERS") || std::getenv("VCS_PROFILE_LINES"))
+            std::fprintf(stderr, "[profile] VCS_PROFILE_CALLERS / VCS_PROFILE_LINES are Windows only: use perf record -g on Linux\n");
+        struct sigaction sa{};
+        sa.sa_sigaction = &onSample;
+        sa.sa_flags = SA_SIGINFO | SA_RESTART;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGPROF, &sa, nullptr);
+
+        std::thread([&runtime, reportSeconds]() {
+            const std::vector<HostFn> map = buildHostMap();
+            const pid_t pid = getpid();
+            // is the host function at `host` generated code (FUN_*, not a hook), and how long is it (symbol size)
+            struct GeneratedInfo
+            {
+                bool generated = false;
+                uint64_t size = 0x100000u; // unknown size: a 1 MB window
+            };
+            std::unordered_map<uintptr_t, GeneratedInfo> generatedCache;
+            auto withinGenerated = [&generatedCache](uintptr_t host, uintptr_t pc) {
+                auto found = generatedCache.find(host);
+                if (found == generatedCache.end())
+                {
+                    GeneratedInfo info;
+                    std::string name;
+                    uintptr_t start = 0;
+                    uint64_t size = 0;
+                    const bool known = hostSymbol(host, &name, &start, &size);
+                    info.generated = !known || name.find("FUN_") != std::string::npos;
+                    if (known && size && start == host)
+                        info.size = size;
+                    found = generatedCache.emplace(host, info).first;
+                }
+                return found->second.generated && pc - host < found->second.size;
+            };
+            auto symbolName = [](uintptr_t addr) {
+                std::string name;
+                if (hostSymbol(addr, &name, nullptr, nullptr))
+                    return name;
+                Dl_info info{};
+                if (dladdr(reinterpret_cast<void *>(addr), &info) && info.dli_fname)
+                {
+                    const char *leaf = std::strrchr(info.dli_fname, '/');
+                    return std::string(leaf ? leaf + 1 : info.dli_fname) + "!?";
+                }
+                return std::string("?");
+            };
+            std::vector<std::pair<pid_t, std::string>> threads;
+            std::unordered_map<uint32_t, uint64_t> hits;   // guest function -> samples
+            std::unordered_map<uintptr_t, uint64_t> other; // host RIP -> samples
+            uint64_t total = 0;
+            auto lastReport = std::chrono::steady_clock::now(), lastLook = std::chrono::steady_clock::time_point{};
+            struct Timed
+            {
+                int64_t ns;
+                uint32_t guest; // 0: host code
+                uintptr_t rip;
+                uint32_t thread;
+            };
+            std::vector<Timed> recent;
+            int spikesReported = 0;
+            size_t wantedCount = 1;
+            for (const char *p = std::getenv("VCS_PROFILE_THREAD"); p && *p; ++p)
+                wantedCount += *p == ',';
+            while (!runtime.isStopRequested())
+            {
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
+                if (threads.size() < wantedCount && std::chrono::steady_clock::now() - lastLook > std::chrono::seconds(1))
+                {
+                    lastLook = std::chrono::steady_clock::now();
+                    threads = findThreads();
+                }
+                for (size_t ti = 0; ti < threads.size(); ++ti)
+                {
+                    g_sampleReady.store(false, std::memory_order_relaxed);
+                    if (syscall(SYS_tgkill, pid, threads[ti].first, SIGPROF) != 0)
+                    {
+                        threads.clear(); // gone: looked for again
+                        break;
+                    }
+                    const int64_t deadline = nowNs() + 2000000;
+                    while (!g_sampleReady.load(std::memory_order_acquire) && nowNs() < deadline)
+                        std::this_thread::yield();
+                    if (!g_sampleReady.load(std::memory_order_acquire))
+                        continue;
+                    const uintptr_t rip = g_sampledRip.load(std::memory_order_relaxed);
+                    ++total;
+                    auto it = std::upper_bound(map.begin(), map.end(), rip, [](uintptr_t v, const HostFn &f) { return v < f.host; });
+                    const bool generated = it != map.begin() && it != map.end() && withinGenerated(std::prev(it)->host, rip);
+                    if (generated)
+                        ++hits[std::prev(it)->guest];
+                    else
+                        ++other[rip];
+                    if (g_spikeMs > 0)
+                    {
+                        if (recent.size() >= 8192u)
+                            recent.erase(recent.begin(), recent.begin() + 4096);
+                        recent.push_back({nowNs(), generated ? std::prev(it)->guest : 0u, rip, static_cast<uint32_t>(ti)});
+                    }
+                }
+                if (g_spikeMs > 0 && g_spikeToNs.load(std::memory_order_acquire) != 0)
+                {
+                    const int64_t from = g_spikeFromNs.load(), to = g_spikeToNs.load();
+                    g_spikeToNs.store(0, std::memory_order_release);
+                    std::unordered_map<std::string, uint64_t> by;
+                    uint64_t n = 0;
+                    for (const Timed &t : recent)
+                        if (t.ns >= from && t.ns <= to)
+                        {
+                            ++n;
+                            char key[32];
+                            if (t.guest)
+                                std::snprintf(key, sizeof(key), "guest 0x%08x", t.guest);
+                            const std::string who = threads.size() > 1 && t.thread < threads.size() ? threads[t.thread].second + ": " : "";
+                            by[who + (t.guest ? std::string(key) : "host " + symbolName(t.rip))]++;
+                        }
+                    if (n && spikesReported++ < 400)
+                    {
+                        std::vector<std::pair<std::string, uint64_t>> rows(by.begin(), by.end());
+                        std::sort(rows.begin(), rows.end(), [](auto &a, auto &b) { return a.second > b.second; });
+                        std::string line;
+                        for (size_t i = 0; i < rows.size() && i < 12; ++i)
+                            line += " | " + rows[i].first + " " + std::to_string(rows[i].second);
+                        static const int64_t startNs = nowNs();
+                        std::fprintf(stderr, "[spike] t=%.2f s: %.1f ms frame, %llu samples%s\n", (to - startNs) / 1e9, (to - from) / 1e6,
+                                     static_cast<unsigned long long>(n), line.c_str());
+                    }
+                }
+                const auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration<double>(now - lastReport).count() < reportSeconds || total == 0)
+                    continue;
+                lastReport = now;
+                std::vector<std::pair<uint32_t, uint64_t>> top(hits.begin(), hits.end());
+                std::sort(top.begin(), top.end(), [](auto &a, auto &b) { return a.second > b.second; });
+                uint64_t guestTotal = 0;
+                for (const auto &[pc, n] : hits)
+                    guestTotal += n;
+                std::fprintf(stderr, "[profile] %llu samples, %.1f%% in generated (guest) code\n", static_cast<unsigned long long>(total),
+                             100.0 * guestTotal / total);
+                for (size_t i = 0; i < top.size() && i < 15; ++i)
+                    std::fprintf(stderr, "[profile]   %5.1f%%  guest 0x%08x\n", 100.0 * top[i].second / total, top[i].first);
+                static const char *guestFile = std::getenv("VCS_PROFILE_GUEST_FILE");
+                static const auto profileStart = std::chrono::steady_clock::now();
+                if (guestFile && *guestFile)
+                    if (FILE *f = std::fopen(guestFile, "a"))
+                    {
+                        std::fprintf(f, "window %.0f total %llu\n", std::chrono::duration<double>(now - profileStart).count(),
+                                     static_cast<unsigned long long>(total));
+                        for (const auto &[pc, n] : top)
+                            std::fprintf(f, "0x%08x %llu\n", pc, static_cast<unsigned long long>(n));
+                        std::fclose(f);
+                    }
+                std::unordered_map<std::string, uint64_t> byName;
+                for (const auto &[rip, count] : other)
+                    byName[symbolName(rip)] += count;
+                std::vector<std::pair<std::string, uint64_t>> rest(byName.begin(), byName.end());
+                std::sort(rest.begin(), rest.end(), [](auto &a, auto &b) { return a.second > b.second; });
+                for (size_t i = 0; i < rest.size() && i < 30; ++i)
+                    std::fprintf(stderr, "[profile]   %5.1f%%  host %s\n", 100.0 * rest[i].second / total, rest[i].first.c_str());
+                std::fflush(stderr);
+                hits.clear();
+                other.clear();
+                total = 0;
+            }
+        }).detach();
+    }
+
     void profilerFrame()
     {
         if (g_spikeMs <= 0)

@@ -17,7 +17,8 @@ draws the game's models directly, on D3D11, as fast as possible. Windows only fo
 now, but nothing Windows- or D3D-specific may leak outside two small directories so
 macOS (Metal) and Linux (Vulkan) can be added later.
 
-Non-goals for this plan: macOS/Linux backends, movies, a new frontend/UI.
+Non-goals for this plan: macOS/Linux backends, movies, a new frontend/UI. (Linux got its Vulkan backend later, below:
+"Vulkan backend"; docs/LINUX.md.)
 
 ## Why (where the frame goes today)
 
@@ -630,6 +631,25 @@ Only possible cleanly once the 3D scene is native:
 - Widescreen: projection change in the camera code + HUD aspect handling
   (game-internals.md "Camera and projection" / "HUD" sections still to fill).
 - Each as an option that defaults to authentic output.
+
+### Vulkan backend (Linux, 2026-10-30)
+
+`src/rhi/vulkan/rhi_vulkan.cpp` implements rhi.h on Vulkan 1.3 (dynamic rendering, synchronization2, push descriptors;
+volk + VMA). It keeps the D3D11 backend's behaviour, which the renderer was written against:
+- D3D's Y-up NDC through a negative viewport height (the shaders are unchanged); depth 0..1 and pixel centres at +0.5
+  are the same in both, so `gsPixelCentreOffset` holds.
+- One push-descriptor set with the D3D registers as bindings (tools/hlsl_spirv.py: bN -> N, tN -> 16 + N,
+  sN -> 32 + N). Unbound slots and a texture that is also the pass's target read zeros, as D3D's null views do.
+- State stays bound across draws and passes; beginPass unbinds textures and resets viewport / scissor (as D3D11's).
+- Dynamic buffers: a new slice of the frame's upload ring per update (WRITE_DISCARD), and their CPU copy goes into the
+  ring again when a later frame draws with them unchanged. Static buffers / textures are updated by copies.
+- Copies, uploads and readbacks inside a pass suspend its rendering and resume it with LOAD (`PS2X_RHI_STATS=1` counts
+  them). Textures rest in SHADER_READ_ONLY (or their attachment layout) and return there after each operation.
+- `depthClip=false` is depth clamp (D3D11's DepthClipEnable=FALSE clamps to the viewport, too).
+- New targets start as zeros; pipelines are made per (colour format, depth format, samples) at the first draw.
+- Dear ImGui is drawn through the RHI (render/ui_renderer.cpp, shaders/ui.hlsl).
+- Hidden windows get no swapchain (an off-screen back buffer).
+Checks still to do: picture against D3D11 on the same PC (scenes), validation clean, the in-pass suspension count.
 
 ## Verification
 

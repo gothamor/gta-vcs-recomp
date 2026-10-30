@@ -272,6 +272,7 @@ namespace rhi
                 }
             }
 
+            Backend backend() const override { return Backend::D3D11; }
             const std::string &adapterName() const override { return m_adapterName; }
 
             // ---- resources ----------------------------------------------------------------------------------------

@@ -118,6 +118,7 @@ namespace platform
         int width = 640;
         int height = 448;
         bool hidden = false; // not on the desktop or taskbar (scripted test runs)
+        bool vulkan = false; // for a Vulkan renderer (the surface comes from vulkanCreateSurface)
     };
 
     // Where the window was on the desktop, to open it there again (main.cpp keeps it in vcs.ini as window.*).
@@ -150,7 +151,13 @@ namespace platform
     bool init(const WindowDesc &desc);
     void shutdown();
     bool ready();
-    void *nativeWindow(); // HWND on Windows
+    void *nativeWindow(); // HWND on Windows, null elsewhere
+
+    bool windowHidden(); // made with WindowDesc::hidden
+
+    // For the Vulkan renderer (rhi::VulkanWindow), on a window made with WindowDesc::vulkan. Main thread.
+    const char *const *vulkanInstanceExtensions(uint32_t *count); // the instance extensions the surface needs
+    bool vulkanCreateSurface(void *instance, uint64_t *surface);  // VkInstance -> VkSurfaceKHR
 
     // Main thread, once per host frame, in this order:
     //   pumpEvents()      events + input snapshot

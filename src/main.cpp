@@ -27,6 +27,7 @@
 #include "game/vcs_volume.h"
 #include "platform/platform.h"
 #include "render/presenter.h"
+#include "rhi/rhi.h"
 #include "settings/settings.h"
 #include "ui/settings_menu.h"
 #include "ui/trainer_menu.h"
@@ -116,6 +117,11 @@ namespace
         const DWORD n = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
         if (n > 0 && n < MAX_PATH)
             return fs::path(buffer).parent_path();
+#elif defined(__linux__)
+        std::error_code ec;
+        const fs::path self = fs::read_symlink("/proc/self/exe", ec);
+        if (!ec && !self.empty())
+            return self.parent_path();
 #endif
         return fs::current_path();
     }
@@ -129,6 +135,8 @@ namespace
         if (const char *local = std::getenv("LOCALAPPDATA"))
             return fs::path(local) / "VCSRecomp";
 #endif
+        if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg == '/') // absolute only (the XDG spec)
+            return fs::path(xdg) / "VCSRecomp";
         if (const char *home = std::getenv("HOME"))
             return fs::path(home) / ".local/share/VCSRecomp";
         return exeDirectory() / "userdata";
@@ -575,6 +583,24 @@ namespace
         s.env = "PS2X_HW_ANISO";
         s.onChange = [](int v) { setEnv("PS2X_HW_ANISO", std::to_string(v)); };
         settings::add(s);
+
+        // The graphics API, when the build has more than one (Windows with VCS_RHI_VULKAN); VCS_RHI=d3d11|vulkan|null
+        // chooses for one run (render/presenter.h).
+        s = {};
+        s.key = "display.renderer";
+        s.page = "Graphics";
+        s.section = "Renderer";
+        s.label = "Graphics API";
+        s.help = "The graphics API the game draws with. D3D11 is the reference on Windows; Vulkan is the one on Linux.";
+        s.type = Type::Choice;
+        for (rhi::Backend b : {rhi::Backend::D3D11, rhi::Backend::Vulkan})
+            if (rhi::backendBuilt(b))
+                s.choices.push_back({rhi::backendName(b), static_cast<int>(b)});
+        s.defaultValue = static_cast<int>(rhi::defaultBackend());
+        s.apply = Apply::Restart;
+        s.onChange = [](int v) { present::setBackend(v); };
+        if (s.choices.size() > 1)
+            settings::add(s);
 
         vcs::input::registerSettings(); // the Keyboard & mouse and Gamepad pages (game/vcs_input.h)
 

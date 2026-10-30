@@ -41,6 +41,43 @@ function(EnableFastReleaseMode TargetName)
         endif()
         return()
     endif()
+    # [gta-recomp] Linux (clang, the only supported compiler there): the same code and numerics as clang-cl above.
+    # x86-64-v3 is /arch:AVX2 (AVX2, FMA, BMI); -ffp-contract=off for the same reason. clang-cl defaults to
+    # -fno-strict-aliasing (MSVC compatibility) and the runtime and generated code read guest memory through casts, so
+    # say it here. No stack protector / CET (Ubuntu turns them on; clang-cl gets /GS-, no CET).
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT MSVC)
+        target_compile_options(${TargetName} PRIVATE
+            $<$<CONFIG:Release>:-O2 -DNDEBUG -march=x86-64-v3 -ffp-contract=off -fno-math-errno -fno-strict-aliasing
+                                -fno-stack-protector -fcf-protection=none>
+        )
+        get_target_property(_type ${TargetName} TYPE)
+        if(PS2X_LTO STREQUAL "THIN")
+            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
+            if(_type STREQUAL "EXECUTABLE")
+                target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin
+                                    -Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache
+                                    -Wl,--thinlto-cache-policy=cache_size_bytes=1g:prune_after=72h>)
+                # ThinLTO's backends run in parallel; each needs memory for a share of the 150 MB game
+                if(PS2X_LTO_JOBS)
+                    target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-Wl,--thinlto-jobs=${PS2X_LTO_JOBS}>)
+                endif()
+            endif()
+        elseif(PS2X_LTO STREQUAL "FULL" AND IPO_SUPPORTED)
+            set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+        endif()
+        if(PS2X_PGO STREQUAL "GEN")
+            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-generate>)
+            target_compile_definitions(${TargetName} PRIVATE $<$<CONFIG:Release>:PS2X_PGO_GEN=1>)
+            if(_type STREQUAL "EXECUTABLE")
+                target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-generate>)
+            endif()
+        elseif(PS2X_PGO)
+            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-use=${PS2X_PGO}
+                                   -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled -Wno-profile-instr-missing
+                                   -Wno-backend-plugin>)
+        endif()
+        return()
+    endif()
     if(MSVC)
         target_compile_options(${TargetName} PRIVATE
             $<$<CONFIG:Release>:

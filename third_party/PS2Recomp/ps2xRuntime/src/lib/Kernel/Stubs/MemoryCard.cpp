@@ -11,6 +11,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif defined(__linux__)
+#include <fcntl.h>    // AT_FDCWD
+#include <sys/stat.h> // statx: the birth time
 #endif
 
 namespace ps2_stubs
@@ -301,7 +304,8 @@ namespace ps2_stubs
             }
         }
 
-        // Creation time where the host has one (Windows), else the last write.
+        // Creation time where the host has one (Windows; Linux file systems with a birth time, ext4 / btrfs / xfs), else
+        // the last write. Only an order between new entries: .ps2x-order holds the card's order once known.
         uint64_t mcCreationTime(const std::filesystem::directory_entry &entry)
         {
 #if defined(_WIN32)
@@ -309,6 +313,13 @@ namespace ps2_stubs
             if (GetFileAttributesExW(entry.path().c_str(), GetFileExInfoStandard, &data))
             {
                 return (static_cast<uint64_t>(data.ftCreationTime.dwHighDateTime) << 32) | data.ftCreationTime.dwLowDateTime;
+            }
+#elif defined(__linux__)
+            struct statx st{};
+            if (statx(AT_FDCWD, entry.path().c_str(), 0, STATX_BTIME | STATX_MTIME, &st) == 0)
+            {
+                const statx_timestamp &t = (st.stx_mask & STATX_BTIME) ? st.stx_btime : st.stx_mtime;
+                return static_cast<uint64_t>(t.tv_sec) * 1000000000ull + t.tv_nsec;
             }
 #endif
             std::error_code ec;

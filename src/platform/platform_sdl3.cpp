@@ -2,6 +2,7 @@
 #include "platform/platform.h"
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -336,7 +337,8 @@ namespace platform
             std::fprintf(stderr, "[platform] no audio: %s\n", SDL_GetError());
 
         // created hidden, placed, then shown: no flash at the default place
-        g_window = SDL_CreateWindow(desc.title, desc.width, desc.height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
+        g_window = SDL_CreateWindow(desc.title, desc.width, desc.height,
+                                    SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | (desc.vulkan ? SDL_WINDOW_VULKAN : 0));
         if (!g_window)
         {
             std::fprintf(stderr, "[platform] SDL_CreateWindow: %s\n", SDL_GetError());
@@ -409,6 +411,31 @@ namespace platform
 #else
         return nullptr;
 #endif
+    }
+
+    bool windowHidden() { return g_hiddenWindow; }
+
+    const char *const *vulkanInstanceExtensions(uint32_t *count)
+    {
+        Uint32 n = 0;
+        const char *const *names = SDL_Vulkan_GetInstanceExtensions(&n);
+        if (count)
+            *count = names ? n : 0;
+        if (!names)
+            std::fprintf(stderr, "[platform] SDL_Vulkan_GetInstanceExtensions: %s\n", SDL_GetError());
+        return names;
+    }
+
+    bool vulkanCreateSurface(void *instance, uint64_t *surface)
+    {
+        VkSurfaceKHR made{};
+        if (!g_window || !SDL_Vulkan_CreateSurface(g_window, static_cast<VkInstance>(instance), nullptr, &made))
+        {
+            std::fprintf(stderr, "[platform] SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
+            return false;
+        }
+        *surface = reinterpret_cast<uint64_t>(made);
+        return true;
     }
 
     void pumpEvents()

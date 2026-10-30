@@ -17,6 +17,7 @@ detailed knowledge lives in `docs/`:
 | [docs/RSL_SUBMISSION.md](docs/RSL_SUBMISSION.md) | Plan: render submission at the RSL level (milestone 7) - draws from the game's render calls instead of DMA packets |
 | [docs/DISC.md](docs/DISC.md), [docs/CONTROLS.md](docs/CONTROLS.md) | Disc layout; keyboard / gamepad mapping |
 | [docs/TRAINER.md](docs/TRAINER.md) | The trainer (F5): what it does, how (the game's script commands), its check |
+| [docs/LINUX.md](docs/LINUX.md) | The Linux build: packages, flags, the Vulkan backend, what differs from Windows, the work list |
 
 **When you learn something about the game, write it into docs/game-internals.md in the same change.**
 Record addresses and how you found them. When something is weird, use judgment, fix or work around it,
@@ -28,7 +29,8 @@ choices).
 - GTA: Vice City Stories (PS2, SLUS-21590 USA) statically recompiled to C++ (PS2Recomp, vendored and
   heavily modified in `third_party/PS2Recomp`), turned step by step into a native port: native D3D11
   rendering of the game's models (`src/game/vcs_hle_world.cpp`), SDL3 platform layer, settings menu.
-- Windows only for now (SDL3 + our RHI keep macOS / Linux possible later; not in scope).
+- Windows and Linux (docs/LINUX.md: clang, Vulkan; a plain host build). macOS later is possible (SDL3 + the RHI); the
+  Steam Deck is postponed.
 - Distribution is source-only, bring your own disc. **Never commit game code or data**: no ISO, no
   ELF, no generated C++ (`generated/`), no disassembly listings, no extracted assets. Analysis dumps go
   to `build/analysis/` (ignored). Function maps (names + addresses) and docs describing behaviour are
@@ -41,7 +43,7 @@ choices).
 |---|---|
 | `src/main.cpp` | Launcher: ISO, settings registration, runtime start |
 | `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`), frame timing (`vcs_framerate.cpp`, per-frame mission meters `vcs_script_timing.cpp`), the player's controls (`vcs_input.cpp`), the game's music / effects levels as settings (`vcs_volume.cpp`) |
-| `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders, the RHI (D3D11 only under `rhi_d3d11/`), SDL3 platform layer |
+| `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders (HLSL; DXBC by fxc, SPIR-V by `tools/hlsl_spirv.py`), the RHI (backends `d3d11/`, `vulkan/`, `null/`; only they see a graphics API), SDL3 platform layer |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
 | `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2), the trainer menu (F5) |
 | `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch |
@@ -56,6 +58,7 @@ python tools/build.py                       # rebuild after code changes (--reco
 python tools/build.py --recompile [ISO]     # disc -> generated C++ -> build (slow)
 python tools/build.py --iop-tests           # SPU2 unit tests (reverb, interpolation, noise, PMON)
 python tools/build.py --quick               # no LTO (= --opt none): fast relinks; kept until --opt lto
+python tools/build.py --check-deps          # Linux: missing packages and the command that installs them
 python tools/build.py --opt none|lto|pgo    # game optimisation, kept until changed (lto: the default; pgo: ThinLTO + profile, trains if needed)
 python tools/bench.py [OUT]                  # game-thread benchmark: fixed city spots + an AI drive (game / worker ms)
 python tools/clean.py [--apply] [--keep-days 7]   # delete test output in build/ (lists first; builds, saves, baselines kept)

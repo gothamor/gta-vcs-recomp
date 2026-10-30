@@ -3,7 +3,9 @@
 - Windows: finds the newest Visual Studio with the C++ x64 toolset (vswhere), takes the vcvars64 environment
   (cached in build/msvc_env.json) and builds with clang-cl + Ninja. Standalone CMake / Ninja / LLVM / JDK from
   scoop are preferred when installed.
-- Elsewhere: the current environment, clang / clang++ when available.
+- Linux: the newest LLVM 19+ (Debian / Ubuntu's /usr/lib/llvm-<N>/bin, apt.llvm.org, or the distro's own clang on
+  PATH) goes first on PATH, so clang, clang++, ld.lld and llvm-profdata are one version; CMake and Ninja from PATH.
+  `check_linux_deps()` lists the packages the build needs (docs/LINUX.md).
 """
 import glob
 import json
@@ -264,10 +266,40 @@ def _vs_root():
     return out.splitlines()[0]
 
 
+MIN_CLANG = 19  # PS2_GUEST_CC's preserve_none (ps2_guest_cc.h)
+
+
+def clang_version(clang):
+    """The major version of a clang binary, 0 when it doesn't run."""
+    try:
+        out = subprocess.run([clang, "--version"], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    m = re.search(r"clang version (\d+)", out)
+    return int(m.group(1)) if m else 0
+
+
+def _linux_llvm_bin(env):
+    """The bin folder of the newest LLVM >= MIN_CLANG: /usr/lib/llvm-<N>/bin (Debian / Ubuntu) or clang on PATH."""
+    found = []
+    for d in glob.glob("/usr/lib/llvm-*/bin") + glob.glob("/usr/lib64/llvm*/bin"):
+        clang = os.path.join(d, "clang")
+        if os.path.isfile(clang):
+            found.append((clang_version(clang), d))
+    on_path = _which("clang", env)
+    if on_path:
+        found.append((clang_version(on_path), os.path.dirname(os.path.realpath(on_path))))
+    found = [f for f in found if f[0] >= MIN_CLANG]
+    return max(found)[1] if found else None
+
+
 def build_env():
     """Environment for CMake / Ninja / the compiler."""
     env = dict(os.environ)
     if not IS_WINDOWS:
+        llvm = _linux_llvm_bin(env)
+        if llvm:
+            env["PATH"] = os.pathsep.join([llvm, env.get("PATH", "")])
         return env
     cache = os.path.join(BUILD, "msvc_env.json")
     vs = _vs_root()
@@ -318,15 +350,93 @@ def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
             fail(f"{name} not found on PATH")
     cmd = ["cmake", "-S", ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
     cmd += ["-D%s=%s" % (k, v) for k, v in (defines or {}).items()]
-    if IS_WINDOWS:
-        cmd += ["-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl"]
-    elif _which("clang", env) and _which("clang++", env):
-        cmd += ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
+    cmd += compiler_defines(env)
     print("[build] configuring " + os.path.relpath(build_dir, ROOT) + "".join(" %s=%s" % kv for kv in (defines or {}).items()))
     log = os.path.join(BUILD, "configure.log")
     if run_with_progress(cmd, log, "[build] configure", env=env) != 0:
         print(tail(log, 30))
         fail("CMake configure failed (full log: build/configure.log)")
+
+
+def compiler_defines(env):
+    """-DCMAKE_C(XX)_COMPILER for a fresh build tree: clang-cl on Windows, clang 19+ elsewhere (build_env put it first
+    on PATH)."""
+    if IS_WINDOWS:
+        return ["-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl"]
+    clang, clangxx = _which("clang", env), _which("clang++", env)
+    if not clang or not clangxx or clang_version(clang) < MIN_CLANG:
+        fail("clang %d or newer not found - install it (docs/LINUX.md; e.g. sudo apt install clang-20 lld-20 llvm-20), "
+             "or run python tools/build.py --check-deps" % MIN_CLANG)
+    if not _which("ld.lld", env):
+        fail("ld.lld not found (the LLVM linker, next to clang): e.g. sudo apt install lld-%d" % clang_version(clang))
+    return ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx]
+
+
+# ---- Linux packages ---------------------------------------------------------------------------------------------
+# (what is checked, how, the package per distro family: Debian / Ubuntu, Fedora, Arch)
+LINUX_DEPS = [
+    ("cmake", "cmake", ("cmake", "cmake", "cmake")),
+    ("ninja", "ninja", ("ninja-build", "ninja-build", "ninja")),
+    ("git", "git", ("git", "git", "git")),
+    ("pkg-config", "pkg-config", ("pkg-config", "pkgconf-pkg-config", "pkgconf")),
+    ("glslangValidator", "glslangValidator", ("glslang-tools", "glslang", "glslang")),
+    ("FFmpeg (movies)", "pc:libavcodec libavformat libavutil libswscale libswresample",
+     ("libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev", "ffmpeg-free-devel", "ffmpeg")),
+    # SDL3 is built from source (src/platform): without these it builds, silently, without a video / audio / input backend
+    ("X11 (SDL3)", "pc:x11 xext xrandr xcursor xi xfixes xscrnsaver",
+     ("libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev",
+      "libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXi-devel libXfixes-devel libXScrnSaver-devel",
+      "libx11 libxext libxrandr libxcursor libxi libxfixes libxss")),
+    ("Wayland (SDL3)", "pc:wayland-client wayland-protocols xkbcommon",
+     ("libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev", "wayland-devel wayland-protocols-devel "
+      "libxkbcommon-devel libdecor-devel", "wayland wayland-protocols libxkbcommon libdecor")),
+    ("audio (SDL3)", "pc:libpipewire-0.3 libpulse alsa",
+     ("libpipewire-0.3-dev libpulse-dev libasound2-dev", "pipewire-devel pulseaudio-libs-devel alsa-lib-devel",
+      "pipewire libpulse alsa-lib")),
+    ("gamepads (SDL3)", "pc:libudev dbus-1", ("libudev-dev libdbus-1-dev", "systemd-devel dbus-devel", "systemd-libs dbus")),
+]
+
+
+def _linux_family():
+    try:
+        with open("/etc/os-release", encoding="utf-8") as f:
+            text = f.read().lower()
+    except OSError:
+        return 0
+    like = " ".join(re.findall(r"^(?:id|id_like)=\"?([^\"\n]*)", text, re.M))
+    if any(w in like for w in ("fedora", "rhel", "centos")):
+        return 1
+    if any(w in like for w in ("arch", "manjaro", "endeavouros")):
+        return 2
+    return 0
+
+
+def check_linux_deps(env):
+    """Missing build dependencies on Linux, with the install command for this distro; True when nothing is missing."""
+    missing = []
+    for label, check, packages in LINUX_DEPS:
+        if check.startswith("pc:"):
+            mods = check[3:].split()
+            ok = bool(_which("pkg-config", env)) and subprocess.run(["pkg-config", "--exists"] + mods, env=env).returncode == 0
+        else:
+            ok = bool(_which(check, env))
+        if not ok:
+            missing.append((label, packages))
+    family = _linux_family()
+    llvm = _linux_llvm_bin(env)
+    if not llvm:
+        missing.append(("clang %d+ / lld / llvm" % MIN_CLANG, ("clang-20 lld-20 llvm-20", "clang lld llvm", "clang lld llvm")))
+    elif not os.path.isfile(os.path.join(llvm, "ld.lld")) and not _which("ld.lld", env):
+        missing.append(("lld", ("lld-%d" % clang_version(os.path.join(llvm, "clang")), "lld", "lld")))
+    if not missing:
+        print("[deps] all build dependencies found" + (" (LLVM: %s)" % llvm if llvm else ""))
+        return True
+    for label, _ in missing:
+        print("[deps] missing: " + label)
+    pkgs = " ".join(p[family] for _, p in missing)
+    cmd = ("sudo apt install " if family == 0 else "sudo dnf install " if family == 1 else "sudo pacman -S --needed ") + pkgs
+    print("[deps] install them with:\n    " + cmd)
+    return False
 
 
 _INTERESTING = re.compile(r"error|FAILED|Linking|warning: unused")

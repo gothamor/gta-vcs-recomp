@@ -41,6 +41,12 @@ using SocketHandle = int;
 static constexpr SocketHandle kNoSocket = -1;
 static void closeSocket(SocketHandle s) { close(s); }
 #endif
+// [gta-recomp] a client gone before its reply (a killed gamectl.py) must not end the game with SIGPIPE
+#if defined(MSG_NOSIGNAL)
+static constexpr int kSendFlags = MSG_NOSIGNAL;
+#else
+static constexpr int kSendFlags = 0;
+#endif
 
 namespace ps2control
 {
@@ -146,7 +152,7 @@ namespace ps2control
                                              ? reply.get()
                                              : std::string("error timed out (is the game loop running?)");
                     answer += '\n';
-                    send(client, answer.data(), static_cast<int>(answer.size()), 0);
+                    send(client, answer.data(), static_cast<int>(answer.size()), kSendFlags);
                 }
             }
             closeSocket(client);
@@ -290,6 +296,12 @@ namespace ps2control
         g_listen = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (g_listen == kNoSocket)
             return;
+#if !defined(_WIN32)
+        // [gta-recomp] a game started right after another may bind while the old connections are in TIME_WAIT (on
+        // POSIX this never lets two games listen at once; on Windows SO_REUSEADDR would, so it stays off there)
+        const int reuse = 1;
+        setsockopt(g_listen, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#endif
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(port));

@@ -18,6 +18,7 @@
 #include "Kernel/Stubs/MPEG.h"
 #include "ps2_host_backend.h"
 #include "render/presenter.h"
+#include "rhi/rhi.h" // [gta-recomp] backendName
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 #include "runtime/ps2_vu0_native.h"
@@ -1034,7 +1035,7 @@ bool PS2Runtime::syncCoreSubsystems()
             g_presentHw = m_hw; // [gta-recomp] ps2_present.h
             g_presentMemory = &m_memory;
             m_gs.setRasterBackend(std::move(hw));
-            std::cerr << "[gs] hardware GS renderer (D3D11)" << std::endl;
+            std::cerr << "[gs] hardware GS renderer (" << rhi::backendName(static_cast<rhi::Backend>(present::backend())) << ")" << std::endl; // [gta-recomp]
         }
         const GSRendererMode mode = (gsEnv && std::strcmp(gsEnv, "hw") == 0) ? GSRendererMode::Cpu : gsRendererModeFromEnvironment();
         if (mode != GSRendererMode::Cpu)
@@ -1172,14 +1173,15 @@ bool PS2Runtime::initialize(const char *title)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
         // [gta-recomp] Host window, input and audio through the platform layer (SDL3); PS2X_HIDDEN=1: no window on the
-        // desktop (runtime/ps2_control.h). The window is drawn through the RHI (D3D11, render/presenter.h); host
-        // frames are paced to 60/s by platform::waitNextFrame().
+        // desktop (runtime/ps2_control.h). The window is drawn through the RHI (D3D11 / Vulkan, render/presenter.h);
+        // host frames are paced to 60/s by platform::waitNextFrame().
         platform::WindowDesc window;
         window.title = title;
         window.width = HOST_WINDOW_WIDTH;
         window.height = HOST_WINDOW_HEIGHT;
         window.hidden = ps2control::hiddenMode();
-        if (!platform::init(window) || !present::init(platform::nativeWindow(), window.width, window.height))
+        window.vulkan = present::backendNeedsVulkanWindow();
+        if (!platform::init(window) || !present::init(window.width, window.height))
         {
             std::cerr << "Failed to create the window" << std::endl;
             return false;
@@ -1809,7 +1811,9 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
     {
 #if defined(_MSC_VER)
         __debugbreak();
-#endif // TODO others breakpoints
+#elif defined(__clang__)
+        __builtin_debugtrap(); // [gta-recomp] Linux: SIGTRAP, stops in a debugger
+#endif
     }
 
     if (ctx)

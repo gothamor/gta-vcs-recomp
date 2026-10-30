@@ -836,7 +836,7 @@ namespace ps2_stubs
     void fseek(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         uint32_t file_handle = getRegU32(ctx, 4); // $a0
-        long offset = (long)getRegU32(ctx, 5);    // $a1 (Note: might need 64-bit for large files?)
+        long offset = static_cast<int32_t>(getRegU32(ctx, 5)); // $a1, signed ([gta-recomp] a plain (long) didn't sign-extend where long is 64-bit)
         int whence = (int)getRegU32(ctx, 6);      // $a2 (SEEK_SET, SEEK_CUR, SEEK_END)
         int ret = -1;                             // Default error
 

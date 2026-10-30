@@ -1,4 +1,5 @@
-// Compiled shaders of the HW GS renderer (shaders/gs_draw.hlsl, shaders/gs_util.hlsl) for the current RHI backend.
+// Compiled shaders of the presenter (shaders/present.hlsl) and the HW GS renderer (shaders/gs_draw.hlsl,
+// shaders/gs_util.hlsl) for an RHI backend.
 #pragma once
 
 #include "rhi/rhi.h"
@@ -18,7 +19,12 @@ namespace render
         rhi::ShaderCode blitPS;
         rhi::ShaderCode fillColorPS;
         rhi::ShaderCode fillDepthPS;
+        rhi::ShaderCode presentVS;    // the window's picture (render/presenter.cpp)
+        rhi::ShaderCode presentPS;
+        rhi::ShaderCode uiVS;         // Dear ImGui through the RHI (render/ui_renderer.cpp)
+        rhi::ShaderCode uiPS;
     };
 
-    const GsShaders &gsShaders();
+    // The backend's shaders (empty for the null backend, which never runs them).
+    const GsShaders &gsShaders(rhi::Backend backend);
 }

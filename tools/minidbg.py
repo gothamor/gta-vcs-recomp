@@ -9,8 +9,13 @@ stack, symbolized with DbgHelp (needs the PDB next to the exe).
 """
 import ctypes
 import ctypes.wintypes as wt
+import os
 import sys
 import time
+
+if os.name != "nt":
+    sys.exit("minidbg.py is Windows only; on Linux run the game under gdb (gdb --args build/vcs <iso>), and the crash "
+             "handler writes a backtrace to the log (docs/LINUX.md)")
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 dbghelp = ctypes.WinDLL("dbghelp", use_last_error=True)

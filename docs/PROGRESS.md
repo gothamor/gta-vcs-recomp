@@ -632,6 +632,22 @@ dropped on uploads (lazy render-target patching).
   drives a cutscene's end); fixed, and a launch turns it off. `--freecam` 8 checks (Soldier's cutscene played out
   under it), 0 failed; the full check 41, 0 failed.
 
+## Milestone 9 - Linux (started 2026-10-30)
+
+Native Linux as a second platform (the user's request; the Steam Deck postponed): docs/LINUX.md has the build, the
+differences and the work list. Written and syntax-checked on the Linux laptop (GCC 13 for checking; the build itself
+needs the packages `build.py --check-deps` lists, clang 20 among them):
+- toolchain: clang 19+ found by `tools/toolchain.py`, clang-cl's flags for clang (`ReleaseMode.cmake`, incl.
+  `-fno-strict-aliasing`), compile / ThinLTO jobs capped by memory, `--check-deps`;
+- host / runtime: exe folder, XDG data folder, the LP64 `long` spots (`fseek`, IOP `strtol`), `_BitScanForward`,
+  control socket SIGPIPE / reuse, card birth time, rig kill and copy;
+- renderer: RHI backend choice (`VCS_RHI`, Graphics > Graphics API), a null backend, the **Vulkan backend**
+  (`src/rhi/vulkan/rhi_vulkan.cpp`), HLSL -> SPIR-V through glslang (`tools/hlsl_spirv.py`; all 15 shaders pass
+  `spirv-val`), Dear ImGui through the RHI (`render/ui_renderer.cpp`);
+- debugging: crash handler on signals (tested), SIGPROF profiler.
+Not run in the game yet: first build, then the checks in docs/LINUX.md (generated code equal to Windows', bit-exact
+HLE / VU0, scenes against the Windows reference, the rig).
+
 ## Useful switches
 | Env var | Effect |
 |---|---|
@@ -783,8 +799,12 @@ dropped on uploads (lazy render-target patching).
 | `PS2X_HW_DUMP=<frame>` | dump HW render targets + display as PPM |
 | `python tools/run.py N name --hidden` + `python tools/gamectl.py ...` | hidden test run driven over the control channel |
 | `python tools/scenes.py capture OUT` / `compare REF NEW` | reference scenes (screenshots + perf) from an empty card; diff two captures |
-| `VCS_DATA_DIR=dir` | save / cache folder instead of %LOCALAPPDATA%/VCSRecomp |
+| `VCS_DATA_DIR=dir` | save / cache folder instead of %LOCALAPPDATA%/VCSRecomp (Linux: $XDG_DATA_HOME/VCSRecomp) |
 | `PS2X_D3D_DEBUG=1` | D3D11 debug layer (needs Windows' Graphics Tools feature) |
+| `VCS_RHI=d3d11\|vulkan\|null` | the renderer for one run (Graphics > Graphics API when the build has two; docs/LINUX.md) |
+| `PS2X_RHI_DEBUG=1` | the API's validation layer: D3D11 debug layer / Vulkan's Khronos validation |
+| `PS2X_RHI_STATS=1` | Vulkan: draws, passes, suspended passes, barriers, uploads per frame every 5 s |
+| `VCS_VK_DEVICE=<n or name>` | Vulkan: which GPU |
 | `PS2X_HLE=0` | draw the world through the VU1 program instead of natively (src/game/vcs_hle_world.cpp) |
 | `PS2X_HLE_VERIFY=1` | compare the C++ world pipeline with the VU1's output (bit-exact expected) |
 | `PS2X_HLE_SURVEY=1`, `PS2X_HLE_SURVEY_DUMP=n`, `PS2X_HLE_SURVEY_DUMP_EVERY=n` | VU1 program / layout survey, sample dumps |

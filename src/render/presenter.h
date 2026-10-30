@@ -23,7 +23,14 @@ namespace present
         bool linear = false; // bilinear filtering when scaled
     };
 
-    bool init(void *nativeWindow, int width, int height);
+    // The renderer (RHI backend) to start with: VCS_RHI=d3d11|vulkan|null for one run, else the Graphics > Renderer
+    // setting (setBackend, before init), else rhi::defaultBackend(). One the build lacks falls back to the default.
+    void setBackend(int backend); // rhi::Backend
+    int backend();                // rhi::Backend init uses (or used)
+    bool backendNeedsVulkanWindow(); // platform::WindowDesc::vulkan
+
+    // On the platform layer's window (platform::init first).
+    bool init(int width, int height);
     void shutdown();
     rhi::Device *device();
 

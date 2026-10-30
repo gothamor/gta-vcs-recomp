@@ -1,0 +1,99 @@
+# Linux
+
+The native Linux build: the same source, the same `python3 tools/build.py` pipeline, and the same game as on
+Windows. It is built with the distro's own clang and libraries (a plain host build: no container or Flatpak), and it
+draws with a Vulkan backend of the RHI (`src/rhi/vulkan`). Decisions: DECISIONS.md, 2026-10-30. The Steam Deck is
+postponed; nothing here blocks it.
+
+## Building
+
+```
+python3 tools/build.py --check-deps                    # what is missing, and the command that installs it
+python3 tools/build.py --recompile "<your disc>.iso"   # disc -> generated C++ -> build/vcs
+python3 tools/build.py --quick                         # day-to-day rebuilds (no LTO)
+python3 tools/run.py 0 play                            # play (window; build/run/play.log)
+```
+
+Needed (the `--check-deps` list, Debian / Ubuntu names):
+
+| What | Packages |
+|---|---|
+| Compiler: clang 19+, lld, llvm (`llvm-profdata`, `llvm-symbolizer`) | `clang-20 lld-20 llvm-20` (Ubuntu 24.04 / Mint 22; newer from apt.llvm.org) |
+| Build tools | `cmake ninja-build pkg-config git` |
+| Vulkan shaders (HLSL -> SPIR-V) | `glslang-tools` |
+| Movies | `libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev` |
+| SDL3, built from source: window (X11, Wayland), audio, gamepads | `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev libpipewire-0.3-dev libpulse-dev libasound2-dev libudev-dev libdbus-1-dev` |
+| Optional: Vulkan validation (`PS2X_RHI_DEBUG=1`) | `vulkan-validationlayers` |
+
+Fedora / Arch get the right package names from `--check-deps`. A Vulkan 1.3 driver is needed to play (Mesa's RADV /
+ANV, NVIDIA's driver): `vulkaninfo --summary` shows it. The Vulkan headers, volk (the loader) and VMA come with the
+build (FetchContent), so no Vulkan SDK is needed.
+
+- **The compiler is clang only** (`tools/toolchain.py` takes the newest LLVM 19+ from `/usr/lib/llvm-<N>/bin` or
+  PATH). It is the same compiler as clang-cl on Windows, so the generated code and its numerics are the same; and
+  `PS2_GUEST_CC` needs its `preserve_none`. GCC is not supported.
+- **The flags match clang-cl's** (`ps2xRuntime/cmake/ReleaseMode.cmake`): `-march=x86-64-v3` (= `/arch:AVX2`),
+  `-ffp-contract=off` (the PS2 rounds a multiply-add twice: DECISIONS.md 2026-10-22), `-fno-math-errno`,
+  **`-fno-strict-aliasing`** (clang-cl's default; the runtime and generated code read guest memory through casts), no
+  stack protector or CET (Ubuntu turns them on).
+- **Memory**: a unity batch of generated code takes up to ~2 GB to compile. CMake allows one compile job, and one
+  ThinLTO job at the link, per 2 GB of RAM (at most one per core): `VCS_COMPILE_JOBS` and `PS2X_LTO_JOBS` in the CMake
+  cache override this.
+- The game is `build/vcs` and its settings are `build/vcs.ini`. Saves and caches go to `$XDG_DATA_HOME/VCSRecomp`
+  (`~/.local/share/VCSRecomp`); `VCS_DATA_DIR` works as on Windows.
+
+## Running
+
+- The renderer is Vulkan (`[present] Vulkan on <GPU>` in the log). `VCS_RHI=null` draws nothing: the null backend,
+  for checking the CPU side on its own. `VCS_VK_DEVICE=<number | part of the name>` picks the GPU when there are
+  several.
+- **Hidden test runs** (`PS2X_HIDDEN=1`, everything in `tools/` uses it) make no swapchain at all: the back buffer is
+  a texture. Presenting to a hidden window can block forever under Wayland (FIFO waits for a frame callback that never
+  comes), and screenshots come from off-screen captures anyway.
+- SDL picks Wayland when it runs, X11 otherwise. `SDL_VIDEO_DRIVER=x11` / `wayland` chooses for one run.
+- The control channel (`tools/gamectl.py`, the rig) is the same TCP port. The rig copies cards with `shutil` (Linux
+  keeps no settable creation time; the card's `.ps2x-order` file holds its directory order) and stops a hung game
+  through its process group.
+
+## Debugging
+
+- **Crashes**: SIGSEGV / SIGBUS / SIGILL / SIGFPE print `[crash]` lines with each frame as `module+offset (symbol)`,
+  and an `llvm-symbolizer -e <module> <offsets>` line that gives files and lines (`src/debug/crash.cpp`; the exe is
+  linked `-rdynamic`, and the runtime and our code carry line tables). The process then dies of the signal itself, so
+  the exit status and core dumps stay as they would be. For anything harder: `gdb --args build/vcs <iso>`
+  (`tools/minidbg.py` is Windows only).
+- **Profiler**: `VCS_PROFILE=5` works as on Windows (`src/debug/profiler.cpp`: one SIGPROF per sample instead of
+  SuspendThread), including `VCS_PROFILE_THREAD`, `VCS_PROFILE_SPIKES` and `VCS_PROFILE_GUEST_FILE`.
+  `VCS_PROFILE_CALLERS` and `VCS_PROFILE_LINES` are Windows only: `perf record -g build/vcs <iso>` covers them.
+- **Vulkan**: `PS2X_RHI_DEBUG=1` turns on the Khronos validation layer and prints its messages as `[rhi] vulkan`.
+  `PS2X_RHI_STATS=1` prints draws, passes, suspended passes, barriers and upload volume per frame every 5 s.
+  `PS2X_GPU_TIMING` (GPU time per marker) is D3D11 only so far.
+
+## Differences from Windows, and why
+
+| Area | Windows | Linux | Why |
+|---|---|---|---|
+| Renderer | D3D11 (reference) | Vulkan | D3D11 is Windows only. The Vulkan backend builds on Windows too (`-DVCS_RHI_VULKAN=ON`, then Graphics > Graphics API), to compare it with D3D11 on the same PC |
+| Shaders | fxc -> DXBC | glslang -> SPIR-V (`tools/hlsl_spirv.py`) | One HLSL source. glslang ignores `[[vk::index(1)]]`, so the script moves the second output to Location 0 Index 1 itself. `VCS_SPIRV` adds a point size, which Vulkan needs for points |
+| Dear ImGui | `imgui_impl_dx11` | `render/ui_renderer.cpp` (through the RHI) | One pipeline for every target format (the swapchain's BGRA, the RGBA captures) |
+| Write watch (`ps2_write_watch.cpp`) | `GetWriteWatch` | off | Linux has no equivalent; see the work list |
+| Card creation time | `GetFileAttributesExW` | `statx` birth time (mtime without one) | Only the order of new entries; `.ps2x-order` is the source of truth |
+
+## Work list
+
+| Step | Status |
+|---|---|
+| Toolchain: clang 19+ found, flags as clang-cl, RAM-capped jobs, `--check-deps` | done (2026-10-30), not built yet: needs the packages |
+| Recompile on Linux; `generated/` the same as on Windows | to do: hash both trees |
+| Host / runtime fixes: exe folder, XDG data folder, `_BitScanForward`, `fseek` sign on LP64, IOP `strtol` 32-bit, control socket SIGPIPE / reuse, debug trap, card birth time, rig kill / copy | done (2026-10-30), syntax-checked with GCC 13 |
+| Null RHI backend (`VCS_RHI=null`) | done, untested in the game |
+| Vulkan RHI backend + SPIR-V shaders + RHI ImGui renderer | written (2026-10-30); every shader passes `spirv-val`; not run yet |
+| Bit-exact checks on Linux: `PS2X_HLE_VERIFY=1`, `PS2X_VU0_VERIFY=1`, `--iop-tests` | to do |
+| Picture: Windows D3D11 vs Windows Vulkan, Windows reference vs Linux Vulkan (`scenes.py compare`) | to do |
+| Crash handler (signals, module+offset, llvm-symbolizer line) | done, tested in a stand-alone program |
+| Sampling profiler (SIGPROF) | done, not run in the game yet |
+| Write watch: worth it? (measure the skip on Windows), then userfaultfd `WP_ASYNC` + `PAGEMAP_SCAN` (Linux 6.7+) | to do |
+| The scheduler's guest-thread switches (C++ throws) on Linux vs Windows: `bench.py` | to do |
+| GPU timing (`PS2X_GPU_TIMING`) for Vulkan: timestamp queries | to do |
+| The rig on Linux: regress, tour, saves, trainer, controls, shakedown, finale, soundcheck, soak, framerate audit | to do |
+| Performance on this laptop (i5 Skylake, HD 520: the "modest hardware" target) in PERFORMANCE.md | to do |

@@ -1,6 +1,9 @@
 // See presenter.h.
 #include "render/presenter.h"
 
+#include "platform/platform.h"
+#include "render/gs_shaders.h"
+#include "render/ui_renderer.h"
 #include "rhi/rhi.h"
 
 #include "imgui.h"
@@ -10,11 +13,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
-
-// fxc's /Fh headers declare `const BYTE name[]`
-using BYTE = unsigned char;
-#include "present_ps.h"
-#include "present_vs.h"
 
 namespace present
 {
@@ -34,8 +32,39 @@ namespace present
         std::unique_ptr<rhi::Texture> g_captureTarget;
         std::unique_ptr<rhi::Texture> g_lumaTarget; // frameLuma
         std::vector<uint8_t> g_captureRgba;
+        // Dear ImGui: the backend's own renderer (D3D11) or render::UiRenderer through the RHI (Vulkan)
+        std::unique_ptr<render::UiRenderer> g_ui;
+
+        void uiRender(ImDrawData *data)
+        {
+            if (g_ui)
+                g_ui->render(data);
+            else
+                g_device->uiRender(data);
+        }
 
         std::atomic<float> g_displayAspect{4.0f / 3.0f};
+        int g_backendSetting = -1; // rhi::Backend; -1: the default
+
+        rhi::Backend chooseBackend()
+        {
+            rhi::Backend b = rhi::defaultBackend();
+            const char *env = std::getenv("VCS_RHI");
+            if (env && *env)
+            {
+                if (!rhi::backendFromName(env, b))
+                    std::fprintf(stderr, "[present] VCS_RHI=%s not understood (d3d11, vulkan or null)\n", env);
+            }
+            else if (g_backendSetting >= 0)
+                b = static_cast<rhi::Backend>(g_backendSetting);
+            if (!rhi::backendBuilt(b))
+            {
+                std::fprintf(stderr, "[present] the %s renderer is not part of this build: %s\n", rhi::backendName(b),
+                             rhi::backendName(rhi::defaultBackend()));
+                b = rhi::defaultBackend();
+            }
+            return b;
+        }
 
         // The bound pass's target is targetWidth x targetHeight; the src region is shown at display aspect `aspect`
         // inside the game's frame (fitRect)
@@ -61,26 +90,40 @@ namespace present
         }
     }
 
-    bool init(void *nativeWindow, int width, int height)
+    void setBackend(int backend) { g_backendSetting = backend; }
+
+    int backend() { return static_cast<int>(g_device ? g_device->backend() : chooseBackend()); }
+
+    bool backendNeedsVulkanWindow() { return chooseBackend() == rhi::Backend::Vulkan; }
+
+    bool init(int width, int height)
     {
         rhi::DeviceDesc desc;
-        desc.nativeWindow = nativeWindow;
+        desc.backend = chooseBackend();
+        desc.nativeWindow = platform::nativeWindow();
+        desc.vulkan.instanceExtensions = platform::vulkanInstanceExtensions;
+        desc.vulkan.createSurface = platform::vulkanCreateSurface;
+        desc.offscreen = platform::windowHidden();
         desc.width = static_cast<uint32_t>(std::max(width, 1));
         desc.height = static_cast<uint32_t>(std::max(height, 1));
-        const char *debug = std::getenv("PS2X_D3D_DEBUG"); // D3D11 debug layer (Graphics Tools must be installed)
+        // the API's validation layer: D3D11 debug layer (Graphics Tools), Vulkan's Khronos layer
+        const char *debug = std::getenv("PS2X_RHI_DEBUG");
+        if (!debug || !*debug)
+            debug = std::getenv("PS2X_D3D_DEBUG");
         desc.debug = debug && *debug && *debug != '0';
         std::string error;
-        g_device = rhi::createD3D11Device(desc, error);
+        g_device = rhi::createDevice(desc, error);
         if (!g_device)
         {
-            std::fprintf(stderr, "[present] %s\n", error.c_str());
+            std::fprintf(stderr, "[present] %s: %s\n", rhi::backendName(desc.backend), error.c_str());
             return false;
         }
-        std::fprintf(stderr, "[present] D3D11 on %s\n", g_device->adapterName().c_str());
+        std::fprintf(stderr, "[present] %s on %s\n", rhi::backendName(g_device->backend()), g_device->adapterName().c_str());
 
+        const render::GsShaders &shaders = render::gsShaders(g_device->backend());
         rhi::PipelineDesc pd;
-        pd.vertex = {kPresentVS, sizeof(kPresentVS)};
-        pd.pixel = {kPresentPS, sizeof(kPresentPS)};
+        pd.vertex = shaders.presentVS;
+        pd.pixel = shaders.presentPS;
         pd.topology = rhi::Topology::TriangleStrip;
         // alpha-blended over black, as raylib's DrawTexturePro did
         pd.blend.enable = true;
@@ -97,13 +140,24 @@ namespace present
             return false;
         }
         if (!g_device->uiInit())
-            std::fprintf(stderr, "[present] Dear ImGui renderer failed\n");
+        {
+            g_ui = std::make_unique<render::UiRenderer>();
+            if (!g_ui->init(*g_device))
+            {
+                std::fprintf(stderr, "[present] Dear ImGui renderer failed\n");
+                g_ui.reset();
+            }
+        }
         return true;
     }
 
     void shutdown()
     {
+        if (g_ui)
+            g_ui->shutdown();
+        g_ui.reset();
         g_captureTarget.reset();
+        g_lumaTarget.reset();
         g_pipeline.reset();
         g_params.reset();
         g_nearest.reset();
@@ -135,7 +189,11 @@ namespace present
                                     rgba);
     }
 
-    void beginFrame() { g_device->uiNewFrame(); }
+    void beginFrame()
+    {
+        if (!g_ui)
+            g_device->uiNewFrame();
+    }
 
     void setDisplayAspect(float aspect) { g_displayAspect.store(aspect, std::memory_order_relaxed); }
 
@@ -178,7 +236,7 @@ namespace present
         pass.name = "window";
         g_device->beginPass(pass);
         drawPicture(picture, srcWidth, srcHeight, aspect, static_cast<int>(w), static_cast<int>(h), frameAspect);
-        g_device->uiRender(ImGui::GetDrawData());
+        uiRender(ImGui::GetDrawData());
         g_device->endPass();
     }
 
@@ -254,7 +312,7 @@ namespace present
         {
             ImDrawData scaled = *data; // the window's UI, stretched to the capture size
             scaled.FramebufferScale = ImVec2(width / data->DisplaySize.x, height / data->DisplaySize.y);
-            g_device->uiRender(&scaled);
+            uiRender(&scaled);
         }
         g_device->endPass();
         g_captureRgba.resize(static_cast<size_t>(width) * height * 4);

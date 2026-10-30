@@ -3,7 +3,9 @@
 #include "../core/iop_cpu.h"
 #include "../core/iop_memory.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstring>
 #include <cstdlib>
 #include <optional>
@@ -451,9 +453,23 @@ namespace ps2x::iop::detail
             const std::string value = m_memory.readString(a0, 4096u);
             char *end = nullptr;
             const int base = static_cast<int>(a2);
-            const unsigned long parsed = ordinal == 36
-                                             ? static_cast<unsigned long>(std::strtol(value.c_str(), &end, base))
-                                             : std::strtoul(value.c_str(), &end, base);
+            // [gta-recomp] the IOP's long is 32 bits: out-of-range values saturate there, not at the host's 64-bit limits
+            uint32_t parsed = 0;
+            if (ordinal == 36)
+            {
+                const long long v = std::strtoll(value.c_str(), &end, base);
+                parsed = static_cast<uint32_t>(static_cast<int32_t>(std::clamp<long long>(v, INT32_MIN, INT32_MAX)));
+            }
+            else
+            {
+                const unsigned long long v = std::strtoull(value.c_str(), &end, base);
+                const char *digits = value.c_str();
+                while (std::isspace(static_cast<unsigned char>(*digits)))
+                    ++digits;
+                const unsigned long long magnitude = *digits == '-' ? 0ull - v : v;
+                parsed = magnitude > UINT32_MAX ? UINT32_MAX
+                                                : (*digits == '-' ? 0u - static_cast<uint32_t>(magnitude) : static_cast<uint32_t>(magnitude));
+            }
             if (a1 != 0u)
             {
                 m_memory.write32(a1, a0 + static_cast<uint32_t>(end - value.c_str()));

@@ -37,7 +37,8 @@ def copy_card(src, dst):
         if r.returncode >= 8:
             raise RuntimeError("robocopy failed (%d) copying %s" % (r.returncode, src))
     else:
-        shutil.copytree(src, dst)
+        # Linux keeps no settable creation time; the card's own order file (.ps2x-order) keeps its directory order
+        shutil.copytree(src, dst, copy_function=shutil.copy2)
 
 
 class Scm:
@@ -131,7 +132,7 @@ class Game:
         proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "run.py"), str(int(seconds)), name, "--control",
                                  "--hidden"],
                                 cwd=ROOT, env=e, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL)
+                                stderr=subprocess.DEVNULL, start_new_session=not tc.IS_WINDOWS)
         gamectl.wait(port=port, timeout=90)
         return cls(proc, os.path.join(ROOT, "build", "run", name + ".log"), port)
 
@@ -298,7 +299,12 @@ class Game:
             if tc.IS_WINDOWS:
                 subprocess.run(["taskkill", "/T", "/F", "/PID", str(self.proc.pid)], capture_output=True)
             else:
-                self.proc.kill()
+                # run.py and the game share the session started for them (start): the whole group goes
+                import signal
+                try:
+                    os.killpg(self.proc.pid, signal.SIGKILL)
+                except OSError:
+                    self.proc.kill()
 
 
 def main():
