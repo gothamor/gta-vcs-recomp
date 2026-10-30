@@ -558,6 +558,13 @@ dropped on uploads (lazy render-target patching).
       garbage and the game loop stopped - now a script of its own at the subroutine (`vcs::rig::startScriptAt`). Check:
       `python tools/finale_check.py --full` (9 checks, 0 failed: credits, back below the Mendez building, faded in) and
       `--story` (the story's own credits, one copy only).
+- [x] White lines across the picture in the morning, from the planes' trails in the sky (user report 2026-10-30, seen
+      after the Linux work but not caused by it: at 4:3 too, in every renderer path, with either frame timing) -
+      **fixed 2026-10-30** in the recompiler. Its `VCLIPw` had the + / - clip bits swapped and compared with w, not
+      |w|; RenderWare's Im3D line clipper (EE, `FUN_002F95E0`) then cut a trail segment leaving the view at the
+      opposite side plane, next to the camera, and the wrapped projection drew across the screen (game-internals.md
+      6k). One generated function changed. Check: `VCS_SELFTEST=1` (12 clip-flag cases); at the Little Havana Empire
+      site at 08:20 the F12 dumps had a near-camera line vertex (Q ~8.9) every frame at 4:3 and 16:9, none after.
 
 ## Phase 6 - enhancements
 
@@ -698,7 +705,8 @@ HLE / VU0, scenes against the Windows reference, the rig).
 | `PS2X_TRACE_RPC=n` | first n SIF RPC events |
 | `PS2X_LOG_MPG=1`, `PS2X_DUMP_MPG_DIR=d` | VU1 microcode uploads |
 | `VCS_GS_STATS=s` | GS state histogram |
-| `VCS_SELFTEST=1` | recompiled libgcc helpers vs native |
+| `VCS_SELFTEST=1` | recompiled libgcc helpers vs native; RenderWare's clip flags (`VCLIPw`) on known vertices |
+| `VCS_TRACE_IMMEDIATE=1` | callers of the Im2D / Im3D draw entries with their first arguments, counted every 5 s (which game code draws a primitive) |
 | `VCS_TRACE_DELAY=1`, `VCS_TRACE_SOUND=1` | DelayThread calls; EE sound driver commands |
 | `PS2X_TRACE_SPU=1`, `PS2X_TRACE_IOP_DMA=1` | IOP SPU2/DMA/interrupt tracing |
 | `PS2X_TRACE_SPU2=1` | SPU2 key-ons, DMA bytes, IRQs, peak level per 5 s; per core: wet input, reverb output, ESA/EEA, EVOL, PMON / NON use |

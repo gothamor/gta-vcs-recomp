@@ -263,22 +263,22 @@ namespace ps2recomp
                 }
                 case VU0_S2_VCLIPw:
                 {
+                    // [gta-recomp] CLIP as the VU does it (and the VU1 interpreter, ps2_vu1_upper.cpp): bit 0 x > +|w|,
+                    // bit 1 x < -|w|, then y, z; compared as sign-magnitude bits, a denormal w as zero. Before: + and -
+                    // swapped and w's sign kept, so RenderWare's Im3D line clipper (0x2F95E0, flags from 0x32E508) cut a
+                    // line leaving the right side at the left plane - the plane trails' lines across the screen
                     uint8_t field = inst.function & 0x3;
-                    std::string shuffle_pattern = fmt::format("_MM_SHUFFLE({},{},{},{})", field, field, field, field);
-
                     return fmt::format(
-                        "{{ __m128 fs = ctx->vu0_vf[{}]; "
-                        "__m128 ft = _mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {}); "
-                        "__m128 neg_ft = _mm_xor_ps(ft, _mm_castsi128_ps(_mm_set1_epi32(0x80000000))); "
-                        "__m128 gt = _mm_cmpgt_ps(fs, ft); "
-                        "__m128 lt = _mm_cmplt_ps(fs, neg_ft); "
-                        "uint32_t gt_mask = (uint32_t)_mm_movemask_ps(gt); "
-                        "uint32_t lt_mask = (uint32_t)_mm_movemask_ps(lt); "
-                        "uint32_t flags = ((lt_mask & 0x1) << 0) | ((gt_mask & 0x1) << 1) | "
-                        "((lt_mask & 0x2) << 1) | ((gt_mask & 0x2) << 2) | "
-                        "((lt_mask & 0x4) << 2) | ((gt_mask & 0x4) << 3); "
-                        "ctx->vu0_clip_flags = ((ctx->vu0_clip_flags << 6) | (flags & 0x3F)) & 0xFFFFFF; }}",
-                        inst.rd, inst.rt, inst.rt, shuffle_pattern);
+                        "{{ alignas(16) uint32_t fsb[4], ftb[4]; "
+                        "_mm_store_ps(reinterpret_cast<float *>(fsb), ctx->vu0_vf[{}]); "
+                        "_mm_store_ps(reinterpret_cast<float *>(ftb), ctx->vu0_vf[{}]); "
+                        "const int32_t lim = (ftb[{}] & 0x7F800000u) ? (int32_t)(ftb[{}] & 0x7FFFFFFFu) : 0x007FFFFF; "
+                        "uint32_t flags = 0u; "
+                        "for (int c = 0; c < 3; ++c) {{ "
+                        "if ((int32_t)fsb[c] > lim) flags |= 1u << (2 * c); "
+                        "if ((int32_t)(fsb[c] ^ 0x80000000u) > lim) flags |= 2u << (2 * c); }} "
+                        "ctx->vu0_clip_flags = ((ctx->vu0_clip_flags << 6) | flags) & 0xFFFFFF; }}",
+                        inst.rd, inst.rt, field, field);
                 }
                 case VU0_S2_VNOP:
                     return fmt::format("// NOP operation, no action needed for VU0");

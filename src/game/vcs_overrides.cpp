@@ -36,6 +36,8 @@
 #include <cstring>
 #include <utility>
 #include <map>
+#include <mutex>
+#include <tuple>
 #include <iostream>
 
 namespace
@@ -378,6 +380,50 @@ namespace
         SET_GPR_S32(ctx, 3, i);
         SET_GPR_S32(ctx, 2, i < count ? i : -1);
         ctx->pc = GPR_U32(ctx, 31);
+    }
+
+    // VCS_TRACE_IMMEDIATE=1: callers of the immediate-mode draw entries (kImmediateEntries) with their first three
+    // arguments, counted, every 5 s - which game code draws a given Im2D / Im3D primitive
+    struct ImmediateEntry
+    {
+        uint32_t at;
+        const char *name;
+    };
+    constexpr ImmediateEntry kImmediateEntries[] = {
+        {0x002FBE08u, "im2d-prim"}, {0x002FBE68u, "im2d-indexed"}, {0x002FBD78u, "im2d-line"}, {0x0035C8F0u, "im2d-35c8f0"},
+        {0x002FB9D0u, "im2d-core"}, {0x002FC2E8u, "im3d-2fc2e8"},  {0x002FC838u, "im3d-2fc838"}, {0x002F8250u, "im3d-submit"},
+    };
+    constexpr int kImmediateCount = static_cast<int>(sizeof(kImmediateEntries) / sizeof(kImmediateEntries[0]));
+    PS2Runtime::RecompiledFunction g_origImmediate[kImmediateCount] = {};
+    template <int Which>
+    PS2_GUEST_CC void traceImmediate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static std::mutex lock;
+        static std::map<std::tuple<int, uint32_t, uint32_t, uint32_t, uint32_t>, uint64_t> counts;
+        static auto last = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> g(lock);
+            ++counts[{Which, GPR_U32(ctx, 31), GPR_U32(ctx, 4), GPR_U32(ctx, 5), GPR_U32(ctx, 6)}];
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last > std::chrono::seconds(5))
+            {
+                last = now;
+                for (const auto &[k, n] : counts)
+                    std::fprintf(stderr, "[immediate] %s ra=0x%08x a0=0x%x a1=0x%x a2=0x%x x%llu\n",
+                                 kImmediateEntries[std::get<0>(k)].name, std::get<1>(k), std::get<2>(k), std::get<3>(k),
+                                 std::get<4>(k), static_cast<unsigned long long>(n));
+                counts.clear();
+            }
+        }
+        g_origImmediate[Which](rdram, ctx, runtime);
+    }
+    template <int... I>
+    void hookImmediate(PS2Runtime &runtime, std::integer_sequence<int, I...>)
+    {
+        const PS2Runtime::RecompiledFunction hooks[] = {&traceImmediate<I>...};
+        for (int i = 0; i < kImmediateCount; ++i)
+            if ((g_origImmediate[i] = runtime.lookupFunction(kImmediateEntries[i].at)))
+                runtime.replaceFunction(kImmediateEntries[i].at, hooks[i]);
     }
 
     PS2Runtime::RecompiledFunction g_origDmaSend = nullptr;
@@ -924,6 +970,8 @@ namespace
             if (g_origDmaSend)
                 runtime.replaceFunction(0x00448970u, &traceDmaSend);
         }
+        if (std::getenv("VCS_TRACE_IMMEDIATE"))
+            hookImmediate(runtime, std::make_integer_sequence<int, kImmediateCount>{});
         if (std::getenv("VCS_TRACE_FILES"))
             runtime.replaceFunction(0x0023BAF0u, &traceLevelLoad);
         if (std::getenv("VCS_TRACE_SOUND"))

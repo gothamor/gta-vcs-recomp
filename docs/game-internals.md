@@ -1090,6 +1090,35 @@ windowScale role there), a dropped or outgrown target's texture reused by the ne
 one), a dropped target re-made at the size it had. The drop itself stays (the reflection map starts from cleared each
 frame, as before).
 
+### 6k. Plane trails and RenderWare's Im3D line clipper (2026-10-30)
+
+Found from a user report: long thin white lines across the picture in the morning, starting at the white trails that
+planes leave in the sky (seen outside the Little Havana Empire site, 08:28, 16:9 - and at 4:3 too).
+
+- **The trails** (VC's `CPlaneTrails`): six of them at `0x50B5D0`, 0x140 bytes each - 16 points (`CVector` + pad, 16
+  bytes) then 16 times (`u32` ms, at +0x100). Drawn by `FUN_00245A28`, which calls **`FUN_00245768` = `CPlaneTrail::
+  Render(this, visibility)`**: `CCamera::IsSphereVisible(TheCamera 0x6F44D0, point 0, 1000)`, alpha = visibility * 110,
+  a point older than 30 s (`now - time >= 30001`, the clock at `0x4CD104`) gets time 0 and is skipped, the rest go to
+  a vertex buffer at `0x709650` (stride 0x18, white, alpha fading over the last 10 s), then `RwIm3DTransform`
+  (`FUN_002FBFA8`) and `RwIm3DRenderIndexedPrimitive(2, 0x4873B0, 2 * (n - 1))` (`FUN_002FC2E8`; the static
+  indices 0,1,1,2,...). The points are 500-600 units up and sane (read with the rig while the lines showed).
+- **Lines go through the EE, not the VU1**: `FUN_002FC2E8` with type 2 loops over the index pairs and calls
+  **`FUN_002F95E0`, the line clipper**: each end to clip space (`FUN_001AAA38`, the VU0-macro matrix multiply with
+  the camera's matrix at `0x520A80`), clip flags from **`FUN_0032E508`** (`ctc2 $zero, vi18; vclipw.xyz vf1, vf1w;
+  cfc2 $v0, vi18`), trivial reject on a shared outside bit, otherwise a cut per plane by bit (`FUN_002F97F0`, plane
+  table `0x5209A0`, 16 bytes a plane), then emitted as a PATH2 GIF packet (ST / RGBAQ / XYZ2, `FUN_002F9AA0`).
+  `FUN_0032E508` is the only VCLIP in the EE code.
+- **The bug was the recompiler's VCLIP**: it set bit 0 for x < -w and bit 1 for x > +w (swapped; the VU sets bit 0
+  for x > +|w|, bit 1 for x < -|w|, then y, z) and compared with w, not |w|. A trail segment leaving the view on the
+  right was cut at the left plane; the side planes meet at the eye, so the cut point landed next to the camera (w
+  0.11 - 0.12, Q ~8.9 in the F12 log) and its projection, far outside the GS's 16-bit coordinate range, wrapped to
+  anywhere on screen: a line from the trail across the picture. Fixed in `ps2xRecomp/src/lib/vu_translator.cpp`
+  (the VU1 interpreter's CLIP, `ps2_vu1_upper.cpp`, was right); `VCS_SELFTEST=1` checks the flags.
+- How it was found: F12 with `PS2X_HW_DUMP_ALLVERTS=1` showed one line draw with one vertex at Q 8.9 and the same in
+  every path (compiled / interpreted VU1, `PS2X_HLE=0`, the GS front end), so the game itself sent it; a trace of the
+  kicks showed PATH2 and no ADC; `VCS_TRACE_IMMEDIATE=1` (callers of the Im2D / Im3D entries, `vcs_overrides.cpp`)
+  named `0x245904` in the trail renderer.
+
 ## 7. Textures: `.XTX`
 
 Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):

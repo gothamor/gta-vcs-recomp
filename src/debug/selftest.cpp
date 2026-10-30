@@ -62,6 +62,32 @@ namespace vcs
                          (unsigned long long)mod, (unsigned long long)(c.a % c.b),
                          (unsigned long long)mul, (unsigned long long)(c.a * c.b));
         }
+        // RenderWare's clip-flag helper (0x32E508: VCLIPw.xyz on a clip-space vertex, the flags read back from vi18):
+        // bit 0 x > +|w|, bit 1 x < -|w|, then y, z. The recompiler had + / - swapped and compared with w, not |w|, so
+        // the Im3D line clipper cut lines at the wrong plane (the plane trails across the screen, game-internals.md 6k)
+        {
+            struct ClipCase
+            {
+                float v[4];
+                uint32_t flags;
+            };
+            const ClipCase clipCases[] = {
+                {{2, 0, 0, 1}, 0x01},     {{-2, 0, 0, 1}, 0x02},     {{0, 2, 0, 1}, 0x04},  {{0, -2, 0, 1}, 0x08},
+                {{0, 0, 2, 1}, 0x10},     {{0, 0, -2, 1}, 0x20},     {{0.5f, 0, 0, 1}, 0},  {{0.5f, -0.5f, 0, -1}, 0},
+                {{2, -3, 0.5f, -1}, 0x09}, {{-2, 3, -4, -1}, 0x26}, {{1, 0, 0, 0}, 0x01},  {{0, 0, 0, 0}, 0},
+            };
+            constexpr uint32_t kScratch = 0x01F80000u; // free before boot
+            uint8_t *rdram = runtime.memory().getRDRAM();
+            for (const ClipCase &c : clipCases)
+            {
+                std::memcpy(rdram + kScratch, c.v, sizeof(c.v));
+                const uint32_t got = static_cast<uint32_t>(call2(runtime, FUN_0032e508_0x32e508, 0x0032E508u, kScratch, 0));
+                const bool ok = got == c.flags;
+                failures += ok ? 0 : 1;
+                std::fprintf(stderr, "[selftest] %s vclip (%g, %g, %g, %g): flags %02x (%02x)\n", ok ? "ok  " : "FAIL", c.v[0],
+                             c.v[1], c.v[2], c.v[3], got, c.flags);
+            }
+        }
         // GS host->local PSMT8 upload, then T8 reads must give back the linear input
         // (VCS_SELFTEST_XTX=<loading screen .XTX>: 512x512 indices at 0x4B0).
         if (const char *xtx = std::getenv("VCS_SELFTEST_XTX"))
