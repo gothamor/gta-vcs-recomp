@@ -471,7 +471,7 @@ def build_env():
     env["PATH"] = os.pathsep.join(front + [env.get("PATH", "")] + [p for p in back if os.path.isdir(p)])
     if jdk:
         env["JAVA_HOME"] = jdk
-    clang = _which("clang-cl", env)
+    clang = _which("clang-cl", env) or shutil.which("clang-cl")
     if not clang:
         fail('clang-cl not found: in the Visual Studio Installer, Modify, tick "C++ Clang tools for Windows"', "no_clang")
     if clang_version(clang) < MIN_CLANG:
