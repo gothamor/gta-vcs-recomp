@@ -43,6 +43,7 @@
 #include <cfenv>
 #include <string>
 #include <vector>
+#include <condition_variable>
 #include <mutex>
 #include <sstream>
 
@@ -529,6 +530,23 @@ namespace
     PS2Memory *g_presentMemory = nullptr;
     std::atomic<bool> g_presentOnGameFrames{false};
     std::atomic<int64_t> g_lastGameFrameNs{0};
+    // [gta-recomp] ps2HostTick / ps2WaitHostTick
+    std::mutex g_tickMutex;
+    std::condition_variable g_tickCv;
+    uint64_t g_hostTick = 0, g_tickTaken = 0;
+    std::atomic<bool> g_hostPaced{false};
+    std::atomic<uint64_t> g_framesPosted{0}, g_framesTaken{0}; // frames on their way to the window
+    int g_deferredTick = -1; // a tick held back by a backlog: frames allowed on their way when it goes (g_tickMutex)
+
+    // a tick, when no more than `allowed` frames are on their way; held back until then otherwise (g_tickMutex held)
+    bool releaseTickLocked(uint64_t allowed)
+    {
+        const uint64_t posted = g_framesPosted.load(std::memory_order_relaxed), taken = g_framesTaken.load(std::memory_order_relaxed);
+        if (posted > taken && posted - taken > allowed)
+            return false;
+        ++g_hostTick;
+        return true;
+    }
 
     int64_t presentNowNs()
     {
@@ -544,9 +562,64 @@ namespace
         } regs;
         std::memcpy(regs.v, &memory.gs(), sizeof(regs.v));
         ps2perf::PhaseScope renderTime(ps2perf::Phase::Render); // waiting for the worker counts as render time
+        g_framesPosted.fetch_add(1, std::memory_order_relaxed);
         ps2_render_worker::post([hw, regs] { ps2_render_worker::runOnGsStage([hw, regs] { hw->endFrame(regs.v); }, true); }, true);
     }
 }
+
+void ps2NoteFramesTaken(uint32_t frames)
+{
+    g_framesTaken.fetch_add(frames, std::memory_order_relaxed);
+    bool released = false;
+    {
+        std::lock_guard<std::mutex> lock(g_tickMutex);
+        if (g_deferredTick >= 0 && releaseTickLocked(static_cast<uint64_t>(g_deferredTick)))
+        {
+            g_deferredTick = -1;
+            released = true;
+        }
+    }
+    if (released)
+        g_tickCv.notify_all();
+}
+
+void ps2HostTick(bool lead, bool paced)
+{
+    // A backlog (ps2_present.h): with paced host frames the frame starts at the next tick instead - which brings its phase
+    // back to ready-just-in-time (started on a later release it would be a host frame late again). Unpaced (the GPU or
+    // the CPU is the limit) the frame waiting is what keeps the GPU fed: the tick goes when the main thread takes it
+    // (ps2NoteFramesTaken), a few ms later in the same host frame.
+    {
+        std::lock_guard<std::mutex> lock(g_tickMutex);
+        const uint64_t allowed = lead ? 0u : 1u;
+        if (!releaseTickLocked(allowed))
+        {
+            g_deferredTick = (lead || paced) ? -1 : static_cast<int>(allowed);
+            return;
+        }
+        g_deferredTick = -1;
+    }
+    g_tickCv.notify_all();
+}
+
+bool ps2WaitHostTick()
+{
+    // PS2X_HOST_PACED=0: the game's own deadline, as before 2026-10-30
+    static const bool allowed = [] {
+        const char *e = std::getenv("PS2X_HOST_PACED");
+        return !(e && e[0] == '0');
+    }();
+    if (!allowed || !g_hostPaced.load(std::memory_order_relaxed))
+        return false;
+    ps2perf::PhaseScope waiting(ps2perf::Phase::Wait);
+    std::unique_lock<std::mutex> lock(g_tickMutex);
+    // the 100 ms timeout is a guard (a main thread held up: a window being dragged), not pacing
+    g_tickCv.wait_for(lock, std::chrono::milliseconds(100), [] { return g_hostTick != g_tickTaken; });
+    g_tickTaken = g_hostTick;
+    return true;
+}
+
+void ps2SetHostPacedFrames(bool on) { g_hostPaced.store(on, std::memory_order_relaxed); }
 
 void ps2PresentGameFrame()
 {
@@ -3124,6 +3197,10 @@ void PS2Runtime::run()
             }
         });
         platform::pumpEvents(); // [gta-recomp]
+        // [gta-recomp] host-paced game frames start on fresh input (ps2_present.h): here, unless the frame lead started
+        // this one already, early enough to be ready now (below)
+        if (!platform::frameLeadRan())
+            ps2HostTick(false, platform::frameSlept());
         present::beginFrame();
         platform::beginFrame();
         uint32_t presentWidth = FB_WIDTH;
@@ -3245,7 +3322,28 @@ void PS2Runtime::run()
             --g_burst.left;
         }
         ps2control::pump(capturePng, [this] { requestStop(); });
+        present::setFrameInputTime(gsHwShownInputNs()); // [gta-recomp] input-to-screen delay (PS2X_RHI_STATS)
         present::present();
+        // [gta-recomp] frame lead (docs/PERFORMANCE.md 19): with host-paced game frames, the next one starts - on input
+        // read then - as long before the next host frame as it takes to build (gsHwFrameBuildNs) plus a margin, so it is
+        // ready just in time instead of a host frame late. PS2X_FRAME_LEAD=0: at the host frame's start (no lead);
+        // PS2X_FRAME_LEAD_MARGIN_US=<us> (1500).
+        {
+            static const bool leadOn = [] {
+                const char *e = std::getenv("PS2X_FRAME_LEAD");
+                return !(e && e[0] == '0');
+            }();
+            static const int64_t marginNs = [] {
+                const char *e = std::getenv("PS2X_FRAME_LEAD_MARGIN_US");
+                return (e && *e ? std::atoll(e) : 1500ll) * 1000ll;
+            }();
+            const int64_t build = gsHwFrameBuildNs();
+            const bool lead = leadOn && g_hostPaced.load(std::memory_order_relaxed) && build > 0;
+            platform::setFrameLead(lead ? static_cast<uint64_t>(build + marginNs) : 0u, [] {
+                platform::pumpEvents(false);
+                ps2HostTick(true);
+            });
+        }
         platform::waitNextFrame();
 
         if (platform::quitRequested())

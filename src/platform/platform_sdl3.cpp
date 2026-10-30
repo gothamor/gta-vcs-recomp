@@ -12,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -55,6 +56,14 @@ namespace platform
         // full screen (setFullscreen); main thread
         bool g_fullscreen = false;
         bool g_hiddenWindow = false;
+        std::atomic<int64_t> g_snapshotNs{0}; // inputSnapshotNs
+        // frame lead (setFrameLead), main thread
+        uint64_t g_leadNs = 0;
+        FrameLead g_atLead = nullptr;
+        bool g_leadRan = false;
+        bool g_slept = false; // the last waitNextFrame waited (frameSlept)
+        // keyPressed edges seen by input refreshes between frames, reported at the next frame-start pump
+        std::array<bool, KEY_COUNT> g_edgesPending{};
         uint64_t g_mouseMovedNs = 0;
         bool g_cursorHidden = false;
         constexpr uint64_t kCursorIdleNs = 2000000000ull;
@@ -438,7 +447,22 @@ namespace platform
         return true;
     }
 
-    void pumpEvents()
+    namespace
+    {
+        // a key's went-down edge: kept by refreshes between frames, reported (with the kept ones) at a frame start
+        void noteEdge(int k, bool edge, bool frameStart)
+        {
+            if (!frameStart)
+            {
+                g_edgesPending[k] = g_edgesPending[k] || edge;
+                return;
+            }
+            g_keysPressed[k] = edge || g_edgesPending[k];
+            g_edgesPending[k] = false;
+        }
+    }
+
+    void pumpEvents(bool frameStart)
     {
         SDL_Event e;
         while (SDL_PollEvent(&e))
@@ -523,7 +547,7 @@ namespace platform
         {
             if (k >= KEY_MOUSE_LEFT && k <= KEY_WHEEL_DOWN)
                 continue; // below
-            g_keysPressed[k] = now[k] && !g_keysPrev[k];
+            noteEdge(k, now[k] && !g_keysPrev[k], frameStart);
             g_keysPrev[k] = now[k];
             g_keys[k].store(now[k], std::memory_order_relaxed);
         }
@@ -559,7 +583,7 @@ namespace platform
         }
         for (int k = KEY_MOUSE_LEFT; k <= KEY_WHEEL_DOWN; ++k)
         {
-            g_keysPressed[k] = pseudo[k] && !g_keysPrev[k];
+            noteEdge(k, pseudo[k] && !g_keysPrev[k], frameStart);
             g_keysPrev[k] = pseudo[k];
             g_keys[k].store(pseudo[k], std::memory_order_relaxed);
         }
@@ -583,7 +607,11 @@ namespace platform
             g_rumbleSent = rumble;
             g_rumbleSentNs = nowNs;
         }
+        g_snapshotNs.store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                           std::memory_order_release);
     }
+
+    int64_t inputSnapshotNs() { return g_snapshotNs.load(std::memory_order_acquire); }
 
     bool quitRequested() { return g_quit; }
 
@@ -634,11 +662,38 @@ namespace platform
         const uint64_t kPeriodNs = g_framePeriodNs.load(std::memory_order_relaxed);
         const uint64_t now = SDL_GetTicksNS();
         g_nextFrameNs = g_nextFrameNs ? g_nextFrameNs + kPeriodNs : now + kPeriodNs;
+        g_leadRan = false;
+        g_slept = false;
         if (g_nextFrameNs < now)
+        {
             g_nextFrameNs = now; // fell behind: don't try to catch up
-        else
-            SDL_DelayPrecise(g_nextFrameNs - now);
+            return;
+        }
+        g_slept = true;
+        // the frame lead: wake early for its call, then sleep the rest (none when its time has passed)
+        const uint64_t lead = std::min(g_leadNs, kPeriodNs);
+        if (g_atLead && lead && g_nextFrameNs - lead > now)
+        {
+            SDL_DelayPrecise(g_nextFrameNs - lead - now);
+            g_atLead();
+            g_leadRan = true;
+            const uint64_t after = SDL_GetTicksNS();
+            if (g_nextFrameNs > after)
+                SDL_DelayPrecise(g_nextFrameNs - after);
+            return;
+        }
+        SDL_DelayPrecise(g_nextFrameNs - now);
     }
+
+    void setFrameLead(uint64_t leadNs, FrameLead atLead)
+    {
+        g_leadNs = leadNs;
+        g_atLead = atLead;
+    }
+
+    bool frameLeadRan() { return g_leadRan; }
+
+    bool frameSlept() { return g_slept; }
 
     void windowSize(int &width, int &height)
     {

@@ -435,6 +435,42 @@ loading, the flyover road (the world and the post effects), the pause map - are 
 moving ones differ less than two runs of the same build do. On Windows (D3D11, fxc) the same variants are built; there
 the gain wants measuring at 3x / 4x, where the GPU counts (and a picture check: `scenes.py compare`).
 
+### 19. Input delay (2026-10-30)
+
+The user felt more input lag after section 17. Measured now, not guessed: `PS2X_RHI_STATS=1` reports **input to GPU
+done** per shown frame (Vulkan) - from the input snapshot the game read (`platform::inputSnapshotNs`, stamped on the
+pad read and on the frame) to the GPU's end of that frame on the CPU's clock (`VK_KHR_calibrated_timestamps`); the
+display adds up to a refresh. gs_hw splits the part before the GPU: input -> queued (game, render worker, GS stage) and
+queued -> taken (waiting for the main thread). Laptop (HD 520), quick build, flyover + intro, frame-rate independent:
+
+| | old pacing | section 17 | now |
+|---|---|---|---|
+| 60 cap: input -> GPU done | 44.5 ms | 50.4 ms | **33.9-35.0 ms** |
+| 60 cap: game fps, p95 frame | 59.5, 16.8 | 59.7, 16.9 | 58.7-58.9, 17.1-18.2 |
+| 144 cap (GPU bound here) / uncapped | 84 ms, 30 shown fps | 45 ms, 76-80 | **44.6 ms**, 80.9 |
+
+What was wrong, in order:
+- **Two clocks.** The game slept to its own deadline, the main thread to its own; a finished frame waited for the next
+  host frame - on this machine almost a whole one. Now the main thread's frame paces the game's
+  (`ps2HostTick` / `ps2WaitHostTick`, ps2_present.h): at a cap of 60 or more (or none) with frame-rate independent timing.
+- **A standing backlog.** Once one frame queued behind another, production and consumption at the same rate kept it
+  there for good - every frame a host frame late (input -> queued and queued -> taken both exactly one period). A tick
+  counts the frames on their way (posted by the game, not yet taken); with a backlog, at a cap the tick starts nothing (the
+  next one starts in time again), GPU or CPU bound it goes when the waiting frame is taken (that frame keeps the GPU fed:
+  dropping it measured 36 ms but 77 fps and a p95 of 18.9 ms - judder).
+- **Late start.** The game's frame (11 ms here) plus the render worker's and GS stage's tail (5.6 ms) just missed a
+  60 Hz host frame. The **frame lead**: the main thread wakes before the next host frame by the frame's build time (the
+  95th percentile of recent frames' input -> ready, `gsHwFrameBuildNs`) plus 1.5 ms, refreshes the input
+  (`pumpEvents(false)`: key-press edges kept for the frame-start pump, so hotkeys miss nothing) and starts the game's
+  frame then: it is ready just in time, on input read just before it started.
+- Tried and dropped: a hand-over wait at the GS stage (stalls the pipeline, not the game: 70 fps); a frames-in-flight
+  limit alone (1 starves the pipeline - 51-54 fps -, 2-3 change nothing); releasing a backlog's tick late (the backlog
+  comes back).
+Switches: `PS2X_HOST_PACED=0` (the game's own deadline), `PS2X_FRAME_LEAD=0`, `PS2X_FRAME_LEAD_MARGIN_US=<us>`.
+Original timing is paced by the emulated VBlank and unchanged (49.8 ms at 30 fps). What is left at a cap: the frame's
+build (~10 ms) and the GPU (~11 ms + recording). On Windows (D3D11) the pacing is the same code; DXGI's default of
+three queued frames might add delay when GPU bound there - to measure (the delay report is Vulkan's only so far).
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker

@@ -908,7 +908,7 @@ namespace rhi
                     vkCmdBeginDebugUtilsLabelEXT(m_cmd, &label);
                     ++m_markerDepth;
                 }
-                if (m_timer.on)
+                if (m_timer.markers)
                     m_timer.open.push_back({name ? name : "?", timestamp()});
             }
 
@@ -919,7 +919,7 @@ namespace rhi
                     vkCmdEndDebugUtilsLabelEXT(m_cmd);
                     --m_markerDepth;
                 }
-                if (m_timer.on && !m_timer.open.empty())
+                if (m_timer.markers && !m_timer.open.empty())
                 {
                     auto [name, begin] = std::move(m_timer.open.back());
                     m_timer.open.pop_back();
@@ -957,10 +957,14 @@ namespace rhi
                     swapBarrier(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
                 if (m_timer.on)
                 {
+                    auto &slot = m_timer.slots[m_core->frame];
                     const uint32_t end = timestamp();
-                    if (m_timer.frameBegin != kNoQuery && end != kNoQuery)
-                        m_timer.slots[m_core->frame].spans.push_back({"(frame)", m_timer.frameBegin, end});
+                    if (m_timer.markers && m_timer.frameBegin != kNoQuery && end != kNoQuery)
+                        slot.spans.push_back({"(frame)", m_timer.frameBegin, end});
                     m_timer.open.clear(); // spans left open don't cross frames
+                    // the shown frame's input delay ends when the GPU is done with it (collectTimes)
+                    slot.frameEnd = end;
+                    slot.inputNs = m_pendingInputNs;
                 }
                 VkSemaphore done = show ? m_renderDone[m_imageIndex] : VK_NULL_HANDLE;
                 submit(true, done);
@@ -990,6 +994,8 @@ namespace rhi
                     reportStats();
                 beginFrame();
             }
+
+            void setFrameInputTime(int64_t steadyNs) override { m_pendingInputNs = steadyNs; }
 
             // ---- Dear ImGui: drawn through the RHI by render::UiRenderer (this backend has no renderer of its own) ----
             bool uiInit() override { return false; }
@@ -1216,6 +1222,21 @@ namespace rhi
                 std::vector<const char *> extensions{VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
                 if (!m_offscreen)
                     extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+                // GPU time on the CPU's clock (the input delay, PS2X_RHI_STATS): CLOCK_MONOTONIC is steady_clock on Linux
+                if (statsOn() && deviceHas(VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME))
+                {
+                    uint32_t n = 0;
+                    vkGetPhysicalDeviceCalibrateableTimeDomainsKHR(m_core->physical, &n, nullptr);
+                    std::vector<VkTimeDomainKHR> domains(n);
+                    vkGetPhysicalDeviceCalibrateableTimeDomainsKHR(m_core->physical, &n, domains.data());
+                    const bool dev = std::find(domains.begin(), domains.end(), VK_TIME_DOMAIN_DEVICE_KHR) != domains.end();
+                    const bool mono = std::find(domains.begin(), domains.end(), VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR) != domains.end();
+                    if (dev && mono)
+                    {
+                        extensions.push_back(VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+                        m_calibration = true;
+                    }
+                }
                 VkDeviceCreateInfo ci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
                 ci.pNext = &f2;
                 ci.queueCreateInfoCount = 1;
@@ -1584,7 +1605,7 @@ namespace rhi
                 f.ring.current = 0;
                 ++m_frameSerial;
                 beginCommands();
-                if (m_timer.on)
+                if (m_timer.markers)
                     m_timer.frameBegin = timestamp();
             }
 
@@ -2273,8 +2294,9 @@ namespace rhi
             void timerInit(bool hostReset)
             {
                 // PS2X_RHI_GPU_TIME=1: the same, without gs_hw's marker (and pass break) around every draw - the passes as
-                // they are, and the whole frame
-                if (!std::getenv("PS2X_GPU_TIMING") && !std::getenv("PS2X_RHI_GPU_TIME"))
+                // they are, and the whole frame. PS2X_RHI_STATS=1: only each frame's end, for the input-to-GPU-done delay
+                m_timer.markers = std::getenv("PS2X_GPU_TIMING") || std::getenv("PS2X_RHI_GPU_TIME");
+                if (!m_timer.markers && !statsOn())
                     return;
                 uint32_t count = 0;
                 vkGetPhysicalDeviceQueueFamilyProperties(m_core->physical, &count, nullptr);
@@ -2288,6 +2310,8 @@ namespace rhi
                     return;
                 }
                 m_timer.periodNs = props.limits.timestampPeriod;
+                const uint32_t bits = families[m_queueFamily].timestampValidBits;
+                m_timer.validMask = bits >= 64 ? ~0ull : (1ull << bits) - 1;
                 for (auto &slot : m_timer.slots)
                 {
                     VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
@@ -2321,6 +2345,8 @@ namespace rhi
                                               VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
                     {
                         ++m_timer.frames;
+                        if (slot.inputNs > 0 && slot.frameEnd != kNoQuery)
+                            noteInputDelay(t[slot.frameEnd], slot.inputNs);
                         for (const auto &sp : slot.spans)
                             if (t[sp.end] >= t[sp.begin])
                             {
@@ -2333,7 +2359,9 @@ namespace rhi
                 }
                 slot.used = 0;
                 slot.spans.clear();
-                if (!m_timer.frames || std::chrono::steady_clock::now() - m_timer.lastReport < std::chrono::seconds(5))
+                slot.frameEnd = kNoQuery;
+                slot.inputNs = 0;
+                if (!m_timer.markers || !m_timer.frames || std::chrono::steady_clock::now() - m_timer.lastReport < std::chrono::seconds(5))
                     return;
                 m_timer.lastReport = std::chrono::steady_clock::now();
                 std::vector<std::pair<std::string, std::pair<double, uint64_t>>> rows(m_timer.totals.begin(), m_timer.totals.end());
@@ -2358,9 +2386,18 @@ namespace rhi
                     VkQueryPool pool = VK_NULL_HANDLE;
                     uint32_t used = 0;
                     std::vector<Span> spans;
+                    uint32_t frameEnd = kNoQuery; // the frame's last timestamp
+                    int64_t inputNs = 0;          // its input snapshot (setFrameInputTime)
                 };
-                bool on = false;
+                bool on = false;      // query pools exist
+                bool markers = false; // spans between markers reported ([gpu-timing])
                 double periodNs = 1.0;
+                uint64_t validMask = ~0ull;
+                // GPU ticks <-> steady_clock (VK_KHR_calibrated_timestamps, CLOCK_MONOTONIC: Linux's steady_clock)
+                bool calibrated = false;
+                uint64_t gpuRef = 0;
+                int64_t cpuRef = 0;
+                std::chrono::steady_clock::time_point calibratedAt{};
                 std::array<Slot, kFrames> slots;
                 std::vector<std::pair<std::string, uint32_t>> open;
                 uint32_t frameBegin = kNoQuery;
@@ -2368,6 +2405,38 @@ namespace rhi
                 uint64_t frames = 0;
                 std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
             } m_timer;
+            int64_t m_pendingInputNs = 0;
+
+            // The input-to-GPU-done delay of a shown frame: its last timestamp on the CPU's clock minus its input snapshot
+            void noteInputDelay(uint64_t gpuEnd, int64_t inputNs)
+            {
+                if (!m_calibration || !vkGetCalibratedTimestampsKHR)
+                    return;
+                const auto now = std::chrono::steady_clock::now();
+                if (!m_timer.calibrated || now - m_timer.calibratedAt > std::chrono::seconds(1))
+                {
+                    VkCalibratedTimestampInfoKHR info[2] = {{VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR},
+                                                            {VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR}};
+                    info[0].timeDomain = VK_TIME_DOMAIN_DEVICE_KHR;
+                    info[1].timeDomain = VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR;
+                    uint64_t ts[2] = {}, deviation = 0;
+                    if (vkGetCalibratedTimestampsKHR(m_core->device, 2, info, ts, &deviation) != VK_SUCCESS)
+                        return;
+                    m_timer.gpuRef = ts[0];
+                    m_timer.cpuRef = static_cast<int64_t>(ts[1]);
+                    m_timer.calibrated = true;
+                    m_timer.calibratedAt = now;
+                }
+                // signed tick difference within the counter's valid bits
+                uint64_t d = (gpuEnd - m_timer.gpuRef) & m_timer.validMask;
+                int64_t ticks = static_cast<int64_t>(d);
+                if (m_timer.validMask != ~0ull && d > (m_timer.validMask >> 1))
+                    ticks = -static_cast<int64_t>((m_timer.gpuRef - gpuEnd) & m_timer.validMask);
+                const int64_t doneNs = m_timer.cpuRef + static_cast<int64_t>(static_cast<double>(ticks) * m_timer.periodNs);
+                const double ms = (doneNs - inputNs) / 1e6;
+                if (ms > 0.0 && ms < 1000.0)
+                    m_stats.inputDelays.push_back(ms);
+            }
 
             // PS2X_RHI_STATS=1: per-frame counts every 5 s (suspended passes are the cost of copies inside a pass)
             void reportStats()
@@ -2385,6 +2454,16 @@ namespace rhi
                              m_stats.draws / f, m_stats.descriptorWrites / f, m_stats.passes / f, m_stats.suspends / f, m_stats.barriers / f,
                              m_stats.waits / f, m_stats.uploaded / f / 1024.0, static_cast<unsigned long long>(m_stats.pipelines),
                              m_stats.pipelineMs, m_stats.fenceMs / f, m_stats.acquireMs / f, m_stats.submitMs / f, m_stats.presentMs / f);
+                if (!m_stats.inputDelays.empty())
+                {
+                    std::vector<double> d = m_stats.inputDelays;
+                    std::sort(d.begin(), d.end());
+                    double sum = 0.0;
+                    for (double x : d)
+                        sum += x;
+                    std::fprintf(stderr, "[rhi] input to GPU done: avg %.1f ms, p50 %.1f, p95 %.1f, max %.1f (%zu frames; the display adds up to a refresh)\n",
+                                 sum / d.size(), d[d.size() / 2], d[std::min(d.size() - 1, d.size() * 95 / 100)], d.back(), d.size());
+                }
                 m_stats = {};
                 m_statsStart = now;
             }
@@ -2394,6 +2473,16 @@ namespace rhi
             uint32_t m_queueFamily = 0;
             VkSurfaceKHR m_surface = VK_NULL_HANDLE;
             bool m_offscreen = false;
+            bool m_calibration = false; // VK_KHR_calibrated_timestamps on (noteInputDelay)
+
+            bool deviceHas(const char *name)
+            {
+                uint32_t count = 0;
+                vkEnumerateDeviceExtensionProperties(m_core->physical, nullptr, &count, nullptr);
+                std::vector<VkExtensionProperties> exts(count);
+                vkEnumerateDeviceExtensionProperties(m_core->physical, nullptr, &count, exts.data());
+                return std::any_of(exts.begin(), exts.end(), [&](const VkExtensionProperties &e) { return std::strcmp(e.extensionName, name) == 0; });
+            }
             bool m_debugUtils = false;
             bool m_anisotropy = false;
             float m_maxAnisotropy = 1.0f;
@@ -2466,6 +2555,7 @@ namespace rhi
             {
                 uint64_t frames = 0, draws = 0, passes = 0, suspends = 0, barriers = 0, waits = 0, uploaded = 0, pipelines = 0;
                 uint64_t descriptorWrites = 0;
+                std::vector<double> inputDelays; // ms, input snapshot -> GPU done, per shown frame
                 double pipelineMs = 0.0, fenceMs = 0.0, acquireMs = 0.0, submitMs = 0.0, presentMs = 0.0;
             } m_stats;
             std::chrono::steady_clock::time_point m_statsStart = std::chrono::steady_clock::now();

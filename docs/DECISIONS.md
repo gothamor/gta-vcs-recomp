@@ -589,3 +589,12 @@ With frame-rate independent timing the game thread now queues one frame and the 
 game time is counted in frames, and holding the game thread back would slow the game down when the GPU can't keep up,
 where showing fewer frames keeps it at speed.
 
+## 2026-10-30 - Input delay first: host-paced game frames, the frame lead
+
+The user felt more input lag after the show-every-frame change and asked to keep input lag to a minimum. It is measured
+now (`PS2X_RHI_STATS`: input snapshot to GPU done) and the frame-rate independent pacing was rebuilt around it
+(PERFORMANCE.md 19): the main thread's frames pace the game's, a backlog is drained, and the game's frame starts early
+enough (the frame lead) to be ready just in time on input read just before. 60 cap: 50 -> 34 ms. When the GPU is the
+limit the one frame waiting stays (dropping it cut 9 ms but cost 4% of the frames and visible judder): smoothness kept
+there.
+

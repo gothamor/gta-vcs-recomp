@@ -246,6 +246,8 @@ namespace present
 
     void present() { g_device->present(g_presentMode); }
 
+    void setFrameInputTime(int64_t steadyNs) { g_device->setFrameInputTime(steadyNs); }
+
     bool frameLuma(const Picture &picture, int srcWidth, int srcHeight, float &mean)
     {
         constexpr int kW = 32, kH = 24;

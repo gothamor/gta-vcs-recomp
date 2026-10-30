@@ -1,4 +1,5 @@
 #include "runtime/ps2_pad.h"
+#include <atomic>
 #include "ps2_host_backend.h"
 #include "runtime/ps2_control.h"
 #include <cstring>
@@ -32,6 +33,10 @@ namespace
 }
 
 void PSPadBackend::setReader(Reader reader) { g_reader = reader; }
+
+// [gta-recomp] lastInputNs
+static std::atomic<int64_t> g_padInputNs{0};
+int64_t PSPadBackend::lastInputNs() { return g_padInputNs.load(std::memory_order_relaxed); }
 void PSPadBackend::setActuatorSink(ActuatorSink sink) { g_actuatorSink = sink; }
 
 void PSPadBackend::actuators(uint8_t small, uint8_t large)
@@ -48,6 +53,7 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     if (!data || size < 32)
         return false;
 
+    g_padInputNs.store(platform::inputSnapshotNs(), std::memory_order_relaxed); // [gta-recomp] lastInputNs
     std::memset(data, 0, 32);
     data[0] = 0x01;
     data[1] = kPadAnalogMarker;

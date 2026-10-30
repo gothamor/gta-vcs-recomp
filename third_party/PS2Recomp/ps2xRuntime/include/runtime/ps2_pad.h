@@ -23,6 +23,10 @@ public:
     using ActuatorSink = void (*)(uint8_t small, uint8_t large);
     static void setActuatorSink(ActuatorSink sink);
     static void actuators(uint8_t small, uint8_t large);
+
+    // [gta-recomp] The input snapshot (platform::inputSnapshotNs) the game's last pad read saw: where a frame's input
+    // delay starts (gs_hw.cpp stamps it on the frame). Any thread.
+    static int64_t lastInputNs();
 };
 
 #endif

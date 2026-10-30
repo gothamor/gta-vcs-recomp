@@ -92,6 +92,12 @@ void gsHwSetAspectWidening(float widening);
 // shown per host frame - a GPU-bound machine shows every frame it renders (the HD 520: 76 shown fps instead of 30 at the
 // same GPU load; docs/PERFORMANCE.md 17) with the least latency. Any thread.
 void gsHwSetShowEveryFrame(bool on);
+// [gta-recomp] The input snapshot time (PSPadBackend::lastInputNs) of the frame the last host frame showed: for the
+// input-to-screen delay (rhi::Device::setFrameInputTime). Main thread.
+int64_t gsHwShownInputNs();
+// [gta-recomp] How long a frame takes from its input snapshot to ready for the window (game, render worker, GS stage):
+// the 95th percentile of recent frames, 0 before any (the frame lead, docs/PERFORMANCE.md 19). Any thread.
+int64_t gsHwFrameBuildNs();
 // [gta-recomp] Native frame (GSHwOptions::nativeFrame): the size the picture's own targets are drawn at - the window's
 // letterboxed area for 3D frames' aspect. 0 = the integer scale. Any thread.
 void gsHwSetFrameSize(uint32_t width, uint32_t height);

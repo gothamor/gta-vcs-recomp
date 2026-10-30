@@ -1,4 +1,6 @@
 // [gta-recomp] Hardware GS renderer (D3D11 through the RHI). See runtime/gs/gs_hw.h.
+#include "runtime/ps2_pad.h" // [gta-recomp] the frame's input time
+#include "runtime/ps2_present.h" // [gta-recomp] ps2NoteFramesTaken
 #include "runtime/ps2_perf.h" // [gta-recomp]
 #include "runtime/gs/gs_hw.h"
 #include "runtime/gs/ps2_gs_memory.h" // [gta-recomp] RectBlocks (lazy uploads)
@@ -105,6 +107,53 @@ void gsHwSetFrameSize(uint32_t width, uint32_t height)
 }
 
 void gsHwSetAspectWidening(float widening) { g_aspectWidening.store(widening, std::memory_order_relaxed); }
+
+// [gta-recomp] gsHwShownInputNs (gs_hw.h)
+static int64_t steadyNs()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+// [gta-recomp] gsHwFrameBuildNs: input snapshot -> frame ready for the window (game, render worker, GS stage), the 95th
+// percentile of the last 64 frames - the frame lead's estimate (docs/PERFORMANCE.md 19). GS stage thread writes.
+static std::atomic<int64_t> g_frameBuildNs{0};
+static void noteFrameBuild(int64_t inputNs, int64_t readyNs)
+{
+    static int64_t recent[64] = {};
+    static uint32_t count = 0;
+    if (inputNs <= 0 || readyNs <= inputNs || readyNs - inputNs > 200000000ll)
+        return;
+    recent[count++ % 64u] = readyNs - inputNs;
+    const uint32_t n = std::min<uint32_t>(count, 64u);
+    int64_t sorted[64];
+    std::copy(recent, recent + n, sorted);
+    std::nth_element(sorted, sorted + n * 95 / 100, sorted + n);
+    g_frameBuildNs.store(sorted[n * 95 / 100], std::memory_order_relaxed);
+}
+int64_t gsHwFrameBuildNs() { return g_frameBuildNs.load(std::memory_order_relaxed); }
+
+// PS2X_RHI_STATS=1: where a shown frame's input delay goes before the GPU, every 5 s (the RHI reports the total)
+static void noteDelayStages(int64_t inputNs, int64_t queuedNs, int64_t takenNs)
+{
+    static const bool on = std::getenv("PS2X_RHI_STATS") != nullptr;
+    static double toQueue = 0.0, inQueue = 0.0;
+    static uint64_t n = 0;
+    static int64_t last = takenNs;
+    if (!on || inputNs <= 0 || queuedNs < inputNs || takenNs < queuedNs)
+        return;
+    toQueue += (queuedNs - inputNs) / 1e6;
+    inQueue += (takenNs - queuedNs) / 1e6;
+    ++n;
+    if (takenNs - last >= 5000000000ll)
+    {
+        std::fprintf(stderr, "[gs-hw] input delay by stage: input -> queued %.1f ms (game, render worker, GS stage), queued -> taken %.1f ms\n",
+                     toQueue / n, inQueue / n);
+        toQueue = inQueue = 0.0;
+        n = 0;
+        last = takenNs;
+    }
+}
+static std::atomic<int64_t> g_shownInputNs{0};
+int64_t gsHwShownInputNs() { return g_shownInputNs.load(std::memory_order_relaxed); }
 
 // [gta-recomp] gsHwSetShowEveryFrame (gs_hw.h). PS2X_HW_QUEUE=<n> / PS2X_HW_BATCH_MAX=<n> (0: all) override either mode.
 static std::atomic<bool> g_showEveryFrame{false};
@@ -279,6 +328,8 @@ namespace
         std::vector<uint8_t> nativeBytes; // transient native vertices
         uint64_t nativeVertices = 0;
         bool had3d = false; // [gta-recomp] any depth-tested or native draw (widescreen presentation)
+        int64_t inputNs = 0; // [gta-recomp] the input snapshot the game read for this frame (gsHwShownInputNs)
+        int64_t queuedNs = 0, takenNs = 0; // [gta-recomp] put in / taken from the queue (PS2X_RHI_STATS: input delay by stage)
         int8_t wide3d = -1; // [gta-recomp] recorded for a wide picture (frameWide): draws squeezed into the buffer; -1: not asked
         int8_t shown = -1;  // [gta-recomp] its shape, decided when executed (decideShape): 1 wide, 0 4:3
         bool menu = false;  // [gta-recomp] has primitives the classifier names as the game's menu (GSHwAnchorMenu)
@@ -3816,10 +3867,13 @@ namespace
             ++m_frameIndex;
             shrinkTargets(); // [gta-recomp]
             {
+                noteFrameBuild(m_frame->inputNs, steadyNs()); // [gta-recomp] input -> ready (gsHwFrameBuildNs), before any queue wait
                 std::unique_lock<std::mutex> lock(m_queueMutex);
                 // Don't let the game run more than a few frames ahead of the main thread.
                 const size_t depth = frameQueueDepth(); // [gta-recomp] gsHwSetShowEveryFrame
                 m_queueCv.wait_for(lock, std::chrono::milliseconds(100), [&] { return m_queue.size() < depth; });
+                m_frame->inputNs = PSPadBackend::lastInputNs();
+                m_frame->queuedNs = steadyNs();
                 m_queue.push_back(std::move(m_frame));
             }
             m_frame = takeFreeFrame();
@@ -4020,6 +4074,8 @@ namespace
                     frames.swap(m_queue);
             }
             m_queueCv.notify_all();
+            ps2NoteFramesTaken(static_cast<uint32_t>(frames.size())); // [gta-recomp] frames on their way (ps2_present.h)
+            const int64_t takenNs = steadyNs();
             if (!frames.empty())
             {
                 // [gta-recomp] F12 (or PS2X_HW_DUMP=<frame>): list the next frame's draws and dump its targets
@@ -4054,6 +4110,8 @@ namespace
                 if (m_dumpBatchesLeft > 0)
                     --m_dumpBatchesLeft;
                 m_rhi->composeDisplay(*frames.back());
+                g_shownInputNs.store(frames.back()->inputNs, std::memory_order_relaxed); // [gta-recomp] gsHwShownInputNs
+                noteDelayStages(frames.back()->inputNs, frames.back()->queuedNs, takenNs);
                 // [gta-recomp] the shape on screen is the displayed picture's own (shapeOf), not the newest frame's
                 {
                     const Frame &shown = *frames.back();

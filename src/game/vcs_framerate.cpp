@@ -200,9 +200,13 @@ namespace vcs
         {
             ps2PresentGameFrame(); // the frame's display list was kicked just before
 
+            // at a cap of the host's rate (or none) the main thread's frame start starts the next frame (fresh input, ready
+            // for the next host frame: runtime/ps2_present.h); below it (30) the game's own deadline paces it
             static uint64_t deadline = 0;
             const double fps = effectiveFps();
-            if (fps > 0.0 && !forcedStepFps())
+            if (ps2WaitHostTick())
+                deadline = 0;
+            else if (fps > 0.0 && !forcedStepFps())
             {
                 const uint64_t period = static_cast<uint64_t>(1e9 / fps);
                 const uint64_t now = hostNs();
@@ -324,6 +328,8 @@ namespace vcs
         {
             const double fps = effectiveFps();
             platform::setFrameRate(independent() ? (fps > 0.0 ? std::max(60.0, fps) : 1000.0) : 60.0);
+            // the host runs at the cap: its frames can pace the game's (docs/PERFORMANCE.md 19)
+            ps2SetHostPacedFrames(independent() && (fps <= 0.0 || fps >= 60.0) && !forcedStepFps());
         }
     }
 

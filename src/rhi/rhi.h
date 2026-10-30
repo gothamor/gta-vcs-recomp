@@ -312,6 +312,9 @@ namespace rhi
             Tearing,
         };
         virtual void present(PresentMode mode) = 0;
+        // The input snapshot time (steady_clock ns) of the frame about to be presented: a backend that can tell when the
+        // GPU finished it reports the input-to-screen delay (Vulkan: PS2X_RHI_STATS). Before present.
+        virtual void setFrameInputTime(int64_t) {}
 
         // ---- Dear ImGui renderer (the ImGui context belongs to the platform layer) ---------------------------------
         virtual bool uiInit() = 0;

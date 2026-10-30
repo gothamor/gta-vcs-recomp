@@ -803,9 +803,10 @@ HLE / VU0, scenes against the Windows reference, the rig).
 | `PS2X_D3D_DEBUG=1` | D3D11 debug layer (needs Windows' Graphics Tools feature) |
 | `VCS_RHI=d3d11\|vulkan\|null` | the renderer for one run (Graphics > Graphics API when the build has two; docs/LINUX.md) |
 | `PS2X_RHI_DEBUG=1` | the API's validation layer: D3D11 debug layer / Vulkan's Khronos validation |
-| `PS2X_RHI_STATS=1` | Vulkan: draws, descriptor writes, passes, suspended passes, barriers, uploads, CPU waits per frame every 5 s |
+| `PS2X_RHI_STATS=1` | Vulkan: draws, descriptor writes, passes, suspended passes, barriers, uploads, CPU waits per frame, and input to GPU done (avg / p50 / p95) every 5 s; gs_hw: the input delay by stage |
 | `PS2X_RHI_GPU_TIME=1` | Vulkan: GPU time of the passes and the whole frame (`PS2X_GPU_TIMING=1`: per draw, breaking passes) |
 | `PS2X_RHI_FULL_BARRIERS=1` | Vulkan: whole-pipeline barriers, as before the layout-based ones |
+| `PS2X_HOST_PACED=0`, `PS2X_FRAME_LEAD=0`, `PS2X_FRAME_LEAD_MARGIN_US=<us>` | frame-rate independent timing: the game's own deadline instead of the host's frames; no frame lead; the lead's margin (1500) - PERFORMANCE.md 19 |
 | `PS2X_HW_SPECIALISE=0` | the GS pixel shader's full version for every draw (not one per texture read; PERFORMANCE.md 18) |
 | `PS2X_HW_QUEUE=<n>`, `PS2X_HW_BATCH_MAX=<n>` | frames the game may queue ahead / frames rendered per host frame (0: all); defaults 1 / 1 with frame-rate independent timing, 3 / all with the original (PERFORMANCE.md 17) |
 | `VCS_VK_DEVICE=<n or name>` | Vulkan: which GPU |

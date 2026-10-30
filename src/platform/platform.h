@@ -166,11 +166,23 @@ namespace platform
     //   endUiFrame()      Dear ImGui output finished (ImGui::GetDrawData), for the renderer to draw
     //   ...the renderer draws and presents...
     //   waitNextFrame()   sleeps until the next host frame (1/60 s unless setFrameRate says otherwise)
-    void pumpEvents();
+    // frameStart false: an input refresh between frames (frame lead): the snapshot is new, keyPressed edges are kept for
+    // the next frame-start pump, which reports every press since the last one
+    void pumpEvents(bool frameStart = true);
+    // When the input snapshot the queries read was taken (std::chrono::steady_clock, ns): the start of a frame's input
+    // delay (any thread).
+    int64_t inputSnapshotNs();
     bool quitRequested(); // window closed
     void beginFrame();
     void endUiFrame();
     void waitNextFrame();
+    // Frame lead (main thread): waitNextFrame wakes `leadNs` before the next host frame and calls `atLead` (an input
+    // refresh and the start of the game's next frame, so it is ready by then: docs/PERFORMANCE.md 19); 0 = none.
+    // frameLeadRan(): whether the last waitNextFrame did (then the frame start need not start the game's frame).
+    using FrameLead = void (*)();
+    void setFrameLead(uint64_t leadNs, FrameLead atLead);
+    bool frameLeadRan();
+    bool frameSlept(); // the last waitNextFrame waited for its time (false: the host frame took the whole period or more)
     void setFrameRate(double hz); // host frames per second for waitNextFrame (any thread; 60 by default)
     double displayRefreshHz();    // the window's monitor's refresh rate (60 when unknown)
     void delayPrecise(uint64_t ns); // sleep with sub-millisecond precision (any thread)
