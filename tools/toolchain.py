@@ -369,7 +369,33 @@ def compiler_defines(env):
              "or run python tools/build.py --check-deps" % MIN_CLANG)
     if not _which("ld.lld", env):
         fail("ld.lld not found (the LLVM linker, next to clang): e.g. sudo apt install lld-%d" % clang_version(clang))
-    return ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx]
+    defines = ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx]
+    gcc = _gcc_with_libstdcxx(clangxx)
+    if gcc:
+        flag = "--gcc-install-dir=" + gcc
+        defines += ["-DCMAKE_C_FLAGS=" + flag, "-DCMAKE_CXX_FLAGS=" + flag]
+    return defines
+
+
+def _gcc_with_libstdcxx(clangxx):
+    """clang uses the newest GCC folder for libstdc++, even one without it: Ubuntu 24.04's clang-20 brings
+    libgcc-14-dev but not libstdc++-14-dev, and links fail with "cannot find -lstdc++". The newest GCC folder that has
+    libstdc++ then, or None when clang's own choice is fine."""
+    try:
+        out = subprocess.run([clangxx, "-v"], capture_output=True, text=True, timeout=30).stderr
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"^Selected GCC installation: (.+)$", out, re.M)
+    if not m or os.path.isfile(os.path.join(m.group(1).strip(), "libstdc++.so")):
+        return None
+    candidates = re.findall(r"^Found candidate GCC installation: (.+)$", out, re.M)
+    usable = [c.strip() for c in candidates if os.path.isfile(os.path.join(c.strip(), "libstdc++.so"))]
+    if not usable:
+        return None
+    best = max(usable, key=lambda d: [int(x) for x in re.findall(r"\d+", os.path.basename(d))] or [0])
+    print("[toolchain] clang's GCC folder %s has no libstdc++; using %s (or install libstdc++-%s-dev)"
+          % (m.group(1).strip(), best, os.path.basename(m.group(1).strip())))
+    return best
 
 
 # ---- Linux packages ---------------------------------------------------------------------------------------------

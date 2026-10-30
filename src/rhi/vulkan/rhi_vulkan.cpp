@@ -184,6 +184,15 @@ namespace rhi
             bool alive = false; // the Device object exists: frees go through its frame queues
             uint32_t frame = 0; // the frame slot being recorded
             std::array<std::vector<std::function<void()>>, kFrames> garbage;
+            // the device's bindings forget an object being destroyed (D3D11 kept a reference to what is bound; the
+            // renderer replaces buffers and textures that are still bound)
+            std::function<void(const void *)> unbind;
+
+            void forget(const void *object)
+            {
+                if (alive && unbind)
+                    unbind(object);
+            }
 
             void defer(std::function<void()> free)
             {
@@ -224,6 +233,7 @@ namespace rhi
             VkTexture(std::shared_ptr<Core> core, const TextureDesc &d) : core(std::move(core)) { m_desc = d; }
             ~VkTexture() override
             {
+                core->forget(this);
                 Core *c = core.get();
                 VkImage img = image;
                 VkImageView sv = sampledView, av = attachmentView;
@@ -257,6 +267,7 @@ namespace rhi
             VkBuf(std::shared_ptr<Core> core, const BufferDesc &d) : core(std::move(core)) { m_desc = d; }
             ~VkBuf() override
             {
+                core->forget(this);
                 if (!buffer)
                     return;
                 Core *c = core.get();
@@ -282,6 +293,7 @@ namespace rhi
             VkSamp(std::shared_ptr<Core> core) : core(std::move(core)) {}
             ~VkSamp() override
             {
+                core->forget(this);
                 Core *c = core.get();
                 VkSampler s = sampler;
                 core->defer([c, s] { vkDestroySampler(c->device, s, nullptr); });
@@ -296,6 +308,7 @@ namespace rhi
             VkPipe(std::shared_ptr<Core> core) : core(std::move(core)) {}
             ~VkPipe() override
             {
+                core->forget(this);
                 Core *c = core.get();
                 std::vector<VkPipeline> all;
                 for (auto &[key, p] : variants)
@@ -376,6 +389,7 @@ namespace rhi
                 if (!createInstance(desc, error) || !pickDevice(desc, error) || !createDevice(error))
                     return false;
                 m_core->alive = true;
+                m_core->unbind = [this](const void *object) { unbind(object); };
                 if (!createLayout(error) || !createFrames(error) || !createDummies(error))
                     return false;
                 m_width = std::max(1u, desc.width);
@@ -408,6 +422,7 @@ namespace rhi
                 m_defaultSampler.reset();
                 m_zeroBuffer.reset();
                 m_core->alive = false;
+                m_core->unbind = nullptr;
                 for (uint32_t i = 0; i < kFrames; ++i)
                     m_core->collect(i);
                 VkDevice d = m_core->device;
@@ -1593,6 +1608,42 @@ namespace rhi
                 m_inPass = inPass;
                 m_passStarted = m_passStarted && inPass;
                 ++m_stats.waits;
+            }
+
+            // An object about to be destroyed: no binding may keep pointing at it
+            void unbind(const void *object)
+            {
+                if (object == m_vertexBuffer)
+                    m_vertexBuffer = nullptr;
+                if (object == m_indexBuffer)
+                    m_indexBuffer = nullptr;
+                for (VkBuf *&u : m_uniforms)
+                    if (u == object)
+                    {
+                        u = nullptr;
+                        m_descriptorsDirty = true;
+                    }
+                for (uint32_t i = 0; i < kTextureSlots; ++i)
+                {
+                    if (m_textures[i] == object)
+                        m_textures[i] = nullptr, m_descriptorsDirty = true;
+                    if (m_samplers[i] == object)
+                        m_samplers[i] = nullptr, m_descriptorsDirty = true;
+                }
+                if (object == m_pipeline)
+                {
+                    m_pipeline = nullptr;
+                    m_boundPipeline = VK_NULL_HANDLE;
+                }
+                if (m_inPass && (object == m_passColor || object == m_passDepth))
+                {
+                    // a target destroyed inside its pass: the pass ends here
+                    outsideRendering();
+                    if (object == m_passColor)
+                        m_passColor = nullptr;
+                    if (object == m_passDepth)
+                        m_passDepth = nullptr;
+                }
             }
 
             // ---- passes ---------------------------------------------------------------------------------------------

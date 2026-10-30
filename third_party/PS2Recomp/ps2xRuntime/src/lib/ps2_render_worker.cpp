@@ -16,6 +16,7 @@
 #include <mutex>
 #include <thread>
 #include <xmmintrin.h>
+#include <cstring>  // [gta-recomp] libstdc++ (Linux) does not bring it in
 
 namespace ps2_render_worker
 {

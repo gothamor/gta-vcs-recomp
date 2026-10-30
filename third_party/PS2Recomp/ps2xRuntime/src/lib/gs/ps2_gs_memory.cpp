@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>  // [gta-recomp] libstdc++ (Linux) does not bring it in
 
 namespace GSMem
 {

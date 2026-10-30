@@ -210,3 +210,4 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRuntime/src/lib/ps2_runtime.cpp` | `__builtin_debugtrap()` for the missing-function break on clang; the window made for a Vulkan renderer (`WindowDesc::vulkan`), `present::init` without the HWND; the `[gs]` log line names the backend | Linux |
 | `ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp` | Linux creation time through `statx` (birth time, else mtime) | Card directory order for new entries (game-internals.md 10c) |
 | `ps2xRuntime/src/lib/gs/gs_hw.cpp` | `render::gsShaders(m_dev.backend())` | DXBC or SPIR-V for the device's backend |
+| `ps2xRuntime/src/lib/gs/gs_hw.cpp`, `gs/ps2_gs_memory.cpp`, `ps2_render_worker.cpp`, `vu/ps2_vu_code_log.cpp` | `<cmath>` / `<cstdlib>` / `<cstring>` / `<iterator>` included | libstdc++ doesn't bring them in transitively as MSVC's STL does (Linux) |

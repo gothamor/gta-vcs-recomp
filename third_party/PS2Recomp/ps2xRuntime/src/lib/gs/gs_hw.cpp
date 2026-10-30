@@ -27,6 +27,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <cmath>  // [gta-recomp] libstdc++ (Linux) does not bring it in
 
 namespace
 {

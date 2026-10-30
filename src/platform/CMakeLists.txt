@@ -8,6 +8,9 @@ set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+# Linux: XTest only serves SDL's global mouse warp (the game captures the mouse through XInput2's relative motion);
+# off, so the build needs one package less (SDL stops at a missing one it was asked for)
+set(SDL_X11_XTEST OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     SDL3
     GIT_REPOSITORY "https://github.com/libsdl-org/SDL.git"
