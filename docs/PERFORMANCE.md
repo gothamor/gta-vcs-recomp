@@ -350,6 +350,24 @@ allocations were cheap here, but they were ~200 a second of up to 9 MB each. Che
 `tools/regress.py` (12:00 / 20:00 / 21:00 at the hospital, at 3x: no black frames), reference scenes reuse off / on at
 1x and 3x 16:9 (below).
 
+### 16. Linux on the modest-hardware laptop (2026-10-30)
+
+First numbers of the Linux build (docs/LINUX.md): i5 Skylake (4 threads), Intel HD 520 on Mesa ANV / Vulkan, 1x
+internal resolution, a 960x672 window, the title flyover and intro cutscene from an empty card.
+
+| build | timing | game fps | host fps | game ms | main thread draw (`gl_ms`) |
+|---|---|---|---|---|---|
+| quick (`--opt none`) | original (30 cap) | 26.7-29.3 | 45-51 | 10-14 | 2.5-6 |
+| ThinLTO (`--opt lto`, 14 m 49 s, largest process 1.3 GB) | original (30 cap) | **30.0 locked** | 43-51 | 16-20 | - |
+| ThinLTO | frame-rate independent, uncapped | 28-51 | 12-17 | 12-13 | 20-47 |
+
+Locked 30 on this machine meets the roadmap's modest-hardware bar for 30 fps. Uncapped, it is the GPU: the Linux
+profiler (`VCS_PROFILE_THREAD=MainThread`) puts the main thread 49% in `ioctl` (the i915 driver waiting for the GPU)
+and 30% in Mesa's Vulkan driver itself. Next for Vulkan, by that profile: push descriptors only for the bindings that
+changed (all 20 go with every changed draw now), barriers narrower than ALL_COMMANDS, and the textures gs_hw makes and
+drops each frame (`mmap` / `munmap` show up) kept for reuse. GPU timing per pass (`PS2X_GPU_TIMING`, D3D11 only so far)
+would say which passes the HD 520 spends its time on.
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker

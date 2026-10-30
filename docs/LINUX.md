@@ -92,9 +92,9 @@ build (FetchContent), so no Vulkan SDK is needed.
 | Vulkan validation (`PS2X_RHI_DEBUG=1`, 70 s flyover + intro) | clean: 0 errors, 0 warnings; 1-2 suspended passes a frame (in-pass copies), 0 waits |
 | Picture: Windows D3D11 vs Windows Vulkan, Windows reference vs Linux Vulkan (`scenes.py compare`) | to do |
 | Crash handler (signals, module+offset, llvm-symbolizer line) | done, tested in a stand-alone program |
-| Sampling profiler (SIGPROF) | done, not run in the game yet |
+| Sampling profiler (SIGPROF) | works in the game (`VCS_PROFILE_THREAD=MainThread`, PERFORMANCE.md 16) |
 | Write watch: worth it? (measure the skip on Windows), then userfaultfd `WP_ASYNC` + `PAGEMAP_SCAN` (Linux 6.7+) | to do |
 | The scheduler's guest-thread switches (C++ throws) on Linux vs Windows: `bench.py` | to do |
 | GPU timing (`PS2X_GPU_TIMING`) for Vulkan: timestamp queries | to do |
 | The rig on Linux: regress, tour, saves, trainer, controls, shakedown, finale, soundcheck, soak, framerate audit | to do |
-| Performance on this laptop (i5 Skylake, HD 520: the "modest hardware" target) in PERFORMANCE.md | to do |
+| Performance on this laptop (i5 Skylake, HD 520: the "modest hardware" target) in PERFORMANCE.md | ThinLTO build: 30 fps locked (original timing); uncapped 28-51, GPU / driver bound (PERFORMANCE.md 16, with what to do next) |
