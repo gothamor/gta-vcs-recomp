@@ -467,7 +467,8 @@ it is 1920x1080, 3 x 2.41 pixels per PS2 pixel.
 - **The GS bilinear by Gather** (2026-10-30, PERFORMANCE.md section 15): with filtering off, the same draws (power-of-two
   textures without a mip chain) keep the GS's bilinear but fetch its 2x2 texels with `Gather` through a nearest sampler
   of their wrapping (`linearIipFgeAte.x == 3`, `m_gatherSampler`), drawn with a pixel shader built for that path alone
-  (`GATHER_ONLY`, `drawPSGather*`, pipeline key bit 24). The same texels and weights as the four loads (`PS2X_HW_GATHER=0`;
+  (then `GATHER_ONLY`; since 2026-10-30 `SAMPLE_MODE` 5 of the per-read variants, `drawPS[5][dual]`, pipeline key bits
+  24-26 - PERFORMANCE.md 18). The same texels and weights as the four loads (`PS2X_HW_GATHER=0`;
   `=verify` draws both and marks a differing pixel magenta). It made the helicopter's dust - 60 screens of textured
   overdraw - hold 60 fps at 3x.
 - RHI: texture sample counts and mip levels, `resolveTexture`, `generateMips`, sampler anisotropy (D3D11).
