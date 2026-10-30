@@ -30,11 +30,13 @@ jobs:
       - name: Build the launcher
         run: python tools/build.py --launcher
 
+      # its report outside the checkout: release.py refuses a working tree with untracked files
       - name: Self-test
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath .\VCSLauncher.exe -ArgumentList '--self-test','--out','selftest.txt' -Wait -PassThru
-          Get-Content selftest.txt
+          $out = Join-Path $env:RUNNER_TEMP 'selftest.txt'
+          $p = Start-Process -FilePath .\VCSLauncher.exe -ArgumentList '--self-test','--out',$out -Wait -PassThru
+          Get-Content $out
           if ($p.ExitCode -ne 0) { exit 1 }
 
       # pwsh: `cmd || echo` leaves $LASTEXITCODE at cmd's 1 (echo is a cmdlet), and the runner exits with it
