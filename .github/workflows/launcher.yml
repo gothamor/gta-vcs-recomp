@@ -37,11 +37,17 @@ jobs:
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { exit 1 }
 
+      # pwsh: `cmd || echo` leaves $LASTEXITCODE at cmd's 1 (echo is a cmdlet), and the runner exits with it
       - name: Tool checks
+        shell: pwsh
         run: |
           python tools/doctor.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           python tools/deps.py list
-          python tools/recompile.py --check || echo "no generated code here (expected)"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python tools/recompile.py --check
+          if ($LASTEXITCODE -ne 0) { "no generated code here (expected)" }
+          exit 0
 
       - name: Release zip
         if: startsWith(github.ref, 'refs/tags/v')
