@@ -22,6 +22,8 @@
 // the 2D pass's calls (VCS_TRACE_IM2D_MARKERS=<1..6>), from 30 s on.
 #include "game/vcs_hud.h"
 
+#include "game/vcs_trainer.h"
+
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/gs/gs_hw.h"
@@ -142,6 +144,7 @@ namespace vcs
         std::atomic<bool> g_anchoring{false};            // HUD primitives are captured and classified (updateClassifier)
         std::atomic<bool> g_edges{false};                // anchored to the screen edges (else all to the middle)
         std::atomic<bool> g_hooked{false}, g_layer{false}; // the HUD context is known; the native HUD layer is on
+        std::atomic<uint32_t> g_hudDraws{0};                // CHud::Draw calls let through (Hide HUD's check)
         std::vector<Prim> g_prims;                       // this frame's HUD primitives (one per Im2D call); game thread
         std::vector<uint32_t> g_primKeys;                // their vertex positions (positionKey)
         using AnchorMap = std::unordered_map<uint32_t, uint8_t>;
@@ -317,6 +320,14 @@ namespace vcs
 
         PS2_GUEST_CC void hudDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
+            if (vcs::trainer::toggle(vcs::trainer::HideHud)) // the trainer's Hide HUD: none of it this frame
+            {
+                ctx->pc = GPR_U32(ctx, 31);
+                return;
+            }
+            g_hudDraws.fetch_add(1, std::memory_order_relaxed);
+            if (!g_hooked) // VCS_HUD_RW=0: only for Hide HUD
+                return g_origHudDraw(rdram, ctx, runtime);
             if (traceNow())
                 std::fprintf(stderr, "[im2d] --- hud (%08x)\n", kHudDraw);
             g_inHud = true;
@@ -351,6 +362,8 @@ namespace vcs
             resolveAnchors(); // the display list goes to the GS from here on
     }
 
+    uint32_t hudDrawCount() { return g_hudDraws.load(std::memory_order_relaxed); }
+
     void setHudAnchoring(bool on)
     {
         g_edges.store(on, std::memory_order_relaxed);
@@ -364,6 +377,9 @@ namespace vcs
         if (const char *keys = std::getenv("VCS_TRACE_HUDKEY"))
             g_traceKeys = std::atoi(keys);
         const char *traceEnv = std::getenv("VCS_TRACE_IM2D");
+        g_origHudDraw = runtime.lookupFunction(kHudDraw);
+        if (g_origHudDraw) // (the trainer's Hide HUD needs it in any case)
+            runtime.replaceFunction(kHudDraw, &hudDraw);
         if (!on && !traceEnv)
             return;
         if (traceEnv)
@@ -375,7 +391,6 @@ namespace vcs
         }
         g_origRender = runtime.lookupFunction(kIm2DRender);
         g_origRenderIndexed = runtime.lookupFunction(kIm2DRenderIndexed);
-        g_origHudDraw = runtime.lookupFunction(kHudDraw);
         g_origRenderStateSet = runtime.lookupFunction(kRenderStateSet);
         if (!g_origRender || !g_origRenderIndexed || !g_origHudDraw || !g_origRenderStateSet)
             return;
@@ -384,7 +399,6 @@ namespace vcs
         runtime.replaceFunction(kIm2DRenderIndexed, &im2dRenderIndexed);
         if (on)
         {
-            runtime.replaceFunction(kHudDraw, &hudDraw);
             const char *menus = std::getenv("VCS_MENU_NATIVE"); // 0: menus drawn into the frame buffer as before
             g_origMenuDraw = runtime.lookupFunction(kMenuDraw);
             if (g_origMenuDraw && !(menus && menus[0] == '0'))

@@ -24,4 +24,16 @@ namespace vcs::input
 
     // Stops any vibration now (the game paused in the background).
     void stopVibration();
+
+    // The free camera's controls (game/vcs_freecam.h; fixed keys, docs/CONTROLS.md), taken once per camera update on
+    // the game thread. While the free camera flies the game's pad reads give it nothing, and the mouse is left for this.
+    struct FreeCamInput
+    {
+        float strafe = 0, forward = 0, rise = 0; // -1..1: right, ahead, up
+        float turn = 0, tilt = 0;                // the mouse: radians since the last update (left +, up +)
+        float turnRate = 0, tiltRate = 0;        // the right stick: -1..1 (left +, up +)
+        float zoom = 0;                          // -1..1: narrower (+) or wider
+        bool fast = false, slow = false;
+    };
+    FreeCamInput takeFreeCameraInput();
 }

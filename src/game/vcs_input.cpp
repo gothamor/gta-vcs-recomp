@@ -6,6 +6,7 @@
 // (the mouse turns the on-foot camera itself).
 #include "game/vcs_input.h"
 
+#include "game/vcs_freecam.h"
 #include "platform/platform.h"
 #include "ps2_runtime.h"
 #include "runtime/ps2_audio_out.h"
@@ -298,8 +299,10 @@ namespace vcs::input
             uint16_t buttons = 0;
             float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
             const bool physical = ps2control::physicalInputOn();
+            // the free camera has the controls (and the mouse, takeFreeCameraInput): the game gets a pad left alone
+            const bool freeCamera = freecam::flying();
 
-            if (physical && gamepadConnected())
+            if (physical && gamepadConnected() && !freeCamera)
             {
                 for (size_t i = 0; i < kControlCount; ++i)
                     if (kControls[i].target == Target::Button && padSource(m.pad[i], m.trigger))
@@ -323,7 +326,7 @@ namespace vcs::input
             // drives the Driving keys apply, and other bindings of the same keys do not (W accelerates, not also the
             // stick).
             const GameState game = gameState();
-            const bool blocked = ps2control::gameInputBlocked();
+            const bool blocked = ps2control::gameInputBlocked() || freeCamera;
             const bool alt = !blocked && (ps2control::keyDown(KEY_LEFT_ALT) || ps2control::keyDown(KEY_RIGHT_ALT));
             auto drivingKey = [&](int key) {
                 for (size_t i = 0; i < kControlCount; ++i)
@@ -367,7 +370,9 @@ namespace vcs::input
             const auto now = std::chrono::steady_clock::now();
             const float dt = g_mouse.last.time_since_epoch().count() ? std::chrono::duration<float>(now - g_mouse.last).count() : 0.0f;
             const uint32_t frame = g_rdram ? rd32(kFrameCounter) : 0;
-            if (frame != g_mouse.frame || dt >= 0.25f || dt == 0.0f)
+            if (freeCamera)
+                g_mouse = {};
+            else if (frame != g_mouse.frame || dt >= 0.25f || dt == 0.0f)
             {
                 g_mouse.last = now;
                 g_mouse.frame = frame;
@@ -613,6 +618,18 @@ namespace vcs::input
         s.defaultValue = KEY_F5;
         settings::add(s);
 
+        s = {};
+        s.key = "controls.freecam_key";
+        s.page = kKeys;
+        s.section = "Menus";
+        s.label = "Free camera";
+        s.help = "Turns the trainer's free camera on and off: fly with W / A / S / D, E and Q, the mouse; Shift faster, "
+                 "Ctrl slower. On a gamepad: press Back + LB together.";
+        s.type = Type::Key;
+        s.group = "keys";
+        s.defaultValue = KEY_F6;
+        settings::add(s);
+
         // ---- Gamepad ---------------------------------------------------------------------------------------------
         for (const Control &c : kControls)
         {
@@ -742,7 +759,7 @@ namespace vcs::input
             std::lock_guard<std::mutex> lock(g_mapMutex);
             camera = g_map.mouseCamera;
         }
-        setMouseCaptured(g_enabled && camera && !menuOpen && ps2control::physicalInputOn());
+        setMouseCaptured(((g_enabled && camera) || freecam::flying()) && !menuOpen && ps2control::physicalInputOn());
 
         // the window in the background (Game > In the background): a hidden test run never is
         const bool behind = !ps2control::hiddenMode() && !windowFocused();
@@ -764,4 +781,62 @@ namespace vcs::input
     }
 
     void stopVibration() { gamepadRumble(0.0f, 0.0f); }
+
+    FreeCamInput takeFreeCameraInput()
+    {
+        Map m;
+        {
+            std::lock_guard<std::mutex> lock(g_mapMutex);
+            m = g_map;
+        }
+        FreeCamInput in;
+        const bool physical = ps2control::physicalInputOn();
+        float dx = 0.0f, dy = 0.0f;
+        takeMouseMotion(dx, dy);
+        if (!physical)
+            dx = dy = 0.0f;
+        {
+            std::lock_guard<std::mutex> lock(g_injectedMutex);
+            dx += g_injectedX;
+            dy += g_injectedY;
+            g_injectedX = g_injectedY = 0.0f;
+        }
+        if (ps2control::gameInputBlocked()) // a menu has the input: the camera holds still
+            return in;
+
+        // W / A / S / D move, E / Space up, Q down, Shift fast, Ctrl slow, Z / X zoom out / in, the mouse looks
+        auto key = [](int k) { return ps2control::keyDown(k) ? 1.0f : 0.0f; };
+        in.forward = key(KEY_W) - key(KEY_S);
+        in.strafe = key(KEY_D) - key(KEY_A);
+        in.rise = std::max(key(KEY_E), key(KEY_SPACE)) - key(KEY_Q);
+        in.zoom = key(KEY_X) - key(KEY_Z);
+        in.fast = bound(KEY_LEFT_SHIFT, false);
+        in.slow = bound(KEY_LEFT_CONTROL, false);
+        in.turn = -dx * m.mouseLook;
+        in.tilt = -dy * m.mouseLook * (m.mouseInvertY ? -1.0f : 1.0f);
+
+        // the gamepad: left stick moves, right stick looks, RT up, LT down, A fast, B slow, D-pad up / down zoom
+        if (physical && gamepadConnected())
+        {
+            float lx = gamepadAxis(AXIS_LEFT_X), ly = gamepadAxis(AXIS_LEFT_Y);
+            float rx = gamepadAxis(AXIS_RIGHT_X), ry = gamepadAxis(AXIS_RIGHT_Y);
+            if (m.swapSticks)
+            {
+                std::swap(lx, rx);
+                std::swap(ly, ry);
+            }
+            deadzone(lx, ly, m.deadzoneLeft);
+            deadzone(rx, ry, m.deadzoneRight);
+            in.strafe = std::clamp(in.strafe + lx, -1.0f, 1.0f);
+            in.forward = std::clamp(in.forward - ly, -1.0f, 1.0f);
+            in.turnRate = -rx * (m.invertX ? -1.0f : 1.0f) * m.cameraScale;
+            in.tiltRate = -ry * (m.invertY ? -1.0f : 1.0f) * m.cameraScale;
+            in.rise = std::clamp(in.rise + gamepadAxis(AXIS_RIGHT_TRIGGER) - gamepadAxis(AXIS_LEFT_TRIGGER), -1.0f, 1.0f);
+            in.zoom = std::clamp(in.zoom + (gamepadButton(GAMEPAD_DPAD_UP) ? 1.0f : 0.0f) - (gamepadButton(GAMEPAD_DPAD_DOWN) ? 1.0f : 0.0f),
+                                 -1.0f, 1.0f);
+            in.fast = in.fast || gamepadButton(GAMEPAD_SOUTH);
+            in.slow = in.slow || gamepadButton(GAMEPAD_EAST);
+        }
+        return in;
+    }
 }

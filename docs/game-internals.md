@@ -1622,7 +1622,8 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   player's ped). The ped object starts with its matrix: right (+0), forward (+0x10), up (+0x20), position (+0x30),
   each row with a word after it. Found by searching RAM for vectors near the camera that moved when the player
   walked (`findvec`), then the pointers to the object (`findu32`).
-- **TheCamera** `0x6F44D0`: +0x30 is the point it follows (the player); it also holds pointers to the player ped
+- **TheCamera** `0x6F44D0`: +0x30 is the camera's own position (its matrix; a few metres behind the player in normal
+  play - read as "the point it follows" until the free camera showed it equal to the camera, 2026-10-30); it also holds pointers to the player ped
   (+0xE0, +0x350, +0x7F8). Its active CCam is at +0x70 (12b).
   - **+0x7F8 = pTargetEntity** (what the camera should follow: the player's vehicle while he drives, else the ped)
     and **+0xE0 = the active camera's target** (what it does follow). Getting into a car on foot moves both to the
@@ -1764,6 +1765,19 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   above undone, carrying what is over the stick's top speed to the next frames (90 counts -> +0.225 rad). Other
   cameras (vehicles, aiming, lock-on) get the mouse's speed as the right stick, past the dead third. Checked by
   `tools/controls_check.py` (the `mouse dx dy` control command moves the mouse in hidden runs).
+- **The camera update** (2026-10-30, for the trainer's free camera; FUN_00378dd8 decompiled with `tools/eedecomp.py`):
+  FUN_00378dd8 = CCamera::Process. At `0x378FC0` it calls **FUN_00294540 = CCam::Process** on the active CCam
+  (`TheCamera + 0x70 + ActiveCam x 0x270`, ActiveCam = byte `TheCamera + 0x50`; the only caller), then
+  **FUN_002A2ED0** (CCam::ProcessSpecialHeightRoutines: lifts the follow camera for peds near the player in modes 4,
+  0x1E, 0x24) on the same CCam. CCam::Process switches on `mode - 1` (0..0x37) through the jump table at `0x4B1870`
+  (`jr` at 0x2949E8); mode 4's case calls FUN_0029dab0. After them CCamera::Process builds the frame's camera from
+  the CCam's **+0x20 Source**, **+0x10 Front**, **+0x60 Up** and **+0x134 FOV** (and +0x1A0, the target point, when
+  `TheCamera + 0x890` is set: front = target - source), blending with the previous camera while `TheCamera + 0x8D0`
+  (a byte) marks a transition. Writing those four in place of CCam::Process moves everything with it: TheCamera +0x30,
+  the frustum planes, culling, LODs and the world streaming (the city streamed in at full detail 640 m from the
+  player), the sound listener. Found by tracing the call (generated code), reading the decompile for the fields the
+  matrix is built from, then the free camera: its position appeared at TheCamera +0x30 / +0x90 / +0x250 / +0x810 /
+  +0x960 / +0xA50 the next frame.
 - Teleported to (575, 175) the camera ends up at its lowest pitch (-1.483, straight down) - the game's own doing (the
   same with `VCS_INPUT_MAP=0`).
 

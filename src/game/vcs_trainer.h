@@ -33,6 +33,8 @@ namespace vcs::trainer
         VehicleInvincible,
         WarpIntoSpawned,
         FreezeTime,
+        FreeCamera, // game/vcs_freecam.h
+        HideHud,    // CHud::Draw skipped (game/vcs_hud.cpp)
         ToggleCount
     };
 
@@ -69,6 +71,9 @@ namespace vcs::trainer
     void savePosition();
     void returnToSaved();
     bool hasSavedPosition();
+    void teleportToCamera();            // the player to the ground below the free camera, which then ends
+    int freeCameraSpeed();              // metres a second (before Shift / Ctrl)
+    void setFreeCameraSpeed(int metresPerSecond);
     void setTime(int hour);
     void setWeather(int weather);       // one of weathers(); -1 lets the weather change again
     void launchMission(int index);      // one of missions(): the game's own mission start (not while one runs)

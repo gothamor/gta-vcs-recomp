@@ -35,13 +35,14 @@ namespace ui
             Vehicles,
             VehicleList,
             Teleport,
+            Camera,
             World,
             Missions,
             StoryList,
             JobList,
         };
         const char *const kPageTitles[] = {"MAIN MENU", "PLAYER", "WEAPONS", "GIVE WEAPON", "VEHICLES", "SPAWN VEHICLE",
-                                           "TELEPORT", "WORLD", "MISSIONS", "STORY", "SIDE JOBS"};
+                                           "TELEPORT", "CAMERA", "WORLD", "MISSIONS", "STORY", "SIDE JOBS"};
 
         enum class Value
         {
@@ -73,6 +74,7 @@ namespace ui
         bool g_open = false;
         bool g_releaseWait = false;
         bool g_chordWasDown = false;
+        bool g_camChordWasDown = false; // Back + LB: the free camera
         std::vector<Level> g_stack{{Main}};
         bool g_padWas[platform::GAMEPAD_BUTTON_COUNT] = {};
 
@@ -210,6 +212,7 @@ namespace ui
                 rows.push_back(pageRow("Weapons", Weapons, "Any weapon, loadouts, unlimited ammo."));
                 rows.push_back(pageRow("Vehicles", Vehicles, "Spawn any vehicle; repair, flip and boost the one you drive."));
                 rows.push_back(pageRow("Teleport", Teleport, "Every district of Vice City, and a position of your own."));
+                rows.push_back(pageRow("Camera", Camera, "Free camera: fly anywhere. Hide the HUD."));
                 rows.push_back(pageRow("World", World, "Time of day, weather, game speed."));
                 rows.push_back(pageRow("Missions", Missions, "Start any story mission or side job."));
                 break;
@@ -303,6 +306,31 @@ namespace ui
                 for (const tr::Entry &e : tr::landmarks())
                     rows.push_back(actionRow(e.name, [id = e.id] { tr::teleport(id); }, "Enter: go there (in your vehicle, if you drive one)."));
                 break;
+            case Camera:
+            {
+                rows.push_back(toggleRow("Free camera", tr::FreeCamera,
+                                         "Fly: W / A / S / D, E up, Q down, the mouse looks, Shift faster, Ctrl slower, "
+                                         "Z / X zoom. Gamepad: sticks, RT / LT, A / B, D-pad. The player waits. Hotkey: "
+                                         "F6 (Back + LB)."));
+                static const int kSpeeds[] = {5, 10, 20, 40, 80};
+                int at = 0;
+                while (at + 1 < static_cast<int>(std::size(kSpeeds)) && kSpeeds[at] < tr::freeCameraSpeed())
+                    ++at;
+                char speed[16];
+                std::snprintf(speed, sizeof(speed), "%d m/s", kSpeeds[at]);
+                rows.push_back(choiceRow("Free camera speed", speed,
+                                         [at](int d) {
+                                             const int n = static_cast<int>(std::size(kSpeeds));
+                                             tr::setFreeCameraSpeed(kSpeeds[std::clamp(at + d, 0, n - 1)]);
+                                         },
+                                         [] { tr::setFreeCameraSpeed(20); }, "Left / Right: slower or faster. Enter: 20 m/s."));
+                rows.push_back(actionRow("Teleport player here", tr::teleportToCamera,
+                                         tr::toggle(tr::FreeCamera) ? "Puts you on the ground below the camera and ends it."
+                                                                    : "Turn the free camera on first.",
+                                         tr::toggle(tr::FreeCamera)));
+                rows.push_back(toggleRow("Hide HUD", tr::HideHud, "No radar, money, weapon or stars: for clean pictures."));
+                break;
+            }
             case World:
             {
                 char hour[16];
@@ -491,6 +519,12 @@ namespace ui
         const bool chordPressed = chord && !g_chordWasDown;
         g_chordWasDown = chord;
         const int key = settings::value("controls.trainer_key");
+        // the free camera's own hotkey (any time, the trainer open or not)
+        const bool camChord = padDown(platform::GAMEPAD_BACK) && padDown(platform::GAMEPAD_LEFT_SHOULDER);
+        const bool camChordPressed = camChord && !g_camChordWasDown;
+        g_camChordWasDown = camChord;
+        if (!settingsMenuOpen() && (pressedKey(settings::value("controls.freecam_key")) || camChordPressed))
+            tr::setToggle(tr::FreeCamera, !tr::toggle(tr::FreeCamera));
         if (settingsMenuOpen()) // one menu at a time
         {
             if (g_open)

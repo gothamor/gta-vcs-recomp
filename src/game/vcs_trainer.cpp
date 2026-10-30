@@ -2,6 +2,8 @@
 #include "game/vcs_trainer.h"
 
 #include "debug/rig.h"
+#include "game/vcs_freecam.h"
+#include "game/vcs_hud.h"
 #include "ps2_runtime.h"
 #include "runtime/ps2_control.h"
 
@@ -227,6 +229,8 @@ namespace vcs::trainer
         std::atomic<bool> g_inVehicle{false};
         std::atomic<int> g_speed{100};
         std::atomic<int> g_clockHour{12};
+        std::atomic<int> g_freeCameraSpeed{20};
+        bool g_wasFlying = false; // game thread: the free camera was flying at the last frame kick
 
         struct Action
         {
@@ -538,7 +542,8 @@ namespace vcs::trainer
             const bool on[ToggleCount] = {toggle(GodMode),         toggle(NeverWanted),     toggle(UnlimitedAmmo),
                                           toggle(NoReload),        toggle(InfiniteSprint),  toggle(FastReload),
                                           toggle(PoliceIgnore),    toggle(EveryoneIgnores), toggle(VehicleInvincible),
-                                          toggle(WarpIntoSpawned), toggle(FreezeTime)};
+                                          toggle(WarpIntoSpawned), toggle(FreezeTime),     toggle(FreeCamera),
+                                          toggle(HideHud)};
             const bool refresh = g_runFrames % 60 == 0; // the commands that stick: every 2 s at 30 fps
             Scm code;
 
@@ -611,7 +616,8 @@ namespace vcs::trainer
                 static const char *const names[ToggleCount] = {"God mode", "Never wanted", "Unlimited ammo", "No reload",
                                                                "Infinite sprint", "Fast reload", "Police ignore you",
                                                                "Everyone ignores you", "Vehicle invincibility",
-                                                               "Get into spawned vehicles", "Freeze time"};
+                                                               "Get into spawned vehicles", "Freeze time", "Free camera",
+                                                               "Hide HUD"};
                 notice = std::string(names[t]) + (on ? " on" : " off");
                 const uint32_t ped = rd32(ram, kPlayerPed);
                 switch (t)
@@ -821,7 +827,8 @@ namespace vcs::trainer
                 {"god", GodMode},          {"wanted", NeverWanted},          {"ammo", UnlimitedAmmo},
                 {"reload", NoReload},      {"sprint", InfiniteSprint},       {"fastreload", FastReload},
                 {"police", PoliceIgnore},  {"ignore", EveryoneIgnores},      {"vehicle", VehicleInvincible},
-                {"warp", WarpIntoSpawned}, {"freeze", FreezeTime},
+                {"warp", WarpIntoSpawned}, {"freeze", FreezeTime},        {"freecam", FreeCamera},
+                {"hidehud", HideHud},
             };
             const auto w = words(args);
             const std::string verb = w.empty() ? "" : w[0];
@@ -870,6 +877,13 @@ namespace vcs::trainer
                     return reply(listReply(missions(false)));
                 return reply("error usage: trainer list vehicles|weapons|loadouts|landmarks|weathers|story|jobs");
             }
+            if (verb == "freecam") // the free camera as of its last update
+            {
+                const freecam::Pose p = freecam::pose();
+                return reply(fmt("ok active=%d x=%.2f y=%.2f z=%.2f yaw=%.4f pitch=%.4f fov=%.1f speed=%d hud=%u",
+                                 p.active ? 1 : 0, p.x, p.y, p.z, p.yaw, p.pitch, p.fov, freeCameraSpeed(),
+                                 vcs::hudDrawCount()));
+            }
             if (verb == "notices")
             {
                 std::string out = "ok";
@@ -896,6 +910,8 @@ namespace vcs::trainer
                 {"teleport", [arg] { teleport(arg); }},
                 {"savepos", [] { savePosition(); }},
                 {"returnpos", [] { returnToSaved(); }},
+                {"camtp", [] { teleportToCamera(); }},
+                {"camspeed", [arg] { setFreeCameraSpeed(arg); }},
                 {"time", [arg] { setTime(arg); }},
                 {"weather", [arg] { setWeather(arg); }},
                 {"speed", [arg] { setGameSpeed(arg); }},
@@ -909,7 +925,7 @@ namespace vcs::trainer
                 }
             reply("error usage: trainer state | toggle <name> 0|1 | list <what> | notices | heal | money N | setwanted N | "
                   "weapon T | loadout N | noweapons | spawn MODEL | repair | flip | boost | paint | teleport N | savepos | "
-                  "returnpos | time H | weather W | speed PERCENT | mission N");
+                  "returnpos | camtp | camspeed M | freecam | time H | weather W | speed PERCENT | mission N");
         }
     }
 
@@ -941,6 +957,8 @@ namespace vcs::trainer
             std::memcpy(&model, ram + ((rd32(ram, ped + kPedVehicle) + 0x56) & kRamMask), 2); // entity +0x56: model
         g_vehicleModel = model;
         refreshNames(ram);
+        if (!inGame)
+            g_toggles[FreeCamera] = false; // (a game loading, the title screen): the camera is the game's again
 
         // Scripts finish in the frame they start. One still waiting means the game paused before running it (its
         // menu, the save screen): take it back out so it cannot be saved, and run it once the game runs again.
@@ -973,6 +991,17 @@ namespace vcs::trainer
         if (!running || !inGame || !g_pending.empty())
             return;
         ++g_runFrames;
+        // the free camera ended: the game's camera back behind the player at once (RESTORE_CAMERA_JUMPCUT; not while a
+        // mission's script camera holds it - that one carries on where it was)
+        const bool flying = freecam::flying();
+        if (g_wasFlying && !flying && rd32(ram, kCameraLooksAtPlayer) == 1)
+        {
+            Scm code;
+            code.op(RESTORE_CAMERA_JUMPCUT);
+            const std::vector<uint8_t> bytes = code.finished();
+            vcs::rig::startCodeScript(ram, bytes.data(), bytes.size(), "trainer");
+        }
+        g_wasFlying = flying;
         runActions(ram, ped);
         if (g_runFrames % 10 == 0 && alive(ram, ped) && !vcs::rig::scriptActive(ram, g_tickScript))
             tick(ram, ped);
@@ -1208,6 +1237,22 @@ namespace vcs::trainer
     }
 
     bool hasSavedPosition() { return g_hasSaved.load(std::memory_order_relaxed); }
+
+    void teleportToCamera()
+    {
+        queue([](uint8_t *ram, Scm &code, std::string &notice) {
+            const freecam::Pose p = freecam::pose();
+            if (!freecam::flying() || !p.active)
+                return (notice = "Turn the free camera on first", false);
+            moveTo(code, rd32(ram, kCurrArea), p.x, p.y, -100.0f); // on the ground below it, in the area shown
+            g_toggles[FreeCamera] = false;
+            notice = fmt("Teleported below the camera (%.0f, %.0f)", p.x, p.y);
+            return true;
+        });
+    }
+
+    int freeCameraSpeed() { return g_freeCameraSpeed.load(std::memory_order_relaxed); }
+    void setFreeCameraSpeed(int metresPerSecond) { g_freeCameraSpeed = std::clamp(metresPerSecond, 1, 200); }
 
     void setTime(int hour)
     {

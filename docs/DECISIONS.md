@@ -526,3 +526,22 @@ accelerate / brake / handbrake while driving.
   the stick: on a bike that leans, in a helicopter it pitches). The menu keys stay exclusive across groups. Lean
   forward / back (bikes, aircraft) moved to Keypad 8 / 5, since W / S no longer do it in a vehicle. The gamepad keeps
   the game's own layout.
+
+## 2026-10-30 - The trainer's free camera (the user's request)
+
+The user asked for a free-cam mode in the trainer, and chose: the world keeps running while it flies (the player
+stands), Hide HUD as a switch of its own, on / off from a trainer row and a hotkey (F6, gamepad Back + LB).
+- **The camera update replaced, not a script camera.** GTA trainers usually move a script camera
+  (SET_FIXED_CAMERA_POSITION + POINT_CAMERA_AT_POINT) every frame. Here that would be a script per frame through the
+  trainer's queue, a frame late, and only between frames. Instead the active CCam's update (CCam::Process,
+  FUN_00294540) is replaced while flying and the free camera writes its source / front / up / FOV (game-internals.md
+  12b); CCamera::Process does the rest, so culling, LODs and streaming follow with no extra work. A replacement, not
+  code after the original returns (AGENTS.md rule 2); `VCS_FREECAM=0` keeps the game's code untouched.
+- **Real time**: the camera moves by the host clock, so its speed is the same at 30 / 60 / 144 fps and under the
+  trainer's Game speed (slow-motion shots fly normally).
+- **Fixed keys** for flying (W / A / S / D, E / Q, mouse; the gamepad's sticks and triggers): the game gets none of the
+  input meanwhile, so they cannot clash with its bindings; only the on / off key is a setting. Rebindable flying keys
+  can come later if wanted.
+- **Hide HUD** skips CHud::Draw (the hook vcs_hud.cpp already had, now installed with `VCS_HUD_RW=0` too): radar, clock,
+  money, weapon, stars. Text drawn after it (zone names, help, subtitles) stays - hiding that too would mean picking
+  which text is the HUD's.

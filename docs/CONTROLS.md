@@ -48,7 +48,7 @@ does on the PS2; left mouse button (Circle) attacks / fires.
   button (left, right, middle, 4, 5) or turn the wheel (each notch is a short press); Esc cancels, a right-click on a
   slot clears it. Shift / Ctrl / Alt bind both sides, Enter is also Keypad Enter.
 - A key does one thing: binding it to a control takes it from the control that had it. The menu keys (Settings menu
-  F2, Trainer F5, same page) never take a control's key, and a control can't take theirs - the menu says which setting
+  F2, Trainer F5, Free camera F6, same page) never take a control's key, and a control can't take theirs - the menu says which setting
   has it.
 - **Walk (hold)**: the left stick at the **Walking speed** (45% by default) while held - GTA walks below about half
   a tilt, which keys can't do otherwise.
@@ -74,7 +74,10 @@ does on the PS2; left mouse button (Circle) attacks / fires.
 
 ## Menus
 
-F2 (or Back + Start on a gamepad) opens the settings, F5 (or Back + RB) the trainer (docs/TRAINER.md). In the
+F2 (or Back + Start on a gamepad) opens the settings, F5 (or Back + RB) the trainer (docs/TRAINER.md), F6 (or Back + LB)
+turns the trainer's free camera on and off. Flying: W / A / S / D, E or Space up, Q down, mouse look, Shift faster,
+Ctrl slower, Z / X zoom out / in; gamepad left stick, right stick, RT / LT, A / B, D-pad up / down (fixed keys; the
+game gets no input meanwhile). In the
 trainer: Up / Down or numpad 8 / 2 or the D-pad select, Left / Right or numpad 4 / 6 change a value, Enter / numpad
 5 / A applies, Backspace / numpad 0 / Escape / B goes back (and closes it on the first page). The game gets no input
 while a menu is open.

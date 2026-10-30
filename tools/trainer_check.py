@@ -2,17 +2,19 @@
 """Trainer check (docs/TRAINER.md): every trainer feature through the control channel, each verified in the game's
 memory, with screenshots.
 
-    python tools/trainer_check.py [OUT] [--vehicles all|N] [--port 47672]
+    python tools/trainer_check.py [OUT] [--vehicles all|N] [--freecam] [--port 47672]
 
 Loads the Fort Baxter rig save (a copy, hidden), then: the name lists; god mode (health refilled, an explosion at
 the player's feet survived); wanted level set / cleared / never wanted; money; weapons, loadouts, unlimited ammo
 and no reload; spawning vehicles (every one with --vehicles all, default a sample of 12) and getting in; repair,
 flip, boost, paint and vehicle invincibility; teleports to every landmark on foot and one in a vehicle; saved
-position; time, freeze time, weather, game speed; the mission lists and a side job launched; that no trainer script is left in the game's script list while
+position; time, freeze time, weather, game speed; the free camera (flying, the mouse, far away, Hide HUD, the player
+teleported below it, the camera given back); the mission lists and a side job launched; that no trainer script is left in the game's script list while
 the game is paused (none can end up in a save); and the menu, driven with keys. Results: OUT/summary.txt; screenshots OUT/*.png.
 Default OUT: build/trainer/<date-time>.
 """
 import argparse
+import math
 import os
 import re
 import struct
@@ -27,7 +29,8 @@ S = rig.Scm
 PED_HEALTH, PED_VEHICLE, PED_STATE, PED_WEAPONS = 0x4E4, 0x480, 0x8C4, 0x578
 CAR_HEALTH = 0x278
 CLOCK = 0x4CD148
-CAMERA_TARGET = 0x6F44D0 + 0xE0  # TheCamera: what the active camera follows (game-internals.md 12)
+CAMERA = 0x6F44D0  # TheCamera: +0x30 its position (game-internals.md 12b)
+CAMERA_TARGET = CAMERA + 0xE0  # what the active camera follows (game-internals.md 12)
 # open streets far apart (the landmarks, docs/TRAINER.md), for the vehicle batches
 SPOTS = [(75.0, 175.0), (-1446.2, -820.2), (571.0, -640.8), (-834.4, 1403.7), (-978.2, -570.1), (351.4, 339.0),
          (-958.2, 85.6), (83.8, -1284.7)]
@@ -82,13 +85,85 @@ class Check:
                 return s, clip, total
         return None
 
-    def run(self, vehicles):
+    def pose(self):
+        """The free camera (trainer freecam): active, x, y, z, yaw, pitch, fov, speed, hud (CHud::Draw calls)."""
+        return {k: float(v) for k, v in (kv.split("=") for kv in self.t("freecam").split() if "=" in kv)}
+
+    def free_camera(self):
+        """The free camera: flies at its speed in real time while the player stands, turns with the mouse, moves the
+        game's own camera (TheCamera +0x30), puts the player below it, gives the camera back; Hide HUD."""
+        g = self.g
+        g.teleport(75.0, 175.0, -100.0)
+        time.sleep(2.0)
+        self.t("camspeed 20")
+        self.t("toggle freecam 1")
+        time.sleep(1.0)
+        a = self.pose()
+        p0 = g.player()[1]
+        g.cmd("key W down")
+        time.sleep(2.5)
+        g.cmd("key W up")
+        time.sleep(0.3)
+        b = self.pose()
+        moved = math.dist((a["x"], a["y"], a["z"]), (b["x"], b["y"], b["z"]))
+        still = math.dist(p0, g.player()[1])
+        self.ok("free camera flies", a["active"] == 1 and 40 < moved < 60 and still < 0.5,
+                "%.1f m in 2.5 s at 20 m/s; the player moved %.2f m" % (moved, still))
+        cam = g.peekf(CAMERA + 0x30, 3)
+        self.ok("free camera is the game's camera", math.dist(cam, (b["x"], b["y"], b["z"])) < 0.1, "%s" % cam)
+        g.cmd("mouse 400 0")  # 400 counts: a radian at 100 % sensitivity, to the right
+        time.sleep(0.5)
+        c = self.pose()
+        turn = math.remainder(c["yaw"] - b["yaw"], 2 * math.pi)
+        self.ok("free camera turns with the mouse", abs(turn + 1.0) < 0.01, "%.3f rad" % turn)
+        self.shot("freecam")
+        # up and far away: the world streams in around the camera
+        self.t("camspeed 80")
+        g.cmd("key E down")
+        time.sleep(1.25)
+        g.cmd("key E up")
+        g.cmd("key shift down")
+        g.cmd("key W down")
+        time.sleep(2.0)
+        g.cmd("key W up")
+        g.cmd("key shift up")
+        g.cmd("mouse 0 250")  # then look down at the city
+        time.sleep(5.0)
+        far = self.pose()
+        self.shot("freecam_far")
+        self.ok("free camera far away", math.dist((far["x"], far["y"]), p0[:2]) > 400 and far["z"] > 50,
+                "(%.0f, %.0f, %.0f)" % (far["x"], far["y"], far["z"]))
+        # Hide HUD: CHud::Draw skipped, then back
+        self.t("toggle hidehud 1")
+        h0 = self.pose()["hud"]
+        time.sleep(1.0)
+        h1 = self.pose()["hud"]
+        self.shot("freecam_nohud")
+        self.t("toggle hidehud 0")
+        time.sleep(1.0)
+        h2 = self.pose()["hud"]
+        self.ok("hide HUD", h1 == h0 and h2 > h1, "%d -> %d hidden, %d shown" % (h0, h1, h2))
+        # the player to the ground below it; the camera back behind him
+        self.t("camtp")
+        time.sleep(2.0)
+        pos = g.player()[1]
+        self.ok("teleport below the camera", math.dist(pos[:2], (far["x"], far["y"])) < 3 and "freecam=0" in self.t("state"),
+                "player %s" % (pos,))
+        cam = g.peekf(CAMERA + 0x30, 3)
+        self.ok("camera back on the player", g.u32(CAMERA_TARGET) == self.ped() and math.dist(cam, pos) < 15,
+                "camera %s" % cam)
+        self.t("camspeed 20")
+
+    def run(self, vehicles, only_freecam=False):
         g = self.g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="trainer_check",
                                     port=self.port, data_dir=os.path.join(ROOT, "build", "trainer", "data"),
                                     env={"VCS_FPS": "30", "VCS_ASPECT": "43"})
         try:
             g.wait_ingame()
             g.prime()
+            if only_freecam:
+                self.free_camera()
+                return self.summary()
             g.teleport(75.0, 175.0, -100.0)
             time.sleep(2)
             state = self.t("state")
@@ -266,6 +341,8 @@ class Check:
             self.t("speed 100")
             self.ok("world commands", True)
 
+            self.free_camera()
+
             # nothing of the trainer's left in the script list while paused
             self.t("toggle god 1")
             self.t("toggle wanted 1")
@@ -317,6 +394,9 @@ class Check:
             self.ok("no second mission", "A mission is running" in said, said)
         finally:
             g.quit()
+        return self.summary()
+
+    def summary(self):
         fails = [r for r in self.results if not r[1]]
         with open(os.path.join(self.out, "summary.txt"), "w", encoding="utf-8") as f:
             for name, good, detail in self.results:
@@ -331,11 +411,12 @@ def main():
     ap.add_argument("out", nargs="?")
     ap.add_argument("--vehicles", default="12", help="all, or how many to sample")
     ap.add_argument("--port", type=int, default=47672)
+    ap.add_argument("--freecam", action="store_true", help="only the free camera's checks")
     a = ap.parse_args()
     # absolute: the game writes the screenshots, from its own working directory
     out = os.path.abspath(a.out or os.path.join(ROOT, "build", "trainer", time.strftime("%Y%m%d-%H%M%S")))
     os.makedirs(out, exist_ok=True)
-    sys.exit(0 if Check(out, a.port).run(a.vehicles) else 1)
+    sys.exit(0 if Check(out, a.port).run(a.vehicles, a.freecam) else 1)
 
 
 if __name__ == "__main__":
