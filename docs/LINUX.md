@@ -89,6 +89,7 @@ build (FetchContent), so no Vulkan SDK is needed.
 | Null RHI backend (`VCS_RHI=null`) | done, not run in the game yet |
 | Vulkan RHI backend + SPIR-V shaders + RHI ImGui renderer | runs (2026-10-30, HD 520 / Mesa ANV, X11): title flyover and intro cutscene look right; 27-29 fps at the 30 fps cap in a quick build. Fixed on the way: bindings kept pointers to destroyed buffers (D3D11 keeps a reference) - destroyed objects now unbind themselves |
 | Bit-exact checks on Linux: `PS2X_HLE_VERIFY=1`, `PS2X_VU0_VERIFY=1`, `--iop-tests` | VU0: 0 differences in millions of runs of every program; SPU2 tests pass; HLE (150 s from an empty card: flyover, intro): setup programs, re-draws, C++ clipper, env pass exact; world fast path 8 packets within 1 and 11 off of 2.46 M (103 vertices, ST / XYZF) - the same run on Windows is needed to tell whether that is Linux's |
+| Vulkan validation (`PS2X_RHI_DEBUG=1`, 70 s flyover + intro) | clean: 0 errors, 0 warnings; 1-2 suspended passes a frame (in-pass copies), 0 waits |
 | Picture: Windows D3D11 vs Windows Vulkan, Windows reference vs Linux Vulkan (`scenes.py compare`) | to do |
 | Crash handler (signals, module+offset, llvm-symbolizer line) | done, tested in a stand-alone program |
 | Sampling profiler (SIGPROF) | done, not run in the game yet |

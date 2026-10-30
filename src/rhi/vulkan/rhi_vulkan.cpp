@@ -1039,6 +1039,7 @@ namespace rhi
                                      VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
                     mi.pfnUserCallback = debugMessage;
                     vkCreateDebugUtilsMessengerEXT(m_core->instance, &mi, nullptr, &m_core->messenger);
+                    std::fprintf(stderr, "[rhi] Vulkan validation layer on\n");
                 }
                 if (!m_offscreen)
                 {
@@ -1657,13 +1658,15 @@ namespace rhi
             }
 
             // Copies and barriers can't be recorded inside the rendering: it stops and goes on at the next draw
-            void outsideRendering()
+            // `suspend`: inside a pass, to go on later (counted); false at the pass's end
+            void outsideRendering(bool suspend = true)
             {
                 if (!m_rendering)
                     return;
                 vkCmdEndRendering(m_cmd);
                 m_rendering = false;
-                ++m_stats.suspends;
+                if (suspend)
+                    ++m_stats.suspends;
             }
 
             void startRendering()
@@ -1718,7 +1721,7 @@ namespace rhi
                     return;
                 if (!m_passStarted && (m_pass.clearColor || m_pass.clearDepth))
                     startRendering(); // a pass with only its clears
-                outsideRendering();
+                outsideRendering(false);
                 if (m_passMarker)
                     popMarker();
                 m_passMarker = false;
