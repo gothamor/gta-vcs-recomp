@@ -376,8 +376,12 @@ class Progress:
 
 def run_with_progress(cmd, log, label, cwd=ROOT, env=None):
     """Runs `cmd` with its output to `log` under an elapsed-time line; returns the exit code."""
+    cmd = resolve(cmd, env)
     with open(log, "w", encoding="utf-8") as f, Progress(label) as progress:
-        code = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
+        try:
+            code = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
+        except OSError as e:
+            fail("could not start %s: %s" % (cmd[0], e), "no_cmake" if _is_cmake(cmd) else "error")
     print(progress.summary())
     return code
 
@@ -482,6 +486,21 @@ def build_env():
 
 def _which(name, env):
     return shutil.which(name, path=env.get("PATH"))
+
+
+def resolve(cmd, env):
+    """`cmd` with a bare program name replaced by its full path on `env`'s PATH. On Windows a child's program is looked
+    up on the PATH of this process, not the one passed as env= (CreateProcess): a cmake that only build_env's Visual
+    Studio folders hold (Build Tools without a standalone CMake) was found by the checks and then failed to start with
+    FileNotFoundError."""
+    if env is None or os.path.dirname(cmd[0]):
+        return cmd
+    found = _which(cmd[0], env)
+    return [found] + list(cmd[1:]) if found else cmd
+
+
+def _is_cmake(cmd):
+    return os.path.splitext(os.path.basename(cmd[0]))[0].lower() == "cmake"
 
 
 # ---- CMake ------------------------------------------------------------------------------------------------------
@@ -680,7 +699,7 @@ def cmake_build(env, target, log_name, verbose=False, build_dir=BUILD_DIR):
     verbose). False on failure."""
     log = os.path.join(BUILD, log_name)
     os.makedirs(BUILD, exist_ok=True)
-    cmd = ["cmake", "--build", build_dir, "--target", target]
+    cmd = resolve(["cmake", "--build", build_dir, "--target", target], env)
     with open(log, "w", encoding="utf-8") as f, Progress("[build] " + target) as progress:
         proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         for line in proc.stdout:

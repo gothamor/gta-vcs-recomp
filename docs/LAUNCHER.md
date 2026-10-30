@@ -157,6 +157,13 @@ hidden into a texture and saved - tests never put a window on the desktop.
   ~6 GB on the dev machine).
 - rip_disc.py from an image file: a byte-identical copy in 10 s; the LCS image refused after copying. **No DVD drive on
   the dev machine**: reading `\\.\E:` itself is untested.
+- 2026-10-31, from a player's report ("A tool could not run" at *Configuring the build*, a Python traceback): with
+  Build Tools only, cmake is in Visual Studio's own folders, on the PATH `build_env` makes but not on the launcher's.
+  The checks look on the former, Windows starts a child's program from the latter (CreateProcess ignores the `env=`
+  PATH): FileNotFoundError. `toolchain.resolve` now gives cmake its full path (configure, `cmake --build`, the IOP
+  tests), and a program that can't start is a `fail` (`no_cmake`), not a traceback. Checked with cmake taken off the
+  process PATH: the old code fails like the report, the new one runs. The dev machine never saw it: scoop's cmake is
+  on its PATH.
 
 ## Numbers
 

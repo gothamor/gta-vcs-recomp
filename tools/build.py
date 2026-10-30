@@ -272,9 +272,9 @@ def iop_tests(env):
     """ps2xIOP on its own with PS2X_IOP_BUILD_TESTS=ON in build/iop_tests; runs the SPU2 checks."""
     out = os.path.join(tc.BUILD, "iop_tests")
     if not os.path.isfile(os.path.join(out, "build.ninja")):
-        subprocess.check_call(["cmake", "-S", os.path.join(tc.ROOT, "third_party", "PS2Recomp", "ps2xIOP"), "-B", out,
-                               "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_IOP_BUILD_TESTS=ON"]
-                              + tc.compiler_defines(env), env=env)
+        subprocess.check_call(tc.resolve(["cmake", "-S", os.path.join(tc.ROOT, "third_party", "PS2Recomp", "ps2xIOP"),
+                                          "-B", out, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
+                                          "-DPS2X_IOP_BUILD_TESTS=ON"] + tc.compiler_defines(env), env), env=env)
     if not tc.cmake_build(env, "ps2_iop_spu2_tests", "build_iop_tests.log", build_dir=out):
         return 1
     return subprocess.call([tc.exe(os.path.join(out, "ps2_iop_spu2_tests"))])
