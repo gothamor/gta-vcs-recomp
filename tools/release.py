@@ -14,6 +14,7 @@ Writes build/dist/VCS-Recomp-<version>-windows.zip and its .sha256. Inside, one 
     python/ (python.org's embeddable CPython), deps/ (tools/deps.py fetch), THIRD_PARTY_LICENSES.txt, the source.
 Never game code or data (DECISIONS.md, source-only): before zipping, every file is checked - no disc images, no
 PS2 executables (MIPS ELF), nothing from generated/, build/ or the Ghidra project - and the release stops if one is.
+Every file in the zip is dated a day before the commit (zip_time): never in the future, whatever the extractor's zone.
 """
 import argparse
 import hashlib
@@ -25,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.request
 import zipfile
 
@@ -166,6 +168,20 @@ def self_test(stage):
     shutil.rmtree(os.path.join(stage, "build"), ignore_errors=True)
 
 
+def zip_time(ref, worktree):
+    """The one date every file in the zip carries. Zip dates are a wall-clock time with no time zone: the extractor's
+    zone reads them, so a file packed at 23:44 in Adelaide came out 13.5 h in the future in Brazil, and Ninja re-ran
+    CMake until it gave up (2026-10-31). The commit's time (SOURCE_DATE_EPOCH when set; now for --worktree) a day
+    earlier, written as UTC, is in the past in every zone (UTC-12 to UTC+14) - and the same for every file and run."""
+    if os.environ.get("SOURCE_DATE_EPOCH"):
+        when = int(os.environ["SOURCE_DATE_EPOCH"])
+    elif worktree:
+        when = int(time.time())
+    else:
+        when = int(git("log", "-1", "--format=%ct", ref, text=True).strip())
+    return max(time.gmtime(when - 86400)[:6], (1980, 1, 1, 0, 0, 0))
+
+
 def _iso_at(path):
     with open(path, "rb") as fh:
         fh.seek(16 * 2048)
@@ -240,10 +256,14 @@ def main():
 
     os.makedirs(a.out, exist_ok=True)
     out = os.path.join(a.out, name + ".zip")
-    print("[release] zipping %d files" % (len(files) + 1))
+    when = zip_time(ref, a.worktree)
+    print("[release] zipping %d files, dated %04d-%02d-%02d %02d:%02d:%02d" % ((len(files) + 1,) + when))
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for rel in files + ["RELEASE.json"]:
-            z.write(os.path.join(stage, rel), name + "/" + rel)
+            info = zipfile.ZipInfo.from_file(os.path.join(stage, rel), name + "/" + rel)
+            info.date_time = when
+            with open(os.path.join(stage, rel), "rb") as f:
+                z.writestr(info, f.read(), zipfile.ZIP_DEFLATED, 9)
     digest = hashlib.sha256(open(out, "rb").read()).hexdigest()
     with open(out + ".sha256", "w", encoding="utf-8") as f:
         f.write("%s  %s\n" % (digest, os.path.basename(out)))

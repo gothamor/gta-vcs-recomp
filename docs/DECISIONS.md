@@ -658,3 +658,17 @@ launcher's PATH, not the one given to it). The user asked for CMake to be found 
   any more: it says the build will download it; only a failed download stops a build (`no_cmake`).
 - Not bundled into the release zip (55 MB more for the rare player with no CMake and no internet): Visual Studio's
   installer, which the launcher runs, brings CMake anyway.
+
+## 2026-10-31 - Release zips dated a day before the commit; the build repairs future dates
+
+A player in Brazil (UTC-3) couldn't build 0.0.1: Ninja re-ran CMake 100 times and gave up ("manifest 'build.ninja'
+still dirty"). Zip dates have no time zone; Python's zipfile writes the packer's local time (Adelaide, UTC+10:30), so
+every file came out up to 13.5 h in the future, newer than any build.ninja CMake could write. Both ends are fixed:
+- **release.py** dates every file the commit's time minus a day, as UTC (`zip_time`; `SOURCE_DATE_EPOCH` when set):
+  in the past in every zone, and one date for the whole zip. Not each file's own time made safe: nothing in the
+  build needs those times, and one date makes the zip depend only on its content.
+- **build.py / recompile.py** set files dated in the future to now before CMake runs, with a line saying so, rather
+  than stopping with a message: the player can't fix the zip, and touching a file's date loses nothing. doctor only
+  reports them (it changes nothing). A build tree that already looped recovers without being deleted (checked).
+- Ninja's "still dirty" still gets its own failure (`file_dates`) for what the repair can't reach - a clock that is
+  wrong, a read-only file.

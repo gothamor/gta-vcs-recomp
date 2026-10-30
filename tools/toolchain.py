@@ -819,6 +819,65 @@ def stale_tools(build_dir):
     return False
 
 
+# ---- file dates -------------------------------------------------------------------------------------------------
+# Files dated after the clock (a zip extracted in a time zone behind the packager's - zip times carry no zone - or a
+# clock set back) are newer than anything a build writes: Ninja re-runs CMake for ever ("manifest 'build.ninja' still
+# dirty after 100 tries") and doctor.py sees newer sources than the game after every build. The build sets them to now.
+FUTURE_SLACK = 60  # seconds: a file written a moment ago on a drive with its own clock (network, FAT) is no problem
+_NO_DATE_CHECK = {".git", "build", "generated", "python"}  # ours (written by this machine), or no build input
+
+
+def future_files(root=ROOT):
+    """[(path, seconds ahead)] for the files under `root` dated after now (build folder, generated/, .git and the
+    bundled Python not looked at)."""
+    now = time.time()
+    skip = {os.path.normcase(os.path.abspath(BUILD))}
+    found, todo = [], [root]
+    while todo:
+        try:
+            entries = list(os.scandir(todo.pop()))
+        except OSError:
+            continue
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    if not (e.name in _NO_DATE_CHECK and os.path.dirname(e.path) == root) and \
+                            os.path.normcase(e.path) not in skip:
+                        todo.append(e.path)
+                elif e.is_file(follow_symlinks=False):
+                    t = e.stat().st_mtime
+                    if t > now + FUTURE_SLACK:
+                        found.append((e.path, t - now))
+            except OSError:
+                continue
+    return found
+
+
+def fix_future_files(root=ROOT):
+    """Sets the files future_files finds to now, with one line saying so. The number of files that stay in the
+    future (could not be changed)."""
+    found = future_files(root)
+    if not found:
+        return 0
+    left = 0
+    for path, _ in found:
+        try:
+            os.utime(path, None)
+        except OSError:
+            left += 1
+    path, ahead = max(found, key=lambda f: f[1])
+    print("[build] %d %s dated in the future (up to %s ahead, %s): set to now. A zip extracted in a time zone "
+          "behind the one it was made in does this; so does a clock set back"
+          % (len(found), "file was" if len(found) == 1 else "files were", _ahead(ahead), show(path)))
+    if left:
+        print("[build] %d of them could not be changed (read-only?): the build may loop - check the PC's clock" % left)
+    return left
+
+
+def _ahead(seconds):
+    return "%.1f h" % (seconds / 3600) if seconds >= 3600 else "%d min" % max(1, seconds // 60)
+
+
 # ---- CMake ------------------------------------------------------------------------------------------------------
 def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
     """CMake configure of `build_dir` (first time, when forced, or with `defines`: {"PS2X_LTO": "THIN", ...})."""
@@ -1039,7 +1098,11 @@ def cmake_build(env, target, log_name, verbose=False, build_dir=BUILD_DIR):
         print(progress.summary() if progress.total else "[build] %s up to date" % target)
     else:
         print(f"[build] {target} failed (full log: {show(log)})")
-        event(error=build_failure(log), message=f"building {target} failed", log=show(log).replace(os.sep, "/"))
+        code = build_failure(log)
+        if code == "file_dates":
+            print("[build] Ninja kept finding files newer than its own: some are dated after the PC's clock. Check the "
+                  "clock and time zone, then build again (files in the folder dated in the future are set to now)")
+        event(error=code, message=f"building {target} failed", log=show(log).replace(os.sep, "/"))
     return ok
 
 
@@ -1054,4 +1117,6 @@ def build_failure(log):
         return "file_locked"
     if "out of memory" in text or "bad_alloc" in text or "not enough memory" in text:
         return "out_of_memory"
+    if "still dirty after" in text:
+        return "file_dates"  # Ninja re-running CMake for ever: files dated in the future (fix_future_files)
     return "build_failed"

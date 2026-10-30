@@ -78,6 +78,9 @@ namespace launcher
                              "happening, add the folder to Windows Security's exclusions or move it out of OneDrive."}},
             {"out_of_memory", {"The PC ran out of memory",
                                "Close other programs and build again; it continues where it stopped."}},
+            {"file_dates", {"Files are dated in the future",
+                            "Some files in the folder are newer than the PC's clock, so the build keeps starting over. "
+                            "Check that Windows' clock and time zone are right, then build again."}},
             {"build_failed", {"The build failed", "Open the log for the details, or copy a report for help."}},
             {"recompiler_failed", {"Recompiling the game failed", "Open the log for the details, or copy a report for help."}},
             {"elevation_denied", {"The installer wasn't allowed to run",

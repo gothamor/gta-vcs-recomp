@@ -169,6 +169,8 @@ card copies to start from (never the user's live card).
 - "Loading..." over black after a mission's last cutscene, the game running behind it (clock and scripts move): the
   screen left faded out for a script that never comes - Last Stand out of story order waits for the credits
   (game-internals.md 11g). F12's draw log shows the black quad and the text; the active scripts show who is missing.
+- `ninja: error: manifest 'build.ninja' still dirty after 100 tries`: files dated after the clock (a zip from another
+  time zone); `build.py` sets them to now (`toolchain.fix_future_files`, docs/LAUNCHER.md).
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs

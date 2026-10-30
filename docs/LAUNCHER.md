@@ -47,6 +47,18 @@ never answered. So `release.py --ref` refuses a working tree with uncommitted ch
 before zipping. The launcher itself checks at start that the scripts it runs are in `tools\`, and a check that gives no
 answer shows as "Couldn't check" with the reason and *Check again* - never as something missing.
 
+**Every file in the zip has one date, a day before the commit** (`release.zip_time`; `SOURCE_DATE_EPOCH` overrides
+it). Zip dates are wall-clock times with no time zone, read in the extractor's zone: 0.0.1, made in Adelaide
+(UTC+10:30), extracted in Brazil (UTC-3) with every file up to 13.5 h in the future, and Ninja re-ran CMake until it
+gave up (`manifest 'build.ninja' still dirty after 100 tries`, a GitHub issue, 2026-10-31). A day back, written as UTC,
+is in the past in every zone. The build repairs a folder that has such files anyway (an old zip, a clock set back):
+`build.py` / `recompile.py` set files dated in the future to now before CMake runs (`toolchain.fix_future_files`,
+0.3 s; build folder, `generated/`, `.git`, `python/` not looked at), doctor lists them as a folder warning, and a
+Ninja loop that still happens fails as `file_dates` ("Files are dated in the future": check the clock). The old dates
+are harmless in a fresh folder; `update.py` writes files with today's date, so an update still rebuilds what changed.
+Extracting a newer zip by hand over a built folder would not (the sources older than the build): use the launcher's
+update or a new folder.
+
 ## The player's flow
 
 One window (`launcher/ui.cpp`): a dark sidebar with the logo, the four setup steps as a tracker (Folder, Disc, Build

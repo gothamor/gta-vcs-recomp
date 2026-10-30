@@ -98,6 +98,14 @@ def check_folder():
     if custom and shutil.disk_usage(existing(root)).free < GB // 2:
         warnings.append({"code": "disk_space", "message": "less than 0.5 GB free on the source folder's drive: the "
                                                            "recompiled code (0.2 GB) is kept there"})
+    future = tc.future_files()
+    if future:
+        path, ahead = max(future, key=lambda f: f[1])
+        warnings.append({"code": "future_files", "message": "%d %s dated after the PC's clock (up to %.1f h, %s): the "
+                                                             "build sets them to now. Check the clock and time zone if "
+                                                             "this keeps coming back" % (
+                                                                 len(future), "file is" if len(future) == 1 else
+                                                                 "files are", ahead / 3600, tc.show(path))})
     return {"path": root, "build": build, "build_custom": custom, "free_bytes": free, "need_bytes": NEED_FREE,
             "warnings": warnings}
 

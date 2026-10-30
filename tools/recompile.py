@@ -172,6 +172,7 @@ def main():
         why = why_recompile()
         print("[recompile] " + ("needed: " + why if why else "generated code is current"))
         sys.exit(1 if why else 0)
+    tc.fix_future_files()  # as build.py: else Ninja re-runs CMake until it gives up
     recompile(a.iso, verbose=a.verbose)
 
 

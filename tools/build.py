@@ -79,6 +79,7 @@ def main():
     env = tc.build_env()
     if a.check_deps:
         sys.exit(0 if tc.IS_WINDOWS or tc.check_linux_deps(env) else 1)
+    tc.fix_future_files()  # else Ninja re-runs CMake until it gives up (a release zip from another time zone)
     if not tc.IS_WINDOWS and not os.path.isfile(os.path.join(tc.BUILD_DIR, "build.ninja")) and not tc.check_linux_deps(env):
         tc.fail("missing build dependencies (above)")
     if a.iop_tests:
