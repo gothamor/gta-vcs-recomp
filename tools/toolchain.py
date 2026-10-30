@@ -374,12 +374,17 @@ class Progress:
         return "%s %s" % (self.label, _duration(time.time() - self.start)) + (" (%d steps)" % self.total if self.total else "")
 
 
+def _resolve_command(cmd, env=None):
+    """Resolve a tool using the same PATH its subprocess receives (also supports env=None)."""
+    path = env.get("PATH") if env is not None else None
+    found = shutil.which(cmd[0], path=path)
+    return [found, *cmd[1:]] if found else cmd
+
+
 def run_with_progress(cmd, log, label, cwd=ROOT, env=None):
     """Runs `cmd` with its output to `log` under an elapsed-time line; returns the exit code."""
     with open(log, "w", encoding="utf-8") as f, Progress(label) as progress:
-        exe = shutil.which(cmd[0], path=env.get("PATH"))
-        if exe:
-            cmd = [exe, *cmd[1:]]
+        cmd = _resolve_command(cmd, env)
         code = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
     print(progress.summary())
     return code
@@ -475,12 +480,11 @@ def build_env():
     if jdk:
         env["JAVA_HOME"] = jdk
     clang = _which("clang-cl", env) or shutil.which("clang-cl")
-
-    if clang:
-        clang_dir = os.path.dirname(os.path.abspath(clang))
-        env["PATH"] = clang_dir + os.pathsep + env["PATH"]
     if not clang:
         fail('clang-cl not found: in the Visual Studio Installer, Modify, tick "C++ Clang tools for Windows"', "no_clang")
+    # Keep the detected compiler visible to CMake and its child processes.
+    clang_dir = os.path.dirname(os.path.abspath(clang))
+    env["PATH"] = clang_dir + os.pathsep + env["PATH"]
     if clang_version(clang) < MIN_CLANG:
         fail("clang-cl %d or newer needed (found %d at %s): update Visual Studio (Visual Studio Installer, Update)"
              % (MIN_CLANG, clang_version(clang), clang), "old_clang")
@@ -688,7 +692,7 @@ def cmake_build(env, target, log_name, verbose=False, build_dir=BUILD_DIR):
     verbose). False on failure."""
     log = os.path.join(BUILD, log_name)
     os.makedirs(BUILD, exist_ok=True)
-    cmd = ["cmake", "--build", build_dir, "--target", target]
+    cmd = _resolve_command(["cmake", "--build", build_dir, "--target", target], env)
     with open(log, "w", encoding="utf-8") as f, Progress("[build] " + target) as progress:
         proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         for line in proc.stdout:
