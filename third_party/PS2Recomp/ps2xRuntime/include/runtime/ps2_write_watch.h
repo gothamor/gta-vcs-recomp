@@ -5,6 +5,7 @@
 // the generated code includes that one.
 //
 // PS2X_WRITE_WATCH=0: guest RAM allocated as before; enabled() false, every generation 0 (nothing can be told clean).
+// Linux (userfaultfd async write-protect + PAGEMAP_SCAN, ps2_write_watch.cpp) is opt-in: PS2X_WRITE_WATCH=1.
 // PS2X_WRITE_WATCH_LOG=1: pages written per fold and the fold's cost, every 5 s.
 #pragma once
 

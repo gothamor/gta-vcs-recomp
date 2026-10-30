@@ -807,6 +807,7 @@ HLE / VU0, scenes against the Windows reference, the rig).
 | `PS2X_RHI_GPU_TIME=1` | Vulkan: GPU time of the passes and the whole frame (`PS2X_GPU_TIMING=1`: per draw, breaking passes) |
 | `PS2X_RHI_FULL_BARRIERS=1` | Vulkan: whole-pipeline barriers, as before the layout-based ones |
 | `PS2X_HOST_PACED=0`, `PS2X_FRAME_LEAD=0`, `PS2X_FRAME_LEAD_MARGIN_US=<us>` | frame-rate independent timing: the game's own deadline instead of the host's frames; no frame lead; the lead's margin (1500) - PERFORMANCE.md 19 |
+| `PS2X_WRITE_WATCH=1` (Linux) / `=0` (Windows) | the guest RAM write watch on Linux (opt-in there) / off on Windows - PERFORMANCE.md 20 |
 | `PS2X_HW_SPECIALISE=0` | the GS pixel shader's full version for every draw (not one per texture read; PERFORMANCE.md 18) |
 | `PS2X_HW_QUEUE=<n>`, `PS2X_HW_BATCH_MAX=<n>` | frames the game may queue ahead / frames rendered per host frame (0: all); defaults 1 / 1 with frame-rate independent timing, 3 / all with the original (PERFORMANCE.md 17) |
 | `VCS_VK_DEVICE=<n or name>` | Vulkan: which GPU |

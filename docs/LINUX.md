@@ -80,7 +80,7 @@ build (FetchContent), so no Vulkan SDK is needed.
 | Renderer | D3D11 (reference) | Vulkan | D3D11 is Windows only. The Vulkan backend builds on Windows too (`-DVCS_RHI_VULKAN=ON`, then Graphics > Graphics API), to compare it with D3D11 on the same PC |
 | Shaders | fxc -> DXBC | glslang -> SPIR-V (`tools/hlsl_spirv.py`) | One HLSL source. glslang ignores `[[vk::index(1)]]`, so the script moves the second output to Location 0 Index 1 itself. `VCS_SPIRV` adds a point size, which Vulkan needs for points |
 | Dear ImGui | `imgui_impl_dx11` | `render/ui_renderer.cpp` (through the RHI) | One pipeline for every target format (the swapchain's BGRA, the RGBA captures) |
-| Write watch (`ps2_write_watch.cpp`) | `GetWriteWatch` | off | Linux has no equivalent; see the work list |
+| Write watch (`ps2_write_watch.cpp`) | `GetWriteWatch` (dirty bits: free writes) | userfaultfd async write-protect + `PAGEMAP_SCAN`, **opt-in** (`PS2X_WRITE_WATCH=1`) | Correct (0 wrong skips), but each first write to a page after a fold is a page fault on the game thread: no net gain measured (PERFORMANCE.md 20) |
 | Card creation time | `GetFileAttributesExW` | `statx` birth time (mtime without one) | Only the order of new entries; `.ps2x-order` is the source of truth |
 
 ## Work list
@@ -97,9 +97,11 @@ build (FetchContent), so no Vulkan SDK is needed.
 | Picture: Windows D3D11 vs Windows Vulkan, Windows reference vs Linux Vulkan (`scenes.py compare`) | to do |
 | Crash handler (signals, module+offset, llvm-symbolizer line) | done, tested in a stand-alone program |
 | Sampling profiler (SIGPROF) | works in the game (`VCS_PROFILE_THREAD=MainThread`, PERFORMANCE.md 16) |
-| Write watch: worth it? (measure the skip on Windows), then userfaultfd `WP_ASYNC` + `PAGEMAP_SCAN` (Linux 6.7+) | to do |
+| Write watch: userfaultfd `WP_ASYNC` + `PAGEMAP_SCAN` (Linux 6.7+) | done, opt-in: correct, no net gain on the laptop (PERFORMANCE.md 20) |
+| PGO on Linux (training from a new game when the rig's saves are missing) | done: no measurable gain over ThinLTO on the laptop (PERFORMANCE.md 20) |
+| Input delay measured and cut (host-paced frames, frame lead) | done: 60 cap 50 -> 34 ms (PERFORMANCE.md 19) |
 | The scheduler's guest-thread switches (C++ throws) on Linux vs Windows: `bench.py` | to do |
 | GPU timing (`PS2X_GPU_TIMING`) for Vulkan: timestamp queries | done (and `PS2X_RHI_GPU_TIME`) |
 | Vulkan optimisation pass: layout-based barriers, incremental push descriptors; spirv-opt measured (no gain) | done: 60 fps locked at a 60 cap on the HD 520 (PERFORMANCE.md 16) |
 | The rig on Linux: regress, tour, saves, trainer, controls, shakedown, finale, soundcheck, soak, framerate audit | to do |
-| Performance on this laptop (i5 Skylake, HD 520: the "modest hardware" target) in PERFORMANCE.md | ThinLTO build: 30 fps locked (original timing); uncapped 28-51, GPU / driver bound (PERFORMANCE.md 16, with what to do next) |
+| Performance on this laptop (i5 Skylake, HD 520: the "modest hardware" target) in PERFORMANCE.md | 30 locked (original timing), 60 locked at a 60 cap, ~83 shown fps uncapped (frame-rate independent; PERFORMANCE.md 16-18) |

@@ -471,6 +471,27 @@ Original timing is paced by the emulated VBlank and unchanged (49.8 ms at 30 fps
 build (~10 ms) and the GPU (~11 ms + recording). On Windows (D3D11) the pacing is the same code; DXGI's default of
 three queued frames might add delay when GPU bound there - to measure (the delay report is Vulkan's only so far).
 
+### 20. Linux: PGO, and the write watch (2026-10-30)
+
+- **PGO** (`build.py --opt pgo`): training no longer needs the rig's card copies - `bench.py` starts a new game from
+  an empty card when `build/rig/saves/fortbaxter` is missing (`rig.Game.new_game`: Cross until the player is outdoors),
+  so the profile covers the city spots and the AI drive as well as the reference scenes (a profile from the scenes alone
+  would have marked the driving code cold). Laptop, ThinLTO + PGO against ThinLTO of the same code (a second tree),
+  bench alternating twice: game thread over the six spots 9.7 / 10.0 ms against 9.95 / 9.8 ms, the worker and frame
+  times alike - no measurable gain here (as on Windows, section 10). ThinLTO stays the default for players.
+- **The write watch on Linux** (`ps2_write_watch.cpp`): userfaultfd's asynchronous write-protect over guest RAM
+  (`UFFD_USER_MODE_ONLY`, as unprivileged processes get it) and `PAGEMAP_SCAN`, which lists the written pages and
+  protects them again in one call (Linux 6.7+). A prototype checked first that a kernel write (`read()` from a file into
+  protected guest RAM, as the stream thread does) succeeds and counts. In the game: ~217 pages written per fold,
+  0.10-0.16 ms a fold; `VCS_RSL_SKIP_VERIFY=1` over the bench (2.21 M decisions) and the reference scenes (1.35 M):
+  **0 wrong**. A/B, same build, alternating twice: render worker 7.83 / 8.68 -> 7.53 / 8.20 ms, but the game thread
+  9.30 / 10.30 -> 9.95 / 10.68 ms and fps unchanged: the first write to a page after each fold is a page fault on Linux
+  (Windows reads dirty bits), ~220 a frame on the game thread. So it is **opt-in on Linux** (`PS2X_WRITE_WATCH=1`):
+  the game thread is the longest CPU stage and on the input-delay path. Soft-dirty bits would avoid per-page work only
+  by clearing the whole process's page tables at every fold.
+- What is left for the game thread is guest code (64-80% of it, flat): deeper code generation in the recompiler
+  (guest registers held in host registers across calls) - a project of its own.
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker

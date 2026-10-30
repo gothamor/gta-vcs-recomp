@@ -1,17 +1,20 @@
 # GTA: Vice City Stories — Native PC port (PS2 static recompilation)
 
-A native Windows (and, in progress, Linux) port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
-recompiling the game's PS2 executable into C++.
+A native **Windows and Linux** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
+recompiling the game's PS2 executable into C++. Both are built from the same source and run natively: Direct3D 11 on
+Windows, Vulkan on Linux.
 
 **This repository contains no game code or game data.** You need your own copy of the game as an `.iso`.
 The build reads the executable from your disc, and the finished game reads everything else from it while it runs.
 
-Status: in development. See [docs/PROGRESS.md](docs/PROGRESS.md) for what works.
+Status: in development. See [docs/PROGRESS.md](docs/PROGRESS.md) for what works, and [docs/LINUX.md](docs/LINUX.md)
+for the Linux build in detail.
 
 ## Install
 
 ### 1. Install the tools (once)
 
+**Windows**
 - **Python 3**: [python.org](https://www.python.org/downloads/). During setup, tick *Add python.exe to PATH*.
 - **Git**: [git-scm.com](https://git-scm.com/download/win) (the default options are fine). The first build uses it
   to download the libraries the game needs (SDL3, FFmpeg, ...), so it also needs an internet connection.
@@ -23,11 +26,27 @@ Status: in development. See [docs/PROGRESS.md](docs/PROGRESS.md) for what works.
 That's all: CMake and Ninja come with Visual Studio, and you don't need to open Visual Studio or a special command
 prompt.
 
+**Linux**
+- Python 3 and Git (most distributions have both), then let the build list the rest: in the source folder (step 2),
+  ```bash
+  python3 tools/build.py --check-deps
+  ```
+  prints what is missing and the command that installs it (`apt`, `dnf` or `pacman`): clang 19 or newer with lld,
+  CMake, Ninja, glslang, and the FFmpeg and SDL3 development packages. On Ubuntu 24.04 / Linux Mint 22 that is
+  ```bash
+  sudo apt install clang-20 lld-20 llvm-20 cmake ninja-build pkg-config git glslang-tools \
+      libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
+      libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
+      libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev \
+      libpipewire-0.3-dev libpulse-dev libasound2-dev libudev-dev libdbus-1-dev
+  ```
+- A graphics driver with Vulkan 1.3: Mesa (AMD, Intel) or NVIDIA's own. `vulkaninfo --summary` shows it.
+
 ### 2. Get the source and your disc
 
-1. Get the source, e.g. into `C:\Games\vcs-recomp`:
+1. Get the source, e.g. into `C:\Games\vcs-recomp` (Windows) or `~/games/vcs-recomp` (Linux):
    ```bash
-   git clone <this repository's URL> C:\Games\vcs-recomp
+   git clone <this repository's URL> vcs-recomp
    ```
    (*Code > Download ZIP* on GitHub works too.)
 2. Copy your disc image into that folder. It must be the USA release, and its file name must contain
@@ -40,41 +59,30 @@ python tools/vcs_disc.py info "Grand Theft Auto - Vice City Stories (USA).iso"
 
 ### 3. Build
 
-Open a terminal in the folder (in Explorer: right-click the folder > *Open in Terminal*) and run:
+Open a terminal in the folder (Windows Explorer: right-click the folder > *Open in Terminal*) and run:
 ```bash
-python tools/build.py --recompile
+python tools/build.py --recompile        # Windows
+python3 tools/build.py --recompile       # Linux
 ```
 This recompiles the game from your disc and builds it, optimised. The first time takes a while: the game becomes
-about 200 MB of C++ to compile. It ends with:
+about 200 MB of C++ to compile (about 15 minutes on a 4-core laptop). It ends with:
 ```
-[build] ok: build\vcs.exe (optimised: ThinLTO)
+[build] ok: build\vcs.exe (optimised: ThinLTO)        (Linux: build/vcs)
 ```
 If your `.iso` is somewhere else, give its path: `python tools/build.py --recompile "D:\path\to\your.iso"`.
 
 ### 4. Play
 
-Start `build\vcs.exe` (a shortcut to it on the desktop works well).
-The build already told it where your disc is.
+Start `build\vcs.exe` on Windows, `build/vcs` on Linux (a desktop shortcut works well). The build already told it
+where your disc is.
 
 - **F2** opens the settings: presets, resolution, widescreen, frame rate, vsync, sound, and every key, mouse and
   gamepad binding. The defaults match the PS2; every improvement is an option you turn on (Display > Presets >
-  Enhanced turns on the usual ones at once). Settings are saved in `vcs.ini` next to `vcs.exe`.
+  Enhanced turns on the usual ones at once). Settings are saved in `vcs.ini` next to the game.
 - **Alt+Enter** switches between full screen and the window.
 - **F5** opens the trainer ([docs/TRAINER.md](docs/TRAINER.md)).
 - Keyboard, mouse and gamepads (Xbox, PlayStation, Switch Pro, ...) all work: [docs/CONTROLS.md](docs/CONTROLS.md).
-- Saves (the memory card) live in `%LOCALAPPDATA%\VCSRecomp`.
-
-## Linux (in progress)
-
-The same source builds natively on Linux with clang and draws with Vulkan ([docs/LINUX.md](docs/LINUX.md)). It is
-not tested in the game yet. The steps are the Windows ones with the distro's packages instead of Visual Studio:
-```bash
-python3 tools/build.py --check-deps      # lists what is missing and prints the install command (apt / dnf / pacman)
-python3 tools/build.py --recompile "Grand Theft Auto - Vice City Stories (USA).iso"
-python3 tools/run.py 0 play              # or start build/vcs
-```
-Needed: clang 19 or newer with lld, CMake, Ninja, glslang, the FFmpeg and SDL3 development packages, and a Vulkan 1.3
-driver. Saves go to `~/.local/share/VCSRecomp`.
+- Saves (the memory card) live in `%LOCALAPPDATA%\VCSRecomp` on Windows and `~/.local/share/VCSRecomp` on Linux.
 
 ## Features
 
@@ -82,9 +90,9 @@ The defaults are the PS2 game as it was; every improvement below is an option in
 *Display > Presets* turns on the usual ones at once: **Enhanced** for a modern graphics card, **Widescreen, light**
 for older PCs and integrated graphics, **Authentic (PS2)** to go back.
 
-**Runs natively.** The game's own code, recompiled to C++ and running on the PC, not in an emulator. The 3D world,
-characters, vehicles, HUD and menus are drawn by a native Direct3D 11 renderer, sound and streaming run on the PC,
-and the movies are decoded with FFmpeg.
+**Runs natively, on Windows and Linux.** The game's own code, recompiled to C++ and running on the PC, not in an
+emulator. The 3D world, characters, vehicles, HUD and menus are drawn by a native renderer - Direct3D 11 on Windows,
+Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded with FFmpeg.
 
 **Frame rate**
 - Frame-rate independent timing: 60, 100, 120, 144, 165, 240 fps, your display's refresh rate or uncapped (up to
@@ -93,7 +101,9 @@ and the movies are decoded with FFmpeg.
   keep their speed at high frame rates. Some behaviour at high frame rates is still being fixed
   ([docs/PROGRESS.md](docs/PROGRESS.md)).
 - Fast: well past 100 fps nearly everywhere at the original resolution (over 200 in most of the city on an
-  i7-7700K + GTX 1080 Ti; [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+  i7-7700K + GTX 1080 Ti), and a locked 60 on a 2015 laptop with integrated graphics (Linux, Intel HD 520;
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+- Low input delay with frame-rate independent timing: each frame starts on fresh input just in time to be shown.
 - Vertical sync on or off, and a tearing mode for G-Sync / FreeSync monitors.
 - Frame rate counter, and a performance overlay (F3) with CSV recording (F4).
 
@@ -134,8 +144,9 @@ and the movies are decoded with FFmpeg.
 
 **Also**
 - Skip the intro movies (off by default, as on the PS2).
-- Saves on a memory card in `%LOCALAPPDATA%\VCSRecomp`, written and read by the game's own save code.
-- Every setting kept in `vcs.ini` next to `vcs.exe`.
+- Saves on a memory card (`%LOCALAPPDATA%\VCSRecomp` on Windows, `~/.local/share/VCSRecomp` on Linux), written and
+  read by the game's own save code.
+- Every setting kept in `vcs.ini` next to the game.
 
 ## Updating
 
@@ -154,8 +165,11 @@ python tools/build.py --recompile
 | `unsupported executable build` or `SLUS_215.90 not found on disc` | The disc isn't the USA release (SLUS-21590). Other regions aren't supported. |
 | CMake configure fails while downloading | Check the internet connection and that `git --version` works in a new terminal. |
 | `vcs.exe` does nothing when started | It can't find the disc: put `iso=C:\path\to\your.iso` in `vcs.ini` next to `vcs.exe`. |
+| Linux: `clang 19 or newer not found` / `missing build dependencies` | Install what `python3 tools/build.py --check-deps` lists. |
+| Linux: `cannot find -lstdc++` | Install `libstdc++-<N>-dev` for your newest GCC (`build.py` works around it when an older one has it). |
+| Linux: the game starts but no window / `no GPU with Vulkan 1.3` | Install your GPU's Vulkan driver (Mesa or NVIDIA); `vulkaninfo --summary` should list it. |
 
-The build's full output is in `build\build.log` (`build\configure.log` for the configure step).
+The build's full output is in `build/build.log` (`build/configure.log` for the configure step).
 
 ## For developers
 
@@ -164,7 +178,7 @@ The build's full output is in `build\build.log` (`build\configure.log` for the c
 | `python tools/build.py` | rebuild after code changes |
 | `python tools/build.py --quick` | rebuild without link-time optimisation: much faster relinks, a somewhat slower game. It stays quick until `--opt lto` (switching recompiles everything, ~6-10 min) |
 | `python tools/build.py --opt lto` | back to the optimised build (the default) |
-| `python tools/build.py --opt pgo` | ThinLTO + profile-guided, the fastest game; trains a profile first (~30 min, needs the rig's card copies in `build/rig/saves`) |
+| `python tools/build.py --opt pgo` | ThinLTO + profile-guided; trains a profile first (~30-50 min, from the rig's card copies in `build/rig/saves` or a new game) |
 | `python tools/recompile.py [ISO]` | disc → generated C++ only |
 | `python tools/run.py 0` | run the game with its output logged to `build/run/run.log` (`run.py 60 name`: stop after 60 s, log to `name.log`) |
 | `python tools/gamectl.py` | control a running game: screenshots, key presses, perf numbers, quit |
