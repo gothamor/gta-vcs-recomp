@@ -1,6 +1,15 @@
 // GS primitive drawing for the HW GS renderer (gs_hw.cpp): HLSL port of its former GLSL shaders.
 // Render targets hold PS2 rows top-down (texture row = PS2 row); colours and alpha are 0..255 values / 255.
 // DUAL_SOURCE=1 also outputs the blend factor C as the second colour (Src1Alpha blending).
+// SAMPLE_MODE: the pixel shader built for one way of reading the texture, picked per draw by gs_hw.cpp (drawSampleMode):
+// only that path's code, so fewer registers and no branches between paths (docs/PERFORMANCE.md 18). The same code as the
+// per-draw choice below, so the same pixels.
+//   0 every way, chosen per draw from the constants (PS2X_HW_SPECIALISE=0; PS2X_HW_GATHER=verify)
+//   1 no texture   2 nearest (fetchTexel)   3 the GS's bilinear by four loads   4 the hardware sampler (anisotropic option)
+//   5 the GS's bilinear by Gather   6 a render target read 1:1 at full resolution (sampleRtFull)
+#ifndef SAMPLE_MODE
+#define SAMPLE_MODE 0
+#endif
 
 cbuffer Draw : register(b0)
 {
@@ -228,7 +237,7 @@ float4 sampleGather(float2 uv)
     const float4 gb = tex.GatherBlue(hwSampler, at), ga = tex.GatherAlpha(hwSampler, at);
     const float4 c00 = float4(gr.w, gg.w, gb.w, ga.w) * 255.0, c10 = float4(gr.z, gg.z, gb.z, ga.z) * 255.0;
     const float4 c01 = float4(gr.x, gg.x, gb.x, ga.x) * 255.0, c11 = float4(gr.y, gg.y, gb.y, ga.y) * 255.0;
-#if !GATHER_ONLY
+#if SAMPLE_MODE == 0
     // mode 4 (PS2X_HW_GATHER=verify, the full shader): the four loads as well; a texel that differs paints the pixel magenta
     [branch] if (linearIipFgeAte.x == 4)
         g_gatherMismatch = any(c00 != fetchTexel(i)) || any(c10 != fetchTexel(i + int2(1, 0))) ||
@@ -237,11 +246,29 @@ float4 sampleGather(float2 uv)
     return lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
 }
 
+// the GS's bilinear by four loads (the wrap worked out per tap: region modes, render targets read per PS2 texel)
+float4 sampleBilinear(float2 uv)
+{
+    const float2 p = uv - 0.5;
+    const int2 i = int2(floor(p));
+    const float2 f = p - float2(i);
+    const float4 c00 = fetchTexel(i), c10 = fetchTexel(i + int2(1, 0));
+    const float4 c01 = fetchTexel(i + int2(0, 1)), c11 = fetchTexel(i + int2(1, 1));
+    return lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
+}
+
 float4 sampleTex(float2 uv)
 {
-#if GATHER_ONLY
-    // the gather variant (gs_hw.cpp: draws with linearIipFgeAte.x == 3): without the other paths' registers
+#if SAMPLE_MODE == 2
+    return fetchTexel(int2(floor(uv)));
+#elif SAMPLE_MODE == 3
+    return sampleBilinear(uv);
+#elif SAMPLE_MODE == 4
+    return tex.Sample(hwSampler, uv / float2(texSizeWrap.xy)) * 255.0;
+#elif SAMPLE_MODE == 5
     return sampleGather(uv);
+#elif SAMPLE_MODE == 6
+    return sampleRtFull(uv);
 #else
     float4 r;
     [branch] if (atstArefAfailRt.w == 2)
@@ -263,12 +290,7 @@ float4 sampleTex(float2 uv)
     }
     else
     {
-        const float2 p = uv - 0.5;
-        const int2 i = int2(floor(p));
-        const float2 f = p - float2(i);
-        const float4 c00 = fetchTexel(i), c10 = fetchTexel(i + int2(1, 0));
-        const float4 c01 = fetchTexel(i + int2(0, 1)), c11 = fetchTexel(i + int2(1, 1));
-        r = lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y);
+        r = sampleBilinear(uv);
     }
     return r;
 #endif
@@ -290,6 +312,7 @@ PSOut ps_main(VSOut i)
     o.depth = i.depth;
     const float4 vc = floor((linearIipFgeAte.y == 1 ? i.col : i.colFlat) * 255.0 + 0.5);
     float4 c = vc;
+#if SAMPLE_MODE != 1
     if (tmeTfxTccFst.x == 1)
     {
         const float2 uv = (tmeTfxTccFst.w == 1) ? i.stq.xy : (i.stq.xy / i.stq.z) * float2(texSizeWrap.xy);
@@ -301,6 +324,7 @@ PSOut ps_main(VSOut i)
         else if (tfx == 2) { c.rgb = t.rgb * vc.rgb / 128.0 + vc.a; c.a = tcc ? t.a + vc.a : vc.a; }
         else { c.rgb = t.rgb * vc.rgb / 128.0 + vc.a; c.a = tcc ? t.a : vc.a; }
     }
+#endif
     c = clamp(floor(c), 0.0, 255.0);
     if (linearIipFgeAte.z == 1)
     {

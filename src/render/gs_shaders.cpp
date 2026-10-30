@@ -7,10 +7,20 @@ using BYTE = unsigned char; // fxc's /Fh headers declare `const BYTE name[]`
 #include "dxbc/gs_draw_vs.h"
 #include "dxbc/gs_world_vs.h"
 #include "dxbc/gs_lit_vs.h"
-#include "dxbc/gs_draw_ps.h"
-#include "dxbc/gs_draw_ps_dual.h"
-#include "dxbc/gs_draw_ps_gather.h"
-#include "dxbc/gs_draw_ps_gather_dual.h"
+#include "dxbc/gs_draw_ps0.h"
+#include "dxbc/gs_draw_ps0_dual.h"
+#include "dxbc/gs_draw_ps1.h"
+#include "dxbc/gs_draw_ps1_dual.h"
+#include "dxbc/gs_draw_ps2.h"
+#include "dxbc/gs_draw_ps2_dual.h"
+#include "dxbc/gs_draw_ps3.h"
+#include "dxbc/gs_draw_ps3_dual.h"
+#include "dxbc/gs_draw_ps4.h"
+#include "dxbc/gs_draw_ps4_dual.h"
+#include "dxbc/gs_draw_ps5.h"
+#include "dxbc/gs_draw_ps5_dual.h"
+#include "dxbc/gs_draw_ps6.h"
+#include "dxbc/gs_draw_ps6_dual.h"
 #include "dxbc/gs_quad_vs.h"
 #include "dxbc/gs_blit_ps.h"
 #include "dxbc/gs_fill_color_ps.h"
@@ -24,10 +34,20 @@ using BYTE = unsigned char; // fxc's /Fh headers declare `const BYTE name[]`
 #include "spirv/gs_draw_vs.h"
 #include "spirv/gs_world_vs.h"
 #include "spirv/gs_lit_vs.h"
-#include "spirv/gs_draw_ps.h"
-#include "spirv/gs_draw_ps_dual.h"
-#include "spirv/gs_draw_ps_gather.h"
-#include "spirv/gs_draw_ps_gather_dual.h"
+#include "spirv/gs_draw_ps0.h"
+#include "spirv/gs_draw_ps0_dual.h"
+#include "spirv/gs_draw_ps1.h"
+#include "spirv/gs_draw_ps1_dual.h"
+#include "spirv/gs_draw_ps2.h"
+#include "spirv/gs_draw_ps2_dual.h"
+#include "spirv/gs_draw_ps3.h"
+#include "spirv/gs_draw_ps3_dual.h"
+#include "spirv/gs_draw_ps4.h"
+#include "spirv/gs_draw_ps4_dual.h"
+#include "spirv/gs_draw_ps5.h"
+#include "spirv/gs_draw_ps5_dual.h"
+#include "spirv/gs_draw_ps6.h"
+#include "spirv/gs_draw_ps6_dual.h"
 #include "spirv/gs_quad_vs.h"
 #include "spirv/gs_blit_ps.h"
 #include "spirv/gs_fill_color_ps.h"
@@ -47,10 +67,15 @@ namespace render
             {kGsDrawVS, sizeof(kGsDrawVS)},
             {kGsWorldVS, sizeof(kGsWorldVS)},
             {kGsLitVS, sizeof(kGsLitVS)},
-            {kGsDrawPS, sizeof(kGsDrawPS)},
-            {kGsDrawPSDual, sizeof(kGsDrawPSDual)},
-            {kGsDrawPSGather, sizeof(kGsDrawPSGather)},
-            {kGsDrawPSGatherDual, sizeof(kGsDrawPSGatherDual)},
+            {
+                {{kGsDrawPS0, sizeof(kGsDrawPS0)}, {kGsDrawPS0Dual, sizeof(kGsDrawPS0Dual)}},
+                {{kGsDrawPS1, sizeof(kGsDrawPS1)}, {kGsDrawPS1Dual, sizeof(kGsDrawPS1Dual)}},
+                {{kGsDrawPS2, sizeof(kGsDrawPS2)}, {kGsDrawPS2Dual, sizeof(kGsDrawPS2Dual)}},
+                {{kGsDrawPS3, sizeof(kGsDrawPS3)}, {kGsDrawPS3Dual, sizeof(kGsDrawPS3Dual)}},
+                {{kGsDrawPS4, sizeof(kGsDrawPS4)}, {kGsDrawPS4Dual, sizeof(kGsDrawPS4Dual)}},
+                {{kGsDrawPS5, sizeof(kGsDrawPS5)}, {kGsDrawPS5Dual, sizeof(kGsDrawPS5Dual)}},
+                {{kGsDrawPS6, sizeof(kGsDrawPS6)}, {kGsDrawPS6Dual, sizeof(kGsDrawPS6Dual)}},
+            },
             {kGsQuadVS, sizeof(kGsQuadVS)},
             {kGsBlitPS, sizeof(kGsBlitPS)},
             {kGsFillColorPS, sizeof(kGsFillColorPS)},
@@ -68,10 +93,15 @@ namespace render
             {kGsDrawVS_spv, sizeof(kGsDrawVS_spv)},
             {kGsWorldVS_spv, sizeof(kGsWorldVS_spv)},
             {kGsLitVS_spv, sizeof(kGsLitVS_spv)},
-            {kGsDrawPS_spv, sizeof(kGsDrawPS_spv)},
-            {kGsDrawPSDual_spv, sizeof(kGsDrawPSDual_spv)},
-            {kGsDrawPSGather_spv, sizeof(kGsDrawPSGather_spv)},
-            {kGsDrawPSGatherDual_spv, sizeof(kGsDrawPSGatherDual_spv)},
+            {
+                {{kGsDrawPS0_spv, sizeof(kGsDrawPS0_spv)}, {kGsDrawPS0Dual_spv, sizeof(kGsDrawPS0Dual_spv)}},
+                {{kGsDrawPS1_spv, sizeof(kGsDrawPS1_spv)}, {kGsDrawPS1Dual_spv, sizeof(kGsDrawPS1Dual_spv)}},
+                {{kGsDrawPS2_spv, sizeof(kGsDrawPS2_spv)}, {kGsDrawPS2Dual_spv, sizeof(kGsDrawPS2Dual_spv)}},
+                {{kGsDrawPS3_spv, sizeof(kGsDrawPS3_spv)}, {kGsDrawPS3Dual_spv, sizeof(kGsDrawPS3Dual_spv)}},
+                {{kGsDrawPS4_spv, sizeof(kGsDrawPS4_spv)}, {kGsDrawPS4Dual_spv, sizeof(kGsDrawPS4Dual_spv)}},
+                {{kGsDrawPS5_spv, sizeof(kGsDrawPS5_spv)}, {kGsDrawPS5Dual_spv, sizeof(kGsDrawPS5Dual_spv)}},
+                {{kGsDrawPS6_spv, sizeof(kGsDrawPS6_spv)}, {kGsDrawPS6Dual_spv, sizeof(kGsDrawPS6Dual_spv)}},
+            },
             {kGsQuadVS_spv, sizeof(kGsQuadVS_spv)},
             {kGsBlitPS_spv, sizeof(kGsBlitPS_spv)},
             {kGsFillColorPS_spv, sizeof(kGsFillColorPS_spv)},

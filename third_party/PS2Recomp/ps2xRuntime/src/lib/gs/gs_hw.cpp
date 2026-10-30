@@ -1364,22 +1364,45 @@ namespace
                 std::fprintf(stderr, "[draw] depth fill zbp=%u rows %u..%u width %u value %.6f\n", f.zbp, f.y0, f.y1, f.width, f.value);
         }
 
+        // [gta-recomp] The pixel shader variant for a draw's texture read (gs_draw.hlsl SAMPLE_MODE), from the constants the
+        // full shader branches on - the same path, so the same pixels; only the path's code, so fewer registers.
+        // PS2X_HW_SPECIALISE=0: the full shader for every draw but the Gather ones (as before 2026-10-30)
+        static uint8_t drawSampleMode(const DrawConstants &c)
+        {
+            static const bool specialise = [] {
+                const char *e = std::getenv("PS2X_HW_SPECIALISE");
+                return !(e && e[0] == '0');
+            }();
+            const int linear = c.linearIipFgeAte[0];
+            if (linear == 3)
+                return 5;                   // Gather
+            if (!specialise || linear == 4) // PS2X_HW_GATHER=verify needs the full shader
+                return 0;
+            if (c.tmeTfxTccFst[0] != 1)
+                return 1;                   // no texture
+            if (c.atstArefAfailRt[3] == 2)
+                return 6;                   // a render target 1:1 at full resolution
+            if (linear == 2)
+                return 4;                   // the hardware sampler
+            return linear == 0 ? 2 : 3;     // nearest / the GS's bilinear by four loads
+        }
+
         rhi::Pipeline &drawPipeline(const GsBlend &b, uint8_t mask, bool depthTest, uint32_t ztst, bool zwrite, uint8_t mode,
-                                    bool gather = false)
+                                    uint8_t sample = 0)
         {
             const bool dual = b.enable && (b.src == rhi::BlendFactor::Src1Alpha || b.src == rhi::BlendFactor::InvSrc1Alpha ||
                                            b.dst == rhi::BlendFactor::Src1Alpha || b.dst == rhi::BlendFactor::InvSrc1Alpha);
             const uint32_t key = (b.enable ? 1u : 0u) | (static_cast<uint32_t>(b.src) << 1) | (static_cast<uint32_t>(b.dst) << 5) |
                                  (static_cast<uint32_t>(b.op) << 9) | (uint32_t(mask & 0xF) << 12) | ((depthTest ? 1u : 0u) << 16) |
                                  ((ztst & 3u) << 17) | ((zwrite ? 1u : 0u) << 19) | (uint32_t(mode & 7u) << 20) | ((dual ? 1u : 0u) << 23) |
-                                 ((gather ? 1u : 0u) << 24);
+                                 (uint32_t(sample & 7u) << 24);
             std::unique_ptr<rhi::Pipeline> &p = m_drawPipelines[key];
             if (!p)
             {
                 const render::GsShaders &sh = render::gsShaders(m_dev.backend()); // [gta-recomp] the device's backend (DXBC / SPIR-V)
                 rhi::PipelineDesc d;
-                // [gta-recomp] gather: the pixel shader built for the Gather path alone (gs_draw.hlsl GATHER_ONLY)
-                d.pixel = gather ? (dual ? sh.drawPSGatherDual : sh.drawPSGather) : (dual ? sh.drawPSDual : sh.drawPS);
+                // [gta-recomp] the pixel shader built for the draw's texture read (drawSampleMode)
+                d.pixel = sh.drawPS[sample < render::GsShaders::kSampleModes ? sample : 0][dual ? 1 : 0];
                 if (mode == 4)
                 {
                     // [gta-recomp] native VCS lit model (GSNativeDraw::VcsLit): skinned on the CPU, lit / transformed here
@@ -2181,7 +2204,7 @@ namespace
             if (s.ate && s.atst != 1u && s.afail != 0u)
             {
                 // AFAIL other than KEEP: draw the passing pixels normally, the failing ones with the AFAIL mask
-                submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode, c.linearIipFgeAte[0] == 3));
+                submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode, drawSampleMode(c)));
                 c.atstArefAfailRt[2] = 1;
                 if (s.afail == 1u) zwrite = false;                      // FB_ONLY
                 else if (s.afail == 2u) mask = 0;                       // ZB_ONLY
@@ -2191,7 +2214,7 @@ namespace
             {
                 c.linearIipFgeAte[3] = 0; // no alpha test (ATST ALWAYS)
             }
-            submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode, c.linearIipFgeAte[0] == 3));
+            submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode, drawSampleMode(c)));
         }
 
         // a draw that samples its own target reads a copy (D3D cannot sample a bound render target)

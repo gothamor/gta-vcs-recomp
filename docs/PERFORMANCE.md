@@ -413,6 +413,28 @@ override either. Laptop, quick build, flyover + intro, window visible:
 The ~10% fewer game frames were frames never shown. Queue 1 shows the newest frame (least input delay) at the same
 rate as queue 3. On Windows it matters wherever the GPU is the limit (3x / 4x internal resolution).
 
+### 18. The GS pixel shader built per texture read (both renderers, 2026-10-30)
+
+The GS draw pixel shader (gs_draw.hlsl) chose its texture read per draw from the constants: none, nearest, the GS's
+bilinear by four loads, the hardware sampler, Gather, a render target read 1:1 at full resolution. Every draw paid the
+registers of the largest path (the render-target and four-load reads), the effect passes (bloom, trails: render targets)
+most. Only Gather had a variant of its own (section 15). Now `SAMPLE_MODE` 1-6 builds one variant per read (7 x 2 with
+the dual-source output; 0 is the full shader) and gs_hw.cpp's `drawSampleMode` picks it from the same constants the full
+shader branches on, in the same order - the same code per draw, so the same pixels. `PS2X_HW_SPECIALISE=0` = the full
+shader for all but Gather, as before. The variants are 5-22 KB of SPIR-V against the full shader's 47 KB.
+
+Laptop (HD 520, Vulkan), quick build, flyover + intro, frame-rate independent timing, pairs run alternately:
+
+| | GPU ms / frame, 60 cap | bloom ms | trails ms | uncapped shown fps | GPU ms / frame uncapped |
+|---|---|---|---|---|---|
+| full shader | 11.75 / 12.90 | 2.23 / 2.34 | 2.19 / 2.61 | 76.2 / 76.5 | 12.59 / 12.61 |
+| per read | 11.39 / 10.81 | 1.91 / 1.84 | 1.69 / 1.60 | **83.0 / 82.9** | **11.66 / 11.38** |
+
+Pictures: `scenes.py capture` with and without (original timing): the scenes that show the same frame in both runs -
+loading, the flyover road (the world and the post effects), the pause map - are identical (mean difference 0.00); the
+moving ones differ less than two runs of the same build do. On Windows (D3D11, fxc) the same variants are built; there
+the gain wants measuring at 3x / 4x, where the GPU counts (and a picture check: `scenes.py compare`).
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker
