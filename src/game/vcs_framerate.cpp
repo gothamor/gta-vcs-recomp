@@ -22,6 +22,7 @@
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/ee_scheduler.h"
+#include "runtime/gs/gs_hw.h"
 #include "runtime/ps2_perf.h"
 #include "runtime/ps2_present.h"
 
@@ -330,6 +331,7 @@ namespace vcs
     {
         g_timing.store(static_cast<int>(timing), std::memory_order_relaxed);
         ps2SetPresentOnGameFrames(timing == Timing::Independent);
+        gsHwSetShowEveryFrame(timing == Timing::Independent); // game time follows the clock: show every frame rendered
         applyPresentRate();
     }
 

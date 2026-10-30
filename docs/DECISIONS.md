@@ -581,3 +581,11 @@ libraries through the same `tools/build.py`; no container, Flatpak or Steam Runt
   `perf` / `gdb` cover the rest. The write watch has no Linux equivalent yet (correct without it, slower); whether it is
   worth userfaultfd is to be measured first.
 
+## 2026-10-30 - Frame-rate independent timing shows every frame it renders
+
+The user asked for more performance on both platforms and chose this first (with specialised GS pixel shaders next).
+With frame-rate independent timing the game thread now queues one frame and the window shows every frame rendered
+(PERFORMANCE.md 17: 30 -> 76 shown fps on the GPU-bound laptop). Original timing keeps the old pacing on purpose: there
+game time is counted in frames, and holding the game thread back would slow the game down when the GPU can't keep up,
+where showing fewer frames keeps it at speed.
+

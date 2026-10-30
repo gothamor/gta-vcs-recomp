@@ -106,6 +106,28 @@ void gsHwSetFrameSize(uint32_t width, uint32_t height)
 
 void gsHwSetAspectWidening(float widening) { g_aspectWidening.store(widening, std::memory_order_relaxed); }
 
+// [gta-recomp] gsHwSetShowEveryFrame (gs_hw.h). PS2X_HW_QUEUE=<n> / PS2X_HW_BATCH_MAX=<n> (0: all) override either mode.
+static std::atomic<bool> g_showEveryFrame{false};
+void gsHwSetShowEveryFrame(bool on) { g_showEveryFrame.store(on, std::memory_order_relaxed); }
+namespace
+{
+    size_t envCount(const char *name, size_t fallback)
+    {
+        const char *e = std::getenv(name);
+        return e && *e ? std::strtoul(e, nullptr, 0) : fallback;
+    }
+    size_t frameQueueDepth()
+    {
+        static const size_t forced = envCount("PS2X_HW_QUEUE", 0u);
+        return forced ? forced : (g_showEveryFrame.load(std::memory_order_relaxed) ? 1u : 3u);
+    }
+    size_t frameBatchMax() // 0: no limit
+    {
+        static const size_t forced = envCount("PS2X_HW_BATCH_MAX", ~size_t(0));
+        return forced != ~size_t(0) ? forced : (g_showEveryFrame.load(std::memory_order_relaxed) ? 1u : 0u);
+    }
+}
+
 void gsHwSetHudSqueeze(float factor) { g_hudSqueeze.store(factor, std::memory_order_relaxed); }
 void gsHwSetHudClassifier(GSHwAnchorFn fn) { g_hudClassifier.store(fn, std::memory_order_relaxed); }
 void gsHwSetHudLayer(bool on) { g_hudLayer.store(on, std::memory_order_relaxed); }
@@ -3773,7 +3795,8 @@ namespace
             {
                 std::unique_lock<std::mutex> lock(m_queueMutex);
                 // Don't let the game run more than a few frames ahead of the main thread.
-                m_queueCv.wait_for(lock, std::chrono::milliseconds(100), [&] { return m_queue.size() < 3u; });
+                const size_t depth = frameQueueDepth(); // [gta-recomp] gsHwSetShowEveryFrame
+                m_queueCv.wait_for(lock, std::chrono::milliseconds(100), [&] { return m_queue.size() < depth; });
                 m_queue.push_back(std::move(m_frame));
             }
             m_frame = takeFreeFrame();
@@ -3961,8 +3984,17 @@ namespace
             }
             std::deque<std::unique_ptr<Frame>> frames;
             {
+                // [gta-recomp] frames per host frame (gsHwSetShowEveryFrame): all queued ones (the last shown), or one
+                const size_t batchMax = frameBatchMax();
                 std::lock_guard<std::mutex> lock(m_queueMutex);
-                frames.swap(m_queue);
+                if (batchMax && m_queue.size() > batchMax)
+                    for (size_t i = 0; i < batchMax; ++i)
+                    {
+                        frames.push_back(std::move(m_queue.front()));
+                        m_queue.pop_front();
+                    }
+                else
+                    frames.swap(m_queue);
             }
             m_queueCv.notify_all();
             if (!frames.empty())

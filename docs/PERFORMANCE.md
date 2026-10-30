@@ -391,6 +391,28 @@ no control channel - `tools/run.py` with `PS2X_PERF_LOG`; averages of the [perf]
   a minute (no churn). What is left is GPU time in the GS emulation's passes (bloom, trails, the world's draws through the
   GS pixel shader) - the renderer's work, the same on D3D11, not the backend's.
 
+### 17. Show every frame the GPU renders (frame-rate independent timing, 2026-10-30)
+
+The game thread may run up to three frames ahead of the main thread, and each host frame rendered every queued frame
+and showed the last (gs_hw.cpp). With the GPU behind, that settles at batches of three: the HD 520 rendered 84 frames a
+second and showed 30. Under frame-rate independent timing game time follows the clock, so a game thread that waits
+loses nothing: `gsHwSetShowEveryFrame` (vcs_framerate.cpp turns it on with that timing) queues one frame and renders
+and shows one per host frame. Original timing keeps the old pacing (game time there is frames: waiting would slow the
+game, as the PS2 did, where dropping shown frames keeps its pace). `PS2X_HW_QUEUE=<n>` / `PS2X_HW_BATCH_MAX=<n>` (0: all)
+override either. Laptop, quick build, flyover + intro, window visible:
+
+| | game fps | shown fps | p95 ms | GPU ms / shown frame |
+|---|---|---|---|---|
+| before (queue 3, whole batch) | 84.0 | 30.2 | 19.0 | 33.4 |
+| batch 2, queue 3 | 81.2 | 42.6 | 17.3 | 23.2 |
+| batch 1, queue 3 | 75.3 | 76.5 | 16.2 | 12.6 |
+| **batch 1, queue 1 (now)** | 74.9 | **76.5** | 16.3 | 12.5 |
+| now, 60 cap | 59.3 | 60.1 | 16.9 | 12.2 |
+| original timing (unchanged) | 29.9 | 60.2 | 33.4 | 6.5 |
+
+The ~10% fewer game frames were frames never shown. Queue 1 shows the newest frame (least input delay) at the same
+rate as queue 3. On Windows it matters wherever the GPU is the limit (3x / 4x internal resolution).
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker

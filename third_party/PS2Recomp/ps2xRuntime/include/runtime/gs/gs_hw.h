@@ -86,6 +86,12 @@ void gsHwSetHudLayer(bool on);
 // [gta-recomp] Widescreen: how much wider than 4:3 the game's 640-wide frame is shown (display aspect / (4/3)); the
 // native post effects widen their buffers by it so blur and warp keep their 4:3 proportions on screen. Any thread.
 void gsHwSetAspectWidening(float widening);
+// [gta-recomp] Frame pacing between the game and the window. Off (the PS2's timing): the game may run 3 frames ahead and
+// each host frame renders every queued frame, showing the last - game time keeps its pace when the GPU falls behind.
+// On (frame-rate independent timing, where game time follows the clock anyway): one frame queued, one rendered and
+// shown per host frame - a GPU-bound machine shows every frame it renders (the HD 520: 76 shown fps instead of 30 at the
+// same GPU load; docs/PERFORMANCE.md 17) with the least latency. Any thread.
+void gsHwSetShowEveryFrame(bool on);
 // [gta-recomp] Native frame (GSHwOptions::nativeFrame): the size the picture's own targets are drawn at - the window's
 // letterboxed area for 3D frames' aspect. 0 = the integer scale. Any thread.
 void gsHwSetFrameSize(uint32_t width, uint32_t height);

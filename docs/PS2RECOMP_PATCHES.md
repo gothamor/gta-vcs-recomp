@@ -211,3 +211,4 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp` | Linux creation time through `statx` (birth time, else mtime) | Card directory order for new entries (game-internals.md 10c) |
 | `ps2xRuntime/src/lib/gs/gs_hw.cpp` | `render::gsShaders(m_dev.backend())` | DXBC or SPIR-V for the device's backend |
 | `ps2xRuntime/src/lib/gs/gs_hw.cpp`, `gs/ps2_gs_memory.cpp`, `ps2_render_worker.cpp`, `vu/ps2_vu_code_log.cpp` | `<cmath>` / `<cstdlib>` / `<cstring>` / `<iterator>` included | libstdc++ doesn't bring them in transitively as MSVC's STL does (Linux) |
+| `ps2xRuntime/src/lib/gs/gs_hw.cpp`, `include/runtime/gs/gs_hw.h` | `gsHwSetShowEveryFrame`: with frame-rate independent timing one frame queued and one rendered + shown per host frame (`PS2X_HW_QUEUE`, `PS2X_HW_BATCH_MAX` override) | A GPU-bound machine rendered three frames per shown one (84 rendered, 30 shown on the HD 520; now 76 shown) - PERFORMANCE.md 17 |
