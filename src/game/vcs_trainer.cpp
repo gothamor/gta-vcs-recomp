@@ -1392,6 +1392,8 @@ namespace vcs::trainer
                 g_finale = {true};
             code.op(LOAD_AND_LAUNCH_MISSION_INTERNAL).i(index);
             notice = "Mission: " + name;
+            if (g_toggles[FreeCamera].exchange(false)) // the mission's start is to be watched, not flown past
+                notice += " (free camera off)";
             return true;
         });
     }

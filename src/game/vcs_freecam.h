@@ -3,9 +3,10 @@
 //
 // CCamera::Process (FUN_00378dd8) runs the active camera's update, CCam::Process (FUN_00294540), then
 // FUN_002a2ed0 (its height routines) on it, and builds the frame's camera - matrix, frustum, culling, streaming - from
-// what that CCam left in its source / front / up / FOV (game-internals.md 12b). While the free camera flies both are
-// replaced for the active CCam: the free camera writes those fields itself and returns. Off, they run as before;
-// VCS_FREECAM=0 does not hook them at all (the reference).
+// what that CCam left in its source / front / up / FOV (game-internals.md 12b). While the free camera flies the game's
+// update still runs (a cutscene ends only when its camera has played its path: replacing the update hung missions on
+// "Loading...", 2026-10-30), and the height routines are replaced for the active CCam: the free camera writes those
+// fields there and returns. Off, it runs as before; VCS_FREECAM=0 does not hook it at all (the reference).
 #pragma once
 
 class PS2Runtime;

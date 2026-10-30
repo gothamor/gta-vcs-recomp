@@ -1773,11 +1773,18 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   (`jr` at 0x2949E8); mode 4's case calls FUN_0029dab0. After them CCamera::Process builds the frame's camera from
   the CCam's **+0x20 Source**, **+0x10 Front**, **+0x60 Up** and **+0x134 FOV** (and +0x1A0, the target point, when
   `TheCamera + 0x890` is set: front = target - source), blending with the previous camera while `TheCamera + 0x8D0`
-  (a byte) marks a transition. Writing those four in place of CCam::Process moves everything with it: TheCamera +0x30,
+  (a byte) marks a transition. Writing those four after CCam::Process (in place of FUN_002A2ED0) moves everything: TheCamera +0x30,
   the frustum planes, culling, LODs and the world streaming (the city streamed in at full detail 640 m from the
   player), the sound listener. Found by tracing the call (generated code), reading the decompile for the fields the
   matrix is built from, then the free camera: its position appeared at TheCamera +0x30 / +0x90 / +0x250 / +0x810 /
   +0x960 / +0xA50 the next frame.
+- **A cutscene waits on its camera** (2026-10-30): Soldier (JER_A1) launched with the free camera replacing
+  CCam::Process sat on "Loading..." for good - the mission script at `0x22F8E` (main script: the cutscene's wait,
+  inside 0x22F5E..0x22F97) and the camera in mode 17 at 240 s, where the same launch without it left the cutscene
+  ~175 s in (mode 15 for its first ~35 s, then 17; on foot, mode 4, at ~190 s). With the update left running and the
+  free camera written after it, the cutscene ends on time. So the cutscene's end is driven by the camera's own update
+  (as in VC, where CCutsceneMgr::HasCutsceneFinished asks TheCamera for its position along the cutscene's spline).
+  Found by comparing the two runs' active scripts and camera mode every 5 s.
 - Teleported to (575, 175) the camera ends up at its lowest pitch (-1.483, straight down) - the game's own doing (the
   same with `VCS_INPUT_MAP=0`).
 

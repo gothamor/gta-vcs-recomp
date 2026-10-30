@@ -154,6 +154,26 @@ class Check:
                 "camera %s" % cam)
         self.t("camspeed 20")
 
+    def cutscene_under_free_camera(self):
+        """Soldier's opening cutscene played out under the free camera (turned on once it runs: the launch turns it off).
+        A cutscene ends only when its camera has played its path: the free camera once replaced the camera's update and
+        the mission sat on "Loading..." for good (2026-10-30). Normally on foot in the mission ~190 s after the launch."""
+        g = self.g
+        story = [e for e in self.t("list story").split(";") if ":" in e]
+        soldier = int(story[0].split(":")[0])
+        self.t("mission %d" % soldier)
+        time.sleep(45.0)  # into the cutscene proper (camera mode 17)
+        self.t("toggle freecam 1")
+        start, mode = time.time(), 0
+        while time.time() - start < 240:
+            time.sleep(5.0)
+            mode = g.u32(CAMERA + 0x70) & 0xFFFF
+            if mode == 4 and g.u32(CAMERA + 0x888) == 1:  # the follow camera on foot: the mission has begun
+                break
+        self.shot("freecam_after_cutscene")
+        self.t("toggle freecam 0")
+        self.ok("cutscene ends under the free camera", mode == 4, "camera mode %d, %.0f s after turning it on" % (mode, time.time() - start))
+
     def run(self, vehicles, only_freecam=False):
         g = self.g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="trainer_check",
                                     port=self.port, data_dir=os.path.join(ROOT, "build", "trainer", "data"),
@@ -163,6 +183,7 @@ class Check:
             g.prime()
             if only_freecam:
                 self.free_camera()
+                self.cutscene_under_free_camera()
                 return self.summary()
             g.teleport(75.0, 175.0, -100.0)
             time.sleep(2)
@@ -385,11 +406,14 @@ class Check:
             g.teleport(75.0, 175.0, -100.0)
             time.sleep(2.0)
             taxi = next(i for i, n in jobs.items() if n == "Taxi")
+            self.t("toggle freecam 1")  # a launch turns the free camera off (the mission's start is to be watched)
             said = self.t("mission %d" % taxi)
             time.sleep(3.0)
             model = struct.unpack("<H", g.peek(self.car() + 0x56, 2))[0] if self.driving() else -1
             self.shot("mission_taxi")
-            self.ok("side job in its vehicle", "mission=1" in self.t("state") and model == 226, "%s; model %d" % (said, model))
+            state = self.t("state")
+            self.ok("side job in its vehicle", "mission=1" in state and model == 226, "%s; model %d" % (said, model))
+            self.ok("mission launch ends the free camera", "freecam=0" in state and g.u32(CAMERA_TARGET) == self.car(), said)
             said = self.t("mission %d" % int(story[1].split(":")[0]))
             self.ok("no second mission", "A mission is running" in said, said)
         finally:

@@ -531,12 +531,18 @@ accelerate / brake / handbrake while driving.
 
 The user asked for a free-cam mode in the trainer, and chose: the world keeps running while it flies (the player
 stands), Hide HUD as a switch of its own, on / off from a trainer row and a hotkey (F6, gamepad Back + LB).
-- **The camera update replaced, not a script camera.** GTA trainers usually move a script camera
+- **The camera written after the game's update, not a script camera.** GTA trainers usually move a script camera
   (SET_FIXED_CAMERA_POSITION + POINT_CAMERA_AT_POINT) every frame. Here that would be a script per frame through the
-  trainer's queue, a frame late, and only between frames. Instead the active CCam's update (CCam::Process,
-  FUN_00294540) is replaced while flying and the free camera writes its source / front / up / FOV (game-internals.md
-  12b); CCamera::Process does the rest, so culling, LODs and streaming follow with no extra work. A replacement, not
-  code after the original returns (AGENTS.md rule 2); `VCS_FREECAM=0` keeps the game's code untouched.
+  trainer's queue, a frame late, and only between frames. Instead the free camera writes the active CCam's source /
+  front / up / FOV right after the game's own update of it (in place of the height routine CCamera::Process calls
+  next, FUN_002A2ED0; game-internals.md 12b); CCamera::Process does the rest, so culling, LODs and streaming follow
+  with no extra work. A hook of the next call, not code after the original returns (AGENTS.md rule 2);
+  `VCS_FREECAM=0` keeps the game's code untouched.
+- **The game's update keeps running** (changed the same day): the first version replaced CCam::Process while flying,
+  and a mission launched under it hung on "Loading..." (the user's report) - its cutscene ends only when the cutscene
+  camera has played its path, which that update advances. Running it and overwriting afterwards fixes every cutscene,
+  wherever the mission was started. Launching a mission from the trainer also turns the free camera off (the user
+  was fine with that as the fix): one starts a mission to watch it.
 - **Real time**: the camera moves by the host clock, so its speed is the same at 30 / 60 / 144 fps and under the
   trainer's Game speed (slow-motion shots fly normally).
 - **Fixed keys** for flying (W / A / S / D, E / Q, mouse; the gamepad's sticks and triggers): the game gets none of the

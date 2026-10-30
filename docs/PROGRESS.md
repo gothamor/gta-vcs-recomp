@@ -624,10 +624,13 @@ dropped on uploads (lazy render-target patching).
   Mission launcher added the same day: 59 story missions by title, five side jobs (in their vehicle); 33 checks, 0
   failed.
 - **Free camera and Hide HUD** in the trainer (2026-10-30, docs/TRAINER.md "Camera", F6 / Back + LB): the active
-  CCam's update replaced while flying (game-internals.md 12b), real-time speed (20 m/s: 50.7 m in 2.5 s at 30 fps,
+  CCam written after the game's update of it (game-internals.md 12b), real-time speed (20 m/s: 50.7 m in 2.5 s at 30 fps,
   40.3 m in 2 s at 60 fps), the world streamed in 640 m from the player, works driving and in cutscenes, "Teleport
   player here"; Hide HUD skips CHud::Draw. `VCS_FREECAM=0`: the game's camera untouched (checked). `trainer_check.py`
   40 checks (the one failure the check's own flight path, fixed); `--freecam`: 7 checks, 0 failed.
+  Same day: a mission launched under it hung on "Loading..." (the first version replaced the camera's update, which
+  drives a cutscene's end); fixed, and a launch turns it off. `--freecam` 8 checks (Soldier's cutscene played out
+  under it), 0 failed; the full check 41, 0 failed.
 
 ## Useful switches
 | Env var | Effect |

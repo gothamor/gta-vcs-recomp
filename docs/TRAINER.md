@@ -90,10 +90,13 @@ The switches are not saved: every start is the original game (DECISIONS.md 2026-
   its end), so they run only when the ped's state is 0x37 (driving) and its vehicle pointer is set. The handle comes
   from `STORE_CAR_CHAR_IS_IN_NO_SAVE` (0x024B): `STORE_CAR_CHAR_IS_IN` (0x007B) answers -1 for a car made by
   `CREATE_CAR`.
-- **The free camera** (`src/game/vcs_freecam.cpp`) replaces the game's per-camera update, CCam::Process
-  (FUN_00294540), and the height routine after it for the active camera while it flies: it writes the camera's
-  source, front, up and FOV itself (game-internals.md 12b), and CCamera::Process builds the frame from them as from
-  any camera - so culling, LODs and the world's streaming follow it. No script runs per frame. The pad reads give the
+- **The free camera** (`src/game/vcs_freecam.cpp`) lets the game's per-camera update, CCam::Process (FUN_00294540),
+  run as usual and takes the place of the height routine right after it for the active camera while it flies: there
+  it writes the camera's source, front, up and FOV (game-internals.md 12b), and CCamera::Process builds the frame from
+  them as from any camera - so culling, LODs and the world's streaming follow it. The game's update has to keep
+  running: a cutscene ends only when its camera has played its path. The first version replaced CCam::Process itself,
+  and a mission started under the free camera sat on "Loading..." for good, its script waiting in the cutscene
+  (the user's report, 2026-10-30; game-internals.md 12b). No script runs per frame. The pad reads give the
   game a pad left alone meanwhile (`src/game/vcs_input.cpp`) and the mouse is left for the camera; the trainer menu
   open, the camera holds still. `VCS_FREECAM=0` leaves the game's camera code alone (the switch does nothing).
 - **Missions** are listed from MAIN.SCM, read from the disc at start (`vcs::trainer::setMissionScript`): each
@@ -122,8 +125,8 @@ The switches are not saved: every start is the original game (DECISIONS.md 2026-
 - Boats and planes appear where the player stands, on land too; helicopters and the Airliner can be flown.
 - The developer performance overlay (F3) and the trainer share the top left corner.
 - While the free camera flies the game gets no input at all: no pause menu (Enter) until it ends. A vehicle the player
-  drives rolls on and slows down by itself. It works in cutscenes (the cutscene goes on; when the free camera ends the
-  cutscene's camera carries on) and ends by itself when the game leaves play (Load Game, the title screen).
+  drives rolls on and slows down by itself. It works in cutscenes (the cutscene plays out behind it, the game's camera
+  carries on when it ends). Starting a mission from the trainer turns it off, so the mission's start is seen and ends by itself when the game leaves play (Load Game, the title screen).
 - The free camera's keys are fixed (not on the Keyboard page); only its on / off key is (Keyboard > Menus).
 
 ## The check
@@ -140,7 +143,8 @@ mission lists, a side job launched on foot (he ends up in its vehicle, the job r
 2026-10-26: 30 checks, 0 failed (all 110 vehicles); with missions 33 checks, 0 failed. 2026-10-28 (camera check
 added): 33 checks, 0 failed (12 vehicles). 2026-10-30 (free camera added): 40 checks; the one failure was the check's own
 flight path (tilted down first, it flew 274 m under the map); fixed, `--freecam` (only the free camera's checks): 7
-checks, 0 failed.
+checks, 0 failed. After the "Loading..." fix (a mission launch turns the free camera off; `--freecam` also plays
+Soldier's opening cutscene out under it, ~4 min): 41 checks, 0 failed; `--freecam` 8 checks, 0 failed.
 
 `python tools/finale_check.py [OUT] [--story] [--full]` (~5 min, `--full` ~15): Last Stand launched from the trainer,
 skipped to its roof, the fight won, then the final cutscene, the mission's end and the credits - started by the trainer,

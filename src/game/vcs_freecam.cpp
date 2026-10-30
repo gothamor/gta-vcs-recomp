@@ -25,14 +25,14 @@ namespace vcs::freecam
         constexpr uint32_t kActiveCam = kTheCamera + 0x50u; // byte: which of Cams[3] is active
         constexpr uint32_t kCams = kTheCamera + 0x70u, kCamSize = 0x270u;
         constexpr uint32_t kCamFront = 0x10u, kCamSource = 0x20u, kCamUp = 0x60u, kCamFov = 0x134u, kCamTarget = 0x1A0u;
-        constexpr uint32_t kCamProcess = 0x00294540u;        // CCam::Process(cam)
-        constexpr uint32_t kCamHeightRoutines = 0x002A2ED0u; // CCam::ProcessSpecialHeightRoutines(cam), right after it
+        constexpr uint32_t kCamHeightRoutines = 0x002A2ED0u; // CCam::ProcessSpecialHeightRoutines(cam), right after
+                                                             // CCam::Process (FUN_00294540)
 
         constexpr float kTurnRate = 2.5f;   // radians a second, the stick at full tilt (the game's own top speed)
         constexpr float kZoomRate = 40.0f;  // degrees a second
         constexpr float kPitchLimit = 1.55f;
 
-        PS2Runtime::RecompiledFunction g_origProcess = nullptr, g_origHeight = nullptr;
+        PS2Runtime::RecompiledFunction g_origHeight = nullptr;
         std::atomic<bool> g_installed{false};
 
         // game thread
@@ -118,32 +118,24 @@ namespace vcs::freecam
             g_pose = {true, g_x, g_y, g_z, g_yaw, g_pitch, g_fov};
         }
 
-        // CCam::Process(cam a0): replaced while flying (the free camera is the update), else the game's.
-        PS2_GUEST_CC void camProcess(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        // CCam::ProcessSpecialHeightRoutines(cam a0), which CCamera::Process calls right after the active CCam's update:
+        // while flying, the free camera takes the CCam's place here (the game's update has run - a cutscene finishes
+        // only when its camera has played its path) and the height routine, which lifts the follow camera over peds
+        // near the player, is skipped.
+        PS2_GUEST_CC void camHeight(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t cam = GPR_U32(ctx, 4);
-            if (!flying() || !activeCam(rdram, cam))
+            if (!activeCam(rdram, cam))
+                return g_origHeight(rdram, ctx, runtime);
+            if (!flying())
             {
-                if (activeCam(rdram, cam))
-                    end();
-                return g_origProcess(rdram, ctx, runtime);
+                end();
+                return g_origHeight(rdram, ctx, runtime);
             }
             if (!g_flying)
                 begin(rdram, cam);
             update(rdram, cam);
             ctx->pc = GPR_U32(ctx, 31);
-        }
-
-        // CCam::ProcessSpecialHeightRoutines(cam a0): raises the follow camera over peds near the player - nothing to do
-        // for the free camera.
-        PS2_GUEST_CC void camHeight(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-        {
-            if (g_flying && activeCam(rdram, GPR_U32(ctx, 4)))
-            {
-                ctx->pc = GPR_U32(ctx, 31);
-                return;
-            }
-            g_origHeight(rdram, ctx, runtime);
         }
     }
 
@@ -151,11 +143,9 @@ namespace vcs::freecam
     {
         if (const char *e = std::getenv("VCS_FREECAM"); e && e[0] == '0')
             return;
-        g_origProcess = runtime.lookupFunction(kCamProcess);
         g_origHeight = runtime.lookupFunction(kCamHeightRoutines);
-        if (!g_origProcess || !g_origHeight)
+        if (!g_origHeight)
             return;
-        runtime.replaceFunction(kCamProcess, &camProcess);
         runtime.replaceFunction(kCamHeightRoutines, &camHeight);
         g_installed = true;
     }
