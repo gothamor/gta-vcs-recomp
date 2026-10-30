@@ -17,8 +17,9 @@ recompiles the whole game (~6-10 min). The last line of each build says which on
 Progress: every build step shows `[build] <target> done/total %, elapsed, ~time left` (Ninja's step count; redrawn in
 place on a terminal, a line per 5% / minute otherwise); CMake configure and the recompiler show their elapsed time.
 
-PGO training: an instrumented build in build/pgo-gen plays tools/bench.py (city spots, an AI drive) and the
-reference scenes' boot / flyover / cutscene (tools/scenes.py); the profiles go to build/pgo/vcs.profdata. A profile
+PGO training: an instrumented build in build/pgo-gen plays tools/bench.py (city spots, an AI drive: from the rig's Fort
+Baxter card copy, or a new game when there is none) and the reference scenes' boot / flyover / cutscene
+(tools/scenes.py); the profiles go to build/pgo/vcs.profdata. A profile
 from older code still works: the functions that changed are optimised as without one.
 
 ISO defaults to VCS_ISO, iso=... in vcs.ini, or a '*Vice City Stories*.iso' in the repository root.

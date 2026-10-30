@@ -156,6 +156,29 @@ class Game:
                 time.sleep(1.0)
         raise RuntimeError("not in game after %.0f s" % timeout)
 
+    def new_game(self, timeout=180.0, settle=4.0):
+        """From an empty card (start(save=None)): the game boots into a new game - the intro cutscene, then the first
+        mission at Fort Baxter. Cross (Shift) every few seconds skips the title flyover and the cutscene until the
+        player is outdoors (area 0) and frames advance; then `settle` s more. A mission is running then (unlike
+        wait_ingame's save): fine for measuring and profile training, which need no save (tools/bench.py)."""
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if not self.alive():
+                raise RuntimeError("the game exited while booting")
+            try:
+                if self.area() == 0:
+                    f0 = int(self.cmd("frames"))
+                    time.sleep(1.0)
+                    if int(self.cmd("frames")) > f0 + 10:
+                        time.sleep(settle)
+                        return
+                elif time.time() - t0 > 8.0:
+                    gamectl.send("press Shift", port=self.port)
+            except Exception:
+                pass
+            time.sleep(4.0)
+        raise RuntimeError("not in game after %.0f s" % timeout)
+
     # Outside the Fort Baxter barracks door (where the game itself puts the player when leaving that interior).
     BARRACKS_DOOR = (-1648.87, -261.0)
 

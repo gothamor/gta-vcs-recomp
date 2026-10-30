@@ -3,7 +3,7 @@
 
     python tools/bench.py [OUT] [--fps 60] [--name bench] [ENV=VAL ...]
 
-From a copy of build/rig/saves/fortbaxter: noon, sunny, invincible; outside the barracks door, then teleports to the
+From a copy of build/rig/saves/fortbaxter (or a new game from an empty card when there is none): noon, sunny, invincible; outside the barracks door, then teleports to the
 busiest standing spots of the world tour (tools/tour.py: most game time / draws), each settled for a few seconds and
 measured over ~8 s (4 perf readings); last an AI-driven car (rig autodrive) from the first city spot - the route is
 the AI's, so that one varies more between runs. Prints a table (game fps, game / worker / GS stage / render ms, draws) and writes
@@ -53,15 +53,25 @@ def measure(g, readings=4, gap=2.0):
 def run(out, fps, name, extra_env, settle=6.0):
     env = {"VCS_ASPECT": "43", "VCS_FPS": str(fps)}
     env.update(extra_env)
-    g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name=name, port=47660,
+    # the Fort Baxter card copy when there is one; a new game from an empty card otherwise (a machine without the rig's
+    # saves: the first mission runs meanwhile, the spots and the drive are the same)
+    save = os.path.join(ROOT, "build", "rig", "saves", "fortbaxter")
+    have_save = os.path.isdir(os.path.join(save, "mc0"))
+    if not have_save:
+        print("[bench] no %s: starting a new game instead" % os.path.relpath(save, ROOT))
+    g = rig.Game.start(save=save if have_save else None, name=name, port=47660,
                        data_dir=os.path.join(ROOT, "build", "bench", "data_" + name), env=env)
     results = {}
     try:
-        g.wait_ingame()
+        if have_save:
+            g.wait_ingame()
+        else:
+            g.new_game()
         g.set_time(12)
         g.weather(0)
         g.invincible()
-        g.prime()
+        if have_save:
+            g.prime()
         time.sleep(settle)
         results["fortbaxter"] = measure(g)
         for spot, x, y, heading in SPOTS:
