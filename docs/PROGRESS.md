@@ -803,7 +803,9 @@ HLE / VU0, scenes against the Windows reference, the rig).
 | `PS2X_D3D_DEBUG=1` | D3D11 debug layer (needs Windows' Graphics Tools feature) |
 | `VCS_RHI=d3d11\|vulkan\|null` | the renderer for one run (Graphics > Graphics API when the build has two; docs/LINUX.md) |
 | `PS2X_RHI_DEBUG=1` | the API's validation layer: D3D11 debug layer / Vulkan's Khronos validation |
-| `PS2X_RHI_STATS=1` | Vulkan: draws, passes, suspended passes, barriers, uploads per frame every 5 s |
+| `PS2X_RHI_STATS=1` | Vulkan: draws, descriptor writes, passes, suspended passes, barriers, uploads, CPU waits per frame every 5 s |
+| `PS2X_RHI_GPU_TIME=1` | Vulkan: GPU time of the passes and the whole frame (`PS2X_GPU_TIMING=1`: per draw, breaking passes) |
+| `PS2X_RHI_FULL_BARRIERS=1` | Vulkan: whole-pipeline barriers, as before the layout-based ones |
 | `VCS_VK_DEVICE=<n or name>` | Vulkan: which GPU |
 | `PS2X_HLE=0` | draw the world through the VU1 program instead of natively (src/game/vcs_hle_world.cpp) |
 | `PS2X_HLE_VERIFY=1` | compare the C++ world pipeline with the VU1's output (bit-exact expected) |

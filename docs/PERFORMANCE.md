@@ -361,12 +361,35 @@ internal resolution, a 960x672 window, the title flyover and intro cutscene from
 | ThinLTO (`--opt lto`, 14 m 49 s, largest process 1.3 GB) | original (30 cap) | **30.0 locked** | 43-51 | 16-20 | - |
 | ThinLTO | frame-rate independent, uncapped | 28-51 | 12-17 | 12-13 | 20-47 |
 
-Locked 30 on this machine meets the roadmap's modest-hardware bar for 30 fps. Uncapped, it is the GPU: the Linux
+Locked 30 on this machine meets the roadmap's modest-hardware bar for 30 fps. Uncapped (first look), it is the GPU: the Linux
 profiler (`VCS_PROFILE_THREAD=MainThread`) puts the main thread 49% in `ioctl` (the i915 driver waiting for the GPU)
 and 30% in Mesa's Vulkan driver itself. Next for Vulkan, by that profile: push descriptors only for the bindings that
 changed (all 20 go with every changed draw now), barriers narrower than ALL_COMMANDS, and the textures gs_hw makes and
 drops each frame (`mmap` / `munmap` show up) kept for reuse. GPU timing per pass (`PS2X_GPU_TIMING`, D3D11 only so far)
 would say which passes the HD 520 spends its time on.
+
+**Vulkan work, measured** (same machine, the same 75 s flyover + intro, frame-rate independent timing, window visible,
+no control channel - `tools/run.py` with `PS2X_PERF_LOG`; averages of the [perf] windows from 20 to 70 s):
+- The first look above was skewed: the control channel turns on the brightness probe (`frameLuma`), a synchronous
+  readback - a full GPU wait - every frame. Players never run it; test runs always do. Without it, uncapped: game 84 fps,
+  host 29.5 fps, the main thread waiting 16 ms a frame on the GPU fence: **GPU bound**, 33.8 ms of GPU per shown frame,
+  which carries three game frames' rendering (~11 ms each; bloom and trails ~2.4 ms each of those).
+- **At a 60 fps cap the HD 520 holds 60**: game 59.7 fps, p95 17.0 ms, host 59.9 fps, GPU 12.8-13.0 ms a frame.
+- GPU timing for Vulkan (timestamps): `PS2X_GPU_TIMING=1` as on D3D11 (gs_hw then breaks the pass around every draw,
+  which on Vulkan costs a pass and two barriers per draw - use it for per-draw shares only), and `PS2X_RHI_GPU_TIME=1`:
+  the passes as they are and the whole frame. `PS2X_RHI_STATS` now gives the CPU's waits (fence, acquire, submit,
+  present) and the descriptor writes.
+- Barriers from the image layouts (stages and accesses of what used / will use it) instead of ALL_COMMANDS / MEMORY:
+  GPU 33.8 -> 33.2 ms uncapped - small; kept (`PS2X_RHI_FULL_BARRIERS=1` = before). Synchronization validation
+  (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` with `PS2X_RHI_DEBUG=1`) is clean; it caught the swapchain image's
+  transitions, which must chain to the acquire / present semaphores at COLOR_ATTACHMENT_OUTPUT.
+- Push descriptors: only the slots that changed since the command buffer's last push: 14,499 -> 1,683 descriptor writes
+  a frame at 60; main thread 6.1 -> 5.5 ms a frame (GPU unchanged).
+- `spirv-opt -O` over the SPIR-V (the GS pixel shader 46.6 -> 39.5 KB): GPU 12.44 / 13.11 ms against 12.77 / 12.97 - noise;
+  Mesa optimises the same. Not kept.
+- At 60 the main thread now sleeps 69% of the time (frame pacing), 11% in Mesa's driver. Large textures are made ~24 times
+  a minute (no churn). What is left is GPU time in the GS emulation's passes (bloom, trails, the world's draws through the
+  GS pixel shader) - the renderer's work, the same on D3D11, not the backend's.
 
 ## Next
 

@@ -66,8 +66,12 @@ build (FetchContent), so no Vulkan SDK is needed.
   SuspendThread), including `VCS_PROFILE_THREAD`, `VCS_PROFILE_SPIKES` and `VCS_PROFILE_GUEST_FILE`.
   `VCS_PROFILE_CALLERS` and `VCS_PROFILE_LINES` are Windows only: `perf record -g build/vcs <iso>` covers them.
 - **Vulkan**: `PS2X_RHI_DEBUG=1` turns on the Khronos validation layer and prints its messages as `[rhi] vulkan`.
-  `PS2X_RHI_STATS=1` prints draws, passes, suspended passes, barriers and upload volume per frame every 5 s.
-  `PS2X_GPU_TIMING` (GPU time per marker) is D3D11 only so far.
+  `VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` adds the synchronization checks. `PS2X_RHI_STATS=1` prints draws,
+  descriptor writes, passes, suspended passes, barriers, upload volume and the CPU's waits (fence, acquire, submit,
+  present) per frame every 5 s. `PS2X_GPU_TIMING=1` gives GPU time per marker as on D3D11 (gs_hw breaks the pass at
+  every draw for it); `PS2X_RHI_GPU_TIME=1` times the passes as they are and the whole frame.
+- **Benchmarks**: run without the control channel (`PS2X_PERF_LOG` gives the [perf] lines): the control channel turns
+  on the brightness probe, a full GPU wait every frame (PERFORMANCE.md 16).
 
 ## Differences from Windows, and why
 
@@ -95,6 +99,7 @@ build (FetchContent), so no Vulkan SDK is needed.
 | Sampling profiler (SIGPROF) | works in the game (`VCS_PROFILE_THREAD=MainThread`, PERFORMANCE.md 16) |
 | Write watch: worth it? (measure the skip on Windows), then userfaultfd `WP_ASYNC` + `PAGEMAP_SCAN` (Linux 6.7+) | to do |
 | The scheduler's guest-thread switches (C++ throws) on Linux vs Windows: `bench.py` | to do |
-| GPU timing (`PS2X_GPU_TIMING`) for Vulkan: timestamp queries | to do |
+| GPU timing (`PS2X_GPU_TIMING`) for Vulkan: timestamp queries | done (and `PS2X_RHI_GPU_TIME`) |
+| Vulkan optimisation pass: layout-based barriers, incremental push descriptors; spirv-opt measured (no gain) | done: 60 fps locked at a 60 cap on the HD 520 (PERFORMANCE.md 16) |
 | The rig on Linux: regress, tour, saves, trainer, controls, shakedown, finale, soundcheck, soak, framerate audit | to do |
 | Performance on this laptop (i5 Skylake, HD 520: the "modest hardware" target) in PERFORMANCE.md | ThinLTO build: 30 fps locked (original timing); uncapped 28-51, GPU / driver bound (PERFORMANCE.md 16, with what to do next) |

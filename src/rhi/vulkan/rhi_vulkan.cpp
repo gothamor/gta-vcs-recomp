@@ -58,6 +58,10 @@ namespace rhi
         constexpr uint32_t kSamplerBinding = 32;
         constexpr VkDeviceSize kRingChunk = 8u << 20;
         constexpr VkDeviceSize kRingAlign = 256; // >= minUniformBufferOffsetAlignment everywhere
+        // who reads a buffer the RHI updates by a copy: vertex / index input, constants in both shader stages
+        constexpr VkPipelineStageFlags2 kBufferReaders = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                                                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        constexpr VkAccessFlags2 kBufferReads = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT;
 
         bool statsOn()
         {
@@ -439,6 +443,9 @@ namespace rhi
                 }
                 if (m_waitFence)
                     vkDestroyFence(d, m_waitFence, nullptr);
+                for (auto &slot : m_timer.slots)
+                    if (slot.pool)
+                        vkDestroyQueryPool(d, slot.pool, nullptr);
                 destroySwapchain();
                 if (m_surface)
                     vkDestroySurfaceKHR(m_core->instance, m_surface, nullptr);
@@ -692,8 +699,7 @@ namespace rhi
                     copyToBuffer(cmd, *b, data, desc.size);
                 else
                     vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
-                memoryBarrier(cmd, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                              VK_ACCESS_2_MEMORY_READ_BIT);
+                memoryBarrier(cmd, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, kBufferReaders, kBufferReads);
                 return b;
             }
 
@@ -716,11 +722,9 @@ namespace rhi
                     return;
                 }
                 outsideRendering();
-                memoryBarrier(m_cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                memoryBarrier(m_cmd, kBufferReaders, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 copyToBuffer(m_cmd, b, data, size);
-                memoryBarrier(m_cmd, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                              VK_ACCESS_2_MEMORY_READ_BIT);
+                memoryBarrier(m_cmd, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, kBufferReaders, kBufferReads);
             }
 
             std::unique_ptr<Sampler> createSampler(const SamplerDesc &desc) override
@@ -904,6 +908,8 @@ namespace rhi
                     vkCmdBeginDebugUtilsLabelEXT(m_cmd, &label);
                     ++m_markerDepth;
                 }
+                if (m_timer.on)
+                    m_timer.open.push_back({name ? name : "?", timestamp()});
             }
 
             void popMarker() override
@@ -912,6 +918,14 @@ namespace rhi
                 {
                     vkCmdEndDebugUtilsLabelEXT(m_cmd);
                     --m_markerDepth;
+                }
+                if (m_timer.on && !m_timer.open.empty())
+                {
+                    auto [name, begin] = std::move(m_timer.open.back());
+                    m_timer.open.pop_back();
+                    const uint32_t end = timestamp();
+                    if (begin != kNoQuery && end != kNoQuery)
+                        m_timer.slots[m_core->frame].spans.push_back({std::move(name), begin, end});
                 }
             }
 
@@ -941,6 +955,13 @@ namespace rhi
                 const bool show = m_imageIndex != kNoImage;
                 if (show)
                     swapBarrier(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                if (m_timer.on)
+                {
+                    const uint32_t end = timestamp();
+                    if (m_timer.frameBegin != kNoQuery && end != kNoQuery)
+                        m_timer.slots[m_core->frame].spans.push_back({"(frame)", m_timer.frameBegin, end});
+                    m_timer.open.clear(); // spans left open don't cross frames
+                }
                 VkSemaphore done = show ? m_renderDone[m_imageIndex] : VK_NULL_HANDLE;
                 submit(true, done);
                 if (show)
@@ -951,7 +972,9 @@ namespace rhi
                     pi.swapchainCount = 1;
                     pi.pSwapchains = &m_swapchain;
                     pi.pImageIndices = &m_imageIndex;
+                    const auto t0 = std::chrono::steady_clock::now();
                     const VkResult r = vkQueuePresentKHR(m_queue, &pi);
+                    m_stats.presentMs += msSince(t0);
                     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR)
                         m_swapchainDirty = true;
                     else if (r != VK_SUCCESS)
@@ -1173,7 +1196,14 @@ namespace rhi
                 qi.queueFamilyIndex = m_queueFamily;
                 qi.queueCount = 1;
                 qi.pQueuePriorities = &priority;
+                VkPhysicalDeviceVulkan12Features have12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+                VkPhysicalDeviceFeatures2 have{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+                have.pNext = &have12;
+                vkGetPhysicalDeviceFeatures2(m_core->physical, &have);
+                VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+                f12.hostQueryReset = have12.hostQueryReset; // GPU timing (PS2X_GPU_TIMING)
                 VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+                f13.pNext = &f12;
                 f13.dynamicRendering = VK_TRUE;
                 f13.synchronization2 = VK_TRUE;
                 f13.shaderDemoteToHelperInvocation = VK_TRUE;
@@ -1200,6 +1230,7 @@ namespace rhi
                 }
                 volkLoadDevice(m_core->device);
                 vkGetDeviceQueue(m_core->device, m_queueFamily, 0, &m_queue);
+                timerInit(f12.hostQueryReset == VK_TRUE);
 
                 VmaVulkanFunctions fns{};
                 fns.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
@@ -1463,8 +1494,10 @@ namespace rhi
                         if (!m_swapchain)
                             return false; // minimised
                     }
+                    const auto t0 = std::chrono::steady_clock::now();
                     const VkResult r = vkAcquireNextImageKHR(m_core->device, m_swapchain, UINT64_MAX, frame().acquired, VK_NULL_HANDLE,
                                                              &m_imageIndex);
+                    m_stats.acquireMs += msSince(t0);
                     if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)
                     {
                         m_waitAcquire = true;
@@ -1516,6 +1549,7 @@ namespace rhi
                 m_rendering = false;
                 // a new command buffer has no state: everything is set again at the next draw
                 m_boundPipeline = VK_NULL_HANDLE;
+                m_pushed.valid = false;
                 m_pipelineDirty = m_descriptorsDirty = m_buffersDirty = true;
                 m_viewportDirty = m_scissorDirty = m_blendDirty = true;
                 m_markerDepth = 0;
@@ -1534,10 +1568,14 @@ namespace rhi
                 FrameSlot &f = frame();
                 if (f.submitted)
                 {
+                    const auto t0 = std::chrono::steady_clock::now();
                     vkWaitForFences(m_core->device, 1, &f.fence, VK_TRUE, UINT64_MAX);
+                    m_stats.fenceMs += msSince(t0);
                     vkResetFences(m_core->device, 1, &f.fence);
                     f.submitted = false;
                 }
+                if (m_timer.on)
+                    collectTimes(m_core->frame);
                 m_core->collect(m_core->frame);
                 vkResetCommandPool(m_core->device, f.pool, 0);
                 f.used = 0;
@@ -1546,6 +1584,8 @@ namespace rhi
                 f.ring.current = 0;
                 ++m_frameSerial;
                 beginCommands();
+                if (m_timer.on)
+                    m_timer.frameBegin = timestamp();
             }
 
             // Ends the commands and submits them; `final`: the frame's last submit (its fence, the present's semaphore)
@@ -1558,8 +1598,8 @@ namespace rhi
                     vkCmdEndRendering(m_cmd);
                     m_rendering = false;
                 }
-                while (m_markerDepth > 0)
-                    popMarker();
+                for (; m_markerDepth > 0; --m_markerDepth) // debug labels end with their command buffer; GPU timer spans go on
+                    vkCmdEndDebugUtilsLabelEXT(m_cmd);
                 VkCommandBuffer cbs[2];
                 uint32_t n = 0;
                 if (m_init)
@@ -1570,7 +1610,7 @@ namespace rhi
                 vkEndCommandBuffer(m_cmd);
                 cbs[n++] = m_cmd;
                 VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-                const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; // the swap image's first use
                 VkSemaphore wait = frame().acquired;
                 if (m_waitAcquire)
                 {
@@ -1587,7 +1627,9 @@ namespace rhi
                     si.pSignalSemaphores = &signal;
                 }
                 VkFence fence = final ? frame().fence : VK_NULL_HANDLE;
+                const auto t0 = std::chrono::steady_clock::now();
                 const VkResult r = vkQueueSubmit(m_queue, 1, &si, fence);
+                m_stats.submitMs += msSince(t0);
                 if (r != VK_SUCCESS)
                     reportLost(r, "vkQueueSubmit");
                 else if (final)
@@ -1859,34 +1901,52 @@ namespace rhi
                 }
                 if (m_descriptorsDirty)
                 {
+                    // only the slots that differ from what this command buffer last pushed (push descriptors keep the
+                    // rest); a new command buffer pushes everything
                     VkDescriptorBufferInfo ubo[kUniformSlots];
                     VkDescriptorImageInfo images[kTextureSlots], samplers[kTextureSlots];
+                    VkWriteDescriptorSet writes[kUniformSlots + 2 * kTextureSlots];
+                    uint32_t n = 0;
+                    auto write = [&](uint32_t binding, VkDescriptorType type, const VkDescriptorBufferInfo *b, const VkDescriptorImageInfo *i) {
+                        VkWriteDescriptorSet &w = writes[n++];
+                        w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                        w.dstBinding = binding;
+                        w.descriptorCount = 1;
+                        w.descriptorType = type;
+                        w.pBufferInfo = b;
+                        w.pImageInfo = i;
+                    };
                     for (uint32_t i = 0; i < kUniformSlots; ++i)
                     {
                         VkBuf *b = m_uniforms[i] ? m_uniforms[i] : m_zeroBuffer.get();
                         ubo[i] = {uniformBuffers[i], uniformOffsets[i], std::max<VkDeviceSize>((b->desc().size + 15u) & ~VkDeviceSize(15), 16)};
+                        auto &was = m_pushed.ubo[i];
+                        if (!m_pushed.valid || was.buffer != ubo[i].buffer || was.offset != ubo[i].offset || was.range != ubo[i].range)
+                        {
+                            was = ubo[i];
+                            write(i, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &ubo[i], nullptr);
+                        }
                     }
                     for (uint32_t i = 0; i < kTextureSlots; ++i)
                     {
                         images[i] = {VK_NULL_HANDLE, sampled[i]->sampledView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                        if (!m_pushed.valid || m_pushed.view[i] != images[i].imageView)
+                        {
+                            m_pushed.view[i] = images[i].imageView;
+                            write(kTextureBinding + i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, nullptr, &images[i]);
+                        }
                         samplers[i] = {(m_samplers[i] ? m_samplers[i] : m_defaultSampler.get())->sampler, VK_NULL_HANDLE,
                                        VK_IMAGE_LAYOUT_UNDEFINED};
+                        if (!m_pushed.valid || m_pushed.sampler[i] != samplers[i].sampler)
+                        {
+                            m_pushed.sampler[i] = samplers[i].sampler;
+                            write(kSamplerBinding + i, VK_DESCRIPTOR_TYPE_SAMPLER, nullptr, &samplers[i]);
+                        }
                     }
-                    VkWriteDescriptorSet writes[3] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET},
-                                                      {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
-                    writes[0].dstBinding = 0;
-                    writes[0].descriptorCount = kUniformSlots;
-                    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                    writes[0].pBufferInfo = ubo;
-                    writes[1].dstBinding = kTextureBinding;
-                    writes[1].descriptorCount = kTextureSlots;
-                    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                    writes[1].pImageInfo = images;
-                    writes[2].dstBinding = kSamplerBinding;
-                    writes[2].descriptorCount = kTextureSlots;
-                    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                    writes[2].pImageInfo = samplers;
-                    vkCmdPushDescriptorSetKHR(m_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 3, writes);
+                    if (n)
+                        vkCmdPushDescriptorSetKHR(m_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, n, writes);
+                    m_pushed.valid = true;
+                    m_stats.descriptorWrites += n;
                     m_descriptorsDirty = false;
                 }
                 if (m_buffersDirty)
@@ -2063,14 +2123,74 @@ namespace rhi
             }
 
             // ---- barriers (whole-pipeline: correctness first) --------------------------------------------------------
+            // What uses an image in a layout: the stages and the accesses to wait for (`src`: the writes to make
+            // available) or to make wait (the reads and writes after). Narrow masks matter on Intel: ALL_COMMANDS /
+            // MEMORY flushed and invalidated every cache at each of ~175 barriers a frame (PERFORMANCE.md 16).
+            // PS2X_RHI_FULL_BARRIERS=1: the old whole-pipeline barriers.
+            static void layoutScope(VkImageLayout layout, bool src, VkPipelineStageFlags2 &stage, VkAccessFlags2 &access)
+            {
+                switch (layout)
+                {
+                case VK_IMAGE_LAYOUT_UNDEFINED:
+                    stage = VK_PIPELINE_STAGE_2_NONE;
+                    access = VK_ACCESS_2_NONE;
+                    return;
+                case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                    stage = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+                    access = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    return;
+                case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+                    stage = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+                    access = src ? VK_ACCESS_2_NONE : VK_ACCESS_2_TRANSFER_READ_BIT;
+                    return;
+                case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+                    stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    access = src ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+                                 : VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    return;
+                case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+                    stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                    access = src ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                                 : VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                    return;
+                case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: // sampled by pixel shaders only (rhi.h setTexture)
+                    stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                    access = src ? VK_ACCESS_2_NONE : VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    return;
+                default:
+                    stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                    access = src ? VK_ACCESS_2_MEMORY_WRITE_BIT : VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                    return;
+                }
+            }
+
+            // `swap`: a swapchain image - chained to the acquire / present semaphores at COLOR_ATTACHMENT_OUTPUT on both
+            // sides (the usual pattern; NONE there left the transitions unordered with them)
             void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect, uint32_t baseLevel, uint32_t levels,
-                              VkImageLayout from, VkImageLayout to)
+                              VkImageLayout from, VkImageLayout to, bool swap = false)
             {
                 VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-                b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-                b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-                b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                static const bool full = std::getenv("PS2X_RHI_FULL_BARRIERS") != nullptr;
+                if (swap)
+                {
+                    b.srcStageMask = b.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    b.srcAccessMask = from == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE;
+                    b.dstAccessMask = to == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                          ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+                                          : VK_ACCESS_2_NONE;
+                }
+                else if (full)
+                {
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                    b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                }
+                else
+                {
+                    layoutScope(from, true, b.srcStageMask, b.srcAccessMask);
+                    layoutScope(to, false, b.dstStageMask, b.dstAccessMask);
+                }
                 b.oldLayout = from;
                 b.newLayout = to;
                 b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -2102,7 +2222,7 @@ namespace rhi
                 if (m_imageIndex == kNoImage || m_swapLayouts[m_imageIndex] == to)
                     return;
                 outsideRendering();
-                imageBarrier(m_cmd, m_swapImages[m_imageIndex], VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, m_swapLayouts[m_imageIndex], to);
+                imageBarrier(m_cmd, m_swapImages[m_imageIndex], VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, m_swapLayouts[m_imageIndex], to, true);
                 m_swapLayouts[m_imageIndex] = to;
             }
 
@@ -2140,6 +2260,115 @@ namespace rhi
                 std::fprintf(stderr, "[rhi] %s: %s%s\n", what, vkResultName(r), r == VK_ERROR_DEVICE_LOST ? " (graphics device lost)" : "");
             }
 
+            static double msSince(std::chrono::steady_clock::time_point t0)
+            {
+                return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            }
+
+            // ---- PS2X_GPU_TIMING=1: GPU time between each pushMarker / popMarker pair (timestamps), summed per marker name
+            // and reported every 5 s as ms per frame, as rhi_d3d11.cpp does; "(frame)" is the whole frame ----------------
+            static constexpr uint32_t kNoQuery = ~0u;
+            static constexpr uint32_t kQueries = 16384; // per frame slot
+
+            void timerInit(bool hostReset)
+            {
+                // PS2X_RHI_GPU_TIME=1: the same, without gs_hw's marker (and pass break) around every draw - the passes as
+                // they are, and the whole frame
+                if (!std::getenv("PS2X_GPU_TIMING") && !std::getenv("PS2X_RHI_GPU_TIME"))
+                    return;
+                uint32_t count = 0;
+                vkGetPhysicalDeviceQueueFamilyProperties(m_core->physical, &count, nullptr);
+                std::vector<VkQueueFamilyProperties> families(count);
+                vkGetPhysicalDeviceQueueFamilyProperties(m_core->physical, &count, families.data());
+                VkPhysicalDeviceProperties props{};
+                vkGetPhysicalDeviceProperties(m_core->physical, &props);
+                if (!hostReset || m_queueFamily >= count || !families[m_queueFamily].timestampValidBits)
+                {
+                    std::fprintf(stderr, "[gpu-timing] this GPU / driver has no usable timestamps\n");
+                    return;
+                }
+                m_timer.periodNs = props.limits.timestampPeriod;
+                for (auto &slot : m_timer.slots)
+                {
+                    VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+                    qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+                    qi.queryCount = kQueries;
+                    if (vkCreateQueryPool(m_core->device, &qi, nullptr, &slot.pool) != VK_SUCCESS)
+                        return;
+                    vkResetQueryPool(m_core->device, slot.pool, 0, kQueries);
+                }
+                m_timer.on = true;
+            }
+
+            uint32_t timestamp()
+            {
+                auto &slot = m_timer.slots[m_core->frame];
+                if (!m_recording || slot.used >= kQueries)
+                    return kNoQuery;
+                const uint32_t q = slot.used++;
+                vkCmdWriteTimestamp2(m_cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.pool, q);
+                return q;
+            }
+
+            // a frame slot's results, after its fence
+            void collectTimes(uint32_t index)
+            {
+                auto &slot = m_timer.slots[index];
+                if (slot.used)
+                {
+                    std::vector<uint64_t> t(slot.used);
+                    if (vkGetQueryPoolResults(m_core->device, slot.pool, 0, slot.used, t.size() * sizeof(uint64_t), t.data(), sizeof(uint64_t),
+                                              VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+                    {
+                        ++m_timer.frames;
+                        for (const auto &sp : slot.spans)
+                            if (t[sp.end] >= t[sp.begin])
+                            {
+                                auto &total = m_timer.totals[sp.name];
+                                total.first += static_cast<double>(t[sp.end] - t[sp.begin]) * m_timer.periodNs / 1e6;
+                                ++total.second;
+                            }
+                    }
+                    vkResetQueryPool(m_core->device, slot.pool, 0, slot.used);
+                }
+                slot.used = 0;
+                slot.spans.clear();
+                if (!m_timer.frames || std::chrono::steady_clock::now() - m_timer.lastReport < std::chrono::seconds(5))
+                    return;
+                m_timer.lastReport = std::chrono::steady_clock::now();
+                std::vector<std::pair<std::string, std::pair<double, uint64_t>>> rows(m_timer.totals.begin(), m_timer.totals.end());
+                std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) { return a.second.first > b.second.first; });
+                std::fprintf(stderr, "[gpu-timing] %llu frames, GPU ms per frame by marker:\n", static_cast<unsigned long long>(m_timer.frames));
+                for (const auto &[name, total] : rows)
+                    std::fprintf(stderr, "[gpu-timing] %8.3f ms %8.1f spans  %s\n", total.first / m_timer.frames,
+                                 static_cast<double>(total.second) / m_timer.frames, name.c_str());
+                m_timer.totals.clear();
+                m_timer.frames = 0;
+            }
+
+            struct GpuTimer
+            {
+                struct Span
+                {
+                    std::string name;
+                    uint32_t begin, end;
+                };
+                struct Slot
+                {
+                    VkQueryPool pool = VK_NULL_HANDLE;
+                    uint32_t used = 0;
+                    std::vector<Span> spans;
+                };
+                bool on = false;
+                double periodNs = 1.0;
+                std::array<Slot, kFrames> slots;
+                std::vector<std::pair<std::string, uint32_t>> open;
+                uint32_t frameBegin = kNoQuery;
+                std::unordered_map<std::string, std::pair<double, uint64_t>> totals; // ms, spans
+                uint64_t frames = 0;
+                std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
+            } m_timer;
+
             // PS2X_RHI_STATS=1: per-frame counts every 5 s (suspended passes are the cost of copies inside a pass)
             void reportStats()
             {
@@ -2150,10 +2379,12 @@ namespace rhi
                     return;
                 const double f = static_cast<double>(std::max<uint64_t>(m_stats.frames, 1));
                 std::fprintf(stderr,
-                             "[rhi] vulkan per frame: %.0f draws, %.1f passes, %.1f suspended, %.1f barriers, %.1f waits, %.0f KB uploaded; "
-                             "%llu new pipelines (%.0f ms)\n",
-                             m_stats.draws / f, m_stats.passes / f, m_stats.suspends / f, m_stats.barriers / f, m_stats.waits / f,
-                             m_stats.uploaded / f / 1024.0, static_cast<unsigned long long>(m_stats.pipelines), m_stats.pipelineMs);
+                             "[rhi] vulkan per frame: %.0f draws, %.0f descriptor writes, %.1f passes, %.1f suspended, %.1f barriers, "
+                             "%.1f waits, %.0f KB uploaded; %llu new pipelines (%.0f ms); CPU ms waiting: fence %.2f, acquire %.2f, "
+                             "submit %.2f, present %.2f\n",
+                             m_stats.draws / f, m_stats.descriptorWrites / f, m_stats.passes / f, m_stats.suspends / f, m_stats.barriers / f,
+                             m_stats.waits / f, m_stats.uploaded / f / 1024.0, static_cast<unsigned long long>(m_stats.pipelines),
+                             m_stats.pipelineMs, m_stats.fenceMs / f, m_stats.acquireMs / f, m_stats.submitMs / f, m_stats.presentMs / f);
                 m_stats = {};
                 m_statsStart = now;
             }
@@ -2213,6 +2444,16 @@ namespace rhi
             VkRect2D m_scissor{};
             float m_blendConstant[4] = {0, 0, 0, 0};
             bool m_pipelineDirty = true, m_descriptorsDirty = true, m_buffersDirty = true;
+            // what the current command buffer's push descriptors hold (a destroyed object's handle may come back as a
+            // new one's: compared by value, so that case pushes again only when the value differs - and an equal
+            // handle is the same Vulkan object at that point)
+            struct
+            {
+                bool valid = false;
+                VkDescriptorBufferInfo ubo[kUniformSlots]{};
+                VkImageView view[kTextureSlots]{};
+                VkSampler sampler[kTextureSlots]{};
+            } m_pushed;
             bool m_viewportDirty = true, m_scissorDirty = true, m_blendDirty = true;
 
             // what unbound slots read
@@ -2224,7 +2465,8 @@ namespace rhi
             struct Stats
             {
                 uint64_t frames = 0, draws = 0, passes = 0, suspends = 0, barriers = 0, waits = 0, uploaded = 0, pipelines = 0;
-                double pipelineMs = 0.0;
+                uint64_t descriptorWrites = 0;
+                double pipelineMs = 0.0, fenceMs = 0.0, acquireMs = 0.0, submitMs = 0.0, presentMs = 0.0;
             } m_stats;
             std::chrono::steady_clock::time_point m_statsStart = std::chrono::steady_clock::now();
         };
