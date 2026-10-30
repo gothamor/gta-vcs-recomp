@@ -655,6 +655,27 @@ needs the packages `build.py --check-deps` lists, clang 20 among them):
 Not run in the game yet: first build, then the checks in docs/LINUX.md (generated code equal to Windows', bit-exact
 HLE / VU0, scenes against the Windows reference, the rig).
 
+## Milestone 9 - distribution: the launcher and releases (2026-10-30)
+
+The user's request: a launcher in releases that finds the game, builds and launches it (Windows first), with the
+Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; DECISIONS.md 2026-10-30 the choices.
+- [x] Tools: `@vcs {json}` events with failure codes (toolchain), `build.py --recompile-if-needed / --progress json /
+      --launcher`, `generated/recompile_stamp.json` + `recompile.py --check`, `build/build_info.json`, `doctor.py`,
+      `vcs_disc.py check`, `setup_vs.py`, `backup.py`, `report.py`, `rip_disc.py`, `deps.py`, `release.py`,
+      `update.py`; `find_iso` reads `build/vcs.ini` too (vcs.exe's); vcs.exe's exit codes per failure
+      (`src/disc/vcs_disc_id.h`, shared with the launcher).
+- [x] `launcher/`: VCSLauncher.exe (SDL3 + Dear ImGui, static, 4 MB): the four steps, the next-step button, tasks with
+      stages / progress / cancel / errors and fixes, play with the log, saves backup / restore, shortcut, report,
+      updates, options; command line `--check / --build / --play / --self-test / --screenshot`.
+- [x] Releases: `tools/release.py` (82 MB zip: source, launcher, embeddable Python, `deps/`, licences; the game-file
+      guard), offline configure from `deps/` (`FETCHCONTENT_FULLY_DISCONNECTED`, the FFmpeg URL - a `[gta-recomp]`
+      CMake change), CI workflow `.github/workflows/launcher.yml` (written, not run yet).
+- [x] Checked: from the release zip in an empty folder, the hidden launcher built the game from scratch (bundled Python,
+      no downloads) in 8 min 42 s, and `--play` started it (the intro movie, 0 dropped); update 0.1.0 -> 0.1.1 in place; backups round-trip on a card copy;
+      setup_vs.py dry runs and the Microsoft-signature check; a disc copy from an image file.
+- [ ] A PC with nothing installed (Windows Sandbox): setup_vs.py's real install. A real DVD drive. CI's first run and
+      the first tagged release. Code signing.
+
 ## Useful switches
 | Env var | Effect |
 |---|---|

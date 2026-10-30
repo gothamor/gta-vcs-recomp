@@ -19,8 +19,35 @@ import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BUILD = os.path.join(ROOT, "build")
+# The build folder: build/ in the repository, or one chosen elsewhere (another drive...) - VCS_BUILD_DIR for one run,
+# or kept in .vcs-build-dir (tools/build_dir.py, the launcher's Folder step). The built game, its vcs.ini, the CMake
+# trees and the logs live there; the source and generated/ stay here. The test tools keep their output in build/.
+DEFAULT_BUILD = os.path.join(ROOT, "build")
+BUILD_POINTER = os.path.join(ROOT, ".vcs-build-dir")
+
+
+def read_build_pointer():
+    try:
+        with open(BUILD_POINTER, encoding="utf-8") as f:
+            value = f.read().strip()
+        return os.path.abspath(value) if value else None
+    except OSError:
+        return None
+
+
+BUILD = os.path.abspath(os.environ.get("VCS_BUILD_DIR") or read_build_pointer() or DEFAULT_BUILD)
 BUILD_DIR = os.path.join(BUILD, "release")
+
+
+def show(path):
+    """A path for messages: relative to the repository when it is inside it, else absolute (the build folder can be on
+    another drive, where os.path.relpath fails)."""
+    path = os.path.abspath(path)
+    try:
+        rel = os.path.relpath(path, ROOT)
+    except ValueError:
+        return path
+    return path if rel.startswith("..") else rel
 IS_WINDOWS = platform.system() == "Windows"
 
 # our progress lines and the tools' output interleave in order even when stdout is a pipe
@@ -56,29 +83,123 @@ def tool(name):
     return os.path.join(ROOT, "tools", name)
 
 
-def fail(message):
+# ---- events for the launcher ------------------------------------------------------------------------------------
+# With --progress json (build.py) or VCS_PROGRESS=json the tools also print machine-readable lines, `@vcs {...}`, between
+# their usual output: the launcher (launcher/, docs/LAUNCHER.md) reads those and shows the rest as the log. One JSON
+# object per line: {"stage": id, "title": text}, {"progress": done, "total": n, "eta": s, "note": text},
+# {"error": code, "message": text, "log": path}, {"result": "ok", ...}. Child tools inherit the mode (environment).
+EVENT_PREFIX = "@vcs "
+
+
+def json_progress():
+    return os.environ.get("VCS_PROGRESS") == "json"
+
+
+def set_json_progress():
+    os.environ["VCS_PROGRESS"] = "json"
+
+
+def event(**fields):
+    if json_progress():
+        print(EVENT_PREFIX + json.dumps(fields), flush=True)
+
+
+def stage(stage_id, title):
+    """A new step of a long run, for the launcher (the tools print their own `[tag] ...` line for people)."""
+    event(stage=stage_id, title=title)
+
+
+def fail(message, code="error", log=None):
+    """Stops with `error: message`. `code` names the failure for the launcher (its table of messages and fixes)."""
+    event(error=code, message=message, log=show(log).replace(os.sep, "/") if log else None)
     sys.exit("error: " + message)
 
 
+def ini_value(path, key):
+    """`key=value` from an ini-style file (vcs.ini), None when absent."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                k, sep, value = line.partition("=")
+                if sep and k.strip().lower() == key and value.strip():
+                    return value.strip().strip('"')
+    except OSError:
+        pass
+    return None
+
+
+# vcs.ini next to vcs.exe (the player's settings and iso=), and the repository root's (older setups)
+GAME_INI = os.path.join(BUILD, "vcs.ini")
+ROOT_INI = os.path.join(ROOT, "vcs.ini")
+
+
 def find_iso(given=None):
-    """The disc image: `given`, VCS_ISO, iso=... in vcs.ini, or a '*Vice City Stories*.iso' in the repository root."""
+    """The disc image: `given`, VCS_ISO, iso=... in build/vcs.ini (the one vcs.exe reads) or the repository root's
+    vcs.ini, or a '*Vice City Stories*.iso' in the repository root."""
     if given:
         if not os.path.isfile(given):
-            fail("disc image not found: " + given)
+            fail("disc image not found: " + given, "disc_not_found")
         return os.path.abspath(given)
     if os.environ.get("VCS_ISO"):
         return find_iso(os.environ["VCS_ISO"])
-    ini = os.path.join(ROOT, "vcs.ini")
-    if os.path.isfile(ini):
-        with open(ini, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                key, _, value = line.partition("=")
-                if key.strip().lower() == "iso" and value.strip():
-                    return find_iso(value.strip().strip('"'))
+    for ini in (GAME_INI, ROOT_INI):
+        value = ini_value(ini, "iso")
+        if value:
+            return find_iso(value)
     found = sorted(glob.glob(os.path.join(ROOT, ISO_GLOB)))
     if found:
         return found[0]
-    fail("no disc image: pass your Vice City Stories (USA) .iso, set VCS_ISO, or put the .iso in the repository root")
+    fail("no disc image: pass your Vice City Stories (USA) .iso, set VCS_ISO, or put the .iso in the repository root",
+         "no_disc")
+
+
+# ---- the source's identity --------------------------------------------------------------------------------------
+def source_version():
+    """VERSION (a release's number) and the git commit when this is a clone: {"version": "0.1.0", "commit": "abc..."}
+    ("" for what isn't there). Read from the files, so it works without git installed."""
+    version = ""
+    try:
+        with open(os.path.join(ROOT, "VERSION"), encoding="utf-8") as f:
+            version = f.read().strip()
+    except OSError:
+        pass
+    return {"version": version, "commit": git_commit()}
+
+
+def git_commit():
+    git = os.path.join(ROOT, ".git")
+    if os.path.isfile(git):  # a worktree: "gitdir: <path>"
+        with open(git, encoding="utf-8") as f:
+            git = f.read().partition(":")[2].strip()
+    try:
+        with open(os.path.join(git, "HEAD"), encoding="utf-8") as f:
+            head = f.read().strip()
+    except OSError:
+        return ""
+    if not head.startswith("ref:"):
+        return head
+    ref = head[4:].strip()
+    common = git
+    try:  # a worktree keeps its refs in the main repository (commondir)
+        with open(os.path.join(git, "commondir"), encoding="utf-8") as f:
+            common = os.path.normpath(os.path.join(git, f.read().strip()))
+    except OSError:
+        pass
+    for base in (git, common):
+        try:
+            with open(os.path.join(base, ref), encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError:
+            pass
+        try:
+            with open(os.path.join(base, "packed-refs"), encoding="utf-8") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) == 2 and parts[1] == ref:
+                        return parts[0]
+        except OSError:
+            pass
+    return ""
 
 
 def test_window(env, visible=False):
@@ -90,6 +211,12 @@ def test_window(env, visible=False):
         return env
     env["PS2X_HIDDEN"] = "1"
     env.setdefault("PS2X_AUDIO", "1")
+    # the timing the regression baselines and checks were made with: original, 30 fps. Players' default is 60 with
+    # frame-rate independent timing (2026-10-30); a test that wants another sets VCS_TIMING / VCS_FPS itself, and one
+    # that tests the setting (controls_check: the presets) passes VCS_TIMING="" - set, so not pinned, and empty, so
+    # the game ignores it and the setting stays unlocked
+    env.setdefault("VCS_TIMING", "0")
+    env.setdefault("VCS_FPS", "30")
     return env
 
 
@@ -224,6 +351,17 @@ class Progress:
             if note is not None:
                 self.note = note
             self._draw()
+            self._event()
+
+    def _event(self):
+        """A progress event for the launcher, at most 4 a second (Ninja steps come by the hundred)."""
+        now = time.time()
+        if not json_progress() or (now - getattr(self, "_last_event", 0) < 0.25 and self.done < self.total):
+            return
+        self._last_event = now
+        elapsed = now - self.start
+        eta = int(elapsed * (self.total - self.done) / self.done) if 0 < self.done < self.total and elapsed > 10 else None
+        event(progress=self.done, total=self.total, eta=eta, note=self.note)
 
     def message(self, text):
         """A line printed above the status line (errors, link steps)."""
@@ -258,11 +396,11 @@ def _vs_root():
     vswhere = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Microsoft Visual Studio", "Installer",
                            "vswhere.exe")
     if not os.path.isfile(vswhere):
-        fail("vswhere.exe not found: install Visual Studio 2022 or newer with the C++ workload")
+        fail("vswhere.exe not found: install Visual Studio 2022 or newer with the C++ workload", "no_vs")
     out = subprocess.run([vswhere, "-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
                           "-property", "installationPath"], capture_output=True, text=True).stdout.strip()
     if not out:
-        fail("no Visual Studio with the C++ x64 toolset found")
+        fail("no Visual Studio with the C++ x64 toolset found", "no_cpp_tools")
     return out.splitlines()[0]
 
 
@@ -317,7 +455,7 @@ def build_env():
         # one string: CreateProcess passes it to cmd as written (cmd's own quoting rules, no list escaping)
         result = subprocess.run(f'cmd /s /c ""{vcvars}" >nul 2>nul && set"', capture_output=True, text=True)
         if result.returncode != 0:
-            fail("vcvars64.bat failed")
+            fail("vcvars64.bat failed", "vcvars_failed")
         loaded = {}
         for line in result.stdout.splitlines():
             key, sep, value = line.partition("=")
@@ -333,6 +471,12 @@ def build_env():
     env["PATH"] = os.pathsep.join(front + [env.get("PATH", "")] + [p for p in back if os.path.isdir(p)])
     if jdk:
         env["JAVA_HOME"] = jdk
+    clang = _which("clang-cl", env)
+    if not clang:
+        fail('clang-cl not found: in the Visual Studio Installer, Modify, tick "C++ Clang tools for Windows"', "no_clang")
+    if clang_version(clang) < MIN_CLANG:
+        fail("clang-cl %d or newer needed (found %d at %s): update Visual Studio (Visual Studio Installer, Update)"
+             % (MIN_CLANG, clang_version(clang), clang), "old_clang")
     return env
 
 
@@ -343,19 +487,79 @@ def _which(name, env):
 # ---- CMake ------------------------------------------------------------------------------------------------------
 def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
     """CMake configure of `build_dir` (first time, when forced, or with `defines`: {"PS2X_LTO": "THIN", ...})."""
+    force = drop_foreign_cache(build_dir, ROOT) or force
     if os.path.isfile(os.path.join(build_dir, "build.ninja")) and not force and not defines:
         return
     for name in ("cmake", "ninja"):
         if not _which(name, env):
-            fail(f"{name} not found on PATH")
+            fail(f'{name} not found on PATH (Visual Studio\'s "C++ CMake tools for Windows" bring both)', "no_cmake")
     cmd = ["cmake", "-S", ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
     cmd += ["-D%s=%s" % (k, v) for k, v in (defines or {}).items()]
-    cmd += compiler_defines(env)
-    print("[build] configuring " + os.path.relpath(build_dir, ROOT) + "".join(" %s=%s" % kv for kv in (defines or {}).items()))
+    cmd += compiler_defines(env) + deps_defines()
+    if os.path.normcase(os.path.abspath(build_dir)) == os.path.normcase(BUILD_DIR):
+        cmd.append("-DVCS_GAME_DIR=" + BUILD.replace(os.sep, "/"))  # vcs.exe at the top of the build folder
+    print("[build] configuring " + show(build_dir) + "".join(" %s=%s" % kv for kv in (defines or {}).items()))
+    stage("configure", "Configuring the build (CMake)")
     log = os.path.join(BUILD, "configure.log")
     if run_with_progress(cmd, log, "[build] configure", env=env) != 0:
         print(tail(log, 30))
-        fail("CMake configure failed (full log: build/configure.log)")
+        fail("CMake configure failed (full log: %s)" % show(log), configure_failure(log), log)
+
+
+def drop_foreign_cache(build_dir, source):
+    """A build tree configured from another copy of the source (a build folder reused - tools/build_dir.py - or a
+    moved source folder) makes CMake stop ("does not match the source used to generate cache"): its cache goes, and
+    the tree is set up again (Ninja then rebuilds what changed). True when that happened."""
+    cache = os.path.join(build_dir, "CMakeCache.txt")
+    home = None
+    try:
+        with open(cache, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("CMAKE_HOME_DIRECTORY:"):
+                    home = line.partition("=")[2].strip()
+                    break
+    except OSError:
+        return False
+    if not home or os.path.normcase(os.path.abspath(home)) == os.path.normcase(os.path.abspath(source)):
+        return False
+    print("[build] %s was set up from another source folder (%s): setting it up again" % (show(build_dir), home))
+    os.remove(cache)
+    shutil.rmtree(os.path.join(build_dir, "CMakeFiles"), ignore_errors=True)
+    return True
+
+
+DEPS_DIR = os.path.join(ROOT, "deps")
+
+
+def deps_defines(deps_dir=DEPS_DIR):
+    """A release carries the sources CMake would download (deps/, made by tools/deps.py): each folder there replaces
+    its FetchContent download (FETCHCONTENT_SOURCE_DIR_<NAME>), the FFmpeg archive its URL - no git, no internet.
+    Nothing when deps/ is absent: a clone downloads as before."""
+    if not os.path.isdir(deps_dir):
+        return []
+    defines = []
+    for name in sorted(os.listdir(deps_dir)):
+        path = os.path.join(deps_dir, name)
+        if os.path.isdir(path):
+            defines.append("-DFETCHCONTENT_SOURCE_DIR_%s=%s" % (name.upper(), path.replace(os.sep, "/")))
+        elif name.startswith("ffmpeg-") and name.endswith(".zip"):
+            defines.append("-DFFMPEG_PREBUILT_URL=" + path.replace(os.sep, "/"))
+    if os.path.isfile(os.path.join(deps_dir, "manifest.json")):  # complete (tools/deps.py fetch): never download
+        defines.append("-DFETCHCONTENT_FULLY_DISCONNECTED=ON")
+    return defines
+
+
+def configure_failure(log):
+    """The launcher's name for why a configure failed, read from its log."""
+    text = tail(log, 200).lower()
+    if "no space left" in text or "not enough space" in text:
+        return "disk_full"
+    if any(w in text for w in ("failed to clone", "could not resolve host", "unable to access", "download failed",
+                               "couldn't connect", "timed out", "could not find git", "git_executable")):
+        return "download_failed"
+    if "clang-cl" in text:
+        return "no_clang"
+    return "configure_failed"
 
 
 def compiler_defines(env):
@@ -492,5 +696,20 @@ def cmake_build(env, target, log_name, verbose=False, build_dir=BUILD_DIR):
     if ok:
         print(progress.summary() if progress.total else "[build] %s up to date" % target)
     else:
-        print(f"[build] {target} failed (full log: build/{log_name})")
+        print(f"[build] {target} failed (full log: {show(log)})")
+        event(error=build_failure(log), message=f"building {target} failed", log=show(log).replace(os.sep, "/"))
     return ok
+
+
+def build_failure(log):
+    """The launcher's name for why a build failed, read from its log."""
+    text = tail(log, 400).lower()
+    if "no space left" in text or "not enough space" in text or "disk full" in text:
+        return "disk_full"
+    if "file name too long" in text or "filename too long" in text or "path too long" in text:
+        return "path_too_long"
+    if "being used by another process" in text or "permission denied" in text or "access is denied" in text:
+        return "file_locked"
+    if "out of memory" in text or "bad_alloc" in text or "not enough memory" in text:
+        return "out_of_memory"
+    return "build_failed"

@@ -18,6 +18,7 @@ detailed knowledge lives in `docs/`:
 | [docs/DISC.md](docs/DISC.md), [docs/CONTROLS.md](docs/CONTROLS.md) | Disc layout; keyboard / gamepad mapping |
 | [docs/TRAINER.md](docs/TRAINER.md) | The trainer (F5): what it does, how (the game's script commands), its check |
 | [docs/LINUX.md](docs/LINUX.md) | The Linux build: packages, flags, the Vulkan backend, what differs from Windows, the work list |
+| [docs/LAUNCHER.md](docs/LAUNCHER.md) | The launcher and releases: what a release holds, the player's flow, the tools behind each button, the `@vcs` events, what was checked |
 
 **When you learn something about the game, write it into docs/game-internals.md in the same change.**
 Record addresses and how you found them. When something is weird, use judgment, fix or work around it,
@@ -50,6 +51,7 @@ choices).
 | `third_party/PS2Recomp/ps2xRuntime` | The runtime (EE, VIF, VU1, GS HW backend, IOP host, stubs); our changes marked `[gta-recomp]` |
 | `game/vcs/` | Recompiler config, function map, VU1 upload list |
 | `tools/` | Python 3 tools (standard library only) - see below |
+| `launcher/` | `VCSLauncher.exe` (SDL3 + Dear ImGui, a CMake project of its own): disc, build tools, build, play - a front end over `tools/` (docs/LAUNCHER.md) |
 
 ## Build and run
 
@@ -62,6 +64,18 @@ python tools/build.py --check-deps          # Linux: missing packages and the co
 python tools/build.py --opt none|lto|pgo    # game optimisation, kept until changed (lto: the default; pgo: ThinLTO + profile, trains if needed)
 python tools/bench.py [OUT]                  # game-thread benchmark: fixed city spots + an AI drive (game / worker ms)
 python tools/clean.py [--apply] [--keep-days 7]   # delete test output in build/ (lists first; builds, saves, baselines kept)
+python tools/build.py --launcher             # the launcher (VCSLauncher.exe in the root; no disc, ~1 min the first time)
+python tools/build.py --recompile-if-needed  # recompile only when generated/ is stale (generated/recompile_stamp.json)
+python tools/doctor.py [--json]              # folder, compiler, disc, build state, the next step (the launcher reads --json)
+python tools/build_dir.py [check|set P|reset] # the build folder elsewhere (.vcs-build-dir, VCS_BUILD_DIR): tc.BUILD follows;
+                                             # the test tools keep writing to build\ in the source folder
+python tools/release.py [--ref vX | --worktree]   # the Windows release zip (build/dist); refuses game files. The number is
+                                             # VERSION (root; 0.0.1): bump it before tagging - the tag must match
+python tools/deps.py list|fetch|check        # the libraries CMake downloads; deps/ makes the build offline
+python tools/backup.py create|list|restore   # memory card backups (VCS_DATA_DIR honoured: test on copies)
+python tools/setup_vs.py status|install [--dry-run]   # Visual Studio Build Tools (+ clang) from Microsoft, elevated
+python tools/update.py check|apply [--zip F]  # a release folder to the newest GitHub release (not a clone)
+python tools/rip_disc.py list|rip E: OUT.iso  # a PS2 disc in a DVD drive to an .iso; report.py zips logs for bug reports
 python tools/framerate_audit.py [--steps 15,30,60,100]   # behaviour per simulated second at forced time steps
 python tools/run.py 60 name                 # run 60 s with the window, log to build/run/name.log (0 s: until it exits; --hidden for tests)
 python tools/run.py 60 name --control       # + control channel for tools/gamectl.py
@@ -109,6 +123,10 @@ card copies to start from (never the user's live card).
   pipeline is compiling them.
 - A successful build writes `iso=<disc>` into the `vcs.ini` next to `vcs.exe` when that file has none, so the exe
   started on its own finds the disc.
+- The launcher (`launcher/`, docs/LAUNCHER.md) only runs `tools/`: build logic stays in Python, so a change to the
+  pipeline is a change to the scripts. The tools print `@vcs {json}` event lines (`toolchain.event` / `stage` / `fail`
+  with a code) the launcher reads; keep them when changing a tool's output. `VCSLauncher.exe --screenshot F.png
+  [--step N | --demo error | --action build]` renders its window hidden (tests, docs); `--self-test` is CI's check.
 
 ## Rules that keep things working
 

@@ -3,6 +3,10 @@
 
     python tools/build.py                       build vcs (build/vcs[.exe], with its DLLs and vcs.ini)
     python tools/build.py --recompile [ISO]     recompile from your disc first, then build - the whole pipeline
+    python tools/build.py --recompile-if-needed [ISO]   the same, recompiling only when generated/ is not current
+                                                (generated/recompile_stamp.json; what the launcher runs)
+    python tools/build.py --launcher            build the launcher (VCSLauncher.exe in the repository root; no disc)
+    python tools/build.py --progress json       also print `@vcs {...}` events for the launcher (toolchain.py)
     python tools/build.py --quick               no link-time optimisation: fast rebuilds while changing code
     python tools/build.py --iop-tests           build and run the IOP / SPU2 unit tests (build/iop_tests, no disc)
     python tools/build.py --check-deps          Linux: list the missing packages and the command that installs them
@@ -22,7 +26,9 @@ Baxter card copy, or a new game when there is none) and the reference scenes' bo
 (tools/scenes.py); the profiles go to build/pgo/vcs.profdata. A profile
 from older code still works: the functions that changed are optimised as without one.
 
-ISO defaults to VCS_ISO, iso=... in vcs.ini, or a '*Vice City Stories*.iso' in the repository root.
+ISO defaults to VCS_ISO, iso=... in build/vcs.ini or vcs.ini, or a '*Vice City Stories*.iso' in the repository root.
+A successful game build writes build/build_info.json (source version, optimisation, disc) - the launcher compares it
+with the source to know whether the game needs building.
 Windows: needs Visual Studio 2022+ (or its Build Tools) with "Desktop development with C++" and "C++ Clang tools for
 Windows"; its CMake and Ninja are used when no others are on PATH. The Visual Studio environment is set up
 automatically.
@@ -31,10 +37,12 @@ Linux: clang 19+ with lld, CMake, Ninja, glslang and the development packages SD
 """
 import argparse
 import filecmp
+import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import toolchain as tc  # noqa: E402
@@ -52,11 +60,19 @@ def main():
     ap.add_argument("--quick", action="store_true", help="same as --opt none: fast rebuilds, slower game")
     ap.add_argument("--train", action="store_true", help="with --opt pgo: train a new profile first")
     ap.add_argument("--check-deps", action="store_true", help="Linux: check the build dependencies and stop")
+    ap.add_argument("--recompile-if-needed", nargs="?", const="", metavar="ISO",
+                    help="recompile first only when the generated code is not current")
+    ap.add_argument("--launcher", action="store_true", help="build the launcher (VCSLauncher.exe) instead of the game")
+    ap.add_argument("--progress", choices=("text", "json"), default="text", help="json: events for the launcher too")
     a = ap.parse_args()
+    if a.progress == "json":
+        tc.set_json_progress()
     if a.quick:
         if a.opt not in (None, "none"):
             ap.error("--quick is --opt none; it can't be combined with --opt " + a.opt)
         a.opt = "none"
+    if a.recompile is not None and a.recompile_if_needed is not None:
+        ap.error("--recompile and --recompile-if-needed: one or the other")
 
     env = tc.build_env()
     if a.check_deps:
@@ -65,8 +81,19 @@ def main():
         tc.fail("missing build dependencies (above)")
     if a.iop_tests:
         sys.exit(iop_tests(env))
-    if a.recompile is not None:
-        import recompile
+    if a.launcher:
+        sys.exit(0 if build_launcher(env, a.verbose) else 1)
+    import recompile
+    iso_arg = a.recompile if a.recompile is not None else a.recompile_if_needed
+    if a.recompile_if_needed is not None:
+        why = recompile.why_recompile()
+        if why:
+            print("[build] recompiling: " + why)
+            recompile.recompile(a.recompile_if_needed or None, env, a.verbose)
+        else:
+            print("[build] generated code is current: no recompile")
+            tc.find_iso(a.recompile_if_needed or None)  # the disc is still checked (and remembered below)
+    elif a.recompile is not None:
         recompile.recompile(a.recompile or None, env, a.verbose)
     elif not os.path.isdir(os.path.join(tc.ROOT, "generated", "ee")):
         print("[build] no generated code yet: run with --recompile (only the tools will be built)")
@@ -82,14 +109,53 @@ def main():
         defines = {"PS2X_LTO": "THIN", "PS2X_PGO": PROFDATA.replace(os.sep, "/")}
     tc.configure(env, force=a.reconfigure or configured_without_game(), defines=defines)
     print(f"[build] building {a.target}")
+    tc.stage("compile", "Compiling the game" if a.target == "ps2EntryRunner" else "Building " + a.target)
     if not tc.cmake_build(env, a.target, "build.log", a.verbose):
         sys.exit(1)
     if a.target == "ps2EntryRunner":
         if not os.path.isfile(tc.VCS_EXE):
-            tc.fail("build finished but " + os.path.relpath(tc.VCS_EXE, tc.ROOT) + " is missing")
+            tc.fail("build finished but " + tc.show(tc.VCS_EXE) + " is missing", "build_failed")
         move_from_old_place()
-        remember_iso(a.recompile or None)
-        print("[build] ok: " + os.path.relpath(tc.VCS_EXE, tc.ROOT) + " (" + built_opt() + ")")
+        iso = remember_iso(iso_arg or None)
+        write_build_info(iso)
+        print("[build] ok: " + tc.show(tc.VCS_EXE) + " (" + built_opt() + ")")
+        tc.event(result="ok", exe=tc.show(tc.VCS_EXE).replace(os.sep, "/"), opt=built_opt())
+
+
+BUILD_INFO = os.path.join(tc.BUILD, "build_info.json")
+
+
+def write_build_info(iso):
+    """build/build_info.json: what the game in build/ was built from. The launcher compares it with the source
+    (tools/doctor.py) to tell "Play" from "Update the build"."""
+    import recompile
+    stamp = recompile.read_stamp() or {}
+    info = {"source": tc.source_version(), "generated_inputs": stamp.get("inputs", ""), "opt": built_opt(),
+            "iso": iso or "", "time": int(time.time())}
+    with open(BUILD_INFO, "w", encoding="utf-8") as f:
+        json.dump(info, f, indent=1)
+
+
+LAUNCHER_BUILD = os.path.join(tc.BUILD, "launcher")
+
+
+def build_launcher(env, verbose):
+    """launcher/ is a CMake project of its own (no generated code, no disc): build/launcher, the exe in the
+    repository root."""
+    tc.stage("launcher", "Building the launcher")
+    if tc.drop_foreign_cache(LAUNCHER_BUILD, os.path.join(tc.ROOT, "launcher")) or not os.path.isfile(
+            os.path.join(LAUNCHER_BUILD, "build.ninja")):
+        cmd = ["cmake", "-S", os.path.join(tc.ROOT, "launcher"), "-B", LAUNCHER_BUILD, "-G", "Ninja",
+               "-DCMAKE_BUILD_TYPE=Release"] + tc.compiler_defines(env) + tc.deps_defines()
+        log = os.path.join(tc.BUILD, "configure_launcher.log")
+        if tc.run_with_progress(cmd, log, "[build] configure launcher", env=env) != 0:
+            print(tc.tail(log, 30))
+            tc.fail("CMake configure of the launcher failed (build/configure_launcher.log)", tc.configure_failure(log), log)
+    if not tc.cmake_build(env, "VCSLauncher", "build_launcher.log", verbose, build_dir=LAUNCHER_BUILD):
+        return False
+    print("[build] ok: " + tc.exe("VCSLauncher"))
+    tc.event(result="ok", exe=tc.exe("VCSLauncher"))
+    return True
 
 
 def configured_without_game():
@@ -115,35 +181,37 @@ def move_from_old_place():
     old_ini, new_ini = os.path.join(tc.OLD_GAME_DIR, "vcs.ini"), os.path.join(new_dir, "vcs.ini")
     if os.path.isfile(old_ini) and not os.path.isfile(new_ini):
         shutil.copy2(old_ini, new_ini)
-        print("[build] settings moved: " + os.path.relpath(old_ini, tc.ROOT) + " -> " + os.path.relpath(new_ini, tc.ROOT))
+        print("[build] settings moved: " + tc.show(old_ini) + " -> " + tc.show(new_ini))
     for name in ("vcs.exe", "vcs.pdb", "vcs", "vcs.ini"):
         path = os.path.join(tc.OLD_GAME_DIR, name)
         # the old vcs.ini only once build/'s is the same file (a different one stays for the player to look at)
         if os.path.isfile(path) and (name != "vcs.ini" or (os.path.isfile(new_ini) and filecmp.cmp(path, new_ini, shallow=False))):
             try:
                 os.remove(path)
-                print("[build] removed the old " + os.path.relpath(path, tc.ROOT) + " (the game is now in build/)")
+                print("[build] removed the old " + tc.show(path) + " (the game is now in build/)")
             except OSError as e:
-                print("[build] could not remove the old " + os.path.relpath(path, tc.ROOT) + ": " + str(e))
+                print("[build] could not remove the old " + tc.show(path) + ": " + str(e))
 
 
 def remember_iso(given):
     """Writes iso=<disc> into the vcs.ini next to vcs.exe when it has none, so the exe started on its own (a double
-    click) finds the disc the build used. An iso= already there is the player's and stays."""
+    click) finds the disc the build used. An iso= already there is the player's and stays. Returns the disc (None when
+    none is known)."""
     try:
         iso = tc.find_iso(given)
     except SystemExit:
-        return  # no disc known here: vcs.exe looks next to itself, or is given one
+        return None  # no disc known here: vcs.exe looks next to itself, or is given one
     ini = os.path.join(os.path.dirname(tc.VCS_EXE), "vcs.ini")
     lines = []
     if os.path.isfile(ini):
         with open(ini, encoding="utf-8", errors="replace") as f:
             lines = f.read().splitlines()
     if any(line.strip().lower().startswith("iso=") for line in lines):
-        return
+        return iso
     with open(ini, "w", encoding="utf-8") as f:
         f.write("\n".join(lines + ["iso=" + iso]) + "\n")
-    print("[build] disc for vcs.exe: " + iso + " (iso= in " + os.path.relpath(ini, tc.ROOT) + ")")
+    print("[build] disc for vcs.exe: " + iso + " (iso= in " + tc.show(ini) + ")")
+    return iso
 
 
 def built_opt():
@@ -193,7 +261,7 @@ def train(env, verbose):
         tc.fail("training wrote no profiles (build/pgo/raw)")
     profdata = shutil.which("llvm-profdata", path=env.get("PATH")) or "llvm-profdata"
     subprocess.check_call([profdata, "merge", "-o", PROFDATA] + profiles, env=env)
-    print("[build] profile: " + os.path.relpath(PROFDATA, tc.ROOT) + " from %d runs" % len(profiles))
+    print("[build] profile: " + tc.show(PROFDATA) + " from %d runs" % len(profiles))
 
 
 def tool(name):

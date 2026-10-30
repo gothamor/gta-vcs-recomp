@@ -19,6 +19,7 @@
 #include "debug/selftest.h"
 #include "debug/watchdog.h"
 #include "disc/iso_image.h"
+#include "disc/vcs_disc_id.h"
 #include "game/vcs_display.h"
 #include "game/vcs_framerate.h"
 #include "game/vcs_movie.h"
@@ -68,8 +69,8 @@ namespace vcs
 
 namespace
 {
-    constexpr const char *kElfName = "SLUS_215.90";
-    constexpr const char *kElfSha1 = "d1832508caf0990c2291c0f255c96a889cce9f88";
+    using vcs::disc::kElfName;
+    using vcs::disc::kElfSha1;
 
     class MappedDisc final : public IPS2DiscImage
     {
@@ -247,7 +248,9 @@ namespace
             applyAspect();
     }
 
-    // Display / Graphics presets: the settings each one sets (the rest stay as they are). Authentic is their defaults.
+    // Display / Graphics presets: the settings each one sets (the rest stay as they are). Authentic is their defaults,
+    // except the frame rate: the default is 60 fps with frame-rate independent timing (DECISIONS.md 2026-10-30), the
+    // PS2's is 30 with its own timing.
     struct Preset
     {
         const char *key;
@@ -268,12 +271,16 @@ namespace
         std::fprintf(stderr, "[settings] preset %s\n", name);
     }
 
+    const Preset kAuthenticTiming[] = {{"display.timing", 0}, {"display.fps", 30}};
+
     void applyAuthentic()
     {
         for (const char *key : kPresetKeys)
             for (const settings::Spec &s : settings::all())
                 if (s.key == key)
                     settings::set(s.key, s.defaultValue);
+        for (const Preset &p : kAuthenticTiming)
+            settings::set(p.key, p.value);
         std::fprintf(stderr, "[settings] preset Authentic\n");
     }
 
@@ -469,12 +476,12 @@ namespace
         s.page = "Display";
         s.section = "Frame rate";
         s.label = "Game timing";
-        s.help = "Original: the game paces itself on the PS2's 60 Hz VBlank (30 fps, or 60 with a cap of 60 or more) and "
-                 "slows down when the PC can't keep up. Frame-rate independent: paced by the PC's clock to the frame "
-                 "rate cap, game time follows real time. Behaviour at high frame rates is still being fixed.";
+        s.help = "Frame-rate independent (the default): paced by the PC's clock to the frame rate cap, game time follows "
+                 "real time. Original: the game paces itself on the PS2's 60 Hz VBlank (30 fps, or 60 with a cap of 60 or "
+                 "more) and slows down when the PC can't keep up. Behaviour at high frame rates is still being fixed.";
         s.type = Type::Choice;
         s.choices = {{"Original (PS2)", 0}, {"Frame-rate independent", 1}};
-        s.defaultValue = 0;
+        s.defaultValue = 1;
         s.apply = Apply::Restart;
         s.env = "VCS_TIMING";
         s.onChange = [](int v) { vcs::setTiming(v == 1 ? vcs::Timing::Independent : vcs::Timing::Original); };
@@ -485,7 +492,8 @@ namespace
         s.page = "Display";
         s.section = "Frame rate";
         s.label = "Frame rate cap";
-        s.help = "30 is the original. With original timing anything above 30 runs at 60 (the VBlank allows no more); "
+        s.help = "60 is the default, 30 the original. With original timing anything above 30 runs at 60 (the VBlank "
+                 "allows no more); "
                  "with frame-rate independent timing the game runs up to the cap - at most 240 (above that the game's "
                  "shortest time step makes it run slightly fast).";
         s.type = Type::Choice;
@@ -498,7 +506,7 @@ namespace
                      {"240", 240},
                      {"Display refresh (up to 240)", vcs::kCapRefresh},
                      {"Unlimited (up to 240)", vcs::kCapUnlimited}};
-        s.defaultValue = 30;
+        s.defaultValue = 60;
         s.env = "VCS_FPS";
         s.onChange = [](int v) { vcs::setFrameCap(v); };
         settings::add(s);
@@ -621,7 +629,8 @@ namespace
         s.page = "Advanced";
         s.section = "Reset";
         s.label = "Reset all settings";
-        s.help = "Every setting on every page back to its default (the PS2's picture and timing, the default controls). "
+        s.help = "Every setting on every page back to its default (the PS2's picture at 60 fps with frame-rate independent "
+                 "timing, the default controls). "
                  "The disc path and the window's place are kept.";
         s.type = Type::Action;
         s.button = "Reset everything";
@@ -689,14 +698,15 @@ namespace
         return firstIsoIn(fs::current_path());
     }
 
-    // Writes the guest ELF from the disc into the cache folder (runtime loads it from a file).
-    bool stageElf(const vcs::IsoImage &iso, const fs::path &out, std::string &error)
+    // Writes the guest ELF from the disc into the cache folder (runtime loads it from a file). 0, or vcs.exe's exit
+    // code for the failure (vcs_disc_id.h) with `error` set.
+    int stageElf(const vcs::IsoImage &iso, const fs::path &out, std::string &error)
     {
         vcs::IsoEntry entry;
         if (!iso.find(kElfName, entry))
         {
             error = std::string(kElfName) + " not found: this is not GTA: Vice City Stories (USA)";
-            return false;
+            return vcs::disc::kExitWrongDisc;
         }
         std::vector<uint8_t> elf(entry.size);
         iso.readBytes(uint64_t(entry.lba) * vcs::IsoImage::kSectorSize, elf.size(), elf.data());
@@ -704,15 +714,20 @@ namespace
         if (sha1 != kElfSha1)
         {
             error = "unsupported game build (executable sha1 " + sha1 + ")";
-            return false;
+            return vcs::disc::kExitWrongDisc;
         }
         std::error_code ec;
         if (fs::exists(out, ec) && fs::file_size(out, ec) == elf.size())
-            return true;
+            return 0;
         fs::create_directories(out.parent_path(), ec);
         std::ofstream file(out, std::ios::binary);
         file.write(reinterpret_cast<const char *>(elf.data()), static_cast<std::streamsize>(elf.size()));
-        return file.good();
+        if (!file.good())
+        {
+            error = "cannot write " + out.string();
+            return vcs::disc::kExitError;
+        }
+        return 0;
     }
 }
 
@@ -737,23 +752,23 @@ int main(int argc, char *argv[])
             std::cerr << "No disc image found. Pass your Vice City Stories (USA) .iso as the first argument,\n"
                          "put iso=<path> in vcs.ini next to vcs.exe, or place the .iso next to vcs.exe."
                       << std::endl;
-            return 1;
+            return vcs::disc::kExitNoDisc;
         }
 
         vcs::IsoImage iso;
         if (!iso.open(isoPath))
         {
             std::cerr << "Cannot read disc image " << isoPath.string() << ": " << iso.error() << std::endl;
-            return 1;
+            return vcs::disc::kExitDiscUnreadable;
         }
 
         const fs::path data = dataDirectory();
         const fs::path elfPath = data / "cache" / kElfName;
         std::string error;
-        if (!stageElf(iso, elfPath, error))
+        if (const int code = stageElf(iso, elfPath, error))
         {
             std::cerr << error << std::endl;
-            return 1;
+            return code;
         }
 
         MappedDisc disc(iso);
@@ -796,7 +811,7 @@ int main(int argc, char *argv[])
         if (!runtime.initialize("GTA: Vice City Stories"))
         {
             std::cerr << "Failed to initialize runtime" << std::endl;
-            return 1;
+            return vcs::disc::kExitInitFailed;
         }
         if (!runtime.loadELF(elfPath.string()))
         {

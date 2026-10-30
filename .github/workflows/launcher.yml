@@ -1,0 +1,58 @@
+# The launcher (docs/LAUNCHER.md): built and self-tested on every change to it or the tools it runs; on a tag v*, the
+# Windows release zip is made (tools/release.py: source, launcher, embeddable Python, the libraries - no game code,
+# which only ever exists on a player's PC) and published as a GitHub release.
+name: launcher
+
+on:
+  push:
+    branches: [main]
+    paths: ["launcher/**", "tools/**", "src/disc/**", "src/util/sha1.h", ".github/workflows/launcher.yml"]
+    tags: ["v*"]
+  pull_request:
+    paths: ["launcher/**", "tools/**", "src/disc/**", "src/util/sha1.h", ".github/workflows/launcher.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build the launcher
+        run: python tools/build.py --launcher
+
+      - name: Self-test
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath .\VCSLauncher.exe -ArgumentList '--self-test','--out','selftest.txt' -Wait -PassThru
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+      - name: Tool checks
+        run: |
+          python tools/doctor.py
+          python tools/deps.py list
+          python tools/recompile.py --check || echo "no generated code here (expected)"
+
+      - name: Release zip
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python tools/release.py --ref ${{ github.ref_name }} --launcher VCSLauncher.exe
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = Get-ChildItem build/dist/*.zip | Select-Object -First 1
+          gh release create "${{ github.ref_name }}" $zip.FullName "$($zip.FullName).sha256" `
+            --title "${{ github.ref_name }}" --generate-notes

@@ -77,9 +77,13 @@ if(VCS_HAVE_GENERATED)
     set_target_properties(ps2EntryRunner PROPERTIES OUTPUT_NAME "vcs")
     # The main build tree (build/release) puts vcs.exe, its DLLs and vcs.ini at the top of build/ instead of
     # build/release/third_party/PS2Recomp/ps2xRuntime; other trees (PGO training's build/pgo-gen) keep theirs.
+    # VCS_GAME_DIR: the build folder chosen elsewhere (tools/toolchain.py passes it for the main tree; docs/LAUNCHER.md).
+    set(VCS_GAME_DIR "" CACHE PATH "Where vcs.exe, its DLLs and vcs.ini go (empty: build/ for build/release)")
     string(TOLOWER "${CMAKE_BINARY_DIR}" _vcs_binary_dir)
     string(TOLOWER "${CMAKE_SOURCE_DIR}/build/release" _vcs_main_tree)
-    if(_vcs_binary_dir STREQUAL _vcs_main_tree)
+    if(VCS_GAME_DIR)
+        set_target_properties(ps2EntryRunner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${VCS_GAME_DIR}")
+    elseif(_vcs_binary_dir STREQUAL _vcs_main_tree)
         set_target_properties(ps2EntryRunner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build")
     endif()
     target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_SOURCE_DIR}/src")

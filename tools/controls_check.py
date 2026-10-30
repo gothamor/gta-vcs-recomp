@@ -249,7 +249,7 @@ class Check:
     def run(self):
         g = self.g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="controls_check",
                                     port=self.port, data_dir=os.path.join(ROOT, "build", "controls", "data"),
-                                    env={"VCS_FPS": "30"})
+                                    env={"VCS_FPS": "30", "VCS_TIMING": ""})  # timing unlocked: the presets set it
         try:
             g.wait_ingame()
             # the player's own vcs.ini is read by hidden runs too (never written): start from the defaults

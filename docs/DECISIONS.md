@@ -195,7 +195,8 @@ The user's choices on the roadmap's open questions:
 - Start with milestone 1 (automation / coverage rig), then milestone 2 (correctness sweep), and
   carry the roadmap out autonomously, committing at milestones and major changes.
 - Movies: FFmpeg as the decoder.
-- 60 fps: a settings-menu option, off by default (30 fps stays the authentic default).
+- 60 fps: a settings-menu option, off by default (30 fps stays the authentic default). (Superseded 2026-10-30: 60 fps
+  with frame-rate independent timing is the default.)
 - IOP retirement (milestone 6): do it.
 - Windows only for now; milestone 9 (portability / distribution) is out of scope until further notice. (Superseded
   2026-10-30: native Linux, see that entry.)
@@ -598,3 +599,40 @@ enough (the frame lead) to be ready just in time on input read just before. 60 c
 limit the one frame waiting stays (dropping it cut 9 ms but cost 4% of the frames and visible judder): smoothness kept
 there.
 
+## 2026-10-30 - A launcher for releases (docs/LAUNCHER.md)
+
+The user asked for a launcher, as other recomps have, to be included in releases: locate the game, build, launch;
+Windows first; the Python scripts must stay usable on their own.
+- **Distribution stays source-only.** A release is the source plus `VCSLauncher.exe`, python.org's embeddable Python
+  and `deps/` (the open-source libraries CMake would download) - no game code: the game is still recompiled and built on
+  the player's PC. `tools/release.py` checks every file before zipping (no disc images, no MIPS ELF, nothing from
+  generated/ or build/) and refuses the release otherwise.
+- **The launcher is a front end over `tools/`**, never a second pipeline: it runs `doctor.py`, `build.py`,
+  `setup_vs.py`, `backup.py`, `report.py`, `update.py`, `rip_disc.py` and reads their `@vcs {json}` events. A player
+  with the launcher and a developer with a terminal run the same code.
+- **SDL3 + Dear ImGui** for its window (already dependencies, the look of the in-game menus, portable later), its own
+  CMake project so CI builds it without a disc; one static exe.
+- **Bundled Python and libraries**: Visual Studio's compiler is the only thing left to install, and the launcher runs
+  Microsoft's installer for it (checked for Microsoft's signature first; one UAC prompt). The release builds with no
+  git and no internet (`FETCHCONTENT_FULLY_DISCONNECTED`). Cost: an 82 MB zip instead of a few MB.
+  From that zip in an empty folder the game built in 8 min 42 s on the dev PC (the README said ~15 min on a laptop).
+- **Updates only when asked** (or at start when the player turns it on): the check is one request to GitHub's API.
+- The launcher's own settings live in `build/launcher.ini`; the game's stay in `vcs.ini` (F2 in the game).
+- Not done: code signing (SmartScreen warns about an unknown publisher; documented in the README).
+
+## 2026-10-30 - 60 fps with frame-rate independent timing by default
+
+The user asked for frame-rate independent timing and 60 fps to be the default for every player from their first
+build. `display.timing` defaults to 1 and `display.fps` to 60 (src/main.cpp); everything else stays the PS2's (4:3,
+original resolution, no anti-aliasing). This replaces "60 fps off by default" (2026-10-22): the one enhancement on by
+default, the rest still opt-in.
+- *Authentic (PS2)* sets original timing at 30 explicitly (it used to be "the defaults"); *Reset to defaults* now gives
+  60 fps independent timing; the menu's help says so.
+- vcs.ini only keeps values that differ from the defaults, so players who never touched the frame rate get 60 fps on
+  their next build too; anyone who chose a frame rate keeps it.
+- Test runs keep the old timing: hidden runs (toolchain.test_window) pin `VCS_TIMING=0` and `VCS_FPS=30` unless the
+  test sets them, so the regression baselines, the bench numbers and the checks mean what they did. controls_check
+  passes an empty `VCS_TIMING` (not pinned, ignored by the game) because it tests the presets. The PGO profile is still
+  trained at original timing (bench / scenes); retrain at the new default if the gap shows.
+- Checked 2026-10-30 in a hidden run: reset -> timing 1, 60; Authentic -> 0, 30; Widescreen, light -> 1, 60; a test
+  run -> 0, 30.

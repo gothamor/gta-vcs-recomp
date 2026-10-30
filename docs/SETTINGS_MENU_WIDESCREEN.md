@@ -246,7 +246,7 @@ and **Alt+Enter** switches at any time, also with a menu open; the choice is sav
 
 Asked for by the user ("substantially flexible settings that players can change"). Pages now: Display, Graphics,
 Audio, Game, Keyboard, Gamepad, Advanced.
-- **Display**: *Presets* first - Authentic (PS2) (the Display / Graphics defaults), Enhanced (Match window aspect,
+- **Display**: *Presets* first - Authentic (PS2) (the Display / Graphics defaults, but original timing at 30 fps: the default frame rate is 60 with frame-rate independent timing since 2026-10-30), Enhanced (Match window aspect,
   HUD at the screen edges, Match window resolution, 4x MSAA, 16x AF, independent timing at the display's refresh) and
   Widescreen, light (Match window, 1x, no MSAA, 4x AF, independent at 60). A preset sets only those keys; window
   mode, controls and sound stay. *Frame rate*: **Vertical sync** (`display.vsync`: Off = the flip model's present

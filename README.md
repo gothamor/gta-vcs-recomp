@@ -10,7 +10,31 @@ The build reads the executable from your disc, and the finished game reads every
 Status: in development. See [docs/PROGRESS.md](docs/PROGRESS.md) for what works, and [docs/LINUX.md](docs/LINUX.md)
 for the Linux build in detail.
 
-## Install
+## Install on Windows: the launcher (easiest)
+
+1. Download the newest `VCS-Recomp-<version>-windows.zip` from the [Releases](../../releases) page and extract it
+   somewhere short and local, like `C:\Games\VCS` (not Program Files, not a OneDrive-synced folder such as Desktop or
+   Documents: the build writes thousands of files).
+2. Start **`VCSLauncher.exe`** in that folder. It goes through four steps and the big button always shows the next one:
+   - **Folders**: the game is built in `build\` next to the launcher, or in a folder you choose (another drive with
+     more room, say): *Choose another folder* on this step.
+   - **Disc**: it looks for your `.iso` in Downloads, Desktop, Documents and its own folder; otherwise choose it (or
+     drag it onto the window, or copy your disc from a DVD drive). It checks that it is the USA release.
+   - **Build tools**: the game is compiled on your PC with Microsoft's free C++ tools. If they are missing,
+     *Install build tools* runs Microsoft's installer with the right options (about 6 GB; Windows asks for permission).
+   - **Build**: recompiles the game from your disc and compiles it, with a progress bar - 20 to 60 minutes the first
+     time, a few minutes after an update. Nothing is downloaded during the build: the release brings Python and the
+     libraries.
+   - **Play**.
+
+The launcher also backs up and restores your saves, makes a desktop shortcut, checks for a new release (only when you
+ask, or at start if you turn that on in *Settings*), and zips the logs into a report for bug reports. Windows may warn
+that the launcher is from an unknown publisher (it isn't signed): *More info > Run anyway*. How it works:
+[docs/LAUNCHER.md](docs/LAUNCHER.md). Everything it does is a script in `tools/` you can also run yourself (below).
+
+## Install by hand (Windows and Linux)
+
+The release zip contains the full source: the steps below work in it too, and in a git clone.
 
 ### 1. Install the tools (once)
 
@@ -77,8 +101,9 @@ Start `build\vcs.exe` on Windows, `build/vcs` on Linux (a desktop shortcut works
 where your disc is.
 
 - **F2** opens the settings: presets, resolution, widescreen, frame rate, vsync, sound, and every key, mouse and
-  gamepad binding. The defaults match the PS2; every improvement is an option you turn on (Display > Presets >
-  Enhanced turns on the usual ones at once). Settings are saved in `vcs.ini` next to the game.
+  gamepad binding. The defaults match the PS2 except the frame rate (60 fps, frame-rate independent); every other
+  improvement is an option you turn on (Display > Presets > Enhanced turns on the usual ones at once). Settings are
+  saved in `vcs.ini` next to the game.
 - **Alt+Enter** switches between full screen and the window.
 - **F5** opens the trainer ([docs/TRAINER.md](docs/TRAINER.md)).
 - Keyboard, mouse and gamepads (Xbox, PlayStation, Switch Pro, ...) all work: [docs/CONTROLS.md](docs/CONTROLS.md).
@@ -86,7 +111,8 @@ where your disc is.
 
 ## Features
 
-The defaults are the PS2 game as it was; every improvement below is an option in the settings menu (F2).
+The defaults are the PS2 game as it was, except the frame rate: 60 fps with frame-rate independent timing. Every
+other improvement below is an option in the settings menu (F2), and *Authentic (PS2)* goes back to the PS2's 30 fps.
 *Display > Presets* turns on the usual ones at once: **Enhanced** for a modern graphics card, **Widescreen, light**
 for older PCs and integrated graphics, **Authentic (PS2)** to go back.
 
@@ -96,7 +122,7 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
 
 **Frame rate**
 - Frame-rate independent timing: 60, 100, 120, 144, 165, 240 fps, your display's refresh rate or uncapped (up to
-  240), with game time following real time. Or the original timing at 30 fps, or 60.
+  240), with game time following real time - 60 by default. Or the original timing at 30 fps, or 60.
 - Things the PS2 game counted per frame (vehicle physics, mission meters and timers) put back on real time, so they
   keep their speed at high frame rates. Some behaviour at high frame rates is still being fixed
   ([docs/PROGRESS.md](docs/PROGRESS.md)).
@@ -150,16 +176,17 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
 
 ## Updating
 
-After downloading a newer version of the source, build again the same way:
-```bash
-python tools/build.py --recompile
-```
+- **A release** (the launcher): *Check for updates*, then *Update now*: it puts the new release in place (keeping
+  your built game, settings and saves) and the next *Update the build* compiles only what changed. By hand:
+  `python tools/update.py check` / `python tools/update.py apply`.
+- **A git clone**: `git pull`, then build again: `python tools/build.py --recompile-if-needed` recompiles only when
+  the recompiler or its config changed.
 
 ## Problems
 
 | What you see | What to do |
 |---|---|
-| `vswhere.exe not found` | Visual Studio isn't installed: see step 1. |
+| `vswhere.exe not found` | Visual Studio isn't installed: see step 1 (or `python tools/setup_vs.py install`). |
 | CMake configure fails, mentioning `clang-cl` | Open the Visual Studio Installer, *Modify*, and tick **C++ Clang tools for Windows**. |
 | `no disc image` | Put the `.iso` in the repository folder, or give its path after `--recompile`. |
 | `unsupported executable build` or `SLUS_215.90 not found on disc` | The disc isn't the USA release (SLUS-21590). Other regions aren't supported. |
@@ -170,6 +197,8 @@ python tools/build.py --recompile
 | Linux: the game starts but no window / `no GPU with Vulkan 1.3` | Install your GPU's Vulkan driver (Mesa or NVIDIA); `vulkaninfo --summary` should list it. |
 
 The build's full output is in `build/build.log` (`build/configure.log` for the configure step).
+`python tools/doctor.py` checks everything at once (folder, compiler, disc, whether the game is current) and says what
+to do next; `python tools/report.py` zips the logs for a bug report (no game files, no saves).
 
 ## For developers
 
@@ -179,7 +208,14 @@ The build's full output is in `build/build.log` (`build/configure.log` for the c
 | `python tools/build.py --quick` | rebuild without link-time optimisation: much faster relinks, a somewhat slower game. It stays quick until `--opt lto` (switching recompiles everything, ~6-10 min) |
 | `python tools/build.py --opt lto` | back to the optimised build (the default) |
 | `python tools/build.py --opt pgo` | ThinLTO + profile-guided; trains a profile first (~30-50 min, from the rig's card copies in `build/rig/saves` or a new game) |
-| `python tools/recompile.py [ISO]` | disc → generated C++ only |
+| `python tools/recompile.py [ISO]` | disc → generated C++ only (`--check`: is generated/ current?) |
+| `python tools/build.py --recompile-if-needed [ISO]` | recompile only when the recompiler, its config or the function map changed, then build |
+| `python tools/build.py --launcher` | build the launcher (`VCSLauncher.exe` in the repository root; needs no disc) |
+| `python tools/doctor.py` | everything checked: folder, memory, compiler, disc, build state, the next step (`--json` for the launcher) |
+| `python tools/build_dir.py [set PATH \| reset]` | build in another folder (another drive...) instead of `build\`; every tool follows it |
+| `python tools/backup.py create\|list\|restore` | the memory card backed up / restored (order and times kept) |
+| `python tools/release.py [--worktree]` | the Windows release zip (source, launcher, embeddable Python, `deps/`), self-tested; refuses game files, and uncommitted changes without `--worktree` |
+| `python tools/deps.py fetch` | the libraries the build downloads, into `deps/` (offline builds) |
 | `python tools/run.py 0` | run the game with its output logged to `build/run/run.log` (`run.py 60 name`: stop after 60 s, log to `name.log`) |
 | `python tools/gamectl.py` | control a running game: screenshots, key presses, perf numbers, quit |
 | `python tools/ghidra_analyze.py` | redo the Ghidra analysis (Ghidra 12 + JDK 21) |
@@ -192,7 +228,8 @@ on the code; the documentation is in [docs/](docs).
 | `third_party/PS2Recomp` | Vendored PS2 recompiler + runtime (GPL-3.0) |
 | `game/vcs` | Recompiler config and function map for SLUS_215.90 |
 | `src` | Game-specific code (overrides, renderer, settings, platform) |
-| `tools` | Disc reader, build pipeline, test and analysis scripts |
+| `tools` | Disc reader, build pipeline, launcher back end, test and analysis scripts |
+| `launcher` | The Windows launcher (SDL3 + Dear ImGui; runs the tools) |
 | `docs` | How the game works, decisions, progress |
 
 ## License
