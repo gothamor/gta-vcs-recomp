@@ -377,6 +377,9 @@ class Progress:
 def run_with_progress(cmd, log, label, cwd=ROOT, env=None):
     """Runs `cmd` with its output to `log` under an elapsed-time line; returns the exit code."""
     with open(log, "w", encoding="utf-8") as f, Progress(label) as progress:
+        exe = shutil.which(cmd[0], path=env.get("PATH"))
+        if exe:
+            cmd = [exe, *cmd[1:]]
         code = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
     print(progress.summary())
     return code
@@ -472,6 +475,10 @@ def build_env():
     if jdk:
         env["JAVA_HOME"] = jdk
     clang = _which("clang-cl", env) or shutil.which("clang-cl")
+
+    if clang:
+        clang_dir = os.path.dirname(os.path.abspath(clang))
+        env["PATH"] = clang_dir + os.pathsep + env["PATH"]
     if not clang:
         fail('clang-cl not found: in the Visual Studio Installer, Modify, tick "C++ Clang tools for Windows"', "no_clang")
     if clang_version(clang) < MIN_CLANG:
@@ -501,6 +508,7 @@ def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
     print("[build] configuring " + show(build_dir) + "".join(" %s=%s" % kv for kv in (defines or {}).items()))
     stage("configure", "Configuring the build (CMake)")
     log = os.path.join(BUILD, "configure.log")
+
     if run_with_progress(cmd, log, "[build] configure", env=env) != 0:
         print(tail(log, 30))
         fail("CMake configure failed (full log: %s)" % show(log), configure_failure(log), log)
