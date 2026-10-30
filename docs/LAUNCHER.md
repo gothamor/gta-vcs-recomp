@@ -164,6 +164,13 @@ hidden into a texture and saved - tests never put a window on the desktop.
   tests), and a program that can't start is a `fail` (`no_cmake`), not a traceback. Checked with cmake taken off the
   process PATH: the old code fails like the report, the new one runs. The dev machine never saw it: scoop's cmake is
   on its PATH.
+- 2026-10-31, CMake and Ninja for any setup (`toolchain.build_tools`, DECISIONS.md): checked on the dev machine with
+  every CMake / Ninja hidden but VS 2019's (CMake 3.20, too old: skipped with its reason; Ninja 1.10.2 taken), the
+  launcher built from an empty build folder with a downloaded CMake 4.4.5; with VS 2019's Ninja hidden too, both
+  downloaded and built; the downloads deleted under a configured tree: set up again with scoop's and built. Failures
+  end in a `fail`, never a traceback: no network (`no_cmake`), a wrong SHA-256 (`download_failed`), a `VCS_CMAKE`
+  that's missing or too old (`no_cmake`). The four Linux archives were downloaded, matched their pins and unpacked;
+  **the Linux search and the downloaded programs running there are untested** (no Linux machine).
 
 ## Numbers
 

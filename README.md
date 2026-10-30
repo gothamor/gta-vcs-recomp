@@ -47,8 +47,9 @@ The release zip contains the full source: the steps below work in it too, and in
   **Desktop development with C++**, and under *Installation details* on the right also tick
   **C++ Clang tools for Windows**.
 
-That's all: CMake and Ninja come with Visual Studio, and you don't need to open Visual Studio or a special command
-prompt.
+That's all: you don't need to open Visual Studio or a special command prompt. CMake and Ninja are found wherever
+they are (Visual Studio's own, the CMake installer, winget, scoop, Chocolatey, pip, CLion...); when none is new enough
+(CMake 3.21, Ninja 1.10), the build downloads them once (~55 MB, into `build\build-tools`).
 
 **Linux**
 - Python 3 and Git (most distributions have both), then let the build list the rest: in the source folder (step 2),
@@ -56,7 +57,8 @@ prompt.
   python3 tools/build.py --check-deps
   ```
   prints what is missing and the command that installs it (`apt`, `dnf` or `pacman`): clang 19 or newer with lld,
-  CMake, Ninja, glslang, and the FFmpeg and SDL3 development packages. On Ubuntu 24.04 / Linux Mint 22 that is
+  glslang, and the FFmpeg and SDL3 development packages (CMake and Ninja too if you like; without them, or with ones
+  that are too old, the build downloads its own). On Ubuntu 24.04 / Linux Mint 22 that is
   ```bash
   sudo apt install clang-20 lld-20 llvm-20 cmake ninja-build pkg-config git glslang-tools \
       libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
@@ -191,6 +193,7 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
 | `no disc image` | Put the `.iso` in the repository folder, or give its path after `--recompile`. |
 | `unsupported executable build` or `SLUS_215.90 not found on disc` | The disc isn't the USA release (SLUS-21590). Other regions aren't supported. |
 | CMake configure fails while downloading | Check the internet connection and that `git --version` works in a new terminal. |
+| `CMake 3.21 or newer not found, and downloading it failed` | Check the internet connection, or install CMake yourself ([cmake.org](https://cmake.org/download), or Visual Studio Installer, *Modify*, **C++ CMake tools for Windows**). `VCS_CMAKE` / `VCS_NINJA` set to a full path choose a particular one. |
 | `vcs.exe` does nothing when started | It can't find the disc: put `iso=C:\path\to\your.iso` in `vcs.ini` next to `vcs.exe`. |
 | Linux: `clang 19 or newer not found` / `missing build dependencies` | Install what `python3 tools/build.py --check-deps` lists. |
 | Linux: `cannot find -lstdc++` | Install `libstdc++-<N>-dev` for your newest GCC (`build.py` works around it when an older one has it). |

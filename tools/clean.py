@@ -6,7 +6,7 @@
     python tools/clean.py --apply --keep-days 7    ... but keep anything changed in the last 7 days
 
 Kept always (PROTECTED): the game at the top of build/ (vcs.exe, its DLLs, vcs.pdb, vcs.ini), the builds (release,
-tools, analyzer, iop_tests), the ELF / VU1 extracts, analysis dumps,
+tools, analyzer, iop_tests), the downloaded CMake / Ninja (build-tools), the ELF / VU1 extracts, analysis dumps,
 the rig's card copies (build/rig/saves), the regression baseline, the reference scenes capture
 (build/scenes/reference), the PGO profile and the cached compiler environment. Outside build/ nothing is touched:
 not the disc images, mc0 / mc1, generated/ or ghidra/. New test folders under build/ need no entry here - they are
@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import toolchain as tc  # noqa: E402
 
 PROTECTED = [
-    "release", "tools", "analyzer", "iop_tests", "elf", "vu1", "analysis",
+    "release", "tools", "build-tools", "analyzer", "iop_tests", "elf", "vu1", "analysis",
     "rig/saves", "regress/baseline", "scenes/reference", "pgo/vcs.profdata", "msvc_env.json",
 ]
 

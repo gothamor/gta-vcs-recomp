@@ -489,12 +489,14 @@ def _which(name, env):
 
 
 def resolve(cmd, env):
-    """`cmd` with a bare program name replaced by its full path on `env`'s PATH. On Windows a child's program is looked
-    up on the PATH of this process, not the one passed as env= (CreateProcess): a cmake that only build_env's Visual
-    Studio folders hold (Build Tools without a standalone CMake) was found by the checks and then failed to start with
-    FileNotFoundError."""
+    """`cmd` with a bare program name replaced by its full path: cmake is build_tools' choice, anything else is looked
+    up on `env`'s PATH. On Windows a child's program is looked up on the PATH of this process, not the one passed as
+    env= (CreateProcess): a cmake that only build_env's Visual Studio folders hold (Build Tools without a standalone
+    CMake) was found by the checks and then failed to start with FileNotFoundError."""
     if env is None or os.path.dirname(cmd[0]):
         return cmd
+    if cmd[0] == "cmake":
+        return [build_tools(env)["cmake"]] + list(cmd[1:])
     found = _which(cmd[0], env)
     return [found] + list(cmd[1:]) if found else cmd
 
@@ -503,15 +505,326 @@ def _is_cmake(cmd):
     return os.path.splitext(os.path.basename(cmd[0]))[0].lower() == "cmake"
 
 
+# ---- CMake and Ninja --------------------------------------------------------------------------------------------
+# Players have CMake from anywhere - Visual Studio (each version bundles its own; VS 2019's 3.20 is too old), Kitware's
+# installer (with or without "add to PATH"), winget, scoop, Chocolatey, pip, CLion, Qt, the Android SDK, MSYS2, a
+# distribution's package - or not at all. build_tools() takes the first CMake >= MIN_CMAKE and Ninja >= MIN_NINJA that
+# run, from env's PATH first and then from the places those leave them, and downloads the projects' own builds (pinned,
+# SHA-256 checked) into build/build-tools when none will do. The build runs them by full path (resolve,
+# compiler_defines' CMAKE_MAKE_PROGRAM), never by name. VCS_CMAKE / VCS_NINJA choose them by hand.
+MIN_CMAKE = (3, 21)  # cmake_minimum_required in CMakeLists.txt and launcher/
+MIN_NINJA = (1, 10)
+TOOLS_DIR = os.path.join(BUILD, "build-tools")
+# platform: (url, sha256, the folder it is unpacked to). The versions the dev machine builds with (2026-10-31); the
+# CMake hashes are Kitware's (cmake-4.4.5-SHA-256.txt), Ninja publishes none: hashed when pinned.
+CMAKE_DOWNLOADS = {
+    "windows": ("https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-windows-x86_64.zip",
+                "326c826486d46a23cf9d5a1c9ee3a567d427bdd02c4a34071937a2a675cff004", "cmake-4.4.5-windows-x86_64"),
+    "linux-x86_64": ("https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-linux-x86_64.tar.gz",
+                     "ed85135c5a5135b45e50423cb406dea04ca3338da0b8ef3c9ede963559680be0", "cmake-4.4.5-linux-x86_64"),
+    "linux-aarch64": ("https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-linux-aarch64.tar.gz",
+                      "301d5063ab259577c1b57ce5490b1aab9ea5c56dc4c822f73499553dab94925f", "cmake-4.4.5-linux-aarch64"),
+}
+NINJA_DOWNLOADS = {
+    "windows": ("https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip",
+                "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65", "ninja-1.13.2"),
+    "linux-x86_64": ("https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux.zip",
+                     "5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6", "ninja-1.13.2"),
+    "linux-aarch64": ("https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux-aarch64.zip",
+                      "fd2cacc8050a7f12a16a2e48f9e06fca5c14fc4c2bee2babb67b58be17a607fc", "ninja-1.13.2"),
+}
+_PROBED = {}  # (tool, path) -> version tuple or None: each candidate runs once per process
+
+
+def download_platform():
+    """The key of CMAKE_DOWNLOADS / NINJA_DOWNLOADS for this machine, None when there is no build for it. Windows
+    always takes the x64 builds (Windows on Arm runs them emulated)."""
+    if IS_WINDOWS:
+        return "windows"
+    if platform.system() == "Linux":
+        machine = platform.machine().lower()
+        if machine in ("x86_64", "amd64"):
+            return "linux-x86_64"
+        if machine in ("aarch64", "arm64"):
+            return "linux-aarch64"
+    return None
+
+
+def _posix_runtime(path):
+    """An MSYS2 / Cygwin program (msys-2.0.dll / cygwin1.dll beside it): it takes POSIX paths, not a Windows build's."""
+    folder = os.path.dirname(path)
+    return IS_WINDOWS and any(os.path.isfile(os.path.join(folder, dll)) for dll in ("msys-2.0.dll", "cygwin1.dll"))
+
+
+def _probe(tool, path, run):
+    key = (tool, os.path.normcase(os.path.abspath(path)))
+    if key not in _PROBED:
+        _PROBED[key] = None
+        if not _posix_runtime(path):
+            try:
+                _PROBED[key] = run(path)
+            except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+                pass
+    return _PROBED[key]
+
+
+def cmake_version(path):
+    """(major, minor, patch) of a CMake that runs and makes Ninja builds, else None."""
+    def run(path):
+        caps = json.loads(subprocess.run([path, "-E", "capabilities"], capture_output=True, text=True,
+                                         timeout=60).stdout)
+        if not any(g.get("name") == "Ninja" for g in caps.get("generators", [])):
+            return None
+        v = caps["version"]
+        return int(v["major"]), int(v["minor"]), int(v["patch"])
+    return _probe("cmake", path, run)
+
+
+def ninja_version(path):
+    """(major, minor, patch) of a Ninja that runs, else None."""
+    def run(path):
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=60).stdout
+        m = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", out.strip())
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)) if m else None
+    return _probe("ninja", path, run)
+
+
+def _numbers(path):
+    return [int(n) for n in re.findall(r"\d+", path)]
+
+
+def _newest(pattern):
+    """The folders matching `pattern`, the highest version number first."""
+    return sorted(glob.glob(pattern), key=_numbers, reverse=True)
+
+
+def _visual_studios():
+    """Every Visual Studio / Build Tools folder: vswhere's (any product, prereleases, custom places) and the default
+    places (when the installer's vswhere is gone)."""
+    found = []
+    vswhere = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Microsoft Visual Studio",
+                           "Installer", "vswhere.exe")
+    if os.path.isfile(vswhere):
+        try:
+            out = subprocess.run([vswhere, "-all", "-products", "*", "-prerelease", "-property", "installationPath"],
+                                 capture_output=True, text=True, timeout=60).stdout
+            found += [line.strip() for line in out.splitlines() if line.strip()]
+        except (OSError, subprocess.SubprocessError):
+            pass
+    for var in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
+        if os.environ.get(var):
+            found += _newest(os.path.join(os.environ[var], "Microsoft Visual Studio", "*", "*"))
+    return found
+
+
+def _tool_dirs(env):
+    """Where CMake and Ninja may be, in order: env's PATH (what the player chose comes first), then the places
+    installers leave them without (always) adding them to PATH, pip's, and last build_tools' own downloads."""
+    home = os.path.expanduser("~")
+    local, roaming = os.environ.get("LOCALAPPDATA", ""), os.environ.get("APPDATA", "")
+    dirs = [p.strip().strip('"') for p in env.get("PATH", "").split(os.pathsep)]
+    if IS_WINDOWS:
+        for vs in _visual_studios():
+            bundled = os.path.join(vs, "Common7", "IDE", "CommonExtensions", "Microsoft", "CMake")
+            dirs += [os.path.join(bundled, "CMake", "bin"), os.path.join(bundled, "Ninja")]
+        clions = []
+        for var in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
+            if os.environ.get(var):
+                dirs.append(os.path.join(os.environ[var], "CMake", "bin"))  # Kitware's installer, winget's
+                clions += _newest(os.path.join(os.environ[var], "JetBrains", "CLion*"))
+        dirs += [os.path.join(local, "Programs", "CMake", "bin"), os.path.join(local, "Microsoft", "WinGet", "Links")]
+        dirs += _newest(os.path.join(local, "Microsoft", "WinGet", "Packages", "*CMake*", "*", "bin"))
+        dirs += _newest(os.path.join(local, "Microsoft", "WinGet", "Packages", "Ninja-build.Ninja*"))
+        dirs.append(os.path.join(os.environ.get("ChocolateyInstall") or r"C:\ProgramData\chocolatey", "bin"))
+        dirs.append(os.path.join(os.environ.get("SCOOP") or os.path.join(home, "scoop"), "shims"))
+        clions += _newest(os.path.join(local, "Programs", "CLion*"))
+        clions += _newest(os.path.join(local, "JetBrains", "Toolbox", "apps", "CLion", "*", "*"))
+        for clion in clions:
+            dirs += [os.path.join(clion, "bin", "cmake", "win", "x64", "bin"), os.path.join(clion, "bin", "ninja", "win", "x64")]
+        dirs += [r"C:\Qt\Tools\CMake_64\bin", r"C:\Qt\Tools\Ninja"]
+        dirs += _newest(os.path.join(local, "Android", "Sdk", "cmake", "*", "bin"))
+        dirs += [os.path.join(r"C:\msys64", env_name, "bin") for env_name in ("ucrt64", "clang64", "mingw64")]
+        dirs += _newest(os.path.join(local, "Programs", "Python", "Python3*", "Scripts"))  # pip's cmake / ninja
+        dirs += _newest(os.path.join(roaming, "Python", "Python3*", "Scripts"))
+    else:
+        dirs += ["/usr/local/bin", "/usr/bin", "/snap/bin", os.path.join(home, ".local", "bin")]
+        dirs += _newest("/opt/cmake*/bin") + _newest(os.path.join(home, "Android", "Sdk", "cmake", "*", "bin"))
+        dirs += _newest(os.path.join(home, ".local", "share", "JetBrains", "Toolbox", "apps", "clion*", "bin", "cmake",
+                                     "linux", "*", "bin"))
+        dirs += _newest(os.path.join(home, ".local", "share", "JetBrains", "Toolbox", "apps", "clion*", "bin", "ninja",
+                                     "linux", "*"))
+    import sysconfig
+    for scheme in (None, os.name + "_user"):  # pip's cmake / ninja packages for this Python
+        try:
+            dirs.append(sysconfig.get_path("scripts", scheme) if scheme else sysconfig.get_path("scripts"))
+        except KeyError:
+            pass
+    key = download_platform()
+    for downloads, sub in ((CMAKE_DOWNLOADS, "bin"), (NINJA_DOWNLOADS, "")):
+        if key in downloads:
+            dirs.append(os.path.join(TOOLS_DIR, downloads[key][2], sub))
+    unique, seen = [], set()
+    for d in dirs:
+        norm = os.path.normcase(os.path.abspath(d)) if d else ""
+        if norm and norm not in seen and os.path.isdir(d):
+            seen.add(norm)
+            unique.append(d)
+    return unique
+
+
+def _find_tool(names, probe, minimum, dirs):
+    """(path, version, [(path, version) skipped]) of the first program called one of `names` in `dirs` that runs and
+    is at least `minimum`."""
+    skipped = []
+    for d in dirs:
+        for name in names:
+            path = shutil.which(name, path=d)
+            if not path:
+                continue
+            version = probe(path)
+            if version and version >= minimum:
+                return path, version, skipped
+            skipped.append((path, version))
+    return None, None, skipped
+
+
+def _version_text(version):
+    return ".".join(str(n) for n in version)
+
+
+def _download_tool(title, downloads, probe, minimum, names):
+    """Unpacks this platform's build from `downloads` into TOOLS_DIR (once) and returns its program; fails (no_cmake)
+    when there is none for this machine or it can't be fetched."""
+    import hashlib
+    import http.client
+    import tarfile
+    import urllib.request
+    import zipfile
+    key = download_platform()
+    need = "%s %s or newer" % (title, _version_text(minimum))
+    if key not in downloads:
+        fail("%s not found and there is no build of it to download for this machine: install it (https://cmake.org/"
+             "download, or your system's cmake / ninja package)" % need, "no_cmake")
+    url, sha256, folder = downloads[key]
+    target = os.path.join(TOOLS_DIR, folder)
+    archive = os.path.join(TOOLS_DIR, url.rsplit("/", 1)[1])
+    unpacked = target + ".unpack"
+    stage("download_" + title.lower(), "Downloading " + title)
+    print("[toolchain] no %s found: downloading %s" % (need, url))
+    try:
+        os.makedirs(TOOLS_DIR, exist_ok=True)
+        digest = hashlib.sha256()
+        with urllib.request.urlopen(url, timeout=120) as r, open(archive + ".part", "wb") as f, \
+                Progress("[toolchain] " + title) as progress:
+            total = int(r.headers.get("Content-Length") or 0)
+            done = 0
+            while True:
+                block = r.read(1 << 20)
+                if not block:
+                    break
+                f.write(block)
+                digest.update(block)
+                done += len(block)
+                progress.update(done >> 20, total >> 20, "MB")
+    except (OSError, http.client.HTTPException) as e:
+        fail("%s not found, and downloading it failed (%s). Check the internet connection, or install it: Visual "
+             "Studio's \"C++ CMake tools for Windows\", https://cmake.org/download or your system's package"
+             % (need, e), "no_cmake")
+    if digest.hexdigest() != sha256:
+        os.remove(archive + ".part")
+        fail("the %s download is not the file it should be (SHA-256 %s, expected %s): try again; a proxy or antivirus "
+             "may have changed it" % (title, digest.hexdigest(), sha256), "download_failed")
+    os.replace(archive + ".part", archive)
+    shutil.rmtree(unpacked, ignore_errors=True)
+    if archive.endswith(".zip"):
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(unpacked)
+    else:
+        with tarfile.open(archive) as t:
+            if hasattr(tarfile, "data_filter"):
+                t.extractall(unpacked, filter="data")
+            else:
+                t.extractall(unpacked)
+    os.remove(archive)
+    inner = os.listdir(unpacked)  # CMake's archives hold one folder, Ninja's the program alone
+    shutil.rmtree(target, ignore_errors=True)
+    source = os.path.join(unpacked, inner[0]) if len(inner) == 1 and os.path.isdir(os.path.join(unpacked, inner[0])) \
+        else unpacked
+    for attempt in range(6):  # programs just written can be held open for a moment (a virus scanner)
+        try:
+            os.replace(source, target)
+            break
+        except PermissionError:
+            time.sleep(0.5 * (attempt + 1))
+    else:
+        shutil.copytree(source, target)
+    shutil.rmtree(unpacked, ignore_errors=True)
+    for d in (os.path.join(target, "bin"), target):
+        for name in names:
+            path = os.path.join(d, exe(name))
+            if os.path.isfile(path):
+                if not IS_WINDOWS:
+                    os.chmod(path, 0o755)  # zip keeps no file modes
+                if (probe(path) or ()) >= minimum:
+                    return path
+    fail("the downloaded %s (%s) does not run" % (title, target), "no_cmake")
+
+
+def build_tools(env, download=True):
+    """The CMake and Ninja the build runs, {"cmake": path, "ninja": path, "cmake_version": (...), ...}: VCS_CMAKE /
+    VCS_NINJA when set (checked), else the first good one _tool_dirs holds, else (download=True) a download. Also kept
+    in env's VCS_CMAKE / VCS_NINJA, so later calls and child tools take the same. With download=False a missing one is
+    None (doctor, --check-deps: nothing is fetched)."""
+    found = {}
+    for tool, title, names, probe, minimum, downloads in (
+            ("cmake", "CMake", ["cmake"], cmake_version, MIN_CMAKE, CMAKE_DOWNLOADS),
+            ("ninja", "Ninja", ["ninja", "ninja-build"], ninja_version, MIN_NINJA, NINJA_DOWNLOADS)):
+        var = "VCS_" + tool.upper()
+        given = env.get(var)
+        if given:
+            version = probe(given) if os.path.isfile(given) else None
+            if not version or version < minimum:
+                fail("%s=%s is not a %s %s or newer that runs (%s)" % (var, given, title, _version_text(minimum),
+                     "version " + _version_text(version) if version else "not found or doesn't start"), "no_cmake")
+            found[tool], found[tool + "_version"] = given, version
+            continue
+        path, version, skipped = _find_tool(names, probe, minimum, _tool_dirs(env))
+        if not download:  # a check (doctor --json, --check-deps): silent, nothing kept
+            found[tool], found[tool + "_version"] = path, version
+            continue
+        for old, old_version in skipped:
+            print("[toolchain] skipped %s %s: %s" % (title, old, "version %s, %s needed" % (
+                _version_text(old_version), _version_text(minimum)) if old_version else "doesn't run"))
+        if not path:
+            path = _download_tool(title, downloads, probe, minimum, names)
+            version = probe(path)
+        print("[toolchain] %s %s: %s" % (title, _version_text(version), path))
+        env[var] = path
+        found[tool], found[tool + "_version"] = path, version
+    return found
+
+
+def stale_tools(build_dir):
+    """True when the CMake or Ninja a build tree was set up with is gone (uninstalled, Visual Studio moved, another
+    build folder): it can neither build nor set itself up again, so it is configured afresh with today's."""
+    try:
+        with open(os.path.join(build_dir, "CMakeCache.txt"), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                key, sep, value = line.partition("=")
+                if sep and key.split(":")[0] in ("CMAKE_COMMAND", "CMAKE_MAKE_PROGRAM") and value.strip():
+                    if not os.path.isfile(value.strip()):
+                        return True
+    except OSError:
+        pass
+    return False
+
+
 # ---- CMake ------------------------------------------------------------------------------------------------------
 def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
     """CMake configure of `build_dir` (first time, when forced, or with `defines`: {"PS2X_LTO": "THIN", ...})."""
-    force = drop_foreign_cache(build_dir, ROOT) or force
+    force = drop_foreign_cache(build_dir, ROOT) or stale_tools(build_dir) or force
     if os.path.isfile(os.path.join(build_dir, "build.ninja")) and not force and not defines:
         return
-    for name in ("cmake", "ninja"):
-        if not _which(name, env):
-            fail(f'{name} not found on PATH (Visual Studio\'s "C++ CMake tools for Windows" bring both)', "no_cmake")
     cmd = ["cmake", "-S", ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
     cmd += ["-D%s=%s" % (k, v) for k, v in (defines or {}).items()]
     cmd += compiler_defines(env) + deps_defines()
@@ -583,16 +896,17 @@ def configure_failure(log):
 
 def compiler_defines(env):
     """-DCMAKE_C(XX)_COMPILER for a fresh build tree: clang-cl on Windows, clang 19+ elsewhere (build_env put it first
-    on PATH)."""
+    on PATH); and build_tools' Ninja (CMAKE_MAKE_PROGRAM: by name it would be looked up on PATH)."""
+    ninja = ["-DCMAKE_MAKE_PROGRAM=" + build_tools(env)["ninja"].replace(os.sep, "/")]
     if IS_WINDOWS:
-        return ["-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl"]
+        return ["-DCMAKE_C_COMPILER=clang-cl", "-DCMAKE_CXX_COMPILER=clang-cl"] + ninja
     clang, clangxx = _which("clang", env), _which("clang++", env)
     if not clang or not clangxx or clang_version(clang) < MIN_CLANG:
         fail("clang %d or newer not found - install it (docs/LINUX.md; e.g. sudo apt install clang-20 lld-20 llvm-20), "
              "or run python tools/build.py --check-deps" % MIN_CLANG)
     if not _which("ld.lld", env):
         fail("ld.lld not found (the LLVM linker, next to clang): e.g. sudo apt install lld-%d" % clang_version(clang))
-    defines = ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx]
+    defines = ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx] + ninja
     gcc = _gcc_with_libstdcxx(clangxx)
     if gcc:
         flag = "--gcc-install-dir=" + gcc
@@ -623,9 +937,7 @@ def _gcc_with_libstdcxx(clangxx):
 
 # ---- Linux packages ---------------------------------------------------------------------------------------------
 # (what is checked, how, the package per distro family: Debian / Ubuntu, Fedora, Arch)
-LINUX_DEPS = [
-    ("cmake", "cmake", ("cmake", "cmake", "cmake")),
-    ("ninja", "ninja", ("ninja-build", "ninja-build", "ninja")),
+LINUX_DEPS = [  # CMake and Ninja: build_tools (any new enough, else downloaded) - not needed as packages
     ("git", "git", ("git", "git", "git")),
     ("pkg-config", "pkg-config", ("pkg-config", "pkgconf-pkg-config", "pkgconf")),
     ("glslangValidator", "glslangValidator", ("glslang-tools", "glslang", "glslang")),
@@ -671,6 +983,17 @@ def check_linux_deps(env):
             ok = bool(_which(check, env))
         if not ok:
             missing.append((label, packages))
+    tools = build_tools(env, download=False)
+    for tool, title, minimum, packages, downloads in (
+            ("cmake", "CMake", MIN_CMAKE, ("cmake", "cmake", "cmake"), CMAKE_DOWNLOADS),
+            ("ninja", "Ninja", MIN_NINJA, ("ninja-build", "ninja-build", "ninja"), NINJA_DOWNLOADS)):
+        if tools[tool]:
+            continue
+        if download_platform() in downloads:
+            print("[deps] no %s %s or newer found: the build downloads one (%s)" % (
+                title, _version_text(minimum), downloads[download_platform()][0].rsplit("/", 1)[1]))
+        else:
+            missing.append(("%s %s+" % (title, _version_text(minimum)), packages))
     family = _linux_family()
     llvm = _linux_llvm_bin(env)
     if not llvm:

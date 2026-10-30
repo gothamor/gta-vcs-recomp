@@ -636,3 +636,25 @@ default, the rest still opt-in.
   trained at original timing (bench / scenes); retrain at the new default if the gap shows.
 - Checked 2026-10-30 in a hidden run: reset -> timing 1, 60; Authentic -> 0, 30; Widescreen, light -> 1, 60; a test
   run -> 0, 30.
+
+## 2026-10-31 - CMake and Ninja from anywhere, else downloaded
+
+A player's build stopped at *Configuring the build* with a traceback: with Visual Studio Build Tools only, cmake is
+in Visual Studio's own folders, which the checks looked at and Windows didn't (it starts a child's program from the
+launcher's PATH, not the one given to it). The user asked for CMake to be found whatever the setup.
+- **Search, then download.** `toolchain.build_tools` takes the first CMake >= 3.21 and Ninja >= 1.10 that run (each
+  one is started: `cmake -E capabilities`, `ninja --version`): the build environment's PATH first (what the player
+  chose), then every Visual Studio install's bundled copy (vswhere -all and the default folders), Kitware's
+  installer's folder, winget, scoop, Chocolatey, pip (this Python and the user's), CLion, Qt, the Android SDK and
+  MSYS2's native environments (its POSIX ones refused: msys-2.0.dll / cygwin1.dll beside the program). With none,
+  Kitware's / Ninja's own builds are downloaded once into `build/build-tools` - pinned versions (CMake 4.4.5, Ninja
+  1.13.2: what the dev machine builds with) and SHA-256 hashes in toolchain.py, so a changed file is refused.
+- **Versions are checked, not just names**: VS 2019 bundles CMake 3.20, below the project's 3.21 - found on the dev
+  machine itself. A too-old one is skipped with a line saying why.
+- **Always by full path**: `resolve` gives cmake its path, `CMAKE_MAKE_PROGRAM` gives CMake Ninja's. The chosen folders
+  are not put on PATH, which would let a folder like Chocolatey's or pip's shadow clang-cl. A build tree whose CMake or
+  Ninja has gone (`stale_tools`) is set up again with today's.
+- `VCS_CMAKE` / `VCS_NINJA` (full paths) choose by hand, checked like the rest. doctor never reports CMake as missing
+  any more: it says the build will download it; only a failed download stops a build (`no_cmake`).
+- Not bundled into the release zip (55 MB more for the rare player with no CMake and no internet): Visual Studio's
+  installer, which the launcher runs, brings CMake anyway.

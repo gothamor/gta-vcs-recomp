@@ -30,10 +30,12 @@ ISO defaults to VCS_ISO, iso=... in build/vcs.ini or vcs.ini, or a '*Vice City S
 A successful game build writes build/build_info.json (source version, optimisation, disc) - the launcher compares it
 with the source to know whether the game needs building.
 Windows: needs Visual Studio 2022+ (or its Build Tools) with "Desktop development with C++" and "C++ Clang tools for
-Windows"; its CMake and Ninja are used when no others are on PATH. The Visual Studio environment is set up
-automatically.
-Linux: clang 19+ with lld, CMake, Ninja, glslang and the development packages SDL3 and FFmpeg need (docs/LINUX.md);
---check-deps lists what is missing. The first configure checks them too.
+Windows". The Visual Studio environment is set up automatically.
+CMake 3.21+ and Ninja 1.10+: the first that runs on PATH or wherever installers put them (Visual Studio's, Kitware's,
+winget, scoop, Chocolatey, pip, CLion...), else downloaded once into build/build-tools (toolchain.build_tools);
+VCS_CMAKE / VCS_NINJA=<path> choose them.
+Linux: clang 19+ with lld, glslang and the development packages SDL3 and FFmpeg need (docs/LINUX.md); --check-deps
+lists what is missing. The first configure checks them too.
 """
 import argparse
 import filecmp
@@ -143,8 +145,8 @@ def build_launcher(env, verbose):
     """launcher/ is a CMake project of its own (no generated code, no disc): build/launcher, the exe in the
     repository root."""
     tc.stage("launcher", "Building the launcher")
-    if tc.drop_foreign_cache(LAUNCHER_BUILD, os.path.join(tc.ROOT, "launcher")) or not os.path.isfile(
-            os.path.join(LAUNCHER_BUILD, "build.ninja")):
+    if tc.drop_foreign_cache(LAUNCHER_BUILD, os.path.join(tc.ROOT, "launcher")) or tc.stale_tools(LAUNCHER_BUILD) or \
+            not os.path.isfile(os.path.join(LAUNCHER_BUILD, "build.ninja")):
         cmd = ["cmake", "-S", os.path.join(tc.ROOT, "launcher"), "-B", LAUNCHER_BUILD, "-G", "Ninja",
                "-DCMAKE_BUILD_TYPE=Release"] + tc.compiler_defines(env) + tc.deps_defines()
         log = os.path.join(tc.BUILD, "configure_launcher.log")
@@ -271,7 +273,7 @@ def tool(name):
 def iop_tests(env):
     """ps2xIOP on its own with PS2X_IOP_BUILD_TESTS=ON in build/iop_tests; runs the SPU2 checks."""
     out = os.path.join(tc.BUILD, "iop_tests")
-    if not os.path.isfile(os.path.join(out, "build.ninja")):
+    if not os.path.isfile(os.path.join(out, "build.ninja")) or tc.stale_tools(out):
         subprocess.check_call(tc.resolve(["cmake", "-S", os.path.join(tc.ROOT, "third_party", "PS2Recomp", "ps2xIOP"),
                                           "-B", out, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
                                           "-DPS2X_IOP_BUILD_TESTS=ON"] + tc.compiler_defines(env), env), env=env)

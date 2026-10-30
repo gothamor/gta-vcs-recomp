@@ -56,8 +56,10 @@ namespace launcher
                           "\"C++ Clang tools for Windows\"."}},
             {"old_clang", {"Visual Studio's clang is too old",
                            "Update Visual Studio: open the Visual Studio Installer and choose Update."}},
-            {"no_cmake", {"CMake isn't installed",
-                          "In the Visual Studio Installer choose Modify and tick \"C++ CMake tools for Windows\"."}},
+            {"no_cmake", {"CMake couldn't be found or downloaded",
+                          "The build downloads CMake when none is installed, and that failed: check the internet "
+                          "connection and build again, or install CMake (cmake.org) or Visual Studio's \"C++ CMake "
+                          "tools for Windows\" (Visual Studio Installer, Modify)."}},
             {"vcvars_failed", {"Visual Studio's environment could not be set up",
                                "Repair Visual Studio from the Visual Studio Installer (More > Repair)."}},
             {"no_disc", {"No disc image", "Choose your GTA: Vice City Stories (USA) .iso on the Disc step."}},

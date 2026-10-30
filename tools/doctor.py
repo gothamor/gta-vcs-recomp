@@ -149,7 +149,7 @@ def vs_installs():
 
 def check_compiler():
     """Windows: the Visual Studio the build would use and what it lacks. code: ok, no_vs, no_cpp_tools, no_clang,
-    old_clang, no_cmake. Linux: build.py --check-deps."""
+    old_clang (CMake / Ninja: found or downloaded by the build). Linux: build.py --check-deps."""
     if not tc.IS_WINDOWS:
         ok = tc.check_linux_deps(tc.build_env())
         return {"ok": ok, "code": "ok" if ok else "missing_packages",
@@ -179,10 +179,12 @@ def check_compiler():
     if version < tc.MIN_CLANG:
         return dict(result, ok=False, code="old_clang", message="its clang-cl is version %d; %d or newer is needed: "
                                                                 "update Visual Studio" % (version, tc.MIN_CLANG))
-    cmake = os.path.join(vs["path"], "Common7", "IDE", "CommonExtensions", "Microsoft", "CMake", "CMake", "bin", "cmake.exe")
-    if not os.path.isfile(cmake) and not shutil.which("cmake"):
-        return dict(result, ok=False, code="no_cmake", message="%s has no \"C++ CMake tools for Windows\"" % vs["name"])
-    return dict(result, ok=True, code="ok", message="%s %s, clang-cl %d" % (vs["name"], vs["version"], version))
+    # CMake / Ninja never stop a build: the build downloads them when none here is new enough (toolchain.build_tools)
+    tools = tc.build_tools(dict(os.environ), download=False)
+    result["cmake"], result["ninja"] = tools["cmake"] or "", tools["ninja"] or ""
+    missing = [title for title in ("CMake", "Ninja") if not tools[title.lower()]]
+    return dict(result, ok=True, code="ok", message="%s %s, clang-cl %d%s" % (
+        vs["name"], vs["version"], version, "; the build downloads " + " and ".join(missing) if missing else ""))
 
 
 def check_downloads():

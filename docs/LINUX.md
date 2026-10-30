@@ -19,7 +19,7 @@ Needed (the `--check-deps` list, Debian / Ubuntu names):
 | What | Packages |
 |---|---|
 | Compiler: clang 19+, lld, llvm (`llvm-profdata`, `llvm-symbolizer`) | `clang-20 lld-20 llvm-20` (Ubuntu 24.04 / Mint 22; newer from apt.llvm.org) |
-| Build tools | `cmake ninja-build pkg-config git` |
+| Build tools | `pkg-config git`; `cmake ninja-build` optional: without CMake 3.21+ / Ninja 1.10+ (Debian 11's 3.18, say) the build downloads Kitware's / Ninja's own x86-64 or aarch64 builds into `build/build-tools` (`toolchain.build_tools`) |
 | Vulkan shaders (HLSL -> SPIR-V) | `glslang-tools` |
 | Movies | `libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev` |
 | SDL3, built from source: window (X11, Wayland), audio, gamepads | `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev libpipewire-0.3-dev libpulse-dev libasound2-dev libudev-dev libdbus-1-dev` |
