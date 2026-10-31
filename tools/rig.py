@@ -166,16 +166,18 @@ class Game:
             if not self.alive():
                 raise RuntimeError("the game exited while booting")
             try:
-                if self.area() == 0:
+                # The title flyover is outdoors too, with advancing frames but no player. Requiring the player
+                # prevents benchmarks and visual checks from returning while the title camera is still running.
+                if self.area() == 0 and self.player()[0]:
                     f0 = int(self.cmd("frames"))
                     time.sleep(1.0)
                     if int(self.cmd("frames")) > f0 + 10:
                         time.sleep(settle)
                         return
-                elif time.time() - t0 > 8.0:
-                    gamectl.send("press Shift", port=self.port)
             except Exception:
                 pass
+            if time.time() - t0 > 8.0:
+                gamectl.send("press Shift", port=self.port)
             time.sleep(4.0)
         raise RuntimeError("not in game after %.0f s" % timeout)
 

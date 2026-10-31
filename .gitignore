@@ -9,6 +9,8 @@ SLES_*
 SCUS_*
 /gamefiles/
 /disc/
+/SLUS-21590/
+/textures/
 
 # --- Generated from the user's own ELF: contains translated game code ---
 generated/
