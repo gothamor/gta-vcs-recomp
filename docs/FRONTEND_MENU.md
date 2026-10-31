@@ -30,8 +30,9 @@ The presentation is intentionally isolated in `src/ui/frontend_menu.cpp`. When t
 it also contains `3ece7b57667e958b-f663bcea3bca5023-00006213.png`, labels are drawn directly from the game's proportional
 font atlas, including its original outlines, rather than approximated with an OS font. Missing artwork or font files
 fall back independently to the dark-purple background or Dear ImGui font. The `Game` heading uses the original script
-atlas (`87ad416320b92240-59ab262d214c676c-00006214.png`) and the footer uses a heavier double-pass of the game menu
-face. The initial page omits **Back**, because it has no parent; it
+atlas (`87ad416320b92240-59ab262d214c676c-00006214.png`) and the footer uses the actual thick block atlas
+(`64e22c1534c81341-d49e156c51372d1c-00006214.png`). Each face has its own measured glyph rectangles; the script and
+block masks expand PS2 alpha (0x80 opaque) to PNG/UI alpha (0xff opaque). The initial page omits **Back**, because it has no parent; it
 appears in the Start Game submenu and pause actions. **Display > HUD** also governs this host menu: Keep 4:3 uses a
 centred 4:3 canvas, while Screen edges and Stretch use the full display. Styling remains separate from boot/save logic.
 

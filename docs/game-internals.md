@@ -699,10 +699,13 @@ y 47..69 with boundaries 0,15,22,34,49,61,82,98,114,128,144,159,173,188,204,220,
 boundaries 0,16,31,45. The back marker `<` is x 69..82, y 24..46. These rectangles were found by inspecting the
 atlas at its original logical scale and comparing the glyph sequence to the game's pause screen.
 Two `00006214` replacements provide other menu faces: `87ad416320b92240` is the script atlas used for
-the `Game` heading (512-grid G 181..208/64..128, a 0..27/192..256, m 270..310/192..256, e 103..128/192..256), and
-`64e22c1534c81341` is a heavier block atlas. The latter cannot reuse the proportional atlas's rectangles: its glyph
-packing is distinct, so the host footer uses a heavy double-pass of the already mapped game menu face. Identified by
-reducing each 4096x4096 replacement to its logical grid and matching the original pause-menu screenshot.
+the `Game` heading (512-grid padded bounds G 232..259/69..117, a 1..23/205..220, m 274..305/205..220,
+e 93..111/205..220), and `64e22c1534c81341` is the heavier block atlas now used for the footer. Measured from the
+alpha masks, rather than the RGB padding: block a-g start at x 246,284,322,360,398,436,474 in y 94..142;
+h-t at 0,38,56,94,132,162,220,258,296,334,372,410,448 in y 174..222; u-z at 0,39,82,148,186,224 in
+y 254..302. These two masks use 0x80 for opaque, requiring alpha doubling when drawn directly by Dear ImGui.
+The heading positions the lowercase letters on the capital's baseline instead of aligning their cropped tops.
+Found by sampling each 4096x4096 replacement's alpha at 512-grid coordinates and verified in an isolated menu capture.
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 

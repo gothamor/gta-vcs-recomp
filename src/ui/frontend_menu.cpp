@@ -45,13 +45,14 @@ namespace ui::frontend
         bool g_startSubmenu = false;
         bool g_quitConfirm = false;
         std::atomic<bool> g_pauseDismissed{false};
-        ImTextureData *g_background = nullptr, *g_font = nullptr, *g_scriptFont = nullptr;
+        ImTextureData *g_background = nullptr, *g_font = nullptr, *g_scriptFont = nullptr, *g_promptFont = nullptr;
         bool g_backgroundTried = false;
         bool g_sawBootLoading = false;
 
         constexpr const char *kPalmBackground = "db7fe6220bfa99e-400b40212c17643-00006213.png";
         constexpr const char *kMenuFont = "3ece7b57667e958b-f663bcea3bca5023-00006213.png";
         constexpr const char *kScriptFont = "87ad416320b92240-59ab262d214c676c-00006214.png";
+        constexpr const char *kPromptFont = "64e22c1534c81341-d49e156c51372d1c-00006214.png";
         constexpr ImU32 kCyan = IM_COL32(18, 211, 215, 255);
         constexpr ImU32 kPink = IM_COL32(194, 91, 142, 255);
         constexpr ImU32 kWhite = IM_COL32(225, 225, 225, 255);
@@ -114,6 +115,12 @@ namespace ui::frontend
             g_background = loadTexture(replacements / kPalmBackground, true);
             g_font = loadTexture(replacements / kMenuFont, false);
             g_scriptFont = loadTexture(replacements / kScriptFont, false);
+            g_promptFont = loadTexture(replacements / kPromptFont, false);
+            // These PS2 font masks store full opacity as 0x80, rather than PNG's 0xff.
+            for (ImTextureData *font : {g_scriptFont, g_promptFont})
+                if (font)
+                    for (size_t i = 3, n = static_cast<size_t>(font->Width) * font->Height * 4; i < n; i += 4)
+                        font->Pixels[i] = static_cast<unsigned char>(std::min(255, font->Pixels[i] * 2));
         }
 
         struct Glyph
@@ -231,16 +238,62 @@ namespace ui::frontend
                     ImVec2(width, height), height / 480.0f, 1.0f};
         }
 
+        bool promptGlyph(char c, Glyph &g)
+        {
+            static constexpr float ag[] = {246, 284, 322, 360, 398, 436, 474, 511};
+            static constexpr float ht[] = {0, 38, 56, 94, 132, 162, 220, 258, 296, 334, 372, 410, 448, 488};
+            static constexpr float uz[] = {0, 39, 82, 148, 186, 224, 261};
+            if (c >= 'A' && c <= 'G')
+            {
+                const int i = c - 'A';
+                g = {ag[i], 94, ag[i + 1] - 1, 142};
+                return true;
+            }
+            if (c >= 'H' && c <= 'T')
+            {
+                const int i = c - 'H';
+                g = {ht[i], 174, ht[i + 1] - 1, 222};
+                return true;
+            }
+            if (c >= 'U' && c <= 'Z')
+            {
+                const int i = c - 'U';
+                g = {uz[i], 254, uz[i + 1] - 1, 302};
+                return true;
+            }
+            return false;
+        }
+
         float promptWidth(const char *text, float scale, float xScale)
         {
-            return textSize(text, scale, nullptr, xScale).x + scale * xScale;
+            if (!g_promptFont)
+                return textSize(text, scale, nullptr, xScale).x;
+            float width = 0;
+            for (const char *p = text; *p; ++p)
+            {
+                Glyph g;
+                width += (*p == ' ' ? 8.0f : promptGlyph(*p, g) ? (g.x1 - g.x0 + 3) * 0.4f : 8.0f) * scale * xScale;
+            }
+            return width;
         }
 
         void drawPrompt(ImDrawList *draw, ImVec2 pos, const char *text, ImU32 color, float scale, float xScale)
         {
-            // The control legend uses the same game face with a second, one-pixel offset pass for its heavier weight.
-            drawText(draw, ImVec2(pos.x + scale * xScale, pos.y), text, color, scale, nullptr, xScale);
-            drawText(draw, pos, text, color, scale, nullptr, xScale);
+            if (!g_promptFont)
+                return drawText(draw, pos, text, color, scale, nullptr, xScale);
+            for (const char *p = text; *p; ++p)
+            {
+                Glyph g;
+                if (!promptGlyph(*p, g))
+                {
+                    pos.x += 8 * scale * xScale;
+                    continue;
+                }
+                const float width = (g.x1 - g.x0) * 0.4f * scale * xScale;
+                draw->AddImage(g_promptFont->GetTexRef(), pos, ImVec2(pos.x + width, pos.y + 19.2f * scale),
+                               ImVec2(g.x0 / 512, g.y0 / 512), ImVec2(g.x1 / 512, g.y1 / 512), color);
+                pos.x += width + 1.2f * scale * xScale;
+            }
         }
 
         void footer(const MenuCanvas &canvas, bool showBack)
@@ -282,15 +335,17 @@ namespace ui::frontend
                          "GAME", kPink, canvas.scale, nullptr, canvas.xScale);
                 return;
             }
-            // The game's script atlas: exact G, a, m and e rectangles in its logical 256x256 texture.
-            static constexpr Glyph letters[] = {{183, 69, 207, 116}, {2, 198, 26, 226},
-                                                 {273, 198, 308, 226}, {105, 198, 127, 226}};
+            // Alpha-measured G/a/m/e bounds in the atlas's 512-unit coordinate space.
+            static constexpr Glyph letters[] = {{232, 69, 259, 117}, {1, 205, 23, 220},
+                                                 {274, 205, 305, 220}, {93, 205, 111, 220}};
             ImVec2 pos(canvas.pos.x + 28.0f * canvas.scale, canvas.pos.y + 24.0f * canvas.scale);
-            for (const Glyph &g : letters)
+            for (unsigned i = 0; i < 4; ++i)
             {
+                const Glyph &g = letters[i];
                 const float width = (g.x1 - g.x0) * 0.5f * canvas.scale * canvas.xScale;
                 const float height = (g.y1 - g.y0) * 0.5f * canvas.scale;
-                draw->AddImage(g_scriptFont->GetTexRef(), pos, ImVec2(pos.x + width, pos.y + height),
+                const float y = pos.y + (i ? 14.0f * canvas.scale : 0);
+                draw->AddImage(g_scriptFont->GetTexRef(), ImVec2(pos.x, y), ImVec2(pos.x + width, y + height),
                                ImVec2(g.x0 / 512.0f, g.y0 / 512.0f), ImVec2(g.x1 / 512.0f, g.y1 / 512.0f), kPink);
                 pos.x += width;
             }
