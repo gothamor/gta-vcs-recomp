@@ -152,10 +152,10 @@ namespace ps2_host_profile
         Vu1DecodeFull,     // the decode cache rebuilt for all of code memory
         Vu1DecodePartial,  // ... re-decoded only the pairs written since
         Vu1DecodeVerifyMismatch, // PS2X_VU1_DECODE_VERIFY: the cache differed from a full rebuild (must be 0)
-        // the window
-        WindowFrames,      // game pictures the window showed
-        WindowSkips,       // ... pictures it never showed (a newer one had come before the window took it)
-        WindowRepeats,     // window refreshes that showed no new picture
+        // the TV (the presented output)
+        WindowFrames,      // game pictures the output showed
+        WindowSkips,       // ... pictures it never showed (a newer one had come before the output took it)
+        WindowRepeats,     // output refreshes that showed no new picture
         CounterCount
     };
     inline std::atomic<uint64_t> g_counters[CounterCount]{};

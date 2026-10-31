@@ -19,7 +19,7 @@ namespace render
         rhi::ShaderCode blitPS;
         rhi::ShaderCode fillColorPS;
         rhi::ShaderCode fillDepthPS;
-        rhi::ShaderCode presentVS;    // the window's picture (render/presenter.cpp)
+        rhi::ShaderCode presentVS;    // the picture on the TV (render/presenter.cpp)
         rhi::ShaderCode presentPS;
         rhi::ShaderCode uiVS;         // Dear ImGui through the RHI (render/ui_renderer.cpp)
         rhi::ShaderCode uiPS;

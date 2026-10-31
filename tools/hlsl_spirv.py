@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """HLSL -> SPIR-V for the Vulkan RHI backend (src/render/CMakeLists.txt runs it at build time). Standard library only.
 
-    python tools/hlsl_spirv.py --glslang PATH --stage vert|frag --entry vs_main --name kGsDrawVS_spv
+    python3 tools/hlsl_spirv.py --glslang PATH --stage vert|frag --entry vs_main --name kGsDrawVS_spv
                                --out gs_draw_vs.spv.h [-D NAME=VALUE ...] SOURCE.hlsl
 
-The same HLSL as fxc's DXBC (one source, docs/NATIVE_RENDERER.md). glslang compiles it; the bindings follow the D3D11
-registers (src/rhi/vulkan/rhi_vulkan.cpp has the layout): cbuffer bN -> binding N, texture tN -> 16 + N, sampler
-sN -> 32 + N, all in set 0.
+The shaders are HLSL (docs/NATIVE_RENDERER.md). glslang compiles them; the bindings follow the HLSL registers
+(src/rhi/vulkan/rhi_vulkan.cpp has the layout): cbuffer bN -> binding N, texture tN -> 16 + N, sampler sN -> 32 + N, all
+in set 0.
 
-Dual-source blending: D3D11 takes SV_Target1 as the second source of target 0; Vulkan wants Location 0 Index 1, and
+Dual-source blending: HLSL writes the second source of target 0 as SV_Target1; Vulkan wants Location 0 Index 1, and
 glslang ignores [[vk::index(1)]] in HLSL. The output variable `@entryPointOutput.blend` (PSOut.blend in gs_draw.hlsl)
 is moved to Location 0 Index 1 here.
 

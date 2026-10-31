@@ -10,7 +10,6 @@ namespace rhi
     {
         switch (backend)
         {
-        case Backend::D3D11: return "D3D11";
         case Backend::Vulkan: return "Vulkan";
         case Backend::Null: return "null";
         }
@@ -24,9 +23,7 @@ namespace rhi
         char lower[16] = {};
         for (size_t i = 0; name[i] && i + 1 < sizeof(lower); ++i)
             lower[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(name[i])));
-        if (std::strcmp(lower, "d3d11") == 0)
-            out = Backend::D3D11;
-        else if (std::strcmp(lower, "vulkan") == 0)
+        if (std::strcmp(lower, "vulkan") == 0)
             out = Backend::Vulkan;
         else if (std::strcmp(lower, "null") == 0)
             out = Backend::Null;
@@ -35,46 +32,14 @@ namespace rhi
         return true;
     }
 
-    bool backendBuilt(Backend backend)
-    {
-        switch (backend)
-        {
-#if defined(VCS_HAVE_D3D11)
-        case Backend::D3D11: return true;
-#endif
-#if defined(VCS_HAVE_VULKAN)
-        case Backend::Vulkan: return true;
-#endif
-        case Backend::Null: return true;
-        default: return false;
-        }
-    }
-
-    Backend defaultBackend()
-    {
-#if defined(VCS_HAVE_D3D11)
-        return Backend::D3D11;
-#elif defined(VCS_HAVE_VULKAN)
-        return Backend::Vulkan;
-#else
-        return Backend::Null;
-#endif
-    }
-
     std::unique_ptr<Device> createDevice(const DeviceDesc &desc, std::string &error)
     {
         switch (desc.backend)
         {
-#if defined(VCS_HAVE_D3D11)
-        case Backend::D3D11: return createD3D11Device(desc, error);
-#endif
-#if defined(VCS_HAVE_VULKAN)
         case Backend::Vulkan: return createVulkanDevice(desc, error);
-#endif
         case Backend::Null: return createNullDevice(desc, error);
-        default: break;
         }
-        error = std::string("the ") + backendName(desc.backend) + " renderer is not part of this build";
+        error = std::string("no ") + backendName(desc.backend) + " renderer";
         return nullptr;
     }
 }

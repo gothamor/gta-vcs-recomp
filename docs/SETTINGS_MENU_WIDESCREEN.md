@@ -73,7 +73,7 @@ pause map) are shown at 4:3, pillarboxed.
   chord's own buttons are kept from the game too (docs/CONTROLS.md, "Menus").
 - Settings (main.cpp `registerSettings`): Display > Aspect ratio (`display.aspect` = 43 / 1610 /
   169, env `VCS_ASPECT`), HUD (`display.hud`, env `VCS_HUD`: 0 keep 4:3 / 2 screen edges / 1 stretch), Internal resolution
-  (`display.scale`: 1-8 or 0 = Match window, the native frame; restart, env `PS2X_HW_SCALE`); Graphics > Performance
+  (`display.scale`: 1-8 or 0 = Match the TV, the native frame; restart, env `PS2X_HW_SCALE`); Graphics > Performance
   overlay.
 - Widescreen: the Hor+ route from the spike - `vcs_display.cpp` wraps `FUN_001ab9e0`, the presenter
   shows 3D frames at the display aspect (2D-only frames - loading screens, the pause menu - at
@@ -104,12 +104,12 @@ pause map) are shown at 4:3, pillarboxed.
   side planes the game builds from the FOV global (4:3); they vanished in the outer eighths of a 16:9 picture.
   `vcs_display.cpp` now widens those planes to the Hor+ edge too (game-internals.md 5; `VCS_WIDE_CULL=0` = before).
 - **Ultrawide** (2026-10-27, asked for by the user): Aspect ratio 21:9 (`219`, exactly 21 / 9), 32:9 (`329`) and
-  Match window (`0`: the shape of the picture's output, clamped to 4:3 .. 32:9 - on the PS5 the TV's 16:9). Nothing
+  Match the TV (`0`: the shape of the picture's output, clamped to 4:3 .. 32:9 - on the PS5 the TV's 16:9). Nothing
   else had to change: the Hor+ widening, the entity culling, the presenter's letterbox, the HUD squeeze / anchoring and
   the post effects' buffer widths all take the ratio as a number. Limits: narrower than 4:3 is shown letterboxed
   (Hor+ only widens; a portrait picture would need Vert+), wider than 32:9 is not checked. At 32:9 the horizontal view
   is 124 degrees (tan 35 x 2.67), so near objects at the sides stretch - rectilinear projection, as in any game.
-  Checked at 21:9 (2520x1080 frame) and 32:9 (3840x1080), Internal resolution Match window, HUD Screen edges: the
+  Checked at 21:9 (2520x1080 frame) and 32:9 (3840x1080), Internal resolution Match the TV, HUD Screen edges: the
   reference scenes (flyover, cutscene with its bars inside the picture, gameplay HUD at the edges, loading screen and
   pause map at 4:3 pillarboxed), two AI drives through the city (buildings, traffic and peds out to the edges, no
   unstreamed cells - the streaming follows the camera's cell, not the view), entity planes at 32:9 edge 1.867 = view
@@ -119,7 +119,7 @@ pause map) are shown at 4:3, pillarboxed.
   times wider as the view (640 x scale x r by 448 x scale: 1x at 16:9 853x448, 3x at 32:9 5120x1344, at most 8192
   wide) through the native frame's per-target scales; before, 640 x scale was stretched across (2.67 times softer
   across than down at 32:9). 4:3 unchanged. `PS2X_HW_WIDE_SCALE=0` = before. Cost follows the pixels: a 32:9 3x is a
-  5120-wide picture; 1x / 2x stay cheap, Match window renders at the output's own size.
+  5120-wide picture; 1x / 2x stay cheap, Match the TV renders at the output's own size.
 - **Radar streak at 32:9** (2026-10-27, reported by the user): a thin column of radar map right of the circle. The HUD
   layer squeezed the HUD before snapping it to PS2 pixels, and at a squeeze of 0.375 a PS2 pixel is 6 screen pixels:
   the map's scissor and its corner mask rounded to different ones. Now snapped at the 4:3 positions, then squeezed
@@ -128,7 +128,7 @@ pause map) are shown at 4:3, pillarboxed.
   screens) stay 4:3 but are placed inside the rectangle the game's picture takes - the output letterboxed at the
   chosen ratio - instead of the whole output (`present::fitRect`; the output, screenshots and the HUD layer's output
   size use it). A 32:9 game on a 16:9 TV shows its pause menu in the 32:9 strip between the bars, not at the
-  output's full height. Intro movies keep the whole output. At Match window or 4:3 nothing changes (the frame is the
+  output's full height. Intro movies keep the whole output. At Match the TV or 4:3 nothing changes (the frame is the
   output).
 - **The pause menu switches at once** (same day): before, a frame was shown 4:3 only after 32 frames without 3D, so for
   half a second the menu's full-width backdrop was stretched across the wide picture, then the picture snapped to 4:3
@@ -178,16 +178,17 @@ fixes (`src/ui/settings_menu.cpp`):
 Pages and sections: `settings::Spec::section`; pages in order of first registration, sections likewise, rows in
 registration order; a page whose rows are all hidden is not shown.
 
-## Player settings (2026-10-28): display, sound, gamepad, presets
+## Player settings (2026-10-28): display, sound, the controller, presets
 
 Asked for by the user ("substantially flexible settings that players can change"). Pages: Display, Graphics, Audio,
-Game, Gamepad, Advanced.
+Game, Controller, Advanced.
 - **Display**: *Presets* first - Authentic (PS2) (the Display / Graphics defaults, but original timing at 30 fps: the
-  default frame rate is 60 with frame-rate independent timing since 2026-10-30), Enhanced (Match window aspect, HUD at
-  the screen edges, Match window resolution, 4x MSAA, 16x AF, independent timing at the display's refresh) and
-  Widescreen, light (Match window, 1x, no MSAA, 4x AF, independent at 60). A preset sets only those keys; controls and
+  default frame rate is 60 with frame-rate independent timing since 2026-10-30), Enhanced (Match the TV aspect, HUD at
+  the screen edges, Match the TV resolution, 4x MSAA, 16x AF, independent timing at the TV's refresh) and
+  Widescreen, light (Match the TV, 1x, no MSAA, 4x AF, independent at 60). A preset sets only those keys; controls and
   sound stay. *Screen*: **TV output** (`display.ps5_output`: Automatic = 4K when the TV has it, 1080p, 1440p, 4K;
-  restart), Aspect ratio, HUD. *Frame rate*: Game timing, Frame rate cap, **Vertical sync** (`display.vsync`),
+  restart), Aspect ratio, HUD. *Frame rate*: Game timing, Frame rate cap (30 / 60 / 100 / 120 / 144 / 165 / 240, TV
+  refresh, unlimited up to 240), **Vertical sync** (`display.vsync`),
   **Show frame rate** (game frames per second over half a second, in a chosen corner).
 - **Graphics**: Internal resolution, Anti-aliasing (MSAA), Texture filtering.
 - **Audio**: **Master volume**, **Movie volume** (0-100%, squared to a gain so the steps sound even), **Speakers**
@@ -196,17 +197,26 @@ Game, Gamepad, Advanced.
   and a change there comes back here and into vcs.ini; a save load keeps the player's levels (game-internals.md 9c,
   `VCS_GAME_VOLUME=0` leaves the game's levels alone). A Voices volume was removed again the same day (DECISIONS.md).
 - **Game**: Skip intro movies.
-- **Gamepad**: the bindings, sticks, triggers and vibration (docs/CONTROLS.md).
-- **Advanced**: Performance overlay; **Reset all settings** (asks for a second press).
+- **Controller**: the bindings (a DualSense button for each PS2 button), sticks, triggers and vibration
+  (docs/CONTROLS.md).
+- **Advanced**: Performance overlay; **Record performance** (a button: starts / stops `logs/perf_<date>_<time>.csv` in
+  the app's folder, `tools/perf_report.py` reads it - in place of the old F4 key, 2026-10-31); **Reset all settings**
+  (asks for a second press).
 
 Registry additions (`settings::Spec`): `Type::Action` (a button: `button` text, `confirm` for a second press; no
 value, nothing in vcs.ini, skipped by applyAll and the page reset); `hidden` (no row of its own; a page of hidden rows
 is not shown). Layout: the help area is the longest help's height but at most four lines; a longer help is drawn
 smaller (down to 60%) to fit, so the rows keep about two thirds of the menu whatever the texts.
 
-Checked: `tools/controls_check.py` (21 checks: every default binding in the pad report, the presets, Reset all
-settings, input back after the menu, the game's vibration reaching the pad) and `tools/ps5.py padtest` (the DualSense
-path, 62 checks).
+Checked (2026-10-28, before the PS5 build): the default bindings in the pad report, the presets, Reset all settings,
+input back after the menu, the game's vibration reaching the pad (a scripted check of the PC build, removed with it
+2026-10-31); now `tools/ps5.py padtest` (the DualSense path and the Controller page, 62 checks).
+
+The menu on the PS5 (2026-10-31): only the DualSense drives it - Dear ImGui's gamepad navigation from the pad
+(platform_ps5.cpp feeds the pad's buttons as ImGui's gamepad keys and nothing else: no keyboard, no mouse). Touchpad +
+Options opens and closes it, Circle closes it (not while a combo list is open), L1 / R1 change pages, the d-pad moves,
+Cross changes a value; the help line follows the navigation. The key-binding rows and the mouse handling (hover help,
+click a toggle's row) were for the PC build and are gone; the settings keep their vcs.ini keys and values.
 
 ## The plan's architecture (2026-10-22)
 
@@ -236,7 +246,7 @@ path, 62 checks).
 - **4:3 (original)**: the picture presented at the correct 4:3 display aspect.
 - **16:9**: the game's own widescreen mode (preference on), presented stretched to 16:9 - replaced by Hor+ after the
   spike (above).
-- **16:10, 21:9, Match window**: the aspect global overridden to the target ratio; presented at that ratio.
+- **16:10, 21:9, Match the TV**: the aspect global overridden to the target ratio; presented at that ratio.
 
 ### How each part works
 

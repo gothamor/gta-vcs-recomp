@@ -1,5 +1,5 @@
 // [gta-recomp] Host audio output for the SPU2 mix: a ring buffer filled in IOP time (PS2IopHostAdapter::audioSamples)
-// and drained by the platform layer's audio callback (SDL3 audio stream) at 48 kHz stereo.
+// and drained by the platform layer's audio callback (the PS5's sceAudioOut) at 48 kHz stereo.
 // The emulator produces audio in bursts (IOP time is caught up with the host clock once per IOP batch), so the
 // buffer keeps a target fill that adapts: it starts at 60 ms, grows by 30 ms after every underrun (max 250 ms) and
 // shrinks back by ~1 ms per second. Clock drift is absorbed by resampling within +-0.5% (inaudible), never by the

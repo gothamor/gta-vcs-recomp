@@ -1,7 +1,6 @@
 // Render hardware interface (docs/NATIVE_RENDERER.md): the small set of GPU operations the renderer needs, so the
-// renderer never sees a graphics API. One backend per API: D3D11 (rhi/d3d11, Windows), Vulkan (rhi/vulkan, Linux, and
-// Windows to compare) and null (rhi/null, no GPU work). Immutable pipelines, explicit passes, copies and readbacks as
-// plain operations.
+// renderer never sees a graphics API. Backends: Vulkan (rhi/vulkan, on the PS5's RADV) and null (rhi/null, no GPU
+// work). Immutable pipelines, explicit passes, copies and readbacks as plain operations.
 //
 // Threading: one device, used from one thread (the main thread). No API types appear in this header.
 #pragma once
@@ -182,7 +181,7 @@ namespace rhi
         uint32_t offset = 0;
     };
 
-    // Compiled shader for this device (D3D11: DXBC from fxc; Vulkan: SPIR-V from tools/hlsl_spirv.py).
+    // Compiled shader for this device (SPIR-V from tools/hlsl_spirv.py).
     struct ShaderCode
     {
         const void *data = nullptr;
@@ -225,33 +224,29 @@ namespace rhi
 
     enum class Backend : uint8_t
     {
-        D3D11,
         Vulkan,
         Null, // no GPU work: textures read back as zeros (bring-up and tests of the CPU side)
     };
-    const char *backendName(Backend backend);         // "D3D11", "Vulkan", "null"
-    bool backendFromName(const char *name, Backend &out); // d3d11 | vulkan | null, any case
-    bool backendBuilt(Backend backend);               // compiled into this build
-    Backend defaultBackend();                         // D3D11 on Windows, Vulkan elsewhere
+    const char *backendName(Backend backend);             // "Vulkan", "null"
+    bool backendFromName(const char *name, Backend &out); // vulkan | null, any case
 
-    // What the Vulkan backend needs from the window (the platform layer's SDL): opaque to the RHI.
+    // What the Vulkan backend needs from the platform layer (the TV's surface, RADV's entry point): opaque to the RHI.
     struct VulkanWindow
     {
         const char *const *(*instanceExtensions)(uint32_t *count) = nullptr; // for the surface
         bool (*createSurface)(void *instance, uint64_t *surface) = nullptr;  // VkInstance -> VkSurfaceKHR
-        // the driver's vkGetInstanceProcAddr when it is linked into the game (the PS5's RADV); null: the system's loader
+        // the driver's vkGetInstanceProcAddr (RADV is linked into the game); null: the system's loader library
         void *(*getInstanceProcAddr)() = nullptr;
     };
 
     struct DeviceDesc
     {
-        Backend backend = defaultBackend();
-        void *nativeWindow = nullptr; // D3D11: the HWND
-        VulkanWindow vulkan;          // Vulkan
+        Backend backend = Backend::Vulkan;
+        VulkanWindow vulkan; // Vulkan
         uint32_t width = 0;
         uint32_t height = 0;
         bool debug = false;     // API validation layer (when installed)
-        bool offscreen = false; // Vulkan: no swapchain, the back buffer is a texture (hidden windows: test runs)
+        bool offscreen = false; // Vulkan: no swapchain, the back buffer is a texture
     };
 
     class Device
@@ -304,9 +299,9 @@ namespace rhi
         // ---- swapchain --------------------------------------------------------------------------------------------
         virtual void backbufferSize(uint32_t &width, uint32_t &height) const = 0;
         virtual void resize(uint32_t width, uint32_t height) = 0;
-        // Immediate: as soon as it is drawn, never torn (flip model: a newer frame replaces one not shown yet);
-        // Vsync: waits for the display's refresh; Tearing: at once, mid-refresh if need be (lowest latency, VRR - falls
-        // back to Immediate where the system can't).
+        // Immediate: as soon as it is drawn, never torn (a newer frame replaces one not shown yet); Vsync: waits for
+        // the TV's refresh; Tearing: at once, mid-refresh if need be (lowest latency - falls back to Immediate where the
+        // driver can't).
         enum class PresentMode : uint8_t
         {
             Immediate,
@@ -325,12 +320,10 @@ namespace rhi
         virtual void uiShutdown() = 0;
     };
 
-    // The device of desc.backend. Null with `error` set when that backend isn't built or no device / swapchain could be
-    // made.
+    // The device of desc.backend. Null with `error` set when no device / swapchain could be made.
     std::unique_ptr<Device> createDevice(const DeviceDesc &desc, std::string &error);
 
-    // The backends (rhi.cpp calls them; each exists only when built).
-    std::unique_ptr<Device> createD3D11Device(const DeviceDesc &desc, std::string &error);
+    // The backends (rhi.cpp calls them).
     std::unique_ptr<Device> createVulkanDevice(const DeviceDesc &desc, std::string &error);
     std::unique_ptr<Device> createNullDevice(const DeviceDesc &desc, std::string &error);
 }

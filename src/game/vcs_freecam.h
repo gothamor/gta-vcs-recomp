@@ -17,7 +17,7 @@ namespace vcs::freecam
     void install(PS2Runtime &runtime);
 
     // Any thread: the trainer's Free camera is on and the game is in play - the pad then gives the game nothing and the
-    // keyboard / mouse / gamepad fly the camera (game/vcs_input.h).
+    // DualSense flies the camera (game/vcs_input.h).
     bool flying();
 
     struct Pose

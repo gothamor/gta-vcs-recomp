@@ -3,7 +3,7 @@
 #include <vector>
 #include <mutex>
 #include <unordered_map>
-#include <bit> // [gta-recomp] std::countr_zero instead of MSVC's <intrin.h> _BitScanForward (Linux)
+#include <bit> // [gta-recomp] std::countr_zero instead of <intrin.h> _BitScanForward (not on the PS5 target)
 #include <string>
 #include <memory>
 #include "runtime/ps2_host_profile.h"

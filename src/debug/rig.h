@@ -1,6 +1,6 @@
 // The automation rig (docs/NATIVE_PORT_ROADMAP.md milestone 1): control-channel commands that look into and drive
 // the running game - memory peek / poke / search, and (built on those) teleport, world state and missions.
-// Needs the control channel (PS2X_CONTROL=1, tools/run.py --control); tools/rig.py is the client.
+// Needs the control channel (PS2X_CONTROL=1, runtime/ps2_control.h); tools/gamectl.py sends its commands.
 //
 // Commands that change the game run on the game thread at the next frame kick (a safe point between frames) and
 // answer when done; reads answer at once from the main thread.

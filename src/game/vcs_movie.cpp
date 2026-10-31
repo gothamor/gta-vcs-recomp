@@ -160,7 +160,7 @@ namespace vcs
             return out;
         }
 
-        // Start / Cross on the emulated pad (keyboard, gamepad or injected input; active low)
+        // Start / Cross on the emulated pad (the DualSense or injected input; active low)
         bool skipPressed()
         {
             uint8_t pad[32] = {};

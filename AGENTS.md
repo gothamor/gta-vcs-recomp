@@ -47,7 +47,7 @@ choices).
 | `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders (HLSL, compiled to SPIR-V by `tools/hlsl_spirv.py`), the RHI (`rhi.h`; the PS5 draws with `vulkan/`; only the backends see a graphics API), the PS5 platform layer (`platform_ps5.cpp`) |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
 | `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the settings menu (touchpad + Options), the trainer menu (touchpad + R1) |
-| `src/debug/` | Crash handler, watchdog, self-test, memory watch |
+| `src/debug/` | Crash handler, watchdog, self-test, memory watch, the control channel's automation commands (`rig.cpp`) |
 | `third_party/PS2Recomp/ps2xRuntime` | The runtime (EE, VIF, VU1, GS HW backend, IOP host, stubs); our changes marked `[gta-recomp]` |
 | `game/vcs/` | Recompiler config, function map, VU1 upload list |
 | `ps5/` | The PS5 build's own pieces: the CMake toolchain file and link rule (`cmake/`), start-up code linked into the game (`runtime/`: emulated TLS, `stat` wrapper, RELRO padding), the controller test (`tests/`) |
@@ -65,24 +65,27 @@ python3 tools/ps5.py deploy --host IP [--iso F]               # the app folder t
 python3 tools/ps5.py ffmpeg                                   # FFmpeg for the PS5 (the movies), then build again
 python3 tools/ps5.py compile-check --sdk DIR [--triangle T]   # the PS5 build against stand-in code (no disc; CI)
 python3 tools/ps5.py padtest                                  # the DualSense -> DualShock 2 path, console functions mocked (62 checks)
-python3 tools/release.py --ps5 [--ref vX | --worktree]        # the release zip (build/dist): the source + PS5-README.txt;
-                                                              # refuses game files. The number is VERSION (root; 0.0.3):
+python3 tools/release.py [--ref vX | --worktree]              # the release zip (build/dist): the source + PS5-README.txt;
+                                                              # refuses game files. The number is VERSION (root; 0.0.4):
                                                               # bump it before tagging - the tag must match
-python3 tools/build_dir.py [check|set P|reset]                # the build folder elsewhere (.vcs-build-dir, VCS_BUILD_DIR)
-python3 tools/clean.py [--apply] [--keep-days 7]              # delete test output in build/ (lists first; builds kept)
+python3 tools/gamectl.py ...                                  # the game's control channel (runtime/ps2_control.h)
+python3 tools/perf_report.py logs/perf_*.csv                  # a performance recording (Advanced > Record performance)
+python3 tools/clean.py [--apply] [--keep-days 7]              # delete the build folder's scratch output (lists first)
 python3 tools/ghidra_analyze.py                               # redo the Ghidra analysis (Ghidra 12 + JDK 21)
 python3 tools/irxdis.py --decompile X.IRX OUT.c               # an IOP module as C (headless Ghidra; analysis only)
 python3 tools/eedecomp.py 0x2f7d58 [...] [--out FILE]         # game functions as C (the analysed EE project; analysis only)
 ```
 
-- The build machine is Ubuntu 24.04 or WSL 2 (the PS5 SDK's tools run there); the game runs on the console only.
+- The build machine is Ubuntu 24.04 or WSL 2 (the PS5 SDK's tools run there); the game is built for and runs on the
+  console only - the build machine builds the recompiler (build/release) and the controller test, never the game.
 - On the console the app's folder is `/data/homebrew/<title id>/`: `vcs.ini` (the settings), `userdata/` (the memory
   card), `logs/vcs.log` (the last run; `vcs.prev.log` the one before). Start-up failures are also PS5 notifications.
 - Rebuild costs: a change to `ps2_memory.h`, `gs_backend.h`, `ps2_hle_survey.h` or anything the
   generated code includes rebuilds everything; runtime-only changes about a minute; `src/` only seconds. Prefer
   `src/game/vcs_overrides.cpp` for experiments.
 - `compile-check` and `padtest` need no disc and no console: run them after any change to `src/`, `ps5/` or the
-  runtime. The first run on a console is docs/PS5.md's checklist.
+  runtime (`padtest` builds the controller's path alone: `ps5/tests/CMakeLists.txt`). The first run on a console is
+  docs/PS5.md's checklist.
 - LTO is off by default on the PS5 (`--lto` turns ThinLTO on: not measured on a console yet). Never edit sources while
   a build is compiling them.
 
@@ -101,7 +104,8 @@ python3 tools/eedecomp.py 0x2f7d58 [...] [--out FILE]         # game functions a
    0x1f80), not the console's flush-to-zero default (docs/PS5.md).
 4. **The console's limits** (docs/PS5.md): no file mappings of big files (the disc is read with `pread`), `thread_local`
    at most 32-byte aligned, no `preserve_none` for the PS5 target, `clock_gettime` is a system call (the TSC for hot
-   timing), the Create button is the system's.
+   timing), the Create button is the system's, there is no keyboard or mouse, and an app started from the home screen
+   gets no environment (the `PS2X_*` / `VCS_*` switches: docs/PS5.md's work list).
 5. **Patch scripts**: shell heredocs can turn `\n` inside Python strings into real newlines and corrupt C++ string
    literals. Use the Edit tool, or write the script to a file first.
 6. **Scripts are Python 3, standard library only**, runnable from any shell; extend `tools/*.py`

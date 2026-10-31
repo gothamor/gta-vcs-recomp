@@ -137,60 +137,6 @@ namespace ps2_stubs
             setButton(state, kPadBtnStart, platform::gamepadButton(platform::GAMEPAD_START));
         }
 
-        void applyKeyboardState(PadInputState &state, bool allowAnalog)
-        {
-            if (!platform::ready())
-            {
-                return;
-            }
-
-            // Keyboard mapping (PS2 -> keys):
-            // D-Pad: arrows, Square/Cross/Circle/Triangle: Z/X/C/V
-            // L1/R1: Q/E, L2/R2: 1/3, Start/Select: Enter/RightShift
-            // L3/R3: LeftCtrl/RightCtrl, Analog left: WASD
-            setButton(state, kPadBtnUp, platform::keyDown(platform::KEY_UP));
-            setButton(state, kPadBtnDown, platform::keyDown(platform::KEY_DOWN));
-            setButton(state, kPadBtnLeft, platform::keyDown(platform::KEY_LEFT));
-            setButton(state, kPadBtnRight, platform::keyDown(platform::KEY_RIGHT));
-
-            setButton(state, kPadBtnSquare, platform::keyDown(platform::KEY_Z));
-            setButton(state, kPadBtnCross, platform::keyDown(platform::KEY_X));
-            setButton(state, kPadBtnCircle, platform::keyDown(platform::KEY_C));
-            setButton(state, kPadBtnTriangle, platform::keyDown(platform::KEY_V));
-
-            setButton(state, kPadBtnL1, platform::keyDown(platform::KEY_Q));
-            setButton(state, kPadBtnR1, platform::keyDown(platform::KEY_E));
-            setButton(state, kPadBtnL2, platform::keyDown(platform::KEY_ONE));
-            setButton(state, kPadBtnR2, platform::keyDown(platform::KEY_THREE));
-
-            setButton(state, kPadBtnStart, platform::keyDown(platform::KEY_ENTER));
-            setButton(state, kPadBtnSelect, platform::keyDown(platform::KEY_RIGHT_SHIFT));
-            setButton(state, kPadBtnL3, platform::keyDown(platform::KEY_LEFT_CONTROL));
-            setButton(state, kPadBtnR3, platform::keyDown(platform::KEY_RIGHT_CONTROL));
-
-            if (!allowAnalog)
-            {
-                return;
-            }
-
-            float ax = 0.0f;
-            float ay = 0.0f;
-            if (platform::keyDown(platform::KEY_D))
-                ax += 1.0f;
-            if (platform::keyDown(platform::KEY_A))
-                ax -= 1.0f;
-            if (platform::keyDown(platform::KEY_S))
-                ay += 1.0f;
-            if (platform::keyDown(platform::KEY_W))
-                ay -= 1.0f;
-
-            if (ax != 0.0f || ay != 0.0f)
-            {
-                state.lx = axisToByte(ax);
-                state.ly = axisToByte(ay);
-            }
-        }
-
         void resetPadStateLocked()
         {
             for (PadPortState &portState : g_padPorts)
@@ -309,8 +255,7 @@ namespace ps2_stubs
                 }
                 else
                 {
-                    applyGamepadState(state);
-                    applyKeyboardState(state, portState.analogMode);
+                    applyGamepadState(state); // [gta-recomp] the DualSense only: no keyboard on the PS5
                 }
             }
 

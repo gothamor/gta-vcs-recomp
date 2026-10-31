@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Summarise a perf recording (F4 in game, or PS2X_PERF_LOG=<file.csv>).
+"""Summarise a perf recording (the settings menu's Advanced > Record performance: logs/perf_*.csv in the app's
+folder; or PS2X_PERF_LOG=<file.csv>).
 
-    python tools/perf_report.py perf_20261022_170000.csv [--from S] [--to S] [--worst N]
+    python3 tools/perf_report.py perf_20261022_170000.csv [--from S] [--to S] [--worst N]
 
 Prints frame-rate and frame-time percentiles, where the EE thread's time goes (game code / render submit /
 IOP / waiting for VBlank), render counters, host and audio state, a frame-time histogram, the worst frames

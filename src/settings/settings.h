@@ -1,9 +1,9 @@
-// Player settings (docs/SETTINGS_MENU_WIDESCREEN.md): a registry of typed settings, their values (vcs.ini next to
-// vcs.exe), and change notifications. The settings menu (ui/settings_menu.h) is generated from the registry: a new
+// Player settings (docs/SETTINGS_MENU_WIDESCREEN.md): a registry of typed settings, their values (vcs.ini in the app's
+// folder), and change notifications. The settings menu (ui/settings_menu.h) is generated from the registry: a new
 // setting is one add() plus its apply callback.
 //
-// Order at start-up: add() everything, load(ini), applyAll(). Values are ints (toggles, choices, integers, keys;
-// actions have none).
+// Order at start-up: add() everything, load(ini), applyAll(). Values are ints (toggles, choices, integers; actions have
+// none).
 // Threads: add / load / applyAll / set from the main thread (menu); value() from any thread.
 #pragma once
 
@@ -20,7 +20,6 @@ namespace settings
         Toggle,  // 0 / 1
         Choice,  // one of `choices` (their values)
         Integer, // min..max
-        Key,     // a platform::Key, mouse buttons and wheel included (the menu offers the keys it knows)
         Action,  // a button: onChange(0) when pressed (presets, reset); no value, nothing in vcs.ini
     };
 
@@ -52,16 +51,9 @@ namespace settings
         Apply apply = Apply::Live;
         std::string env;               // an environment variable that overrides it (testing), shown as such
         std::function<void(int)> onChange; // the new value; also called once by applyAll()
-        std::function<int()> read;     // optional: the live value, when something else changes it too (a hotkey)
+        std::function<int()> read;     // optional: the live value, when something else changes it too
 
-        // Key: 0 (unbound) is a valid value. A control binding; the menu clears one with a right click.
-        bool optional = false;
-        // Key: keys of one group are exclusive - binding a key another setting of the group has takes it from that
-        // setting when that one is optional, and is refused otherwise (e.g. the menu key).
-        std::string group;
-        // Key: a second binding of the same action, drawn in this row beside the first (its own Spec, `hidden`).
-        std::string partner;
-        bool hidden = false; // no row of its own (a partner); still saved, reset with its page
+        bool hidden = false; // no row of its own; still saved, reset with its page
         // Action: the button's text, and whether it asks for a second click first.
         std::string button;
         bool confirm = false;
@@ -77,12 +69,12 @@ namespace settings
     bool changedSinceStart(const std::string &key); // Restart settings: "applies after restart"
 
     void load(const std::filesystem::path &ini);
-    void keepFile(); // after load: changes last for this run only, vcs.ini is never rewritten (hidden test runs)
+    void keepFile(); // after load: changes last for this run only, vcs.ini is never rewritten (test runs)
     void applyAll();
     void refresh(); // takes the live values of settings with `read` (the menu calls it when it opens)
 
-    // Saved state that is not a setting (no menu entry, no validation): text values in vcs.ini, e.g. the window
-    // placement (window.*). Main thread, after load().
+    // Saved state that is not a setting (no menu entry, no validation): text values in vcs.ini. Main thread, after
+    // load().
     std::string state(const std::string &key); // "" when absent
     void setState(const std::vector<std::pair<std::string, std::string>> &values); // one rewrite of vcs.ini
 }

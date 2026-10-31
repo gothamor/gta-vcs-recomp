@@ -1,12 +1,8 @@
-// [gta-recomp] Which 4 KB pages of guest RAM were written, without reading them (docs/FULLY_NATIVE.md step 4): guest RAM
-// is allocated with the OS's write watch (Windows MEM_WRITE_WATCH: every write counts - guest code, host threads, the
-// kernel reading a file into it - and costs nothing until asked). fold() takes the pages written since the last fold and
-// bumps their generation; a page whose generation is unchanged holds the bytes it held then. Kept out of ps2_memory.h:
-// the generated code includes that one.
-//
-// PS2X_WRITE_WATCH=0: guest RAM allocated as before; enabled() false, every generation 0 (nothing can be told clean).
-// Linux (userfaultfd async write-protect + PAGEMAP_SCAN, ps2_write_watch.cpp) is opt-in: PS2X_WRITE_WATCH=1.
-// PS2X_WRITE_WATCH_LOG=1: pages written per fold and the fold's cost, every 5 s.
+// [gta-recomp] Which 4 KB pages of guest RAM were written, without reading them (docs/FULLY_NATIVE.md step 4): fold()
+// takes the pages written since the last fold and bumps their generation; a page whose generation is unchanged holds the
+// bytes it held then. The PS5 has no OS write watch (ps2_write_watch.cpp): enabled() is false and every generation 0,
+// so nothing is told clean and the blocks are copied as before. Kept out of ps2_memory.h: the generated code includes
+// that one.
 #pragma once
 
 #include <cstddef>

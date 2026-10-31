@@ -270,10 +270,10 @@ dropped on uploads (lazy render-target patching).
   - [x] Frame copy and motion blur as native passes (texture copy / one full-screen quad); the self-copy over the
         sky stays a GS draw (depth-tested, read at full resolution).
 - [ ] **Step 4: native frame** (started 2026-10-23; NATIVE_RENDERER.md "Native frame").
-  - [x] Per-target scales; "Internal resolution: Match window" draws the picture's targets at the output's size
+  - [x] Per-target scales; "Internal resolution: Match the TV" draws the picture's targets at the output's size
         (1920x1080 at 16:9 1080p), the effect buffers at 1x. Default stays 1x (the original).
   - [x] MSAA (2x-8x) and anisotropic filtering (2x-16x) as options, off by default (NATIVE_RENDERER.md "Native frame").
-  - [x] The reflection map at the output's resolution with "Match window" (2026-10-24, FULLY_NATIVE.md step 3d); the
+  - [x] The reflection map at the output's resolution with "Match the TV" (2026-10-24, FULLY_NATIVE.md step 3d); the
         radar has no target of its own (drawn in the HUD layer, already at the output's resolution).
 - [x] **Draw-source counter** (2026-10-24; NATIVE_RENDERER.md "Draw sources"): what each frame still draws through
       the GS path, by source (VU1 program, C++ reproduction, PATH2, PATH3) - perf line `gs_*`, overlay, the rig's
@@ -565,7 +565,7 @@ dropped on uploads (lazy render-target patching).
   was taken by the load: logged). `tools/saves.py` (regress `saves`) now loads with god mode on: before the fix its
   load failed (stuck on "Loading...", the player never back at the save), after it passes with the slot taken logged.
 
-- **Ultrawide** (2026-10-27, asked for by the user): Aspect ratio 21:9, 32:9 and Match window (the output's own
+- **Ultrawide** (2026-10-27, asked for by the user): Aspect ratio 21:9, 32:9 and Match the TV (the output's own
   shape, 4:3 .. 32:9). Checked with the reference scenes and city drives at 21:9 / 32:9 (picture, HUD,
   cutscene bars, culling and streaming at the edges); regress step "widecull" covers 21:9 and 32:9. At 32:9 3840x1080
   the render worker costs about twice 16:9 1920x1080 (busiest bench spot 97 fps, drive 103) - details in
@@ -626,8 +626,14 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
 - [x] The DualSense audited (2026-10-31): the DualShock 2's mapping button for button, `tools/ps5.py padtest` (62
       checks through the real platform layer and bindings); pad open fallbacks, trigger bits, the menu chords kept from
       the game, DualSense names in the menus' hints.
-- [x] `tools/ps5.py setup` (ps5-plume-triangle pinned and built), `build --zip`, `release.py --ps5` (the build kit -
+- [x] `tools/ps5.py setup` (ps5-plume-triangle pinned and built), `build --zip`, `release.py` (the build kit -
       no game code: DECISIONS.md 2026-10-31); VERSION 0.0.3.
+- [x] The PC code stripped and the in-game text worded for the PS5 (2026-10-31, DECISIONS.md): the SDL3 layer, D3D11,
+      paraLLEl-GS, the launcher, the keyboard / mouse paths, the window settings, the PC tools - each checked to be dead
+      on the PS5 first; the presenter's size, the frame-rate caps, the CMake / Ninja finder, the build folder pointer
+      and clean.py kept. The controller test builds on its own (`ps5/tests/CMakeLists.txt`, in CI); the control channel
+      injects DualShock 2 buttons; Advanced > Record performance. Checked: compile-check links, padtest 62 / 62, the
+      recompiler builds; VERSION 0.0.4.
 - [ ] The first run on a console (docs/PS5.md's checklist); FFmpeg for the PS5 built and the movies checked; frame
       rate there; ThinLTO; 120 Hz / VRR; DualSense extras; the control channel on the LAN; the debug switches below from a
       file in the app's folder (a homebrew app gets no environment).
@@ -639,7 +645,7 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 
 | Env var | Effect |
 |---|---|
-| `PS2X_GS=cpu\|hw\|gpu\|null` | GS renderer (the game: default hw, set by src/main.cpp; the runtime's own default cpu) |
+| `PS2X_GS=cpu\|hw\|gpu\|null` | GS renderer (the game: default hw, set by src/main.cpp; the runtime's own default cpu; gpu has no backend in this build) |
 | `PS2X_HW_SCALE=n`, `PS2X_HW_DEBUG=1` | hardware renderer scale / stats |
 | `VCS_FPS_LOG=1` | VBlanks and flips per second (was `VCS_FPS=1`; `VCS_FPS` is the frame rate cap) |
 | `VCS_TIMING=0\|1`, `VCS_FPS=30\|60\|120\|144\|-1\|0` | game timing original / frame-rate independent; frame rate cap (-1 display refresh, 0 unlimited) |
@@ -695,7 +701,7 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 | `VCS_DUMP_RAM=s,s,...` | write EE RAM to ram_<s>.bin at those seconds |
 | `PS2X_DMA_HIST=1` | VIF1 payload per MB of RAM every 5 s |
 | `VCS_TRACE_PACKETS=1` | peak use of the game's DMA packet buffer |
-| `PS2X_PERF_LOG=f.csv` | CSV recording of the perf numbers (the overlay: Advanced > Performance overlay); `python3 tools/perf_report.py f.csv` |
+| `PS2X_PERF_LOG=f.csv` | CSV recording of the perf numbers from boot (in the game: Advanced > Record performance, `logs/perf_*.csv`; the overlay: Advanced > Performance overlay); `python3 tools/perf_report.py f.csv` |
 | `PS2X_HLE_CLIPPED=1` | draw world packets that cross the clip planes with GPU clipping (wrong in places, game-internals.md 6h) |
 | `PS2X_HLE_CLIPPER=0` | clipped world packets on the VU1 instead of the C++ clipper |
 | `PS2X_HLE_ENV=0` | the environment-map pass (stage table 0x13) on the VU1 |
@@ -708,7 +714,7 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 | `PS2X_HW_PIXEL_CENTRE=0` | draws without the GS pixel-centre offset (softer copies, as before 2026-10-23) |
 | `PS2X_HW_RT_FULL=0` | render targets read once per PS2 texel everywhere (higher internal resolutions lost in the copies) |
 | `PS2X_HW_POSTFX=0` or letters `btc` | effects drawn as recorded / only these native: b bloom, t trails, c frame copy + motion blur |
-| `PS2X_HW_SCALE=0` | native frame: the picture's targets at the output's size (menu: Internal resolution > Match window) |
+| `PS2X_HW_SCALE=0` | native frame: the picture's targets at the output's size (menu: Internal resolution > Match the TV) |
 | `PS2X_HW_MENU_SWITCH=0` | widescreen: the pause menu goes 4:3 only after 32 frames without 3D (as before 2026-10-27) |
 | `PS2X_HW_WIDE_SCALE=0` | integer scales in widescreen: the picture 640 x scale wide, stretched (as before 2026-10-27) |
 | `PS2X_HW_MSAA=2/4/8` | MSAA for the picture's targets (menu: Anti-aliasing) |
@@ -742,7 +748,7 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 | `VCS_RSL_SKIP=0`, `VCS_RSL_SKIP_VERIFY=1`, `VCS_RSL_SKIP_KINDS=<mask>` | copy every marked block; decide skips but copy anyway and check each against the recording it would have replayed; which kinds may be skipped (bit 0 world, 1 model, 2 model-b, 3 other call; default all) |
 | `VCS_RSL_MEASURE=1` | with `VCS_RSL_WORLD_LOG`: per chain the bytes copied, the marked blocks and the distinct ones |
 | `PS2X_HW_RT_LOG=1` | the render targets with their names (gsHwSetTargetRole), sizes and scales, every 5 s |
-| `PS2X_HW_REFLECTION_SCALE=0` | the reflection map stays 1x with "Match window" |
+| `PS2X_HW_REFLECTION_SCALE=0` | the reflection map stays 1x with "Match the TV" |
 | `VCS_RSL_RASTERS=0` | textures not named by raster (no upload REFs recorded) |
 | `PS2X_HW_DECODE_FROM_UPLOAD=0`, `PS2X_HW_DECODE_VERIFY=1` | textures decoded from emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] textures from upload`) |
 | `PS2X_HW_CLUT_FROM_UPLOAD=0`, `PS2X_HW_CLUT_VERIFY=1` | CLUT loads read emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] clut from upload`) |
@@ -777,7 +783,9 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 | `VCS_COUNT_CALLS=addr,...` | calls per 5 s of guest functions |
 | `VCS_RWATCH=lo,hi` | which code reads a guest range |
 | `PS2X_HW_DUMP=<frame>` | dump HW render targets + display as PPM |
-| `VCS_DATA_DIR=dir` | save / cache folder instead of the app's folder |
+| `VCS_DATA_DIR=dir` | save / cache folder instead of the app's `userdata/` |
+| `PS2X_HIDDEN=1`, `PS2X_INPUT=injected`, `PS2X_CONTROL=1` | test runs: the controller ignored and the sound muted / the controller ignored / the control channel on 127.0.0.1 (`python3 tools/gamectl.py`: `button <name> down\|up`, `press <name>`, `screenshot`, `perf`, the game layer's commands) |
+| `VCS_BUILD_DIR=dir` (or the path in `.vcs-build-dir`) | the build machine's tools: the build folder elsewhere |
 | `VCS_RHI=vulkan\|null` | the renderer for one run: Vulkan, or the null backend (no GPU work) |
 | `PS2X_RHI_DEBUG=1` | Vulkan's Khronos validation layer, where it is installed |
 | `PS2X_RHI_STATS=1` | Vulkan: draws, descriptor writes, passes, suspended passes, barriers, uploads, CPU waits per frame, and input to GPU done (avg / p50 / p95) every 5 s; gs_hw: the input delay by stage |

@@ -1,12 +1,12 @@
-// Vulkan backend of rhi.h (Vulkan 1.3: dynamic rendering, synchronization2, push descriptors). The only file that
-// includes Vulkan headers. It keeps D3D11's behaviour, which the renderer was written against (rhi_d3d11.cpp):
+// Vulkan backend of rhi.h (Vulkan 1.3: dynamic rendering, synchronization2, push descriptors), on the PS5's RADV. The
+// only file that includes Vulkan headers. The conventions the renderer and its HLSL shaders were written against:
 //
-// - D3D's Y-up NDC through a negative viewport height; depth 0..1 in both; pixel centres at +0.5 in both.
-// - Bindings follow the D3D registers (tools/hlsl_spirv.py): cbuffer bN -> binding N, texture tN -> 16 + N, sampler
-//   sN -> 32 + N, one push-descriptor set. Unbound slots read zeros (a 1x1 black texture, a zero buffer), as D3D's
-//   null views do; so does a texture that is also the pass's target (D3D unbinds it).
-// - State (pipeline, buffers, textures, viewport, scissor) stays set across draws and passes, as in D3D11; beginPass
-//   unbinds the textures and resets the viewport and scissor to the target.
+// - Y-up clip space (HLSL's) through a negative viewport height; depth 0..1; pixel centres at +0.5.
+// - Bindings follow the HLSL registers (tools/hlsl_spirv.py): cbuffer bN -> binding N, texture tN -> 16 + N, sampler
+//   sN -> 32 + N, one push-descriptor set. Unbound slots read zeros (a 1x1 black texture, a zero buffer); so does a
+//   texture that is also the pass's target.
+// - State (pipeline, buffers, textures, viewport, scissor) stays set across draws and passes; beginPass unbinds the
+//   textures and resets the viewport and scissor to the target.
 // - Dynamic buffers rewritten whole (WRITE_DISCARD): each update takes a new slice of the frame's upload ring, so
 //   draws recorded earlier keep their data; a buffer drawn in a later frame without an update is copied again from
 //   its CPU copy.
@@ -14,7 +14,7 @@
 //   the perf line, PS2X_RHI_STATS=1) and resumed with its contents loaded.
 // - Textures rest in SHADER_READ_ONLY (sampled) or their attachment layout and go back there after every operation;
 //   a pass's targets are in their attachment layouts while it lasts.
-// - New render targets and depth textures start cleared to zero (D3D drivers hand them out that way).
+// - New render targets and depth textures start cleared to zero.
 // - Objects freed while the GPU may still use them are destroyed when their frame's fence has passed.
 #include "rhi/rhi.h"
 
@@ -53,7 +53,7 @@ namespace rhi
     {
         constexpr uint32_t kFrames = 2;          // frames in flight
         constexpr uint32_t kUniformSlots = 4;    // cbuffer b0..b3
-        constexpr uint32_t kTextureSlots = 8;    // t0..t7 / s0..s7 (beginPass unbinds 8, as rhi_d3d11.cpp)
+        constexpr uint32_t kTextureSlots = 8;    // t0..t7 / s0..s7 (beginPass unbinds 8)
         constexpr uint32_t kTextureBinding = 16; // tools/hlsl_spirv.py
         constexpr uint32_t kSamplerBinding = 32;
         constexpr VkDeviceSize kRingChunk = 8u << 20;
@@ -188,7 +188,7 @@ namespace rhi
             bool alive = false; // the Device object exists: frees go through its frame queues
             uint32_t frame = 0; // the frame slot being recorded
             std::array<std::vector<std::function<void()>>, kFrames> garbage;
-            // the device's bindings forget an object being destroyed (D3D11 kept a reference to what is bound; the
+            // the device's bindings forget an object being destroyed (a bound object is referenced; the
             // renderer replaces buffers and textures that are still bound)
             std::function<void(const void *)> unbind;
 
@@ -715,7 +715,7 @@ namespace rhi
                     return;
                 if (b.desc().dynamic)
                 {
-                    // WRITE_DISCARD: the rest of the buffer is undefined in D3D; ours keeps the old bytes
+                    // WRITE_DISCARD-style: the rest of the buffer keeps the old bytes
                     std::memcpy(b.shadow.data(), data, size);
                     b.sliceFrame = 0; // a new slice at the next use
                     if (&b == m_vertexBuffer || &b == m_indexBuffer)
@@ -809,7 +809,7 @@ namespace rhi
                     swapBarrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
                 if (m_passDepth)
                     barrier(m_cmd, *m_passDepth, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
-                // as D3D11's beginPass: textures unbound, viewport and scissor the whole target
+                // beginPass: textures unbound, viewport and scissor the whole target
                 for (uint32_t i = 0; i < kTextureSlots; ++i)
                 {
                     m_textures[i] = nullptr;
@@ -827,7 +827,7 @@ namespace rhi
 
             void setViewport(float x, float y, float width, float height) override
             {
-                // D3D's Y-up NDC: the viewport upside down
+                // HLSL's Y-up clip space: the viewport upside down
                 m_viewport = {x, y + height, width, -height, 0.0f, 1.0f};
                 m_viewportDirty = true;
             }
@@ -1020,7 +1020,7 @@ namespace rhi
                     const char *const *names = desc.vulkan.instanceExtensions(&n);
                     if (!names)
                     {
-                        std::fprintf(stderr, "[rhi] no window surface extensions: drawing off-screen\n");
+                        std::fprintf(stderr, "[rhi] no surface extensions for the TV: drawing off-screen\n");
                         m_offscreen = true;
                     }
                     for (uint32_t i = 0; names && i < n; ++i)
@@ -1079,7 +1079,7 @@ namespace rhi
                     uint64_t surface = 0;
                     if (!desc.vulkan.createSurface(m_core->instance, &surface))
                     {
-                        error = "no Vulkan surface for the window";
+                        error = "no Vulkan surface for the TV";
                         return false;
                     }
                     m_surface = reinterpret_cast<VkSurfaceKHR>(surface);
@@ -1192,7 +1192,7 @@ namespace rhi
                         return true;
                     }
                 }
-                missing = "a graphics queue that can show the window";
+                missing = "a graphics queue that can show the picture";
                 return false;
             }
 
@@ -1226,7 +1226,7 @@ namespace rhi
                 std::vector<const char *> extensions{VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
                 if (!m_offscreen)
                     extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-                // GPU time on the CPU's clock (the input delay, PS2X_RHI_STATS): CLOCK_MONOTONIC is steady_clock on Linux
+                // GPU time on the CPU's clock (the input delay, PS2X_RHI_STATS): CLOCK_MONOTONIC, which steady_clock reads
                 if (statsOn() && deviceHas(VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME))
                 {
                     uint32_t n = 0;
@@ -1379,10 +1379,10 @@ namespace rhi
                 vkGetPhysicalDeviceSurfaceFormatsKHR(m_core->physical, m_surface, &count, formats.data());
                 if (formats.empty())
                 {
-                    error = "the window offers no surface formats";
+                    error = "the TV's surface offers no formats";
                     return false;
                 }
-                // 8-bit UNORM as D3D11's R8G8B8A8_UNORM back buffer (no sRGB conversion)
+                // 8-bit UNORM back buffer (no sRGB conversion)
                 VkSurfaceFormatKHR chosen = formats[0];
                 for (VkFormat want : {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM})
                 {
@@ -1416,7 +1416,7 @@ namespace rhi
                 extent.height =
                     std::clamp(extent.height, caps.minImageExtent.height, std::max(caps.minImageExtent.height, caps.maxImageExtent.height));
                 if (!extent.width || !extent.height)
-                    return true; // minimised: no swapchain until the window has a size again
+                    return true; // no size yet: no swapchain until there is one
                 uint32_t images = std::max(caps.minImageCount, 3u);
                 if (caps.maxImageCount)
                     images = std::min(images, caps.maxImageCount);
@@ -1871,7 +1871,7 @@ namespace rhi
                 {
                     VkTexture *t = m_textures[i];
                     if (t && (t == m_passColor || t == m_passDepth || t->samples != VK_SAMPLE_COUNT_1_BIT || t->resting != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL))
-                        t = nullptr; // D3D unbinds a texture that is also the target: reads zeros
+                        t = nullptr; // a texture that is also the target reads zeros
                     sampled[i] = t ? t : m_dummyTexture.get();
                     if (sampled[i]->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                     {
@@ -2046,7 +2046,7 @@ namespace rhi
                 vp.viewportCount = 1;
                 vp.scissorCount = 1;
                 VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-                rs.depthClampEnable = d.depthClip ? VK_FALSE : VK_TRUE; // D3D11 DepthClipEnable=FALSE: clamped, not clipped
+                rs.depthClampEnable = d.depthClip ? VK_FALSE : VK_TRUE; // depthClip off: clamped, not clipped
                 rs.polygonMode = VK_POLYGON_MODE_FILL;
                 rs.cullMode = VK_CULL_MODE_NONE;
                 rs.frontFace = VK_FRONT_FACE_CLOCKWISE;
@@ -2291,7 +2291,7 @@ namespace rhi
             }
 
             // ---- PS2X_GPU_TIMING=1: GPU time between each pushMarker / popMarker pair (timestamps), summed per marker name
-            // and reported every 5 s as ms per frame, as rhi_d3d11.cpp does; "(frame)" is the whole frame ----------------
+            // and reported every 5 s as ms per frame; "(frame)" is the whole frame ----------------
             static constexpr uint32_t kNoQuery = ~0u;
             static constexpr uint32_t kQueries = 16384; // per frame slot
 
@@ -2397,7 +2397,7 @@ namespace rhi
                 bool markers = false; // spans between markers reported ([gpu-timing])
                 double periodNs = 1.0;
                 uint64_t validMask = ~0ull;
-                // GPU ticks <-> steady_clock (VK_KHR_calibrated_timestamps, CLOCK_MONOTONIC: Linux's steady_clock)
+                // GPU ticks <-> steady_clock (VK_KHR_calibrated_timestamps, CLOCK_MONOTONIC: steady_clock's clock)
                 bool calibrated = false;
                 uint64_t gpuRef = 0;
                 int64_t cpuRef = 0;
@@ -2524,7 +2524,7 @@ namespace rhi
             bool m_passToBackbuffer = false, m_inPass = false, m_passStarted = false, m_passMarker = false;
             uint32_t m_passWidth = 0, m_passHeight = 0;
 
-            // bound state (D3D11-style, kept across draws and passes)
+            // bound state (kept across draws and passes)
             VkPipe *m_pipeline = nullptr;
             VkPipeline m_boundPipeline = VK_NULL_HANDLE;
             VkBuf *m_vertexBuffer = nullptr, *m_indexBuffer = nullptr;

@@ -1,15 +1,16 @@
-// The PS5 controller path, checked on Linux (python3 tools/ps5.py padtest; docs/PS5.md): the real platform_ps5.cpp with
-// the console's pad / user / TSC functions mocked below, the real bindings (src/game/vcs_input.cpp), settings and the
-// runtime's pad backend, linked against a Linux build's objects. DualSense states in, the DualShock 2 report the game
-// reads out: every button and stick, the triggers, Select on the touchpad (tap and hold), the menu chords kept from the
-// game, a controller gone and back, the motors, and the pad as Dear ImGui's gamepad keys. The DualSense's button bits
-// and ScePadData's head are ps5-plume-triangle's, verified on a console.
+// The PS5 controller path, checked on the build machine (python3 tools/ps5.py padtest; ps5/tests/CMakeLists.txt;
+// docs/PS5.md): the real platform_ps5.cpp with the console's pad / user / TSC functions mocked below, the real bindings
+// (src/game/vcs_input.cpp), settings and the runtime's pad backend and control channel. DualSense states in, the
+// DualShock 2 report the game reads out: every button and stick, the triggers, Select on the touchpad (tap and hold),
+// the menu chords kept from the game, a controller gone and back, the motors, the Controller page, and the pad as Dear
+// ImGui's gamepad keys. The DualSense's button bits and ScePadData's head are ps5-plume-triangle's, verified on a
+// console.
 #include "game/vcs_input.h"
 #include "platform/platform.h"
-#include "ps2_runtime.h"
 #include "runtime/ps2_pad.h"
 #include "settings/settings.h"
 #include "imgui.h"
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -46,6 +47,16 @@ struct Ps5NotifyRequest { char reserved[45]; char message[3075]; };
 int sceKernelSendNotificationRequest(int, Ps5NotifyRequest *, size_t, int) { return 0; }
 }
 
+// ---- the rest of the game, which the controller path names but this test leaves out ----------------------------
+namespace vcs::freecam
+{
+    bool flying() { return false; } // game/vcs_freecam.cpp (the trainer's free camera)
+}
+namespace ps2perf
+{
+    std::string summaryLine() { return {}; } // ps2_perf.cpp (the control channel's "perf")
+}
+
 // ---- the checks ------------------------------------------------------------------------------------------------
 static int g_fail = 0, g_pass = 0;
 #define CHECK(cond, ...) do { if (cond) ++g_pass; else { ++g_fail; std::printf("FAIL %s:%d: ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -72,12 +83,10 @@ int main()
     vcs::input::registerSettings();
     settings::load("/nonexistent/vcs.ini");
     settings::applyAll();
-    platform::WindowDesc desc;
-    CHECK(platform::init(desc), "init");
+    CHECK(platform::init(), "init");
     CHECK(g_openedUser == g_initialUser, "the initial user's pad opened (got 0x%x)", g_openedUser);
     CHECK(g_vibMode == 2, "vibration mode 2 (got %d)", g_vibMode);
-    PS2Runtime runtime;
-    vcs::input::install(runtime);
+    vcs::input::install();
     { // the font atlas the renderer's ImGui backend would build (no renderer in this test)
         unsigned char *pixels = nullptr;
         int fw = 0, fh = 0;
@@ -164,8 +173,9 @@ int main()
     CHECK(ImGui::IsKeyDown(ImGuiKey_GamepadFaceRight) && ImGui::IsKeyDown(ImGuiKey_GamepadLStickUp), "ImGui: Circle = FaceRight, stick up");
     CHECK(ImGui::GetIO().BackendFlags & ImGuiBackendFlags_HasGamepad, "ImGui knows there is a gamepad");
     platform::endUiFrame();
-    int w = 0, h = 0; platform::windowSize(w, h); CHECK(w == 1920 && h == 1080, "the TV's size before the surface: %dx%d", w, h);
-    CHECK(std::strcmp(platform::gamepadName(), "DualSense") == 0, "name");
+    int w = 0, h = 0; platform::outputSize(w, h); CHECK(w == 1920 && h == 1080, "the TV's size before the surface: %dx%d", w, h);
+    const std::vector<std::string> pages = settings::pages();
+    CHECK(pages.size() == 1 && pages[0] == "Controller", "the bindings' one page: Controller (%zu pages)", pages.size());
 
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

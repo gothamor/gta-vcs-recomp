@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Delete test output in build/ (screenshots, logs, card copies, training data) - everything but what is listed below.
+"""Delete what the build folder holds besides the builds (scratch output, logs, release staging) - everything but
+what is listed below.
 
-    python tools/clean.py                      list what would go, by folder, with sizes (nothing is deleted)
-    python tools/clean.py --apply              delete it
-    python tools/clean.py --apply --keep-days 7    ... but keep anything changed in the last 7 days
+    python3 tools/clean.py                      list what would go, by folder, with sizes (nothing is deleted)
+    python3 tools/clean.py --apply              delete it
+    python3 tools/clean.py --apply --keep-days 7    ... but keep anything changed in the last 7 days
 
-Kept always (PROTECTED): the game at the top of build/ (vcs.exe, its DLLs, vcs.pdb, vcs.ini), the builds (release,
-tools, analyzer, iop_tests; ps5: the PS5 tree, its app folder and FFmpeg), the downloaded CMake / Ninja (build-tools), the ELF / VU1 extracts, analysis dumps,
-the rig's card copies (build/rig/saves), the regression baseline, the reference scenes capture
-(build/scenes/reference), the PGO profile and the cached compiler environment. Outside build/ nothing is touched:
-not the disc images, mc0 / mc1, generated/ or ghidra/. New test folders under build/ need no entry here - they are
-test output unless protected.
+Kept always (PROTECTED): the builds (release: the recompiler; analyzer; ps5: the PS5 tree, its app folder and FFmpeg;
+ps5-check and ps5-padtest: the checks' trees), the downloaded CMake / Ninja (build-tools), the ELF / VU1 extracts and
+analysis dumps. Outside build/ nothing is touched: not the disc images, generated/ or ghidra/. New folders under
+build/ need no entry here - they are scratch unless protected (the recompiler's generated_fresh/, dist/, logs).
 """
 import argparse
 import os
@@ -22,10 +21,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import toolchain as tc  # noqa: E402
 
-PROTECTED = [
-    "release", "tools", "build-tools", "analyzer", "iop_tests", "ps5", "elf", "vu1", "analysis",
-    "rig/saves", "regress/baseline", "scenes/reference", "pgo/vcs.profdata", "msvc_env.json",
-]
+PROTECTED = ["release", "build-tools", "analyzer", "ps5", "ps5-check", "ps5-padtest", "elf", "vu1", "analysis"]
 
 
 def norm(path):
@@ -64,12 +60,6 @@ def writable_retry(func, path, _):
     func(path)
 
 
-def is_game_file(name):
-    """The game at the top of build/: vcs.exe, its symbols, its DLLs and the player's vcs.ini (build.py)."""
-    lower = name.lower()
-    return lower in ("vcs", "vcs.exe", "vcs.pdb", "vcs.ini") or lower.endswith(".dll")
-
-
 def candidates(build, protected, keep_after):
     """(path, bytes) to delete: build/'s entries, descending into folders that hold something protected."""
     out = []
@@ -82,8 +72,6 @@ def candidates(build, protected, keep_after):
                 continue
             if any(q.startswith(p + os.sep) for q in protected):
                 visit(path)  # keep the protected part, look at the rest
-                continue
-            if folder == build and is_game_file(name):
                 continue
             if keep_after and newest(path) >= keep_after:
                 continue

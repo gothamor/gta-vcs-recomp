@@ -1,87 +1,18 @@
-// Host platform layer: window, events, keyboard / mouse / gamepad, audio output, frame pacing and the Dear ImGui
-// frame. The runtime and the renderer talk to the host only through this header (docs/NATIVE_RENDERER.md);
-// platform_sdl3.cpp implements it with SDL3 (Windows, Linux), platform_ps5.cpp with the PS5's own libraries
-// (docs/PS5.md); platform_common.cpp holds what both share. No SDL, windows.h or graphics-API types appear here.
+// The PS5 platform layer (platform_ps5.cpp, docs/PS5.md): the TV's Vulkan surface, the DualSense, the audio output,
+// frame pacing and the Dear ImGui frame. The runtime and the renderer reach the console only through this header
+// (docs/NATIVE_RENDERER.md); platform_common.cpp holds the PNG writer. No graphics-API types appear here.
 //
-// Threads: init / shutdown / pumpEvents / the frame calls and keyPressed belong to the main thread. The input
-// queries (keyDown, mouseDown, gamepad*) read a snapshot taken by pumpEvents and may be called from any thread
-// (the game thread reads the pad).
+// Threads: init / shutdown / pumpEvents / the frame calls belong to the main thread. The controller queries
+// (gamepad*) read a snapshot taken by pumpEvents and may be called from any thread (the game thread reads the pad).
 #pragma once
 
 #include <cstdint>
-#include <string>
 
 namespace platform
 {
-    // Key codes: the values raylib / GLFW use, so existing call sites and the control channel keep their numbers.
-    enum Key : int
-    {
-        KEY_NULL = 0,
-        KEY_SPACE = 32,
-        KEY_APOSTROPHE = 39,
-        KEY_COMMA = 44,
-        KEY_MINUS = 45,
-        KEY_PERIOD = 46,
-        KEY_SLASH = 47,
-        KEY_ZERO = 48, KEY_ONE, KEY_TWO, KEY_THREE, KEY_FOUR, KEY_FIVE, KEY_SIX, KEY_SEVEN, KEY_EIGHT, KEY_NINE,
-        KEY_SEMICOLON = 59,
-        KEY_EQUAL = 61,
-        KEY_A = 65, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O,
-        KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
-        KEY_LEFT_BRACKET = 91,
-        KEY_BACKSLASH = 92,
-        KEY_RIGHT_BRACKET = 93,
-        KEY_GRAVE = 96,
-        KEY_ESCAPE = 256,
-        KEY_ENTER = 257,
-        KEY_TAB = 258,
-        KEY_BACKSPACE = 259,
-        KEY_INSERT = 260,
-        KEY_DELETE = 261,
-        KEY_RIGHT = 262,
-        KEY_LEFT = 263,
-        KEY_DOWN = 264,
-        KEY_UP = 265,
-        KEY_PAGE_UP = 266,
-        KEY_PAGE_DOWN = 267,
-        KEY_HOME = 268,
-        KEY_END = 269,
-        KEY_CAPS_LOCK = 280,
-        KEY_F1 = 290, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12,
-        KEY_KP_0 = 320, KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4, KEY_KP_5, KEY_KP_6, KEY_KP_7, KEY_KP_8, KEY_KP_9,
-        KEY_KP_DECIMAL = 330,
-        KEY_KP_DIVIDE = 331,
-        KEY_KP_MULTIPLY = 332,
-        KEY_KP_SUBTRACT = 333,
-        KEY_KP_ADD = 334,
-        KEY_KP_ENTER = 335,
-        KEY_LEFT_SHIFT = 340,
-        KEY_LEFT_CONTROL = 341,
-        KEY_LEFT_ALT = 342,
-        KEY_RIGHT_SHIFT = 344,
-        KEY_RIGHT_CONTROL = 345,
-        KEY_RIGHT_ALT = 346,
-        // Mouse buttons and wheel notches as keys, so a control binding can be either (keyDown works for them; a wheel
-        // notch is a short press: down 50 ms, then up 50 ms before the next one).
-        KEY_MOUSE_LEFT = 400,
-        KEY_MOUSE_RIGHT = 401,
-        KEY_MOUSE_MIDDLE = 402,
-        KEY_MOUSE_X1 = 403,
-        KEY_MOUSE_X2 = 404,
-        KEY_WHEEL_UP = 405,
-        KEY_WHEEL_DOWN = 406,
-        KEY_COUNT = 512,
-    };
-
-    enum MouseButton : int
-    {
-        MOUSE_LEFT,
-        MOUSE_RIGHT,
-        MOUSE_MIDDLE,
-        MOUSE_BUTTON_COUNT,
-    };
-
-    // Positions, not labels: SOUTH = Cross / A, EAST = Circle / B, WEST = Square / X, NORTH = Triangle / Y.
+    // The DualSense's buttons by position, as the DualShock 2's: SOUTH = Cross, EAST = Circle, WEST = Square,
+    // NORTH = Triangle; BACK is the touchpad click (the PS2's Select: the Create button belongs to the system),
+    // START is Options.
     enum GamepadButton : int
     {
         GAMEPAD_SOUTH,
@@ -101,7 +32,7 @@ namespace platform
         GAMEPAD_BUTTON_COUNT,
     };
 
-    // Sticks -1..1 (down / right positive), triggers 0..1.
+    // Sticks -1..1 (down / right positive), triggers (L2 / R2) 0..1.
     enum GamepadAxis : int
     {
         AXIS_LEFT_X,
@@ -113,78 +44,39 @@ namespace platform
         AXIS_COUNT,
     };
 
-    struct WindowDesc
-    {
-        const char *title = "";
-        int width = 640;
-        int height = 448;
-        bool hidden = false; // not on the desktop or taskbar (scripted test runs)
-        bool vulkan = false; // for a Vulkan renderer (the surface comes from vulkanCreateSurface)
-    };
-
-    // Where the window was on the desktop, to open it there again (main.cpp keeps it in vcs.ini as window.*).
-    // x / y / width / height: the restored (not maximized) client area, in screen coordinates relative to the
-    // top-left of the monitor it is on. The monitor is found again by name, and by its desktop origin between two of
-    // the same model; when it is gone the window opens at the default place.
-    struct WindowPlacement
-    {
-        std::string display;            // monitor name
-        int displayX = 0, displayY = 0; // that monitor's desktop origin
-        int x = 0, y = 0, width = 0, height = 0;
-        bool maximized = false;
-    };
-    using PlacementChanged = void (*)(const WindowPlacement &placement);
-
-    // Before init: open the window at `placement` instead of centred on the primary monitor at the default size.
-    void setStartPlacement(const WindowPlacement &placement);
-    // Called on the main thread once the window has settled after a move / resize / maximize, and at shutdown. Not
-    // used for hidden windows (they are neither placed nor remembered).
-    void onPlacementChanged(PlacementChanged callback);
-
-    // Main thread. Full screen: borderless at the desktop's resolution on the monitor the window is on (no display mode
-    // change, so Alt+Tab and other monitors stay as they are); off: the window as it was before. Before init: how the
-    // window opens. A hidden window only remembers it. In full screen the mouse cursor hides after 2 s without moving.
-    void setFullscreen(bool on);
-    bool fullscreen();
-
-    // Main thread. Creates the window (no graphics API attached: the renderer makes its swapchain on
-    // nativeWindow()) and the Dear ImGui context with its input backend; the ImGui renderer belongs to the RHI.
-    bool init(const WindowDesc &desc);
+    // Main thread. Opens the controller and makes the Dear ImGui context (fed from the pad); the renderer makes its
+    // swapchain on the TV through vulkanCreateSurface.
+    bool init();
     void shutdown();
     bool ready();
-    void *nativeWindow(); // HWND on Windows, null elsewhere
 
-    bool windowHidden(); // made with WindowDesc::hidden
-
-    // For the Vulkan renderer (rhi::VulkanWindow), on a window made with WindowDesc::vulkan. Main thread.
+    // For the Vulkan renderer (rhi::VulkanWindow). Main thread.
     const char *const *vulkanInstanceExtensions(uint32_t *count); // the instance extensions the surface needs
-    bool vulkanCreateSurface(void *instance, uint64_t *surface);  // VkInstance -> VkSurfaceKHR
-    // The Vulkan driver's vkGetInstanceProcAddr (a PFN_vkGetInstanceProcAddr) when the driver is linked into the game
-    // (the PS5's RADV: there is no loader library); null when the system's loader is to be loaded (volk).
+    bool vulkanCreateSurface(void *instance, uint64_t *surface);  // VkInstance -> VkSurfaceKHR on the TV
+    // The Vulkan driver's vkGetInstanceProcAddr (a PFN_vkGetInstanceProcAddr): RADV is linked into the game, there is
+    // no loader library.
     void *vulkanGetInstanceProcAddr();
 
-    // A short message for the player outside the game's picture, for when the game cannot start (no disc...): the PS5's
-    // notification. Elsewhere nothing: the caller's log line is on the console / in the log.
+    // A short message for the player outside the game's picture, for when the game cannot start (no disc...): the
+    // system's notification.
     void notify(const char *message);
 
     // Main thread, once per host frame, in this order:
-    //   pumpEvents()      events + input snapshot
-    //   beginFrame()      new Dear ImGui frame (overlays / debug UI may draw from here on; the renderer's ImGui
-    //                     backend starts its frame just before)
+    //   pumpEvents()      the controller snapshot
+    //   beginFrame()      new Dear ImGui frame (overlays / menus may draw from here on; the renderer's ImGui backend
+    //                     starts its frame just before)
     //   endUiFrame()      Dear ImGui output finished (ImGui::GetDrawData), for the renderer to draw
     //   ...the renderer draws and presents...
     //   waitNextFrame()   sleeps until the next host frame (1/60 s unless setFrameRate says otherwise)
-    // frameStart false: an input refresh between frames (frame lead): the snapshot is new, keyPressed edges are kept for
-    // the next frame-start pump, which reports every press since the last one
+    // frameStart false: a controller refresh between frames (frame lead)
     void pumpEvents(bool frameStart = true);
-    // When the input snapshot the queries read was taken (std::chrono::steady_clock, ns): the start of a frame's input
-    // delay (any thread).
+    // When the controller snapshot the queries read was taken (std::chrono::steady_clock, ns): the start of a frame's
+    // input delay (any thread).
     int64_t inputSnapshotNs();
-    bool quitRequested(); // window closed
     void beginFrame();
     void endUiFrame();
     void waitNextFrame();
-    // Frame lead (main thread): waitNextFrame wakes `leadNs` before the next host frame and calls `atLead` (an input
+    // Frame lead (main thread): waitNextFrame wakes `leadNs` before the next host frame and calls `atLead` (a controller
     // refresh and the start of the game's next frame, so it is ready by then: docs/PERFORMANCE.md 19); 0 = none.
     // frameLeadRan(): whether the last waitNextFrame did (then the frame start need not start the game's frame).
     using FrameLead = void (*)();
@@ -192,37 +84,22 @@ namespace platform
     bool frameLeadRan();
     bool frameSlept(); // the last waitNextFrame waited for its time (false: the host frame took the whole period or more)
     void setFrameRate(double hz); // host frames per second for waitNextFrame (any thread; 60 by default)
-    double displayRefreshHz();    // the window's monitor's refresh rate (60 when unknown)
+    double displayRefreshHz();    // the TV mode's refresh rate (60 until the surface is made)
     void delayPrecise(uint64_t ns); // sleep with sub-millisecond precision (any thread)
 
-    void windowSize(int &width, int &height); // drawable pixels
-    bool windowFocused(); // the window has the keyboard focus (main thread; false for a hidden window)
+    void outputSize(int &width, int &height); // the TV mode's pixels (1920x1080 until the surface is made)
 
-    // Input (any thread; snapshot from the last pumpEvents).
-    bool keyDown(int key);
-    bool keyPressed(int key); // main thread: went down at the last pumpEvents
-    bool mouseDown(MouseButton button);
+    // The DualSense (any thread; snapshot from the last pumpEvents).
     bool gamepadConnected();
     bool gamepadButton(GamepadButton button);
     float gamepadAxis(GamepadAxis axis);
-    const char *gamepadName(); // "" without a gamepad (main thread)
     // Vibration, motors 0..1 (low = the large, slow motor; high = the small, fast one). Any thread; applied at the next
     // pumpEvents and held until changed (0, 0 stops).
     void gamepadRumble(float low, float high);
 
-    // Mouse capture (main thread): the cursor hidden and held in the window, motion reported as relative counts. Off
-    // while the window is in the background.
-    void setMouseCaptured(bool on);
-    bool mouseCaptured();
-    // Mouse motion since the last call, in mouse counts (any thread; one consumer).
-    void takeMouseMotion(float &dx, float &dy);
-
-    // A key's name for menus ("A", "F2", "Left Shift", "Mouse 4", "Wheel up"); "?" for codes without one.
-    const char *keyName(int key);
-
-    // Audio output: interleaved 16-bit stereo at `rate`, pulled by `fill` on the audio thread.
+    // Audio output: interleaved 16-bit stereo at `rate` (48000), pulled by `fill` on the audio thread.
     using AudioFill = void (*)(int16_t *stereo, uint32_t frames);
-    bool audioAvailable(); // a playback device exists
+    bool audioAvailable(); // the main output port is there
     bool audioOpen(uint32_t rate, uint32_t bufferFrames, AudioFill fill);
     void audioClose();
 

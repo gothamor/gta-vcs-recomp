@@ -6,7 +6,7 @@
 
 #include <algorithm>
 #include <mutex>
-#include <iterator>  // [gta-recomp] libstdc++ (Linux) does not bring it in
+#include <iterator>  // [gta-recomp] the PS5's libc++ does not bring it in
 
 namespace ps2_vu_code_log
 {

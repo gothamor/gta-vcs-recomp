@@ -3,7 +3,8 @@
 The game as a native PS5 homebrew app, for jailbroken consoles that run homebrew from `/data/homebrew/`: the game's
 own code recompiled to C++, the PS5 platform layer (the TV, the DualSense, audio), the PS5's start-up code and link,
 and the RHI's Vulkan renderer (`src/rhi/vulkan`) drawing through RADV, Mesa's AMD driver, linked into the game. No
-emulator. Decisions: DECISIONS.md, 2026-10-31.
+emulator. The tree is PS5-only: the build machine builds the recompiler and the controller test, never the game
+(DECISIONS.md, 2026-10-31: the PS5, and the PC code stripped).
 
 The way to the console is the one the [gta4-ps5](https://github.com/chonzytron/gta4-ps5) port (GTA IV on the PS5)
 takes and has shipped: Nazky's [ps5-plume-triangle](https://github.com/Nazky/ps5-plume-triangle) brings the
@@ -19,13 +20,14 @@ RADV (`libvulkan_radeon.ps5.a`), the app start-up code, the clean-room `libc.prx
 | The link: the ps5-plume-triangle recipe in Python (`tools/ps5_link.py`) | done: the whole game links into a PIE with the fork's libps5platform, libc++ and the system stubs (2026-10-31, stand-in generated code and an empty RADV archive: no disc or RADV build where it was written) |
 | Packaging (`tools/ps5.py package`): eboot.bin, sce_module/libc.prx, sce_sys/param.json + icon0.png, disc/ | done; checked with a stand-in for ps5-native-tool (the real one was not run where it was written), including the RELRO padding fallback |
 | Platform layer (`src/platform/platform_ps5.cpp`): the TV (VK_KHR_display), the DualSense (scePad), sound (sceAudioOut), TSC frame pacing, Dear ImGui from the pad, notifications | written and compiled; not run on a console yet |
-| The DualSense as the DualShock 2 (`tools/ps5.py padtest`, `ps5/tests/padtest.cpp`) | done: 62 checks pass - the real platform layer with the console's pad functions mocked, through the real bindings to the report the game reads (every button, both sticks, the triggers, Select tap / hold, the menu chords kept from the game, a controller gone and back, the motors, the menus' gamepad keys). The pad's button bits are ps5-plume-triangle's, verified on a console |
+| The DualSense as the DualShock 2 (`tools/ps5.py padtest`, `ps5/tests/`) | done: 62 checks pass - the real platform layer with the console's pad functions mocked, through the real bindings to the report the game reads (every button, both sticks, the triggers, Select tap / hold, the menu chords kept from the game, a controller gone and back, the motors, the Controller page, the menus' gamepad keys). Built on its own for the build machine (no game build). The pad's button bits are ps5-plume-triangle's, verified on a console |
 | Vulkan: RADV's entry point instead of a loader (`volkInitializeCustom`) | written; not run on a console yet |
-| The disc read with `pread`, not mapped (`src/disc/iso_image.cpp`) | done: byte-identical to the mapped reads on a test image (every file, past-the-end reads; ASan / UBSan clean) |
+| The disc read with `pread`, not mapped (`src/disc/iso_image.cpp`) | done: byte-identical to mapped reads on a test image (every file, past-the-end reads; ASan / UBSan clean); `pread` is the only way now |
 | Paths (`/app0`), the log file, start-up errors as notifications, the FP state, crash reports | written and compiled; not run on a console yet |
 | FFmpeg for the movies (`tools/ps5.py ffmpeg`) | written, not run (FFmpeg's configure was not run where it was written): without it the movies are skipped |
-| `tools/ps5.py compile-check` + CI (`.github/workflows/ps5.yml`): the PS5 build compiled without a disc | done |
-| `tools/ps5.py setup` (ps5-plume-triangle fetched at its pinned commit and built), `build --zip`, `release.py --ps5` (the build kit) | done; setup's clone checked, its `make` not run where it was written |
+| `tools/ps5.py compile-check` + `padtest` in CI (`.github/workflows/ps5.yml`): the PS5 build compiled without a disc | done |
+| The PC code stripped (SDL3 layer, D3D11, the launcher, keyboard / mouse, window settings, PC tools; 2026-10-31) | done: compile-check links, padtest 62 / 62, the recompiler builds for the build machine |
+| `tools/ps5.py setup` (ps5-plume-triangle fetched at its pinned commit and built), `build --zip`, `release.py` (the build kit) | done; setup's clone checked, its `make` not run where it was written |
 | **First run on a console** | **to do** - the checklist below |
 
 ### First run: what to look at
@@ -68,14 +70,20 @@ lld, CMake 3.21+, Ninja and glslang:
 and empty bodies for the generated functions the host code names - no game code): a check without a disc or a
 console, which CI runs with the upstream SDK release. With a built triangle (`--triangle`) it links too.
 
-`python3 tools/ps5.py padtest` checks the controller path on the build machine: `ps5/tests/padtest.cpp` compiles the
-real `platform_ps5.cpp` with the console's pad, user and TSC functions mocked and links it against the game's objects
-compiled for the build machine (`build/release`, or `--tree`), then feeds DualSense states through the real bindings
-and checks the DualShock 2 report the game reads (62 checks).
+`python3 tools/ps5.py padtest` checks the controller path on the build machine: `ps5/tests/CMakeLists.txt` builds
+`ps5/tests/padtest.cpp` with the real `platform_ps5.cpp` (the console's pad, user and TSC functions mocked), the real
+bindings (`vcs_input.cpp`), settings and the runtime's pad backend and control channel - nothing of the game - in
+`build/ps5-padtest`, then feeds DualSense states through the bindings and checks the DualShock 2 report the game reads
+(62 checks).
+
+The build machine never builds the game: `tools/recompile.py` builds only the recompiler there (`build/release`, the
+top-level CMakeLists.txt without the PS5 toolchain file). `python3 tools/clean.py [--apply]` deletes what the build
+folder holds besides the builds (the recompiler's scratch output, release staging, logs). The build folder can be
+elsewhere: `VCS_BUILD_DIR`, or its path in `.vcs-build-dir`.
 
 ### Releases
 
-A release carries no game code (DECISIONS.md, 2026-10-21): `python3 tools/release.py --ps5` makes
+A release carries no game code (DECISIONS.md, 2026-10-21): `python3 tools/release.py` makes
 `build/dist/VCS-Recomp-<version>-ps5.zip`, the source with `PS5-README.txt` (the steps above in short), through the same
 game-file guard. Players build the app from their own disc. There is no ready-to-run PS5 zip to
 publish: the eboot is the game recompiled.
@@ -130,7 +138,7 @@ Because a chord starts on the touchpad, Select reaches the game once the touchpa
 a short press when it is let go sooner; while it is held, Options / L1 / R1 do not reach the game, and a hold that
 pressed one of them is a chord to the end (`src/game/vcs_input.cpp`).
 
-The Gamepad page of the settings rebinds every PS2 button and has the dead zones (12%), camera speed, trigger point,
+The Controller page of the settings rebinds every PS2 button and has the dead zones (12%), camera speed, trigger point,
 swapped sticks, inverted camera axes and the vibration strength. The game's rumble drives the DualSense's motors (the
 pad's dual-motor vibration mode). The controller is the one of the user who started
 the game (else the user in front, any logged-in user, last the system's); one switched on later is found within a
@@ -176,8 +184,7 @@ second.
 - **Time**: `clock_gettime` is a system call on the PS5, so frame pacing reads the TSC (`sceKernelReadTsc`), sleeping
   while more than 1.5 ms is left and spinning the rest.
 - **The disc is read with `pread`**, not mapped: in gta4-ps5 a file mapping of a disc image froze the whole console.
-  `IsoImage` keeps the descriptor and reads each request (thread-safe, no shared file position); `sectorPtr` is null
-  in that mode (nothing uses it).
+  `IsoImage` keeps the descriptor and reads each request (thread-safe, no shared file position).
 - **Files**: the app's folder is `/app0` (writable for an app run from `/data/homebrew`): `vcs.ini`, `userdata/`
   (`VCS_DATA_DIR`'s place), `logs/`. stdout and stderr go to `logs/vcs.log`, line-buffered, both appending (one file
   offset). Start-up failures (no disc, the wrong disc, no renderer) are also sent as a PS5 notification.
@@ -205,5 +212,5 @@ second.
 | 120 Hz output and VRR (`param.json` attribute3 0x40 / 0x40000, as gta4-ps5 declares them) for the 120 fps cap | to do |
 | DualSense extras (light bar, adaptive triggers), as gta4-ps5 has them | later |
 | The debug switches (`PS2X_*` / `VCS_*`, PROGRESS.md) from a file in the app's folder: an app started from the home screen gets no environment | to do |
-| The control channel on the LAN (opt-in), so `tools/gamectl.py` and the rig can drive the console | later |
+| The control channel on the LAN (opt-in), so `tools/gamectl.py` and the rig's commands (`src/debug/rig.cpp`) can drive the console; it injects DualShock 2 buttons (`button` / `press`) | later |
 | The Vulkan pipeline cache kept between runs (`userdata/`) | later |

@@ -104,7 +104,7 @@ namespace ps2perf
                 return;
             std::fclose(g_csv);
             g_csv = nullptr;
-            std::fprintf(stderr, "[perf] recording saved: %s (summarise with: python tools/perf_report.py %s)\n", g_csvName.c_str(),
+            std::fprintf(stderr, "[perf] recording saved: %s (summarise with: python3 tools/perf_report.py %s)\n", g_csvName.c_str(),
                          g_csvName.c_str());
         }
 
@@ -112,11 +112,7 @@ namespace ps2perf
         {
             const std::time_t now = std::time(nullptr);
             std::tm tm{};
-#if defined(_WIN32)
-            localtime_s(&tm, &now);
-#else
             localtime_r(&now, &tm);
-#endif
             char buf[64];
             std::strftime(buf, sizeof(buf), "perf_%Y%m%d_%H%M%S.csv", &tm);
             return buf;
@@ -373,7 +369,8 @@ namespace ps2perf
             addLine(fmt("AUDIO %3.0f ms queued   %llu underruns (last %zu frames)", now.audioMs, static_cast<unsigned long long>(win.underruns),
                         samples.size()),
                     now.audioMs < 20.0 ? rgba(245, 100, 90, 255) : white);
-            addLine(recording ? fmt("REC %s   [F4] stop   [F3] hide", csvName.c_str()) : std::string("[F4] record CSV   [F3] hide"),
+            // [gta-recomp] the settings menu (touchpad + Options) hides the overlay and records the CSV (Advanced)
+            addLine(recording ? fmt("REC %s", csvName.c_str()) : std::string("touchpad + Options > Advanced: hide / record CSV"),
                     recording ? rgba(245, 90, 90, 255) : dim);
 
             // graph: one stacked bar per game frame, EE thread phases (they add up to the frame time); a red cap marks a
@@ -486,23 +483,13 @@ namespace ps2perf
         g_lastHostNs = now;
     }
 
-    void drawOverlay(bool handleKeys)
+    void drawOverlay()
     {
-        if (handleKeys && ps2control::keyPressed(platform::KEY_F3))
-            g_overlay = !g_overlay;
         bool recording;
         std::string csvName;
         std::vector<Sample> samples;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
-            if (handleKeys && ps2control::keyPressed(platform::KEY_F4))
-            {
-                g_logFromEnv = true; // a manual toggle wins over PS2X_PERF_LOG
-                if (g_csv)
-                    closeCsv();
-                else
-                    openCsv(timestampedName());
-            }
             recording = g_csv != nullptr;
             csvName = g_csvName;
             if (g_overlay)
@@ -578,6 +565,23 @@ namespace ps2perf
     }
 
     void setOverlay(bool on) { g_overlay = on; }
+
+    // [gta-recomp] the settings menu's "Record performance" (in place of a key): perf_<date>_<time>.csv in `dir`
+    void setRecording(bool on, const std::string &dir)
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_logFromEnv = true; // the setting wins over PS2X_PERF_LOG
+        if (!on)
+            closeCsv();
+        else if (!g_csv)
+            openCsv(dir.empty() ? timestampedName() : dir + "/" + timestampedName());
+    }
+
+    bool recording()
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        return g_csv != nullptr;
+    }
 
     bool overlayOn() { return g_overlay; }
 

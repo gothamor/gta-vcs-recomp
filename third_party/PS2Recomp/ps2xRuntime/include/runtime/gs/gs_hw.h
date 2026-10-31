@@ -1,9 +1,9 @@
-// [gta-recomp] Hardware GS renderer (D3D11 through the RHI, src/rhi; was OpenGL 3.3).
+// [gta-recomp] Hardware GS renderer (Vulkan through the RHI, src/rhi).
 //
 // The game thread records: GSHwBackend implements GSRasterBackend, keeps VRAM, transfers and CLUTs in an
 // embedded GSCpuBackend (everything but drawing), turns primitives into batched draws, decodes textures
 // (cached) and hands each frame's command list over at VBlank. The main thread executes the lists on the
-// window's RHI device (render targets, depth, blending, alpha test, fog) and shows the display circuit.
+// presenter's RHI device (render targets, depth, blending, alpha test, fog) and shows the display circuit.
 //
 // PS2X_GS=hw selects it. PS2X_HW_SCALE=<1..8> renders at that multiple of the PS2 resolution.
 #pragma once
@@ -24,7 +24,7 @@ namespace rhi
 struct GSHwOptions
 {
     uint32_t scale = 1;
-    bool nativeFrame = false; // [gta-recomp] PS2X_HW_SCALE=0: the picture's targets at the window's resolution
+    bool nativeFrame = false; // [gta-recomp] PS2X_HW_SCALE=0: the picture's targets at the output's resolution
     uint32_t msaa = 1;        // [gta-recomp] PS2X_HW_MSAA: samples for the picture's targets (1 = off)
     uint32_t anisotropy = 0;  // [gta-recomp] PS2X_HW_ANISO: anisotropic filtering of the game's textures (0 = off)
     static GSHwOptions fromEnvironment();
@@ -35,7 +35,7 @@ class GSHwPresenter
 {
 public:
     virtual ~GSHwPresenter() = default;
-    // Main thread, with the window's device: run every frame recorded since the last call. Returns the texture
+    // Main thread, with the presenter's device: run every frame recorded since the last call. Returns the texture
     // holding the newest displayed picture (alpha = 1, row 0 at the top; owned by the renderer, valid until the next
     // call) and its size; false until a first frame has been displayed.
     virtual bool executeAndGetDisplay(rhi::Device &device, rhi::Texture *&texture, uint32_t &width, uint32_t &height) = 0;
@@ -80,13 +80,13 @@ using GSHwAnchorFn = uint8_t (*)(const float *xy, uint32_t count);
 void gsHwSetHudClassifier(GSHwAnchorFn fn);
 
 // [gta-recomp] Native HUD layer: the primitives the classifier names are kept out of the PS2 frame buffer and drawn over
-// the displayed picture at the output size (gsHwSetOutputSize) - sharp at any window size, in its aspect. The displayed
+// the displayed picture at the output size (gsHwSetOutputSize) - sharp at any output size, in its aspect. The displayed
 // buffer's latest HUD is drawn; a new scene in that buffer starts the next one. Any thread.
 void gsHwSetHudLayer(bool on);
 // [gta-recomp] Widescreen: how much wider than 4:3 the game's 640-wide frame is shown (display aspect / (4/3)); the
 // native post effects widen their buffers by it so blur and warp keep their 4:3 proportions on screen. Any thread.
 void gsHwSetAspectWidening(float widening);
-// [gta-recomp] Frame pacing between the game and the window. Off (the PS2's timing): the game may run 3 frames ahead and
+// [gta-recomp] Frame pacing between the game and the TV. Off (the PS2's timing): the game may run 3 frames ahead and
 // each host frame renders every queued frame, showing the last - game time keeps its pace when the GPU falls behind.
 // On (frame-rate independent timing, where game time follows the clock anyway): one frame queued, one rendered and
 // shown per host frame - a GPU-bound machine shows every frame it renders (the HD 520: 76 shown fps instead of 30 at the
@@ -95,13 +95,13 @@ void gsHwSetShowEveryFrame(bool on);
 // [gta-recomp] The input snapshot time (PSPadBackend::lastInputNs) of the frame the last host frame showed: for the
 // input-to-screen delay (rhi::Device::setFrameInputTime). Main thread.
 int64_t gsHwShownInputNs();
-// [gta-recomp] How long a frame takes from its input snapshot to ready for the window (game, render worker, GS stage):
+// [gta-recomp] How long a frame takes from its input snapshot to ready for the TV (game, render worker, GS stage):
 // the 95th percentile of recent frames, 0 before any (the frame lead, docs/PERFORMANCE.md 19). Any thread.
 int64_t gsHwFrameBuildNs();
-// [gta-recomp] Native frame (GSHwOptions::nativeFrame): the size the picture's own targets are drawn at - the window's
+// [gta-recomp] Native frame (GSHwOptions::nativeFrame): the size the picture's own targets are drawn at - the output's
 // letterboxed area for 3D frames' aspect. 0 = the integer scale. Any thread.
 void gsHwSetFrameSize(uint32_t width, uint32_t height);
-// [gta-recomp] The size the picture is shown at (the window's letterboxed area); 0 = the render targets' size.
+// [gta-recomp] The size the picture is shown at (the letterboxed area on the TV); 0 = the render targets' size.
 void gsHwSetOutputSize(uint32_t width, uint32_t height);
 // [gta-recomp] Render targets named by what they are (docs/FULLY_NATIVE.md step 3d): the game says which buffer (FBP,
 // FBW) is which. windowScale: drawn at the native frame's scale (gsHwSetFrameSize) like the picture's own targets

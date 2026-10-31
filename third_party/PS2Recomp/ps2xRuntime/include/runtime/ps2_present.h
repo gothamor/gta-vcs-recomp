@@ -29,7 +29,7 @@ void ps2NoteFramesTaken(uint32_t frames);
 bool ps2WaitHostTick();
 void ps2SetHostPacedFrames(bool on);
 
-// Movie pictures (a game's movies played natively, e.g. VCS's STINGS / INTRO): shown in the window instead of the game
+// Movie pictures (a game's movies played natively, e.g. VCS's STINGS / INTRO): shown on the TV instead of the game
 // picture, at display aspect `aspect`, until ps2EndMovieFrames. rgba: width x height, rows top-down, R G B A bytes.
 // Any thread (copies the picture).
 void ps2ShowMovieFrame(const uint8_t *rgba, int width, int height, float aspect);

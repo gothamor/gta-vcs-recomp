@@ -5,7 +5,6 @@
 // unity batch (~9 min), while this file only needs a relink.
 // Once a binding is settled it can move to overrides.toml.
 #include "game_overrides.h"
-#include "debug/profiler.h"
 #include "debug/rig.h"
 #include "game/vcs_trainer.h"
 #include "debug/rsl_shadow.h"
@@ -13,7 +12,6 @@
 #include "game/vcs_display.h"
 #include "game/vcs_framerate.h"
 #include "game/vcs_movie.h"
-#include "game/vcs_input.h"
 #include "game/vcs_volume.h"
 #include "game/vcs_script_timing.h"
 #include "game/vcs_physics_timing.h"
@@ -809,10 +807,8 @@ namespace
     PS2_GUEST_CC void markFrameKick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         ps2perf::markGameFrame();
-        vcs::profilerFrame(); // VCS_PROFILE_SPIKES (debug/profiler.h)
         vcs::applyDisplay(rdram); // widescreen preference / aspect (settings menu)
         vcs::rig::onGameFrame(rdram, ctx, runtime); // automation rig jobs (debug/rig.h)
-        vcs::input::holdInBackground(runtime);      // paused while the window is in the background (game/vcs_input.h)
         vcs::trainer::onGameFrame(rdram);           // the trainer's actions and held toggles (game/vcs_trainer.h)
         vcs::volume::onGameFrame(rdram);            // the music / effects levels and the pause menu's (game/vcs_volume.h)
         vcs::onFrameKick();                         // the HUD context ends (game/vcs_hud.h)

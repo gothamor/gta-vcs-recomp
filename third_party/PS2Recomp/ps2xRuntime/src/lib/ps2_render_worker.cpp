@@ -16,7 +16,7 @@
 #include <mutex>
 #include <thread>
 #include <xmmintrin.h>
-#include <cstring>  // [gta-recomp] libstdc++ (Linux) does not bring it in
+#include <cstring>  // [gta-recomp] the PS5's libc++ does not bring it in
 
 namespace ps2_render_worker
 {

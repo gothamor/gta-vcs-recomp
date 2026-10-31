@@ -45,9 +45,8 @@ void PSPadBackend::actuators(uint8_t small, uint8_t large)
         g_actuatorSink(small, large);
 }
 
-// [gta-recomp] Keyboard, mouse and gamepad all feed one DualShock 2. Keyboard layout (see docs/CONTROLS.md):
-//   WASD left stick, IJKL right stick, arrows D-pad, Shift Cross, Space Square, F Triangle, Ctrl/LMB Circle,
-//   RMB/E R1, Q L1, 1/Z L2, 3/X R2, C L3, V R3, Enter Start, Backspace Select.
+// [gta-recomp] The DualSense feeds one DualShock 2: the game layer's bindings (setReader), else this fixed mapping by
+// position (the reference: VCS_INPUT_MAP=0; docs/CONTROLS.md).
 bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t size)
 {
     if (!data || size < 32)
@@ -73,7 +72,8 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     };
     float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
 
-    const bool physical = ps2control::physicalInputOn(); // [gta-recomp] off in hidden test runs
+    // [gta-recomp] off in hidden test runs and while an in-game UI (settings / trainer menu) has the input
+    const bool physical = ps2control::physicalInputOn();
     if (physical && platform::gamepadConnected())
     {
         press(platform::gamepadButton(platform::GAMEPAD_DPAD_UP), PAD_UP);
@@ -107,39 +107,9 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
         deadzone(rx, ry);
     }
 
-    // [gta-recomp] an in-game UI with the input (settings / trainer menu) takes injected keys from the game too
-    const bool blocked = ps2control::gameInputBlocked();
-    auto key = [blocked](int k)
-    { return !blocked && ps2control::keyDown(k); };
-    press(key(platform::KEY_UP), PAD_UP);
-    press(key(platform::KEY_DOWN), PAD_DOWN);
-    press(key(platform::KEY_LEFT), PAD_LEFT);
-    press(key(platform::KEY_RIGHT), PAD_RIGHT);
-    press(key(platform::KEY_LEFT_SHIFT) || key(platform::KEY_RIGHT_SHIFT), PAD_CROSS);
-    press(key(platform::KEY_SPACE), PAD_SQUARE);
-    press(key(platform::KEY_F), PAD_TRIANGLE);
-    press(key(platform::KEY_LEFT_CONTROL) || key(platform::KEY_RIGHT_CONTROL) || (physical && platform::mouseDown(platform::MOUSE_LEFT)), PAD_CIRCLE);
-    press(key(platform::KEY_Q), PAD_L1);
-    press(key(platform::KEY_E) || (physical && platform::mouseDown(platform::MOUSE_RIGHT)), PAD_R1);
-    press(key(platform::KEY_ONE) || key(platform::KEY_Z), PAD_L2);
-    press(key(platform::KEY_THREE) || key(platform::KEY_X), PAD_R2);
-    press(key(platform::KEY_C), PAD_L3);
-    press(key(platform::KEY_V), PAD_R3);
-    // [gta-recomp] Alt+Enter switches full screen (main.cpp), so Enter with Alt held is not Start
-    const bool alt = key(platform::KEY_LEFT_ALT) || key(platform::KEY_RIGHT_ALT);
-    press(!alt && (key(platform::KEY_ENTER) || key(platform::KEY_KP_ENTER)), PAD_START);
-    press(key(platform::KEY_BACKSPACE), PAD_SELECT);
-
-    auto axis = [](float current, bool negative, bool positive)
-    {
-        if (negative != positive)
-            return negative ? -1.0f : 1.0f;
-        return current;
-    };
-    lx = axis(lx, key(platform::KEY_A), key(platform::KEY_D));
-    ly = axis(ly, key(platform::KEY_W), key(platform::KEY_S));
-    rx = axis(rx, key(platform::KEY_J), key(platform::KEY_L));
-    ry = axis(ry, key(platform::KEY_I), key(platform::KEY_K));
+    // [gta-recomp] buttons held through the control channel (runtime/ps2_control.h), unless a menu has the input
+    if (!ps2control::gameInputBlocked())
+        btns = static_cast<uint16_t>(btns & ~ps2control::injectedButtons());
 
     auto toByte = [](float v)
     {

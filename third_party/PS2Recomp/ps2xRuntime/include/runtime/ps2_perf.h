@@ -2,11 +2,9 @@
 //
 // Every game frame (or VBlank, if the game never marks frames) becomes one sample: wall time, the EE thread's time
 // split into phases (game code / render submit / IOP / waiting), render counters, host-side frame and GL times and
-// the audio buffer state. In game:
-//   F3  toggle the overlay (numbers + frame-time graph)
-//   F4  start / stop recording samples to perf_<date>_<time>.csv in the working directory
-// PS2X_PERF_LOG=<file.csv> records from boot (plus a "[perf]" summary line on stderr every 5 s) - for scripted runs;
-// tools/perf_report.py summarises a recording.
+// the audio buffer state. In game, the settings menu's Advanced page turns the overlay (numbers + frame-time graph) on
+// and records samples to logs/perf_<date>_<time>.csv. PS2X_PERF_LOG=<file.csv> records from boot (plus a "[perf]"
+// summary line on stderr every 5 s) - for scripted runs; tools/perf_report.py summarises a recording.
 #pragma once
 
 #include <cstdint>
@@ -26,7 +24,7 @@ namespace ps2perf
 
     enum class Counter : uint8_t
     {
-        Draws,       // GL draw batches recorded by the HW renderer
+        Draws,       // draw batches recorded by the HW renderer
         Vertices,    // vertices recorded by the HW renderer
         TexUploads,  // textures decoded and uploaded to the GPU
         DmaTags,     // VIF1 DMA chain tags walked
@@ -80,16 +78,19 @@ namespace ps2perf
 
     // Main thread, once per host frame: how long the GPU renderer's command execution took.
     void hostFrame(double glMs);
-    // Main thread, between BeginDrawing and EndDrawing: handles F3/F4 and draws the overlay when on.
-    void drawOverlay(bool handleKeys = true);
+    // Main thread, in the Dear ImGui frame: draws the overlay when on.
+    void drawOverlay();
     // [gta-recomp] Main thread, per host frame when the brightness probe runs (PS2X_FRAME_STATS / control channel):
     // the presented picture's mean luma (0..255). Counts black frames (summaryLine: black_frames / probed_frames) and
     // logs every run of black frames ("[frames] black run ...").
     // Returns true on the first frame of a black run or a dip (the moment worth a screenshot).
     bool noteFrameLuma(float mean, uint64_t hostFrame);
-    // [gta-recomp] Main thread: the F3 overlay's state (settings menu).
+    // [gta-recomp] Main thread: the overlay's state (settings menu).
     void setOverlay(bool on);
     bool overlayOn();
+    // [gta-recomp] Recording samples to <dir>/perf_<date>_<time>.csv on / off (settings menu); whether one runs.
+    void setRecording(bool on, const std::string &dir);
+    bool recording();
     // The overlay's numbers for the last second as one line (control channel "perf").
     std::string summaryLine();
     // Closes a running recording (end of run).

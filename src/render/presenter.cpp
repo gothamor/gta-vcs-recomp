@@ -32,7 +32,7 @@ namespace present
         std::unique_ptr<rhi::Texture> g_captureTarget;
         std::unique_ptr<rhi::Texture> g_lumaTarget; // frameLuma
         std::vector<uint8_t> g_captureRgba;
-        // Dear ImGui: the backend's own renderer (D3D11) or render::UiRenderer through the RHI (Vulkan)
+        // Dear ImGui through the RHI (render::UiRenderer), or the backend's own renderer when it has one
         std::unique_ptr<render::UiRenderer> g_ui;
 
         void uiRender(ImDrawData *data)
@@ -44,25 +44,14 @@ namespace present
         }
 
         std::atomic<float> g_displayAspect{4.0f / 3.0f};
-        int g_backendSetting = -1; // rhi::Backend; -1: the default
 
+        // Vulkan, unless VCS_RHI=null (no GPU work)
         rhi::Backend chooseBackend()
         {
-            rhi::Backend b = rhi::defaultBackend();
+            rhi::Backend b = rhi::Backend::Vulkan;
             const char *env = std::getenv("VCS_RHI");
-            if (env && *env)
-            {
-                if (!rhi::backendFromName(env, b))
-                    std::fprintf(stderr, "[present] VCS_RHI=%s not understood (d3d11, vulkan or null)\n", env);
-            }
-            else if (g_backendSetting >= 0)
-                b = static_cast<rhi::Backend>(g_backendSetting);
-            if (!rhi::backendBuilt(b))
-            {
-                std::fprintf(stderr, "[present] the %s renderer is not part of this build: %s\n", rhi::backendName(b),
-                             rhi::backendName(rhi::defaultBackend()));
-                b = rhi::defaultBackend();
-            }
+            if (env && *env && !rhi::backendFromName(env, b))
+                std::fprintf(stderr, "[present] VCS_RHI=%s not understood (vulkan or null)\n", env);
             return b;
         }
 
@@ -90,27 +79,19 @@ namespace present
         }
     }
 
-    void setBackend(int backend) { g_backendSetting = backend; }
-
     int backend() { return static_cast<int>(g_device ? g_device->backend() : chooseBackend()); }
-
-    bool backendNeedsVulkanWindow() { return chooseBackend() == rhi::Backend::Vulkan; }
 
     bool init(int width, int height)
     {
         rhi::DeviceDesc desc;
         desc.backend = chooseBackend();
-        desc.nativeWindow = platform::nativeWindow();
         desc.vulkan.instanceExtensions = platform::vulkanInstanceExtensions;
         desc.vulkan.createSurface = platform::vulkanCreateSurface;
         desc.vulkan.getInstanceProcAddr = platform::vulkanGetInstanceProcAddr;
-        desc.offscreen = platform::windowHidden();
         desc.width = static_cast<uint32_t>(std::max(width, 1));
         desc.height = static_cast<uint32_t>(std::max(height, 1));
-        // the API's validation layer: D3D11 debug layer (Graphics Tools), Vulkan's Khronos layer
+        // Vulkan's Khronos validation layer, where it is installed
         const char *debug = std::getenv("PS2X_RHI_DEBUG");
-        if (!debug || !*debug)
-            debug = std::getenv("PS2X_D3D_DEBUG");
         desc.debug = debug && *debug && *debug != '0';
         std::string error;
         g_device = rhi::createDevice(desc, error);
@@ -126,7 +107,7 @@ namespace present
         pd.vertex = shaders.presentVS;
         pd.pixel = shaders.presentPS;
         pd.topology = rhi::Topology::TriangleStrip;
-        // alpha-blended over black, as raylib's DrawTexturePro did
+        // alpha-blended over black
         pd.blend.enable = true;
         pd.blend.srcColor = pd.blend.srcAlpha = rhi::BlendFactor::SrcAlpha;
         pd.blend.dstColor = pd.blend.dstAlpha = rhi::BlendFactor::InvSrcAlpha;
@@ -225,16 +206,16 @@ namespace present
         y0 = (height - h) * 0.5f;
     }
 
-    void drawWindow(const Picture &picture, int srcWidth, int srcHeight, float aspect, int windowWidth, int windowHeight,
+    void drawOutput(const Picture &picture, int srcWidth, int srcHeight, float aspect, int outputWidth, int outputHeight,
                     float frameAspect)
     {
-        if (windowWidth > 0 && windowHeight > 0)
-            g_device->resize(static_cast<uint32_t>(windowWidth), static_cast<uint32_t>(windowHeight));
+        if (outputWidth > 0 && outputHeight > 0)
+            g_device->resize(static_cast<uint32_t>(outputWidth), static_cast<uint32_t>(outputHeight));
         uint32_t w = 0, h = 0;
         g_device->backbufferSize(w, h);
         rhi::PassDesc pass;
         pass.clearColor = true;
-        pass.name = "window";
+        pass.name = "output";
         g_device->beginPass(pass);
         drawPicture(picture, srcWidth, srcHeight, aspect, static_cast<int>(w), static_cast<int>(h), frameAspect);
         uiRender(ImGui::GetDrawData());
@@ -313,7 +294,7 @@ namespace present
         drawPicture(picture, srcWidth, srcHeight, aspect, width, height, frameAspect);
         if (ImDrawData *data = ImGui::GetDrawData(); data && data->Valid && data->DisplaySize.x > 0.0f && data->DisplaySize.y > 0.0f)
         {
-            ImDrawData scaled = *data; // the window's UI, stretched to the capture size
+            ImDrawData scaled = *data; // the menus and overlay, stretched to the capture size
             scaled.FramebufferScale = ImVec2(width / data->DisplaySize.x, height / data->DisplaySize.y);
             uiRender(&scaled);
         }

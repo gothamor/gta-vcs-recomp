@@ -76,7 +76,7 @@ else()
     endif()
 
     # [gta-recomp] No raylib: the host platform layer (window, input, audio, Dear ImGui) comes from the parent
-    # project as PS2X_HOST_PLATFORM_TARGET (gta-recomp: src/platform, SDL3). Dear ImGui is its `imgui` target.
+    # project as PS2X_HOST_PLATFORM_TARGET (gta-recomp: src/platform, the PS5's). Dear ImGui is its `imgui` target.
     if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_ANDROID AND NOT TARGET imgui)
         message(FATAL_ERROR "PS2X_ENABLE_DEBUG_UI needs an `imgui` target from the host platform layer")
     endif()
@@ -220,11 +220,8 @@ elseif(WIN32)
     include(ExternalProject)
 
     set(FFMPEG_PREBUILT_TAG "n7.1-241205")
-    # [gta-recomp] -DFFMPEG_PREBUILT_URL=<local zip>: a release's bundled copy (deps/, tools/deps.py), no download
-    if(NOT FFMPEG_PREBUILT_URL)
-        set(FFMPEG_PREBUILT_URL
-            "https://github.com/System233/ffmpeg-msvc-prebuilt/releases/download/${FFMPEG_PREBUILT_TAG}/ffmpeg-${FFMPEG_PREBUILT_TAG}-lgpl-amd64-shared.zip")
-    endif()
+    set(FFMPEG_PREBUILT_URL
+        "https://github.com/System233/ffmpeg-msvc-prebuilt/releases/download/${FFMPEG_PREBUILT_TAG}/ffmpeg-${FFMPEG_PREBUILT_TAG}-lgpl-amd64-shared.zip")
 
     set(FFMPEG_PREFIX_DIR "${CMAKE_BINARY_DIR}/ThirdParty/ffmpeg-prefix")
     set(FFMPEG_SOURCE_DIR "${FFMPEG_PREFIX_DIR}/src/ffmpeg_external")
@@ -371,24 +368,9 @@ add_library(ps2_runtime STATIC
     src/lib/games_database.cpp
 )
 
-# [gta-recomp] GS on the graphics card: paraLLEl-GS (Vulkan compute, LGPLv3+). Integration ported from
-# BigDaddyJRich/PS2Recomp (hctp branch, GPL-3.0). Without PS2X_PARALLEL_GS_DIR only the CPU renderer exists.
-set(PS2X_PARALLEL_GS_DIR "" CACHE PATH "paraLLEl-GS source tree (optional Vulkan GS renderer)")
-target_sources(ps2_runtime PRIVATE src/lib/gs/gs_gpu.cpp src/lib/gs/gs_hw.cpp)
-if(PS2X_PARALLEL_GS_DIR AND EXISTS "${PS2X_PARALLEL_GS_DIR}/gs/gs_interface.hpp" AND WIN32)
-    # paraLLEl-GS picks the static C runtime when none is set; everything else uses the DLL one
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-    set(PARALLEL_GS_STANDALONE ON CACHE BOOL "" FORCE)
-    add_subdirectory("${PS2X_PARALLEL_GS_DIR}" "${CMAKE_BINARY_DIR}/parallel-gs" EXCLUDE_FROM_ALL)
-    target_sources(ps2_runtime PRIVATE src/lib/gs/gs_gpu_parallel.cpp)
-    set_source_files_properties(src/lib/gs/gs_gpu_parallel.cpp PROPERTIES
-        COMPILE_DEFINITIONS "NOMINMAX;WIN32_LEAN_AND_MEAN;_SILENCE_CXX20_IS_POD_DEPRECATION_WARNING")
-    target_link_libraries(ps2_runtime PRIVATE parallel-gs)
-    target_compile_definitions(ps2_runtime PRIVATE PS2X_HAS_PARALLEL_GS=1)
-    message(STATUS "paraLLEl-GS: ${PS2X_PARALLEL_GS_DIR}")
-else()
-    target_sources(ps2_runtime PRIVATE src/lib/gs/gs_gpu_none.cpp)
-endif()
+# [gta-recomp] The GS on the graphics card: the hardware renderer (gs_hw.cpp, through the RHI). The compute renderer's
+# interface (gs_gpu.cpp, PS2X_GS=gpu) has no backend in this build (gs_gpu_none.cpp: paraLLEl-GS was Windows-only).
+target_sources(ps2_runtime PRIVATE src/lib/gs/gs_gpu.cpp src/lib/gs/gs_hw.cpp src/lib/gs/gs_gpu_none.cpp)
 
 if(PS2X_ENABLE_RUNTIME_LOGS)
     target_compile_definitions(ps2_runtime PUBLIC
@@ -422,11 +404,6 @@ endif()
 target_compile_definitions(ps2_runtime PRIVATE
     PS2X_HAS_FFMPEG=$<BOOL:${PS2X_ENABLE_FFMPEG}>
 )
-
-# [gta-recomp] control channel sockets (src/lib/ps2_control.cpp)
-if(WIN32)
-    target_link_libraries(ps2_runtime PRIVATE ws2_32)
-endif()
 
 file(GLOB_RECURSE KERNEL_SRC_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel/*.cpp"

@@ -1,8 +1,7 @@
-// PS5 implementation of platform.h (docs/PS5.md). There is no window and no SDL: the picture goes to the TV through
-// VK_KHR_display (PS5_Mesa's RADV, linked into the game), the DualSense is read with scePad, sound goes out through
-// sceAudioOut, and the Dear ImGui frame (the settings menu, the trainer) is fed from the pad. No keyboard or mouse:
-// keyDown / mouseDown are always false, and the menus open with the PC port's pad chords (touchpad + Options: settings;
-// touchpad + R1: trainer; touchpad + L1: free camera), the touchpad click being the PS2's Select.
+// The PS5 implementation of platform.h (docs/PS5.md): the picture goes to the TV through VK_KHR_display (PS5_Mesa's
+// RADV, linked into the game), the DualSense is read with scePad, sound goes out through sceAudioOut, and the Dear
+// ImGui frame (the settings menu, the trainer) is fed from the pad. The menus open with pad chords (touchpad + Options:
+// settings; touchpad + R1: trainer; touchpad + L1: free camera), the touchpad click being the PS2's Select.
 //
 // What the console's libraries need, and where it was found (the gta4-ps5 port and ps5-plume-triangle, both run on
 // consoles; docs/PS5.md):
@@ -114,8 +113,6 @@ namespace platform
         // ---- state --------------------------------------------------------------------------------------------
         bool g_ready = false;
         bool g_imgui = false;
-        bool g_hidden = false;
-        bool g_fullscreen = true;
         uint64_t g_lastUiNs = 0;
 
         std::atomic<uint64_t> g_framePeriodNs{1000000000ull / 60u}; // setFrameRate
@@ -356,15 +353,8 @@ namespace platform
         }
     }
 
-    void setStartPlacement(const WindowPlacement &) {} // the TV: no window to place
-    void onPlacementChanged(PlacementChanged) {}
-
-    void setFullscreen(bool on) { g_fullscreen = on; } // always the whole TV; remembered for the setting's sake
-    bool fullscreen() { return true; }
-
-    bool init(const WindowDesc &desc)
+    bool init()
     {
-        g_hidden = desc.hidden;
         sceUserServiceInitialize(nullptr); // (an error when it already was: fine)
         const int pad = scePadInit();
         if (pad < 0)
@@ -403,8 +393,6 @@ namespace platform
     }
 
     bool ready() { return g_ready; }
-    void *nativeWindow() { return nullptr; }
-    bool windowHidden() { return g_hidden; }
 
     const char *const *vulkanInstanceExtensions(uint32_t *count)
     {
@@ -415,7 +403,7 @@ namespace platform
     }
 
     // The TV as a VkSurfaceKHR: the first display that reports modes, the mode that fits best (modeScore), a plane that
-    // can show that display. The surface's size is the mode's visible region (windowSize reports it from then on).
+    // can show that display. The surface's size is the mode's visible region (outputSize reports it from then on).
     bool vulkanCreateSurface(void *instancePtr, uint64_t *surface)
     {
         VkInstance instance = static_cast<VkInstance>(instancePtr);
@@ -554,8 +542,6 @@ namespace platform
 
     int64_t inputSnapshotNs() { return g_snapshotNs.load(std::memory_order_acquire); }
 
-    bool quitRequested() { return false; } // the system ends the app (PS button, Close Game)
-
     void beginFrame()
     {
         if (!g_imgui)
@@ -642,35 +628,20 @@ namespace platform
     bool frameLeadRan() { return g_leadRan; }
     bool frameSlept() { return g_slept; }
 
-    void windowSize(int &width, int &height)
+    void outputSize(int &width, int &height)
     {
         width = g_width.load();
         height = g_height.load();
     }
 
-    bool windowFocused() { return !g_hidden; } // the system suspends the app when it leaves the screen
-
-    bool keyDown(int) { return false; }
-    bool keyPressed(int) { return false; }
-    bool mouseDown(MouseButton) { return false; }
     bool gamepadConnected() { return g_padConnected.load(std::memory_order_relaxed); }
     bool gamepadButton(GamepadButton button) { return g_padButtons[button].load(std::memory_order_relaxed); }
     float gamepadAxis(GamepadAxis axis) { return g_padAxes[axis].load(std::memory_order_relaxed); }
-    const char *gamepadName() { return gamepadConnected() ? "DualSense" : ""; }
 
     void gamepadRumble(float low, float high)
     {
         auto level = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
         g_rumbleWanted.store(level(low) << 8 | level(high), std::memory_order_relaxed);
-    }
-
-    void setMouseCaptured(bool) {}
-    bool mouseCaptured() { return false; }
-
-    void takeMouseMotion(float &dx, float &dy)
-    {
-        dx = 0.0f;
-        dy = 0.0f;
     }
 
     bool audioAvailable() { return true; } // the system's main output port is always there

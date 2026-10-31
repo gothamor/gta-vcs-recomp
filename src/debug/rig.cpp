@@ -256,7 +256,7 @@ namespace vcs::rig
                     reply(n == len ? fmt("ok %u", len) : std::string("error short write"));
                 });
             });
-            // pause on|off: hold the game thread at the frame kick (the window keeps showing the last frame)
+            // pause on|off: hold the game thread at the frame kick (the TV keeps showing the last frame)
             ps2control::addCommand("pause", [](const std::string &args, ps2control::Reply reply) {
                 if (args != "on" && args != "off")
                     return reply("error usage: pause on|off");

@@ -101,7 +101,7 @@ namespace vcs::trainer
             SET_CHAR_DROWNS_IN_WATER = 0x02F9,
         };
 
-        // Bytecode for one script (rig.Scm in tools/rig.py is the same in Python): arguments carry a type byte.
+        // Bytecode for one script: arguments carry a type byte.
         class Scm
         {
         public:

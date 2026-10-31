@@ -8,7 +8,7 @@ on the build machine (Ubuntu 24.04 or WSL 2). Standard library only.
     python3 tools/ps5.py ffmpeg                     FFmpeg for the PS5 (the movies) into build/ps5/ffmpeg; then build
     python3 tools/ps5.py deploy --host <PS5 IP>     the app folder to /data/homebrew/<title id> over FTP [--iso F]
     python3 tools/ps5.py compile-check --sdk DIR    the PS5 build compiled without a disc or console (CI)
-    python3 tools/ps5.py padtest [--tree DIR]       the DualSense path checked on the build machine (ps5/tests/padtest.cpp)
+    python3 tools/ps5.py padtest                    the DualSense path checked on the build machine (ps5/tests/padtest.cpp)
 
 What it needs (check says what is missing):
 - generated/: the game recompiled from your disc, once: python3 tools/recompile.py <iso>. The PS5 build compiles
@@ -248,14 +248,12 @@ def configure(env, paths, lto, force=False):
     if os.path.isfile(os.path.join(PS5_BUILD, "build.ninja")) and not force and state.get("defines") == defines:
         return
     cmd = ["cmake", "-S", tc.ROOT, "-B", PS5_BUILD, "-G", "Ninja"] + ["-D%s=%s" % kv for kv in defines.items()]
-    cmd += tc.deps_defines()
     print("[ps5] configuring " + tc.show(PS5_BUILD))
-    tc.stage("configure", "Configuring the PS5 build (CMake)")
     os.makedirs(PS5_BUILD, exist_ok=True)
     log = os.path.join(PS5_BUILD, "configure.log")
     if tc.run_with_progress(cmd, log, "[ps5] configure", env=env) != 0:
         print(tc.tail(log, 30))
-        tc.fail("CMake configure failed (full log: %s)" % tc.show(log), tc.configure_failure(log), log)
+        tc.fail("CMake configure failed (full log: %s)" % tc.show(log))
     state.update({"defines": defines, "triangle": paths["triangle"], "sdk": paths["sdk"]})
     save_state(state)
 
@@ -265,7 +263,6 @@ def cmd_build(args):
     if problems:
         tc.fail("the PS5 build is not ready (above)", "ps5_not_ready")
     configure(env, paths, args.lto, args.reconfigure)
-    tc.stage("build", "Building the game for the PS5")
     if not tc.cmake_build(env, "ps2EntryRunner", os.path.join("ps5", "build.log"), args.verbose, build_dir=PS5_BUILD):
         tc.fail("the PS5 build failed (build/ps5/build.log)", "build_failed")
     package(args, paths)
@@ -330,7 +327,6 @@ def package(args, paths=None):
         cmd += ["--module-sdk", MODULE_SDK, "--companion-sdk", COMPANION_SDK, "--file-name", "eboot.elf"]
         return run(cmd)
 
-    tc.stage("package", "Making the PS5 app folder")
     print("[ps5] eboot.elf from %s" % tc.show(ELF))
     err = convert(ELF)
     if err and "no room for PS5 process parameters" in err:
@@ -369,7 +365,6 @@ def package(args, paths=None):
     size = os.path.getsize(os.path.join(app, "eboot.bin"))
     print("[ps5] ok: %s (eboot.bin %.1f MB) - copy it to /data/homebrew/%s on the PS5 (python3 tools/ps5.py deploy "
           "--host <PS5 IP>)" % (tc.show(app), size / 1e6, title_id))
-    tc.event(done="ps5_package", app=tc.show(app).replace(os.sep, "/"))
 
 
 APP_README = """GTA: Vice City Stories - native PS5 port (PS2 static recompilation). No game files are included.
@@ -479,19 +474,17 @@ def make_icon(path, size=512):
 # ---- FFmpeg -----------------------------------------------------------------------------------------------------
 def cmd_ffmpeg(args):
     """FFmpeg's MPEG-2 video decoder and swscale, static, for the PS5 (what src/game/vcs_movie.cpp and the runtime's
-    MPEG stub use), from the pinned release; deps/ffmpeg-<version>.tar.xz is taken when there."""
+    MPEG stub use), from the pinned release (downloaded once into build/ps5/ffmpeg-build)."""
     problems, paths, env = check(args, quiet=True)
     if not paths["clang"] or not paths["sdk"]:
         tc.fail("clang 19+ and the PS5 payload SDK are needed first: python3 tools/ps5.py check")
     work = os.path.join(PS5_BUILD, "ffmpeg-build")
     os.makedirs(work, exist_ok=True)
-    archive = os.path.join(tc.DEPS_DIR, "ffmpeg-%s.tar.xz" % FFMPEG_VERSION)
+    archive = os.path.join(work, "ffmpeg-%s.tar.xz" % FFMPEG_VERSION)
     if not os.path.isfile(archive):
-        archive = os.path.join(work, "ffmpeg-%s.tar.xz" % FFMPEG_VERSION)
-        if not os.path.isfile(archive):
-            print("[ps5] downloading %s" % FFMPEG_URL)
-            urllib.request.urlretrieve(FFMPEG_URL, archive + ".part")
-            os.replace(archive + ".part", archive)
+        print("[ps5] downloading %s" % FFMPEG_URL)
+        urllib.request.urlretrieve(FFMPEG_URL, archive + ".part")
+        os.replace(archive + ".part", archive)
     with open(archive, "rb") as f:
         digest = hashlib.sha256(f.read()).hexdigest()
     if digest != FFMPEG_SHA256:
@@ -600,7 +593,7 @@ def cmd_compile_check(args):
     }
     tree = os.path.join(check_dir, "tree")
     os.makedirs(tree, exist_ok=True)
-    cmd = ["cmake", "-S", tc.ROOT, "-B", tree, "-G", "Ninja"] + ["-D%s=%s" % kv for kv in defines.items()] + tc.deps_defines()
+    cmd = ["cmake", "-S", tc.ROOT, "-B", tree, "-G", "Ninja"] + ["-D%s=%s" % kv for kv in defines.items()]
     log = os.path.join(check_dir, "configure.log")
     if tc.run_with_progress(cmd, log, "[ps5] configure (check)", env=env) != 0:
         print(tc.tail(log, 30))
@@ -627,63 +620,31 @@ def cmd_compile_check(args):
     print("[ps5] ok: the PS5 build compiles%s (%d targets)" % (" and links" if linkable else "", len(targets)))
 
 
-# ---- the controller test (the build machine) ----------------------------------------------------------------------------------
+# ---- the controller test (the build machine) -------------------------------------------------------------------
 def cmd_padtest(args):
-    """ps5/tests/padtest.cpp: the real platform_ps5.cpp with the console's pad functions mocked, linked against the
-    game's objects compiled for the build machine (the bindings, settings, the runtime's pad backend), run. The tree is
-    build/release (python3 tools/build.py first) or --tree; its generated code may be real or compile-check's stand-in."""
-    import re
+    """ps5/tests/padtest.cpp: the real platform_ps5.cpp with the console's pad functions mocked, the bindings, settings
+    and the runtime's pad backend - ps5/tests/CMakeLists.txt, built for the build machine in build/ps5-padtest - run."""
     if platform.system() != "Linux":
         tc.fail("the controller test runs on the build machine (Ubuntu 24.04 or WSL 2)")
     env = tc.build_env()
-    tree = os.path.abspath(args.tree or tc.BUILD_DIR)
-    ninja = tc.build_tools(env)["ninja"]
+    clang, clangxx = shutil.which("clang", path=env.get("PATH")), shutil.which("clang++", path=env.get("PATH"))
+    if not clang or not clangxx or tc.clang_version(clang) < tc.MIN_CLANG:
+        tc.fail("clang %d or newer not found (sudo apt install clang-20 lld-20)" % tc.MIN_CLANG)
+    tools = tc.build_tools(env)
+    tree = os.path.join(tc.BUILD, "ps5-padtest")
+    os.makedirs(tree, exist_ok=True)
     if not os.path.isfile(os.path.join(tree, "build.ninja")):
-        tc.fail("no build tree at %s: build the game's objects for the build machine first (python3 tools/build.py)"
-                % tc.show(tree))
-    if subprocess.run([ninja, "-C", tree, "ps2EntryRunner"], env=env).returncode != 0:
-        tc.fail("the build machine's build of the game failed")
-    commands = subprocess.run([ninja, "-C", tree, "-t", "commands", "ps2EntryRunner"], capture_output=True, text=True,
-                              env=env).stdout.splitlines()
-    link = commands[-1].split()
-    compile_input = next((c for c in commands if "src/game/vcs_input.cpp" in c and " -c " in c), None)
-    if not compile_input:
-        tc.fail("the tree's commands have no vcs_input.cpp compile")
-
-    def absolute(path):
-        return path if os.path.isabs(path) else os.path.join(tree, path)
-
-    words = compile_input.split()
-    flags = []
-    for i, w in enumerate(words):
-        if w == "-isystem" and i + 1 < len(words):
-            flags += [w, words[i + 1]]
-        elif re.match(r"-(I|D|std=|march=|isystem.)", w):
-            flags.append(w)
-    flags += ["-I" + os.path.join(tree, "_deps", "vulkanheaders-src", "include"), "-fno-strict-aliasing", "-g", "-O1"]
-    objects = [absolute(w) for w in link if w.endswith(".o") and not w.endswith("/src/main.cpp.o")]
-    libraries = [absolute(w) for w in link if w.endswith(".a") and "libvcs_platform.a" not in w and "SDL3" not in w]
-    system = [w for w in link if w.startswith("-l") or w.endswith(".so")]
-    out = os.path.join(tree, "ps5-padtest")
-    os.makedirs(out, exist_ok=True)
-    clangxx = shutil.which("clang++", path=env.get("PATH")) or "clang++"
-    units = [(os.path.join(tc.ROOT, "src", "platform", "platform_ps5.cpp"), ["-DVK_NO_PROTOTYPES",
-              "-I" + os.path.join(tc.ROOT, "ps5", "tests", "shim")]),
-             (os.path.join(tc.ROOT, "src", "platform", "platform_common.cpp"), []),
-             (os.path.join(tc.ROOT, "ps5", "tests", "padtest.cpp"), [])]
-    built = []
-    for src, extra in units:
-        obj = os.path.join(out, os.path.basename(src) + ".o")
-        cmd = [clangxx, "-c", src, "-o", obj] + flags + extra
-        if subprocess.run(cmd, env=env, cwd=tree).returncode != 0:
-            tc.fail("compiling %s failed" % tc.show(src))
-        built.append(obj)
-    exe = os.path.join(out, "padtest")
-    cmd = [clangxx, "-fuse-ld=lld", "-o", exe] + built + objects + ["-Wl,--start-group"] + libraries + ["-Wl,--end-group"]
-    cmd += system + ["-ldl", "-lm", "-lpthread"]
-    if subprocess.run(cmd, env=env, cwd=tree).returncode != 0:
-        tc.fail("linking the controller test failed")
-    result = subprocess.run([exe], env=env, cwd=out, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        cmd = [tools["cmake"], "-S", os.path.join(tc.ROOT, "ps5", "tests"), "-B", tree, "-G", "Ninja",
+               "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx,
+               "-DCMAKE_MAKE_PROGRAM=" + tools["ninja"]]
+        log = os.path.join(tree, "configure.log")
+        if tc.run_with_progress(cmd, log, "[ps5] configure (controller test)", env=env) != 0:
+            print(tc.tail(log, 30))
+            tc.fail("configuring the controller test failed (%s)" % tc.show(log))
+    if subprocess.run([tools["ninja"], "-C", tree, "padtest"], env=env).returncode != 0:
+        tc.fail("building the controller test failed")
+    exe = os.path.join(tree, "padtest")
+    result = subprocess.run([exe], env=env, cwd=tree, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     print(result.stdout.rstrip())
     if result.returncode != 0:
         tc.fail("the controller test failed")
@@ -754,7 +715,6 @@ def main():
     p.add_argument("--triangle", help="a built ps5-plume-triangle: the link is checked too")
     p.add_argument("--sdk", help="the PS5 payload SDK (the upstream release compiles; the link needs the fork)")
     p = sub.add_parser("padtest")
-    p.add_argument("--tree", help="a build tree of the game for the build machine (default build/release)")
     p = sub.add_parser("deploy")
     p.add_argument("--host", required=True, help="the PS5's IP address")
     p.add_argument("--port", type=int, default=2121, help="its FTP payload's port (default 2121; etaHEN: 1337)")

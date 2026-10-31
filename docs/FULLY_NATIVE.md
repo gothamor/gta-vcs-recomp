@@ -136,7 +136,7 @@ point at (-925, 1175) classed "water" this run - the same fall, landing in a wat
   `src/game/vcs_display.cpp`): frame 140, shown picture 0, Z buffer 280, reflection map 420 / 128 wide, bloom 420 /
   452, trails 384. `PS2X_HW_RT_LOG=1` lists the targets with their names, sizes and scales every 5 s. The GPU targets
   stay keyed by FBP inside the renderer (the game reuses VRAM, and a draw names only its FBP).
-- **The reflection map at the window's resolution**: with "Internal resolution: Match window" it takes the frame's
+- **The reflection map at the window's resolution**: with "Internal resolution: Match the TV" it takes the frame's
   scale (1080p: 384 x 309 texels instead of 128 x 128) - it is only ever sampled (vehicles' paint), never copied 1:1;
   kept at 1x when the GS bloom shares its memory (`PS2X_HW_POSTFX` without b) and with
   `PS2X_HW_REFLECTION_SCALE=0`. At 1x nothing changes. (2026-10-30: the scale goes by the FBP, not the draw's width -

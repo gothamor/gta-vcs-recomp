@@ -1,6 +1,5 @@
-// Dear ImGui drawn through the RHI (shaders/ui.hlsl), for backends without an ImGui renderer of their own (Vulkan; the
-// D3D11 backend keeps imgui_impl_dx11). Its pipeline works on any target the backend draws to, the swapchain and the
-// RGBA capture targets alike. Main thread.
+// Dear ImGui drawn through the RHI (shaders/ui.hlsl). Its pipeline works on any target the backend draws to, the
+// swapchain and the RGBA capture targets alike. Main thread.
 #pragma once
 
 #include <memory>

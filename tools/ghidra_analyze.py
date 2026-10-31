@@ -26,7 +26,7 @@ def main():
     ghidra = os.environ.get("GHIDRA_HOME", os.path.join(home, "scoop", "apps", "ghidra", "current"))
     env = dict(os.environ)
     env.setdefault("JAVA_HOME", os.path.join(home, "scoop", "apps", "temurin21-jdk", "current"))
-    headless = os.path.join(ghidra, "support", "analyzeHeadless" + (".bat" if tc.IS_WINDOWS else ""))
+    headless = os.path.join(ghidra, "support", "analyzeHeadless")
     if not os.path.isfile(headless):
         tc.fail(f"{headless} not found: set GHIDRA_HOME")
     if not os.path.isfile(a.elf):

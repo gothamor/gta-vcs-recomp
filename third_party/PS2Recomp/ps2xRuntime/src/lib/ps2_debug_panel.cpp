@@ -2204,10 +2204,7 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
         return;
     }
 
-    if (platform::keyPressed(platform::KEY_F1))
-    {
-        toggleVisible();
-    }
+    // [gta-recomp] no F1 on the PS5 (no keyboard): toggleVisible() is the way in
 
     if (!m_visible)
     {

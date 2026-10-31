@@ -1,6 +1,6 @@
 // Null backend of rhi.h (VCS_RHI=null): every operation is accepted and does nothing; readbacks give zeros. The CPU
-// side of the game runs as with a real renderer, so it can be brought up and checked on a machine (or a build) without
-// one, and renderer bugs stay apart from the rest (docs/LINUX.md).
+// side of the game runs as with a real renderer, so it can be brought up and checked without one, and renderer bugs
+// stay apart from the rest.
 #include "rhi/rhi.h"
 
 #include "imgui.h"

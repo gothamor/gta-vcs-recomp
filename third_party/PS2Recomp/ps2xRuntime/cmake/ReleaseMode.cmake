@@ -4,49 +4,13 @@ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
 
 function(EnableFastReleaseMode TargetName)
     message("> Enabling optimization for: ${TargetName}")
-    # [gta-recomp] clang-cl rejects /Qspectre- and /GL//LTCG need MSVC's own
-    # linker; use plain optimisation flags there and leave LTO to IPO below.
-    # LTO is opt-in (PS2X_LTO=THIN|FULL): with full LTO every relink of the
-    # 150 MB game re-codegens everything, which kills iteration time.
-    # -ffp-contract=off: /arch:AVX2 enables FMA and clang would fuse `a + b * c` into one rounding; the PS2's
-    # FMACs (VU and EE FPU) round the product and the sum separately.
-    if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_compile_options(${TargetName} PRIVATE
-            $<$<CONFIG:Release>:/O2 /Oi /Gy /Gw /GF /DNDEBUG /arch:AVX2 /GS- /clang:-fno-math-errno /clang:-ffp-contract=off>
-        )
-        if(PS2X_LTO STREQUAL "THIN")
-            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
-            # [gta-recomp] the cache is pruned: at most 1 GB, nothing older than 3 days
-            target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:/lldltocache:${CMAKE_BINARY_DIR}/lto-cache
-                                /lldltocachepolicy:cache_size_bytes=1g:prune_after=72h>)
-        elseif(PS2X_LTO STREQUAL "FULL" AND IPO_SUPPORTED)
-            set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
-        endif()
-        # [gta-recomp] Profile-guided optimisation (PS2X_PGO, tools/build.py --opt pgo): GEN = instrumented build that
-        # writes a .profraw when the game exits; a .profdata path = optimise with that profile. Functions the profile
-        # doesn't match (code changed since) are optimised as without it.
-        if(PS2X_PGO STREQUAL "GEN")
-            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-generate>)
-            target_compile_definitions(${TargetName} PRIVATE $<$<CONFIG:Release>:PS2X_PGO_GEN=1>)
-            get_target_property(_type ${TargetName} TYPE)
-            if(_type STREQUAL "EXECUTABLE")
-                execute_process(COMMAND ${CMAKE_CXX_COMPILER} /clang:-print-resource-dir OUTPUT_VARIABLE _resource
-                                OUTPUT_STRIP_TRAILING_WHITESPACE)
-                target_link_options(${TargetName} PRIVATE "${_resource}/lib/windows/clang_rt.profile-x86_64.lib")
-            endif()
-        elseif(PS2X_PGO)
-            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-use=${PS2X_PGO}
-                                   -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled -Wno-profile-instr-missing
-                                   -Wno-backend-plugin>)
-        endif()
-        return()
-    endif()
-    # [gta-recomp] Linux (clang, the only supported compiler there): the same code and numerics as clang-cl above.
-    # x86-64-v3 is /arch:AVX2 (AVX2, FMA, BMI); -ffp-contract=off for the same reason. clang-cl defaults to
-    # -fno-strict-aliasing (MSVC compatibility) and the runtime and generated code read guest memory through casts, so
-    # say it here. No stack protector / CET (Ubuntu turns them on; clang-cl gets /GS-, no CET).
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT MSVC)
-        # [gta-recomp] the PS5 (VCS_PS5, docs/PS5.md): its own CPU, Zen 2 (x86-64-v3 and more)
+    # [gta-recomp] clang only (the PS5's cross build and the build machine's recompiler; the top-level CMakeLists.txt
+    # refuses other compilers). LTO is opt-in (PS2X_LTO=THIN|FULL; tools/ps5.py build --lto): with full LTO every relink
+    # of the 150 MB game re-codegens everything, which kills iteration time.
+    # -ffp-contract=off: the PS2's FMACs (VU and EE FPU) round the product and the sum separately, so clang must not
+    # fuse `a + b * c` into one rounding. -fno-strict-aliasing: the runtime and generated code read guest memory through
+    # casts. No stack protector / CET. -march: the PS5's Zen 2 (VCS_PS5), x86-64-v3 for the build machine's tools.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         set(_ps2x_march -march=x86-64-v3)
         if(VCS_PS5)
             set(_ps2x_march -march=znver2)
@@ -70,6 +34,9 @@ function(EnableFastReleaseMode TargetName)
         elseif(PS2X_LTO STREQUAL "FULL" AND IPO_SUPPORTED)
             set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
         endif()
+        # [gta-recomp] Profile-guided optimisation (PS2X_PGO): GEN = instrumented build that writes a .profraw when the
+        # game exits; a .profdata path = optimise with that profile. Functions the profile doesn't match (code changed
+        # since) are optimised as without it.
         if(PS2X_PGO STREQUAL "GEN")
             target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-generate>)
             target_compile_definitions(${TargetName} PRIVATE $<$<CONFIG:Release>:PS2X_PGO_GEN=1>)
@@ -82,35 +49,6 @@ function(EnableFastReleaseMode TargetName)
                                    -Wno-backend-plugin>)
         endif()
         return()
-    endif()
-    if(MSVC)
-        target_compile_options(${TargetName} PRIVATE
-            $<$<CONFIG:Release>:
-                /O2 # speed
-                /Ob2 # inline aggressively
-                /Oi # intrinsics
-                /GL # whole program opt
-                /Gy # function-level linking
-                /Gw # global data in COMDAT
-                /GF # string pooling
-                /Zc:inline # remove unreferenced inline
-                /fp:fast # fast math (graphics friendly)
-                /DNDEBUG
-                /arch:AVX2 # Advanced Vector Extensions 2
-                /GS- # Disable Buffer Security Check (faster)
-                /Qspectre- # Disable Spectre mitigations (faster)
-            >
-        )
-
-        if(TARGET ${TargetName})
-            target_link_options(${TargetName} PRIVATE
-                $<$<CONFIG:Release>:
-                    /LTCG # link-time code generation
-                    /OPT:REF # remove unreferenced
-                    /OPT:ICF # fold identical COMDATs
-                >
-            )
-        endif()
     endif()
 
     if(IPO_SUPPORTED)

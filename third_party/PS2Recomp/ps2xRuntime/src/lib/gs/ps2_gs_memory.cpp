@@ -4,7 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
-#include <cstdlib>  // [gta-recomp] libstdc++ (Linux) does not bring it in
+#include <cstdlib>  // [gta-recomp] the PS5's libc++ does not bring it in
 
 namespace GSMem
 {

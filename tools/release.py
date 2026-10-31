@@ -1,24 +1,18 @@
 #!/usr/bin/env python3
-"""Make the Windows release zip: the source, the launcher, Python and the libraries - everything but the game.
-And with --ps5 the PS5 build kit: the source with the PS5 quick start (docs/PS5.md) - the game itself is built from the
-player's own disc on a Linux PC, as on Windows.
+"""Make the release zip: the PS5 build kit - the source with PS5-README.txt (the quick start of docs/PS5.md). The game
+itself is built from the player's own disc on their build machine.
 
-    python tools/release.py [--ref TAG | --worktree] [--version X] [--launcher EXE] [--out DIR]
-    python tools/release.py --ps5 [--ref TAG | --worktree] [--version X] [--out DIR]
+    python3 tools/release.py [--ref TAG | --worktree] [--version X] [--out DIR]
 
     --ref TAG       the source at a tag or commit (git archive; default HEAD)
     --worktree      the working tree as it is, uncommitted files included (tracked + untracked, not ignored) - tests
     --version X     the release's number (default: VERSION in the repository; a version tag must match it)
-    --launcher EXE  a VCSLauncher.exe built elsewhere (CI); default: python tools/build.py --launcher
-    --python X.Y.Z  the embeddable Python to bundle (default: the version running this)
 
-Writes build/dist/VCS-Recomp-<version>-windows.zip (--ps5: -ps5.zip, the source and PS5-README.txt) and its .sha256.
-Inside the Windows zip, one folder:
-    VCSLauncher.exe, VERSION, RELEASE.json (version, repository, file list for tools/update.py),
-    python/ (python.org's embeddable CPython), deps/ (tools/deps.py fetch), THIRD_PARTY_LICENSES.txt, the source.
-Never game code or data (DECISIONS.md, source-only): before zipping, every file is checked - no disc images, no
-PS2 executables (MIPS ELF), nothing from generated/, build/ or the Ghidra project - and the release stops if one is.
-Every file in the zip is dated a day before the commit (zip_time): never in the future, whatever the extractor's zone.
+Writes build/dist/VCS-Recomp-<version>-ps5.zip and its .sha256: one folder with the source, PS5-README.txt, VERSION and
+RELEASE.json (version, repository, file list). Never game code or data (DECISIONS.md, source-only): before zipping,
+every file is checked - no disc images, no PS2 executables (MIPS ELF), nothing from generated/, build/ or the Ghidra
+project - and the release stops if one is. Every file in the zip is dated a day before the commit (zip_time): never in
+the future, whatever the extractor's zone.
 """
 import argparse
 import hashlib
@@ -31,15 +25,12 @@ import subprocess
 import sys
 import tarfile
 import time
-import urllib.request
 import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import deps  # noqa: E402
 import toolchain as tc  # noqa: E402
 
 DIST = os.path.join(tc.BUILD, "dist")
-CACHE = os.path.join(DIST, "cache")
 FORBIDDEN_DIRS = ("generated/", "build/", "ghidra/project/", "ghidra/export/", "mc0/", "mc1/")
 FORBIDDEN_NAME = re.compile(r"(?i)(\.iso|\.gzf|\.chd|\.cso|\.cue)$|(^|/)(SLUS|SLES|SCUS|SLPM|SLPS)_\d{3}\.\d{2}")
 
@@ -74,60 +65,6 @@ def copy_source(stage, ref, worktree):
         t.extractall(stage, filter="data")
 
 
-def build_launcher():
-    exe = os.path.join(tc.ROOT, "VCSLauncher.exe")
-    if subprocess.run([sys.executable, tc.tool("build.py"), "--launcher"]).returncode != 0:
-        tc.fail("the launcher didn't build")
-    return exe
-
-
-def bundle_python(stage, version):
-    name = "python-%s-embed-amd64.zip" % version
-    cached = os.path.join(CACHE, name)
-    if not os.path.isfile(cached):
-        url = "https://www.python.org/ftp/python/%s/%s" % (version, name)
-        print("[release] downloading " + url)
-        os.makedirs(CACHE, exist_ok=True)
-        deps.download(url, cached)
-    with zipfile.ZipFile(cached) as z:
-        z.extractall(os.path.join(stage, "python"))
-
-
-def bundle_deps(stage):
-    cached = os.path.join(CACHE, "deps")
-    if deps.check(cached):
-        if os.path.isdir(cached):
-            shutil.rmtree(cached, onerror=lambda f, p, _: (os.chmod(p, 0o666), f(p)))
-        deps.fetch(cached)
-    shutil.copytree(cached, os.path.join(stage, "deps"))
-
-
-def licenses(stage):
-    """THIRD_PARTY_LICENSES.txt from the bundled libraries' own licence files (and Python's, FFmpeg's)."""
-    parts = []
-    for base in sorted(os.listdir(os.path.join(stage, "deps"))):
-        folder = os.path.join(stage, "deps", base)
-        if not os.path.isdir(folder):
-            continue
-        for f in sorted(os.listdir(folder)):
-            if re.match(r"(?i)(license|licence|copying)(\.(txt|md|rst))?$", f):
-                with open(os.path.join(folder, f), encoding="utf-8", errors="replace") as fh:
-                    parts.append("=" * 78 + "\n%s (deps/%s/%s)\n" % (base, base, f) + "=" * 78 + "\n" + fh.read())
-    for z in (f for f in os.listdir(os.path.join(stage, "deps")) if f.endswith(".zip")):
-        with zipfile.ZipFile(os.path.join(stage, "deps", z)) as zf:
-            for n in zf.namelist():
-                if re.search(r"(?i)(^|/)(license|copying)[^/]*$", n) and not n.endswith("/"):
-                    parts.append("=" * 78 + "\nFFmpeg (deps/%s: %s)\n" % (z, n) + "=" * 78 + "\n"
-                                 + zf.read(n).decode("utf-8", "replace"))
-    py = os.path.join(stage, "python", "LICENSE.txt")
-    if os.path.isfile(py):
-        with open(py, encoding="utf-8", errors="replace") as fh:
-            parts.append("=" * 78 + "\nPython (python/LICENSE.txt)\n" + "=" * 78 + "\n" + fh.read())
-    with open(os.path.join(stage, "THIRD_PARTY_LICENSES.txt"), "w", encoding="utf-8") as f:
-        f.write("The libraries and tools bundled with this release, under their own licences. The project itself is "
-                "GPL-3.0 (LICENSE).\n\n" + "\n\n".join(parts))
-
-
 def guard(stage):
     """Every file checked for game code or data; the release stops at the first."""
     problems = []
@@ -152,24 +89,6 @@ def guard(stage):
         for p in problems:
             print("[release] REFUSED " + p)
         tc.fail("game files in the release (above): nothing was written", "release_refused")
-
-
-def self_test(stage):
-    """The release's own launcher, with its own Python and scripts, checks itself (VCSLauncher.exe --self-test: the
-    scripts it runs are there, the bundled Python runs them, doctor.py answers). A release that fails isn't zipped."""
-    out = os.path.join(DIST, "selftest.txt")
-    code = subprocess.run([os.path.join(stage, "VCSLauncher.exe"), "--self-test", "--out", out], cwd=stage).returncode
-    report = "(no output)"
-    if os.path.isfile(out):
-        with open(out, encoding="utf-8", errors="replace") as f:
-            report = f.read()
-        os.remove(out)
-    for line in report.splitlines():
-        print("[release]   " + line)
-    if code != 0:
-        tc.fail("the release's launcher failed its self-test (above): nothing was written", "release_selftest")
-    # the self-test ran doctor.py, which may leave build/ (the Visual Studio environment cache): not part of a release
-    shutil.rmtree(os.path.join(stage, "build"), ignore_errors=True)
 
 
 PS5_README = """{title}
@@ -230,28 +149,24 @@ def main():
     src.add_argument("--ref", default=None)
     src.add_argument("--worktree", action="store_true")
     ap.add_argument("--version")
-    ap.add_argument("--launcher")
-    ap.add_argument("--python", default="%d.%d.%d" % sys.version_info[:3])
     ap.add_argument("--allow-dirty", action="store_true", help="package --ref even with uncommitted changes")
     ap.add_argument("--out", default=DIST)
-    ap.add_argument("--ps5", action="store_true", help="the PS5 build kit: the source and PS5-README.txt")
+    ap.add_argument("--ps5", action="store_true", help="(the only kind of release: accepted for older instructions)")
     a = ap.parse_args()
 
     ref = a.ref or "HEAD"
     if not a.worktree and not a.allow_dirty:
-        # the launcher is built from the working tree, the source taken from a commit: with uncommitted changes the
-        # two don't match (a new launcher next to old scripts - "build tools missing" in the window, 2026-10-30)
+        # the source is taken from a commit: uncommitted changes would not be in it
         changed = git("status", "--porcelain", "--untracked-files=normal", text=True).splitlines()
         if changed:
             for line in changed[:15]:
                 print("[release]   " + line)
             if len(changed) > 15:
                 print("[release]   ... and %d more" % (len(changed) - 15))
-            tc.fail("uncommitted changes (above): the release would package %s's files next to a launcher built from "
-                    "the working tree. Commit them, or use --worktree to package the working tree as it is "
-                    "(--allow-dirty to go ahead anyway)" % ref, "release_dirty")
-    # VERSION in the repository is the number (the launcher's exe carries it too: launcher/CMakeLists.txt); a version tag
-    # must agree with it, or the release would say one number and its launcher another
+            tc.fail("uncommitted changes (above): the release packages %s's files without them. Commit them, or use "
+                    "--worktree to package the working tree as it is (--allow-dirty to go ahead anyway)" % ref,
+                    "release_dirty")
+    # VERSION in the repository is the number; a version tag must agree with it
     if a.worktree:
         repo_version = tc.source_version()["version"]
     else:
@@ -264,7 +179,7 @@ def main():
         tc.fail("the tag says %s, VERSION says %s: bump VERSION (and commit) before tagging" % (tag_version, repo_version),
                 "release_version")
     version = a.version or tag_version or repo_version or "0.0.0-dev"
-    name = "VCS-Recomp-%s-%s" % (version, "ps5" if a.ps5 else "windows")
+    name = "VCS-Recomp-%s-ps5" % version
     stage = os.path.join(DIST, name)
     if os.path.isdir(stage):
         shutil.rmtree(stage, onerror=lambda f, p, _: (os.chmod(p, 0o666), f(p)))
@@ -274,20 +189,11 @@ def main():
     copy_source(stage, ref, a.worktree)
     with open(os.path.join(stage, "VERSION"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
-    if a.ps5:
-        # the PS5's build machine has its own Python, and needs the internet anyway (ps5-plume-triangle's
-        # setup downloads the SDK and Mesa): no launcher, no bundled Python or libraries
-        with open(os.path.join(stage, "PS5-README.txt"), "w", encoding="utf-8") as f:
-            title = "GTA: Vice City Stories - native PS5 port, build kit %s" % version
-            f.write(PS5_README.format(title=title, underline="=" * len(title)))
-    else:
-        launcher = a.launcher or build_launcher()
-        shutil.copy2(launcher, os.path.join(stage, "VCSLauncher.exe"))
-        print("[release] python %s (embeddable)" % a.python)
-        bundle_python(stage, a.python)
-        print("[release] libraries (deps/)")
-        bundle_deps(stage)
-        licenses(stage)
+    # the build machine has its own Python, and needs the internet anyway (ps5-plume-triangle's setup downloads the SDK
+    # and Mesa): nothing bundled
+    with open(os.path.join(stage, "PS5-README.txt"), "w", encoding="utf-8") as f:
+        title = "GTA: Vice City Stories - native PS5 port, build kit %s" % version
+        f.write(PS5_README.format(title=title, underline="=" * len(title)))
 
     files = sorted(os.path.relpath(os.path.join(d, f), stage).replace(os.sep, "/")
                    for d, _, fs in os.walk(stage) for f in fs)
@@ -296,13 +202,10 @@ def main():
         json.dump({"version": version, "repository": repository(), "commit": commit, "files": files + ["RELEASE.json"]},
                   f, indent=0)
     guard(stage)
-    if a.ps5:
-        # its tools answer from the kit itself (Python 3, standard library only)
-        for tool in ("ps5.py", "build.py", "recompile.py"):
-            if subprocess.run([sys.executable, os.path.join(stage, "tools", tool), "--help"], capture_output=True).returncode:
-                tc.fail("the kit's tools/%s does not start: nothing was written" % tool, "release_selftest")
-    else:
-        self_test(stage)
+    # its tools answer from the kit itself (Python 3, standard library only)
+    for tool in ("ps5.py", "recompile.py", "release.py"):
+        if subprocess.run([sys.executable, os.path.join(stage, "tools", tool), "--help"], capture_output=True).returncode:
+            tc.fail("the kit's tools/%s does not start: nothing was written" % tool, "release_selftest")
 
     os.makedirs(a.out, exist_ok=True)
     out = os.path.join(a.out, name + ".zip")
@@ -318,7 +221,6 @@ def main():
     with open(out + ".sha256", "w", encoding="utf-8") as f:
         f.write("%s  %s\n" % (digest, os.path.basename(out)))
     print("[release] ok: %s (%.0f MB, sha256 %s)" % (out, os.path.getsize(out) / (1 << 20), digest[:16]))
-    tc.event(result="ok", path=out, version=version)
 
 
 if __name__ == "__main__":

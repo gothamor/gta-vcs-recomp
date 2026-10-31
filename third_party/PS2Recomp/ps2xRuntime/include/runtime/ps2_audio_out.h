@@ -11,7 +11,7 @@ uint64_t ps2AudioUnderrunCount();  // underruns since start
 
 // [gta-recomp] The player's audio settings (any thread, applied from the next audio callback): gains 0..1 for the
 // whole output and for movie sound, the output mode (0 stereo, 1 mono, 2 left and right swapped), and a mute that
-// keeps everything running (the window in the background).
+// keeps everything running.
 void ps2AudioSetVolume(float master, float movies);
 void ps2AudioSetOutputMode(int mode);
 void ps2AudioSetMuted(bool muted);

@@ -50,8 +50,11 @@ Where the frame went with every draw emulated (title flyover):
 ```
 
 Rules:
-- Vulkan headers only under `src/rhi/vulkan/`; the console's libraries only under `src/platform/`. Everything else
-  includes `rhi.h` / `platform.h`.
+- Vulkan headers only under `src/rhi/vulkan/` and in `platform_ps5.cpp` (the TV's VK_KHR_display surface); the
+  console's libraries only under `src/platform/`. Everything else includes `rhi.h` / `platform.h`.
+- The renderers: `PS2X_GS=hw` (this one, the default) and `cpu` (the runtime's software GS, the reference). The
+  compute renderer's interface (`PS2X_GS=gpu`) has no backend in the PS5 build: paraLLEl-GS built on Windows only and
+  was removed with the PC code (2026-10-31).
 - Shaders are written in HLSL (`src/render/shaders/`) and compiled to SPIR-V by glslang at build time
   (`tools/hlsl_spirv.py`, `vcs_shader()` in `src/render/CMakeLists.txt`).
 - The runtime reaches the platform and the RHI through its host-backend seam (`ps2_host_backend.h`); patches go in
@@ -236,7 +239,7 @@ at higher resolutions:
 
 ## Native frame
 
-"Internal resolution: Match window" (`display.scale` 0, `PS2X_HW_SCALE=0`; on the PS5 the TV output's size): the
+"Internal resolution: Match the TV" (`display.scale` 0, `PS2X_HW_SCALE=0`; on the PS5 the TV output's size): the
 picture's own targets - the 640-wide ones: the drawn frame FBP 140, the shown copy FBP 0, the Z buffer FBP 280 - are
 drawn at the output's size (the letterboxed area at the 3D frames' aspect, `gsHwSetFrameSize`; it stays when a menu
 shows at 4:3), every other target (effect buffers) at 1x - except the reflection map, which the game names a scaled

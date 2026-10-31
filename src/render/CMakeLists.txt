@@ -1,69 +1,38 @@
-# Renderer pieces on top of the RHI: the window presenter and the HW GS renderer's shaders (docs/NATIVE_RENDERER.md).
-# One HLSL source per shader, compiled at build time into headers for each backend that is built:
-#   D3D11: DXBC from fxc (Windows SDK)             -> shaders/dxbc/<header>, array <name>
-#   Vulkan: SPIR-V from glslang (tools/hlsl_spirv.py) -> shaders/spirv/<header>, array <name>_spv
+# Renderer pieces on top of the RHI: the presenter (the picture on the TV) and the HW GS renderer's shaders
+# (docs/NATIVE_RENDERER.md). One HLSL source per shader, compiled at build time to SPIR-V by glslang
+# (tools/hlsl_spirv.py) into shaders/spirv/<header>, array <name>_spv.
 set(VCS_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
-file(MAKE_DIRECTORY "${VCS_SHADER_OUT}/dxbc" "${VCS_SHADER_OUT}/spirv")
+file(MAKE_DIRECTORY "${VCS_SHADER_OUT}/spirv")
 
-if(VCS_RHI_D3D11)
-    file(GLOB VCS_FXC_CANDIDATES "C:/Program Files (x86)/Windows Kits/10/bin/10.*/x64/fxc.exe")
-    list(SORT VCS_FXC_CANDIDATES COMPARE NATURAL ORDER DESCENDING)
-    find_program(VCS_FXC fxc HINTS ${VCS_FXC_CANDIDATES})
-    if(NOT VCS_FXC AND VCS_FXC_CANDIDATES)
-        list(GET VCS_FXC_CANDIDATES 0 VCS_FXC)
-    endif()
-    if(NOT VCS_FXC)
-        message(FATAL_ERROR "fxc.exe (Windows SDK) not found: install the Windows 10/11 SDK")
-    endif()
-endif()
-if(VCS_RHI_VULKAN)
-    find_package(Python3 REQUIRED COMPONENTS Interpreter)
-    find_program(VCS_GLSLANG NAMES glslangValidator glslang HINTS "$ENV{VULKAN_SDK}/bin")
-    if(NOT VCS_GLSLANG)
-        message(FATAL_ERROR "glslangValidator not found (Vulkan shaders): install glslang-tools (Debian / Ubuntu), "
-                            "glslang (Fedora / Arch) or the Vulkan SDK - docs/LINUX.md")
-    endif()
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_program(VCS_GLSLANG NAMES glslangValidator glslang)
+if(NOT VCS_GLSLANG)
+    message(FATAL_ERROR "glslangValidator not found (the shaders): sudo apt install glslang-tools")
 endif()
 
 set(VCS_SHADER_HEADERS "")
 # vcs_shader(<file.hlsl> <entry> <profile> <array name> <output header> [NAME=VALUE defines...])
 function(vcs_shader source entry profile name header)
     set(src "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
-    if(VCS_RHI_D3D11)
-        set(out "${VCS_SHADER_OUT}/dxbc/${header}")
-        set(defines "")
-        foreach(d IN LISTS ARGN)
-            list(APPEND defines /D ${d})
-        endforeach()
-        add_custom_command(
-            OUTPUT "${out}"
-            COMMAND "${VCS_FXC}" /nologo /O3 /T ${profile} /E ${entry} /Vn ${name} ${defines} /Fh "${out}" "${src}"
-            DEPENDS "${src}"
-            COMMENT "fxc ${source} ${entry}"
-            VERBATIM)
-        list(APPEND VCS_SHADER_HEADERS "${out}")
+    set(out "${VCS_SHADER_OUT}/spirv/${header}")
+    string(SUBSTRING "${profile}" 0 2 kind)
+    if(kind STREQUAL "vs")
+        set(stage vert)
+    else()
+        set(stage frag)
     endif()
-    if(VCS_RHI_VULKAN)
-        set(out "${VCS_SHADER_OUT}/spirv/${header}")
-        string(SUBSTRING "${profile}" 0 2 kind)
-        if(kind STREQUAL "vs")
-            set(stage vert)
-        else()
-            set(stage frag)
-        endif()
-        set(defines "")
-        foreach(d IN LISTS ARGN)
-            list(APPEND defines -D ${d})
-        endforeach()
-        add_custom_command(
-            OUTPUT "${out}"
-            COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/hlsl_spirv.py" --glslang "${VCS_GLSLANG}"
-                    --stage ${stage} --entry ${entry} --name ${name}_spv --out "${out}" ${defines} "${src}"
-            DEPENDS "${src}" "${CMAKE_SOURCE_DIR}/tools/hlsl_spirv.py"
-            COMMENT "glslang ${source} ${entry}"
-            VERBATIM)
-        list(APPEND VCS_SHADER_HEADERS "${out}")
-    endif()
+    set(defines "")
+    foreach(d IN LISTS ARGN)
+        list(APPEND defines -D ${d})
+    endforeach()
+    add_custom_command(
+        OUTPUT "${out}"
+        COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/hlsl_spirv.py" --glslang "${VCS_GLSLANG}"
+                --stage ${stage} --entry ${entry} --name ${name}_spv --out "${out}" ${defines} "${src}"
+        DEPENDS "${src}" "${CMAKE_SOURCE_DIR}/tools/hlsl_spirv.py"
+        COMMENT "glslang ${source} ${entry}"
+        VERBATIM)
+    list(APPEND VCS_SHADER_HEADERS "${out}")
     set(VCS_SHADER_HEADERS ${VCS_SHADER_HEADERS} PARENT_SCOPE)
 endfunction()
 vcs_shader(shaders/present.hlsl vs_main vs_5_0 kPresentVS present_vs.h)

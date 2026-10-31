@@ -94,8 +94,8 @@ namespace vcs::freecam
             g_last = now;
             const input::FreeCamInput in = input::takeFreeCameraInput();
 
-            g_yaw = std::remainder(g_yaw + in.turn + in.turnRate * kTurnRate * dt, 6.2831855f);
-            g_pitch = std::clamp(g_pitch + in.tilt + in.tiltRate * kTurnRate * dt, -kPitchLimit, kPitchLimit);
+            g_yaw = std::remainder(g_yaw + in.turnRate * kTurnRate * dt, 6.2831855f);
+            g_pitch = std::clamp(g_pitch + in.tiltRate * kTurnRate * dt, -kPitchLimit, kPitchLimit);
             g_fov = std::clamp(g_fov - in.zoom * kZoomRate * dt, 20.0f, 110.0f);
 
             const float cy = std::cos(g_yaw), sy = std::sin(g_yaw), cp = std::cos(g_pitch), sp = std::sin(g_pitch);

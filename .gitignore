@@ -20,14 +20,10 @@ ghidra/export/
 # --- Build outputs ---
 build/
 out/
-.vs/
 .vscode/
-*.exe
-*.pdb
-*.ilk
-*.exp
-*.obj
+*.elf
+eboot.bin
 __pycache__/
 
-# the build folder chosen elsewhere (tools/build_dir.py): this machine only
+# the build folder chosen elsewhere (a path; tools/toolchain.py BUILD_POINTER): this machine only
 .vcs-build-dir

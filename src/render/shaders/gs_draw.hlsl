@@ -20,7 +20,7 @@ cbuffer Draw : register(b0)
     int4 texSizeWrap;      // texture w, h, WMS, WMT
     int4 region;           // MINU, MAXU, MINV, MAXV
     float4 rtOrigin;       // xy: texture origin inside the render target (PS2 pixels); z: pixel-centre offset (0.5: the
-                           // GS samples pixel X at X, D3D at X + 0.5 - geometry moves by z to sample where the GS does);
+                           // GS samples pixel X at X, the GPU at X + 0.5 - geometry moves by z to sample where the GS does);
                            // w: render-target texel scale y
     int4 blendCPremul;     // C (0 As, 1 Ad, 2 FIX), premultiply (0 none, 1 rgb *= C, 2 rgb *= 1 + C)
     float4 fogColor;       // rgb 0..255
@@ -44,7 +44,7 @@ struct VSOut
     noperspective float depth : TEXCOORD2;
     float2 clip : SV_ClipDistance0; // native draws: the PS2 clip test's near / far planes
 #if VCS_SPIRV
-    [[vk::builtin("PointSize")]] float psize : PSIZE; // Vulkan points need one (D3D11's are always 1 pixel)
+    [[vk::builtin("PointSize")]] float psize : PSIZE; // Vulkan points need one (GS points are 1 pixel)
 #endif
 };
 

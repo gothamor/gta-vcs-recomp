@@ -1,4 +1,4 @@
-// What the platform layers share (platform.h): key names for the menus and the PNG writer for screenshots.
+// The PNG writer for screenshots (platform.h), apart from the console's own functions in platform_ps5.cpp.
 #include "platform/platform.h"
 
 #include <zlib.h>
@@ -48,67 +48,6 @@ namespace platform
             out.insert(out.end(), type, type + 4);
             out.insert(out.end(), data.begin(), data.end());
             put32(out, pngCrc32(0, out.data() + start, out.size() - start));
-        }
-    }
-
-    const char *keyName(int key)
-    {
-        static thread_local char buffer[16];
-        if ((key >= KEY_A && key <= KEY_Z) || (key >= KEY_ZERO && key <= KEY_NINE))
-            return (buffer[0] = static_cast<char>(key), buffer[1] = 0, buffer);
-        if (key >= KEY_F1 && key <= KEY_F12)
-            return (std::snprintf(buffer, sizeof(buffer), "F%d", key - KEY_F1 + 1), buffer);
-        if (key >= KEY_KP_0 && key <= KEY_KP_9)
-            return (std::snprintf(buffer, sizeof(buffer), "Keypad %d", key - KEY_KP_0), buffer);
-        switch (key)
-        {
-        case KEY_SPACE: return "Space";
-        case KEY_GRAVE: return "`";
-        case KEY_MINUS: return "-";
-        case KEY_EQUAL: return "=";
-        case KEY_LEFT_BRACKET: return "[";
-        case KEY_RIGHT_BRACKET: return "]";
-        case KEY_BACKSLASH: return "\\";
-        case KEY_SEMICOLON: return ";";
-        case KEY_APOSTROPHE: return "'";
-        case KEY_COMMA: return ",";
-        case KEY_PERIOD: return ".";
-        case KEY_SLASH: return "/";
-        case KEY_ESCAPE: return "Escape";
-        case KEY_ENTER: return "Enter";
-        case KEY_TAB: return "Tab";
-        case KEY_BACKSPACE: return "Backspace";
-        case KEY_INSERT: return "Insert";
-        case KEY_DELETE: return "Delete";
-        case KEY_RIGHT: return "Right";
-        case KEY_LEFT: return "Left";
-        case KEY_DOWN: return "Down";
-        case KEY_UP: return "Up";
-        case KEY_HOME: return "Home";
-        case KEY_END: return "End";
-        case KEY_PAGE_UP: return "Page Up";
-        case KEY_PAGE_DOWN: return "Page Down";
-        case KEY_CAPS_LOCK: return "Caps Lock";
-        case KEY_KP_DECIMAL: return "Keypad .";
-        case KEY_KP_DIVIDE: return "Keypad /";
-        case KEY_KP_MULTIPLY: return "Keypad *";
-        case KEY_KP_SUBTRACT: return "Keypad -";
-        case KEY_KP_ADD: return "Keypad +";
-        case KEY_KP_ENTER: return "Keypad Enter";
-        case KEY_LEFT_SHIFT: return "Shift"; // control bindings take either side (game/vcs_input.cpp)
-        case KEY_LEFT_CONTROL: return "Ctrl";
-        case KEY_LEFT_ALT: return "Alt";
-        case KEY_RIGHT_SHIFT: return "Right Shift";
-        case KEY_RIGHT_CONTROL: return "Right Ctrl";
-        case KEY_RIGHT_ALT: return "Right Alt";
-        case KEY_MOUSE_LEFT: return "Left mouse";
-        case KEY_MOUSE_RIGHT: return "Right mouse";
-        case KEY_MOUSE_MIDDLE: return "Middle mouse";
-        case KEY_MOUSE_X1: return "Mouse 4";
-        case KEY_MOUSE_X2: return "Mouse 5";
-        case KEY_WHEEL_UP: return "Wheel up";
-        case KEY_WHEEL_DOWN: return "Wheel down";
-        default: return "?";
         }
     }
 

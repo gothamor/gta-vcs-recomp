@@ -2,8 +2,6 @@
 #include "runtime/ps2_control.h"
 #include "runtime/ps2_perf.h"
 
-#include "platform/platform.h"
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -20,19 +18,6 @@
 #include <unordered_map>
 #include <vector>
 
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
-using SocketHandle = SOCKET;
-static constexpr SocketHandle kNoSocket = INVALID_SOCKET;
-static void closeSocket(SocketHandle s) { closesocket(s); }
-#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -40,7 +25,6 @@ static void closeSocket(SocketHandle s) { closesocket(s); }
 using SocketHandle = int;
 static constexpr SocketHandle kNoSocket = -1;
 static void closeSocket(SocketHandle s) { close(s); }
-#endif
 // [gta-recomp] a client gone before its reply (a killed gamectl.py) must not end the game with SIGPIPE
 #if defined(MSG_NOSIGNAL)
 static constexpr int kSendFlags = MSG_NOSIGNAL;
@@ -58,9 +42,7 @@ namespace ps2control
             return v && *v && *v != '0';
         }
 
-        constexpr int kKeys = 512;
-        std::array<std::atomic<bool>, kKeys> g_injected{};
-        std::array<bool, kKeys> g_injectedEdge{}; // main thread: went down since the last pump
+        std::atomic<uint16_t> g_injected{0}; // DualShock 2 buttons held through the channel (the report's bits, set = down)
 
         struct Command
         {
@@ -73,7 +55,7 @@ namespace ps2control
 
         struct Release
         {
-            int key;
+            uint16_t button;
             std::chrono::steady_clock::time_point at;
             std::shared_ptr<Command> command;
         };
@@ -83,46 +65,29 @@ namespace ps2control
         std::thread g_server;
         SocketHandle g_listen = kNoSocket;
 
-        // platform::Key for a name: letters, digits, F1-F12 and the names below (case-insensitive).
-        int keyFromName(std::string name)
+        // A DualShock 2 button's bit in the pad report's 16-bit word for its name (case-insensitive); 0: none.
+        uint16_t buttonFromName(std::string name)
         {
             for (char &c : name)
                 c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            struct Named { const char *name; int key; };
+            struct Named { const char *name; uint16_t bit; };
             static const Named named[] = {
-                {"return", platform::KEY_ENTER}, {"enter", platform::KEY_ENTER}, {"start", platform::KEY_ENTER}, {"shift", platform::KEY_LEFT_SHIFT}, {"shiftkey", platform::KEY_LEFT_SHIFT},
-                {"cross", platform::KEY_LEFT_SHIFT}, {"space", platform::KEY_SPACE}, {"square", platform::KEY_SPACE}, {"triangle", platform::KEY_F}, {"ctrl", platform::KEY_LEFT_CONTROL},
-                {"controlkey", platform::KEY_LEFT_CONTROL}, {"circle", platform::KEY_LEFT_CONTROL}, {"escape", platform::KEY_ESCAPE}, {"esc", platform::KEY_ESCAPE},
-                {"backspace", platform::KEY_BACKSPACE}, {"back", platform::KEY_BACKSPACE}, {"select", platform::KEY_BACKSPACE}, {"tab", platform::KEY_TAB}, {"up", platform::KEY_UP},
-                {"down", platform::KEY_DOWN}, {"left", platform::KEY_LEFT}, {"right", platform::KEY_RIGHT},
-                {"alt", platform::KEY_LEFT_ALT}, // [gta-recomp] Alt+Enter (full screen)
-                // [gta-recomp] the mouse as keys (control bindings, game/vcs_input.cpp), the right-hand modifiers
-                {"mouseleft", platform::KEY_MOUSE_LEFT}, {"mouseright", platform::KEY_MOUSE_RIGHT},
-                {"mousemiddle", platform::KEY_MOUSE_MIDDLE}, {"mouse4", platform::KEY_MOUSE_X1}, {"mouse5", platform::KEY_MOUSE_X2},
-                {"wheelup", platform::KEY_WHEEL_UP}, {"wheeldown", platform::KEY_WHEEL_DOWN},
-                {"rshift", platform::KEY_RIGHT_SHIFT}, {"rctrl", platform::KEY_RIGHT_CONTROL}, {"kpenter", platform::KEY_KP_ENTER},
+                {"select", 0x0001}, {"l3", 0x0002}, {"r3", 0x0004}, {"start", 0x0008}, {"up", 0x0010}, {"right", 0x0020},
+                {"down", 0x0040}, {"left", 0x0080}, {"l2", 0x0100}, {"r2", 0x0200}, {"l1", 0x0400}, {"r1", 0x0800},
+                {"triangle", 0x1000}, {"circle", 0x2000}, {"cross", 0x4000}, {"square", 0x8000},
             };
             for (const Named &n : named)
                 if (name == n.name)
-                    return n.key;
-            if (name.size() == 1 && std::isalpha(static_cast<unsigned char>(name[0])))
-                return platform::KEY_A + (name[0] - 'a');
-            if (name.size() == 1 && std::isdigit(static_cast<unsigned char>(name[0])))
-                return platform::KEY_ZERO + (name[0] - '0');
-            if (name.size() >= 2 && name[0] == 'f')
-            {
-                const int n = std::atoi(name.c_str() + 1);
-                if (n >= 1 && n <= 12)
-                    return platform::KEY_F1 + n - 1;
-            }
-            return -1;
+                    return n.bit;
+            return 0;
         }
 
-        void setInjected(int key, bool down)
+        void setInjected(uint16_t button, bool down)
         {
-            if (down && !g_injected[key].load())
-                g_injectedEdge[key] = true;
-            g_injected[key].store(down);
+            if (down)
+                g_injected.fetch_or(button);
+            else
+                g_injected.fetch_and(static_cast<uint16_t>(~button));
         }
 
         void serve(SocketHandle client)
@@ -189,30 +154,31 @@ namespace ps2control
                 const std::string size = capture(path);
                 command->reply.set_value(size.empty() ? "error could not write " + path : "ok " + size);
             }
-            else if (verb == "key" || verb == "press")
+            else if (verb == "button" || verb == "press")
             {
                 std::string name, arg;
                 in >> name >> arg;
-                const int key = keyFromName(name);
-                if (key < 0 || key >= kKeys)
+                const uint16_t button = buttonFromName(name);
+                if (!button)
                 {
-                    command->reply.set_value("error unknown key '" + name + "'");
+                    command->reply.set_value("error unknown button '" + name + "' (cross, circle, square, triangle, l1, r1, l2, "
+                                             "r2, l3, r3, start, select, up, down, left, right)");
                     return;
                 }
-                if (verb == "key")
+                if (verb == "button")
                 {
                     if (arg != "down" && arg != "up")
                     {
-                        command->reply.set_value("error usage: key <name> down|up");
+                        command->reply.set_value("error usage: button <name> down|up");
                         return;
                     }
-                    setInjected(key, arg == "down");
+                    setInjected(button, arg == "down");
                     command->reply.set_value("ok");
                     return;
                 }
                 const int ms = arg.empty() ? 150 : std::max(1, std::atoi(arg.c_str()));
-                setInjected(key, true);
-                g_releases.push_back({key, std::chrono::steady_clock::now() + std::chrono::milliseconds(ms), command});
+                setInjected(button, true);
+                g_releases.push_back({button, std::chrono::steady_clock::now() + std::chrono::milliseconds(ms), command});
             }
             else if (verb == "perf")
                 command->reply.set_value("ok " + ps2perf::summaryLine());
@@ -232,7 +198,7 @@ namespace ps2control
                 });
             }
             else
-                command->reply.set_value("error unknown command '" + verb + "' (ping, screenshot, key, press, perf, quit" +
+                command->reply.set_value("error unknown command '" + verb + "' (ping, screenshot, button, press, perf, quit" +
                                          [] {
                                              std::string names;
                                              for (const auto &[name, handler] : g_extraCommands)
@@ -268,19 +234,7 @@ namespace ps2control
         return on && !g_gameInputBlocked.load(std::memory_order_relaxed);
     }
 
-    bool keyDown(int key)
-    {
-        if (key >= 0 && key < kKeys && g_injected[key].load(std::memory_order_relaxed))
-            return true;
-        return physicalInputOn() && platform::keyDown(key);
-    }
-
-    bool keyPressed(int key)
-    {
-        if (key >= 0 && key < kKeys && g_injectedEdge[key])
-            return true;
-        return physicalInputOn() && platform::keyPressed(key);
-    }
+    uint16_t injectedButtons() { return g_injected.load(std::memory_order_relaxed); }
 
     void start()
     {
@@ -288,20 +242,12 @@ namespace ps2control
             return;
         const char *portEnv = std::getenv("PS2X_CONTROL_PORT");
         const int port = portEnv && *portEnv ? std::atoi(portEnv) : 47615;
-#if defined(_WIN32)
-        WSADATA wsa;
-        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
-            return;
-#endif
         g_listen = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (g_listen == kNoSocket)
             return;
-#if !defined(_WIN32)
-        // [gta-recomp] a game started right after another may bind while the old connections are in TIME_WAIT (on
-        // POSIX this never lets two games listen at once; on Windows SO_REUSEADDR would, so it stays off there)
+        // [gta-recomp] a game started right after another may bind while the old connections are in TIME_WAIT
         const int reuse = 1;
         setsockopt(g_listen, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-#endif
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(port));
@@ -315,12 +261,11 @@ namespace ps2control
         }
         g_running.store(true);
         g_server = std::thread(serverLoop);
-        std::fprintf(stderr, "[control] listening on 127.0.0.1:%d%s\n", port, hiddenMode() ? " (window hidden, physical input off)" : "");
+        std::fprintf(stderr, "[control] listening on 127.0.0.1:%d%s\n", port, hiddenMode() ? " (physical input off, sound muted)" : "");
     }
 
     void pump(const std::function<std::string(const std::string &path)> &capture, const std::function<void()> &quit)
     {
-        g_injectedEdge.fill(false);
         const auto now = std::chrono::steady_clock::now();
         for (size_t i = 0; i < g_releases.size();)
         {
@@ -329,7 +274,7 @@ namespace ps2control
                 ++i;
                 continue;
             }
-            setInjected(g_releases[i].key, false);
+            setInjected(g_releases[i].button, false);
             g_releases[i].command->reply.set_value("ok");
             g_releases.erase(g_releases.begin() + static_cast<std::ptrdiff_t>(i));
         }

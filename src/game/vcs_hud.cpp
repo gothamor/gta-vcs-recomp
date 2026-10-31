@@ -15,7 +15,7 @@
 // Native HUD (docs/NATIVE_RENDERER.md "HUD layer"): the HUD context's primitives are collected per frame, grouped into
 // elements and anchored (resolveAnchors); at the frame kick their vertex positions go to the renderer, which asks
 // classify() about each 2D primitive it gets. Named ones are squeezed towards their anchor in widescreen (HUD "Screen
-// edges"; otherwise all to the middle) and drawn over the picture at the window's size (VCS_HUD_NATIVE=0: into the
+// edges"; otherwise all to the middle) and drawn over the picture at the output's size (VCS_HUD_NATIVE=0: into the
 // frame buffer as before). VCS_TRACE_HUDKEY=<n> logs n primitives that were not found.
 //
 // VCS_TRACE_IM2D=<n>: log n Im2D calls (caller, primitive, vertex count, the first vertices' raw words) and markers at

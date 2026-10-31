@@ -1,14 +1,12 @@
 // See trainer_menu.h.
 //
 // Drawn straight into Dear ImGui's foreground draw list (no ImGui widgets): the look is the trainer's own, the input is
-// read here (keyboard, numpad, gamepad, with key repeat), and nothing moves under the mouse. Pages are rebuilt every
+// read here (the DualSense, with repeat on the d-pad). Pages are rebuilt every
 // frame from the trainer's state, so a row always shows what is true now.
 #include "ui/trainer_menu.h"
 
 #include "game/vcs_trainer.h"
 #include "platform/platform.h"
-#include "runtime/ps2_control.h"
-#include "settings/settings.h"
 #include "ui/settings_menu.h"
 
 #include "imgui.h"
@@ -59,8 +57,8 @@ namespace ui
             Value kind = Value::None;
             std::string value; // Choice
             std::string help;
-            std::function<void()> select;    // Enter / A
-            std::function<void(int)> change; // Left / Right: -1 / +1
+            std::function<void()> select;    // Cross
+            std::function<void(int)> change; // d-pad left / right: -1 / +1
             bool enabled = true;
         };
 
@@ -74,11 +72,11 @@ namespace ui
         bool g_open = false;
         bool g_releaseWait = false;
         bool g_chordWasDown = false;
-        bool g_camChordWasDown = false; // Back + LB: the free camera
+        bool g_camChordWasDown = false; // touchpad + L1: the free camera
         std::vector<Level> g_stack{{Main}};
         bool g_padWas[platform::GAMEPAD_BUTTON_COUNT] = {};
 
-        // the choices' current values (the menu's own; applied with Enter, or at once where noted)
+        // the choices' current values (the menu's own; applied with Cross, or at once where noted)
         int g_wanted = 3;
         int g_moneyIndex = 1;
         int g_loadout = 0;
@@ -87,8 +85,6 @@ namespace ui
         constexpr int kMoney[] = {1000, 10000, 100000, 1000000};
 
         // ---- Input ------------------------------------------------------------------------------------------------
-        bool pressedKey(int k) { return platform::keyPressed(k) || ps2control::keyPressed(k); }
-        bool heldKey(int k) { return platform::keyDown(k) || ps2control::keyDown(k); }
         bool padDown(platform::GamepadButton b) { return platform::gamepadConnected() && platform::gamepadButton(b); }
 
         // A direction held down repeats, like a text cursor.
@@ -128,26 +124,19 @@ namespace ui
                 padPressed[b] = d && !g_padWas[b];
                 g_padWas[b] = d;
             }
-            auto dir = [&](Repeat &r, int key, int numpad, GamepadButton pad) {
-                return r.fire(pressedKey(key) || pressedKey(numpad) || padPressed[pad], heldKey(key) || heldKey(numpad) || padDown(pad));
-            };
+            auto dir = [&](Repeat &r, GamepadButton pad) { return r.fire(padPressed[pad], padDown(pad)); };
             Input in;
-            in.up = dir(g_up, KEY_UP, KEY_KP_8, GAMEPAD_DPAD_UP);
-            in.down = dir(g_down, KEY_DOWN, KEY_KP_2, GAMEPAD_DPAD_DOWN);
-            in.left = dir(g_left, KEY_LEFT, KEY_KP_4, GAMEPAD_DPAD_LEFT);
-            in.right = dir(g_right, KEY_RIGHT, KEY_KP_6, GAMEPAD_DPAD_RIGHT);
-            const bool alt = heldKey(KEY_LEFT_ALT) || heldKey(KEY_RIGHT_ALT); // Alt+Enter is full screen
-            in.select = (!alt && (pressedKey(KEY_ENTER) || pressedKey(KEY_KP_ENTER))) || pressedKey(KEY_KP_5) ||
-                        padPressed[GAMEPAD_SOUTH];
-            in.back = pressedKey(KEY_BACKSPACE) || pressedKey(KEY_KP_0) || pressedKey(KEY_ESCAPE) || padPressed[GAMEPAD_EAST];
+            in.up = dir(g_up, GAMEPAD_DPAD_UP);
+            in.down = dir(g_down, GAMEPAD_DPAD_DOWN);
+            in.left = dir(g_left, GAMEPAD_DPAD_LEFT);
+            in.right = dir(g_right, GAMEPAD_DPAD_RIGHT);
+            in.select = padPressed[GAMEPAD_SOUTH];
+            in.back = padPressed[GAMEPAD_EAST];
             return in;
         }
 
         bool anyInputHeld()
         {
-            for (int k = 1; k < platform::KEY_COUNT; ++k)
-                if (platform::keyDown(k))
-                    return true;
             for (int b = 0; b < platform::GAMEPAD_BUTTON_COUNT; ++b)
                 if (padDown(static_cast<platform::GamepadButton>(b)))
                     return true;
@@ -155,24 +144,7 @@ namespace ui
         }
 
         // ---- Pages ------------------------------------------------------------------------------------------------
-#if defined(__PROSPERO__)
-        // The PS5 has only the DualSense: the hints name its buttons (Cross applies, Circle goes back, the touchpad is
-        // Back / Select). The free camera's help is its own there.
-        std::string forPad(const std::string &help)
-        {
-            if (help.rfind("Fly: ", 0) == 0)
-                return "Fly: the left stick moves, the right stick looks, R2 up, L2 down, Cross faster, Circle slower, "
-                       "D-pad up / down zoom. The player waits. Hotkey: touchpad + L1.";
-            std::string text = help;
-            for (size_t at; (at = text.find("Enter:")) != std::string::npos;)
-                text.replace(at, 6, "Cross:");
-            return text;
-        }
         constexpr const char *kKeysHint = "D-pad: select   Left/Right: change   Cross: apply   Circle: back";
-#else
-        const std::string &forPad(const std::string &help) { return help; }
-        constexpr const char *kKeysHint = "Up/Down: select   Left/Right: change   Enter: apply   Backspace: back";
-#endif
 
         Row pageRow(const char *label, Page page, const char *help)
         {
@@ -243,10 +215,10 @@ namespace ui
                 rows.push_back(toggleRow("Never wanted", tr::NeverWanted, "The police forget you as soon as they notice you."));
                 rows.push_back(choiceRow("Set wanted level", std::string(g_wanted, '*') + (g_wanted ? "" : "none"),
                                          [](int d) { g_wanted = std::clamp(g_wanted + d, 0, 6); },
-                                         [] { tr::setWanted(g_wanted); }, "Left / Right: how many stars. Enter: set it."));
+                                         [] { tr::setWanted(g_wanted); }, "Left / Right: how many stars. Cross: set it."));
                 rows.push_back(choiceRow("Add money", money(kMoney[g_moneyIndex]),
                                          [](int d) { g_moneyIndex = wrap(g_moneyIndex + d, static_cast<int>(std::size(kMoney))); },
-                                         [] { tr::addMoney(kMoney[g_moneyIndex]); }, "Left / Right: how much. Enter: add it."));
+                                         [] { tr::addMoney(kMoney[g_moneyIndex]); }, "Left / Right: how much. Cross: add it."));
                 rows.push_back(toggleRow("Infinite sprint", tr::InfiniteSprint, "Run as long as you like."));
                 rows.push_back(toggleRow("Police ignore you", tr::PoliceIgnore, "Cops leave you alone, whatever you do."));
                 rows.push_back(toggleRow("Everyone ignores you", tr::EveryoneIgnores, "Nobody reacts to you: cops, gangs, people."));
@@ -270,7 +242,7 @@ namespace ui
             }
             case WeaponList:
                 for (const tr::Entry &e : tr::weapons())
-                    rows.push_back(actionRow(e.name, [id = e.id] { tr::giveWeapon(id); }, "Enter: give it, with ammunition, "
+                    rows.push_back(actionRow(e.name, [id = e.id] { tr::giveWeapon(id); }, "Cross: give it, with ammunition, "
                                                                                        "and hold it."));
                 break;
             case Vehicles:
@@ -296,7 +268,7 @@ namespace ui
                     rows.push_back(actionRow("(the game's names are not loaded yet)", {}, "", false));
                 for (const tr::Entry &e : list)
                     rows.push_back(actionRow(e.name, [id = e.id] { tr::spawnVehicle(id); },
-                                             tr::toggle(tr::WarpIntoSpawned) ? "Enter: spawn it and get in." : "Enter: spawn it ahead of you."));
+                                             tr::toggle(tr::WarpIntoSpawned) ? "Cross: spawn it and get in." : "Cross: spawn it ahead of you."));
                 break;
             }
             case Missions:
@@ -311,7 +283,7 @@ namespace ui
                     rows.push_back(actionRow("(the game's names are not loaded yet)", {}, "", false));
                 const bool running = tr::missionRunning();
                 const std::string help = running ? "A mission is running: finish or fail it first."
-                                                 : "Enter: start it here, as its marker would. Saving after a mission "
+                                                 : "Cross: start it here, as its marker would. Saving after a mission "
                                                    "played out of turn keeps what it changed.";
                 for (const tr::Entry &e : list)
                     rows.push_back(actionRow(e.name, [id = e.id] { tr::launchMission(id); }, help, !running));
@@ -323,14 +295,13 @@ namespace ui
                                          tr::hasSavedPosition() ? "Back to the position you saved." : "Save a position first.",
                                          tr::hasSavedPosition()));
                 for (const tr::Entry &e : tr::landmarks())
-                    rows.push_back(actionRow(e.name, [id = e.id] { tr::teleport(id); }, "Enter: go there (in your vehicle, if you drive one)."));
+                    rows.push_back(actionRow(e.name, [id = e.id] { tr::teleport(id); }, "Cross: go there (in your vehicle, if you drive one)."));
                 break;
             case Camera:
             {
                 rows.push_back(toggleRow("Free camera", tr::FreeCamera,
-                                         "Fly: W / A / S / D, E up, Q down, the mouse looks, Shift faster, Ctrl slower, "
-                                         "Z / X zoom. Gamepad: sticks, RT / LT, A / B, D-pad. The player waits. Hotkey: "
-                                         "F6 (Back + LB)."));
+                                         "Fly: the left stick moves, the right stick looks, R2 up, L2 down, Cross faster, "
+                                         "Circle slower, D-pad up / down zoom. The player waits. Hotkey: touchpad + L1."));
                 static const int kSpeeds[] = {5, 10, 20, 40, 80};
                 int at = 0;
                 while (at + 1 < static_cast<int>(std::size(kSpeeds)) && kSpeeds[at] < tr::freeCameraSpeed())
@@ -342,7 +313,7 @@ namespace ui
                                              const int n = static_cast<int>(std::size(kSpeeds));
                                              tr::setFreeCameraSpeed(kSpeeds[std::clamp(at + d, 0, n - 1)]);
                                          },
-                                         [] { tr::setFreeCameraSpeed(20); }, "Left / Right: slower or faster. Enter: 20 m/s."));
+                                         [] { tr::setFreeCameraSpeed(20); }, "Left / Right: slower or faster. Cross: 20 m/s."));
                 rows.push_back(actionRow("Teleport player here", tr::teleportToCamera,
                                          tr::toggle(tr::FreeCamera) ? "Puts you on the ground below the camera and ends it."
                                                                     : "Turn the free camera on first.",
@@ -370,7 +341,7 @@ namespace ui
                 std::snprintf(speed, sizeof(speed), "%d%%", tr::gameSpeed());
                 rows.push_back(choiceRow("Game speed", speed,
                                          [](int d) { tr::setGameSpeed(std::clamp(tr::gameSpeed() + d * 25, 25, 200)); },
-                                         [] { tr::setGameSpeed(100); }, "Left / Right: slower or faster. Enter: normal speed."));
+                                         [] { tr::setGameSpeed(100); }, "Left / Right: slower or faster. Cross: normal speed."));
                 break;
             }
             }
@@ -393,7 +364,7 @@ namespace ui
         void close()
         {
             g_open = false;
-            g_releaseWait = true; // the game would otherwise see the keys that closed the menu held
+            g_releaseWait = true; // the game would otherwise see the buttons that closed the menu held
         }
 
         // ---- Drawing ----------------------------------------------------------------------------------------------
@@ -465,12 +436,12 @@ namespace ui
             text(dl, 15.0f * s, ImVec2(x + w - 12.0f * s - cw, y + (subH - 15.0f * s) * 0.5f), rgba(220, 220, 220), count);
             y += subH;
 
-            // the rows: as many as fit above the help and the keys (12 at most)
+            // the rows: as many as fit above the help and the button hints (12 at most)
             const float rowH = 32.0f * s, padX = 14.0f * s;
             const float hs = 15.0f * s, wrapW = w - 2.0f * padX, ks = 13.0f * s;
-            const std::string help = rows.empty() ? std::string() : forPad(rows[level.selected].help);
+            const std::string help = rows.empty() ? std::string() : rows[level.selected].help;
             const float helpH = help.empty() ? 0.0f : textSize(hs, help.c_str(), wrapW).y + 20.0f * s;
-            const float below = 20.0f * s + helpH + ks + 10.0f * s + 12.0f * s; // arrows, help, keys, margin
+            const float below = 20.0f * s + helpH + ks + 10.0f * s + 12.0f * s; // arrows, help, button hints, margin
             const int visible = std::clamp(static_cast<int>((vp->Pos.y + vp->Size.y - y - below) / rowH), 4, 12);
             level.top = std::clamp(level.top, std::max(0, level.selected - visible + 1), std::max(0, level.selected));
             level.top = std::clamp(level.top, 0, std::max(0, static_cast<int>(rows.size()) - visible));
@@ -513,7 +484,7 @@ namespace ui
                 y += ah + 6.0f * s;
             }
 
-            // the selected row's help, and the keys
+            // the selected row's help, and the button hints
             if (!help.empty())
             {
                 const float h = helpH - 4.0f * s;
@@ -534,22 +505,22 @@ namespace ui
 
     void drawTrainerMenu()
     {
+        // touchpad + R1: the trainer (the PS2's Select + R1, kept from the game: game/vcs_input.cpp)
         const bool chord = padDown(platform::GAMEPAD_BACK) && padDown(platform::GAMEPAD_RIGHT_SHOULDER);
         const bool chordPressed = chord && !g_chordWasDown;
         g_chordWasDown = chord;
-        const int key = settings::value("controls.trainer_key");
-        // the free camera's own hotkey (any time, the trainer open or not)
+        // touchpad + L1: the free camera's own hotkey (any time, the trainer open or not)
         const bool camChord = padDown(platform::GAMEPAD_BACK) && padDown(platform::GAMEPAD_LEFT_SHOULDER);
         const bool camChordPressed = camChord && !g_camChordWasDown;
         g_camChordWasDown = camChord;
-        if (!settingsMenuOpen() && (pressedKey(settings::value("controls.freecam_key")) || camChordPressed))
+        if (!settingsMenuOpen() && camChordPressed)
             tr::setToggle(tr::FreeCamera, !tr::toggle(tr::FreeCamera));
         if (settingsMenuOpen()) // one menu at a time
         {
             if (g_open)
                 close();
         }
-        else if (pressedKey(key) || chordPressed)
+        else if (chordPressed)
             g_open ? close() : open();
 
         if (g_releaseWait && !anyInputHeld())

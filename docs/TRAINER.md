@@ -5,8 +5,8 @@ ScriptHookRDR2 trainer, the one most RDR2 trainers copy): a list menu at the sid
 touchpad + R1 and drive with the d-pad, with pages for the player, weapons, vehicles, teleports and the world - and
 here a mission launcher. Nothing changes until you use it; turning a toggle off undoes it.
 
-Code: `src/game/vcs_trainer.{h,cpp}` (what it does), `src/ui/trainer_menu.{h,cpp}` (the menu). Check:
-`tools/trainer_check.py` (below).
+Code: `src/game/vcs_trainer.{h,cpp}` (what it does), `src/ui/trainer_menu.{h,cpp}` (the menu). The checks it passed
+(below) ran on the PC build before the PS5 port.
 
 ## How RDR2's Native Trainer works, and what was taken from it
 
@@ -119,17 +119,21 @@ The switches are not saved: every start is the original game (DECISIONS.md 2026-
   trainer runs the game's own credits subroutine (main script 0x24DC3, as a script of its own named `credits`) 5.5 s
   after the end, as the story would; at
   their end the player is back in control below the Mendez building. Story flags are not touched (no "credits
-  seen", no chapter change). `tools/finale_check.py` plays the end (below).
+  seen", no chapter change). The finale check (below) played the end.
 - Boats and planes appear where the player stands, on land too; helicopters and the Airliner can be flown.
 - The performance overlay (Advanced > Performance overlay) and the trainer share the top left corner.
 - While the free camera flies the game gets no input at all: no pause menu (Options) until it ends. A vehicle the player
   drives rolls on and slows down by itself. It works in cutscenes (the cutscene plays out behind it, the game's camera
   carries on when it ends). Starting a mission from the trainer turns it off, so the mission's start is seen and ends by itself when the game leaves play (Load Game, the title screen).
-- The free camera's buttons are fixed (not on the Gamepad page).
+- The free camera's buttons are fixed (not on the Controller page).
 
 ## The check
 
-`tools/trainer_check.py` drives the game through its own script VM from a card copy and checks every feature in the
+These ran on the PC build (2026-10-26 to 10-30) and were removed with it (2026-10-31; they are in the git history, commit
+611a2a3): on the PS5 the control channel they drove is not reachable yet (docs/PS5.md's work list). The trainer's code
+is the same on the PS5; its menu takes the DualSense only.
+
+`tools/trainer_check.py` drove the game through its own script VM from a card copy and checks every feature in the
 game's memory: the name lists; god mode (health refilled, an explosion at his feet survived); wanted level set,
 cleared, never wanted; money; weapon, loadout, unlimited ammo, no reload; spawning (all 110 vehicles, in batches at
 eight places in the city) and getting in, the camera following the new vehicle; repair, flip, boost, paint, vehicle
@@ -140,6 +144,6 @@ while paused; the menu opened and a row toggled while the game behind it keeps r
 launched on foot (he ends up in its vehicle, the job running) and a second launch refused. 2026-10-30: 41 checks, 0
 failed; the free camera's own (`--freecam`, Soldier's opening cutscene played out under it): 8 checks, 0 failed.
 
-`tools/finale_check.py [--story] [--full]` plays Last Stand's end: launched from the trainer, skipped to its roof, the
+`tools/finale_check.py [--story] [--full]` played Last Stand's end: launched from the trainer, skipped to its roof, the
 fight won, then the final cutscene, the mission's end and the credits - started by the trainer, or with `--story` (the
 chapter flags set) by the story itself and only once; `--full` waits for the credits' end.

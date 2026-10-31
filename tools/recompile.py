@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Recompile the game: your ISO -> generated C++ (generated/ee, generated/vu1).
 
-    python tools/recompile.py ["path/to/Grand Theft Auto - Vice City Stories (USA).iso"]
+    python3 tools/recompile.py ["path/to/Grand Theft Auto - Vice City Stories (USA).iso"]
 
-Without an argument the disc is taken from VCS_ISO, iso=... in build/vcs.ini or vcs.ini, or a '*Vice City
+Without an argument the disc is taken from VCS_ISO, iso=... in vcs.ini (the repository root's), or a '*Vice City
 Stories*.iso' in the repository root. `--check` says whether generated/ is current (generated/recompile_stamp.json: a
-hash of the recompiler, its config and the function map). Uses the committed function map (game/vcs); Ghidra is only needed to redo the analysis
-(tools/ghidra_analyze.py). To recompile and build in one go: python tools/build.py --recompile
+hash of the recompiler, its config and the function map). Uses the committed function map (game/vcs); Ghidra is only
+needed to redo the analysis (tools/ghidra_analyze.py). The recompiler is built for the build machine (build/release);
+the game is then built for the PS5: python3 tools/ps5.py build
 """
 import argparse
 import filecmp
@@ -45,8 +46,6 @@ STAMP_INPUTS = [
 
 def step(title, stage_id=None):
     print(f"[recompile] {title}")
-    if stage_id:
-        tc.stage(stage_id, title[0].upper() + title[1:])
 
 
 def inputs_hash():
@@ -72,8 +71,7 @@ def read_stamp():
 
 
 def why_recompile():
-    """None when generated/ came from this source's recompiler and config, else the reason (for people and the
-    launcher). The disc doesn't count: only one build of it is supported, and recompile checks that."""
+    """None when generated/ came from this source's recompiler and config, else the reason. The disc doesn't count: only one build of it is supported, and recompile checks that."""
     if not os.path.isfile(os.path.join(GENERATED, "ee", "register_functions.cpp")):
         return "no generated code yet"
     if not os.path.isfile(os.path.join(GENERATED, "vu1", "vu1_compiled.cpp")):
@@ -172,7 +170,7 @@ def main():
         why = why_recompile()
         print("[recompile] " + ("needed: " + why if why else "generated code is current"))
         sys.exit(1 if why else 0)
-    tc.fix_future_files()  # as build.py: else Ninja re-runs CMake until it gives up
+    tc.fix_future_files()  # else Ninja re-runs CMake until it gives up
     recompile(a.iso, verbose=a.verbose)
 
 

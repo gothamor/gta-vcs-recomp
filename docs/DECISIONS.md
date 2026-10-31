@@ -368,12 +368,12 @@ between the bars, at the strip's height, rather than over the whole screen. Load
 are the same kind of frame: no 3D). The intro movies keep the whole screen: they play before there is a game frame to
 belong to. The menu switches to 4:3 as soon as it opens rather than after the 3D history runs out.
 
-## 2026-10-27 - Ultrawide: fixed ratios plus Match window, Hor+ between 4:3 and 32:9
+## 2026-10-27 - Ultrawide: fixed ratios plus Match the TV, Hor+ between 4:3 and 32:9
 
 The user asked for 21:9 and 32:9. "21:9" displays are 2.37 (2560x1080) or 2.39 (3440x1440), not 21 / 9 = 2.33. Chosen:
-- The menu's 21:9 is exactly 21 / 9 (the label says what it is), and a Match window choice takes the output's own
+- The menu's 21:9 is exactly 21 / 9 (the label says what it is), and a Match the TV choice takes the output's own
   shape (on the PS5 the TV's 16:9), so the picture has no bars.
-- Match window is clamped to 4:3 .. 32:9: narrower than 4:3 would cut the original horizontal view (we only do Hor+),
+- Match the TV is clamped to 4:3 .. 32:9: narrower than 4:3 would cut the original horizontal view (we only do Hor+),
   wider than 32:9 is untested (the view passes 140 degrees).
 - No separate FOV setting: the game's horizontal FOV is kept for the middle 4:3 and the sides are added.
 
@@ -594,7 +594,42 @@ ready-to-run build for a release.
   Select a little later is the cost; holding Select with those buttons is not something the game asks for.
 - **No ready-to-run PS5 zip for a release**: the eboot is the game recompiled - its code made from the disc - which the
   project never distributes (2026-10-21: source only), and there was no disc here to build it from anyway. The PS5
-  release asset is the build kit (`release.py --ps5`: the source with PS5-README.txt, through the same game-file
+  release asset is the build kit (`release.py`: the source with PS5-README.txt, through the same game-file
   guard); `tools/ps5.py setup` fetches and builds the toolchain, and `build --zip` gives the player the app folder
   zipped for their own console, with a line saying it is not to be published.
 - VERSION 0.0.3 for that release.
+
+## 2026-10-31 - The PC code stripped; the in-game text worded for the PS5
+
+The user asked to strip the PC code and make the in-game text PS5-specific, then to double-check that everything
+stripped was dead code on the PS5. The tree now builds the game for the PS5 only; the build machine builds the
+recompiler (the top-level CMakeLists.txt without the PS5 toolchain file) and the controller test.
+- **Removed, each checked against what the PS5 build compiled before**: the SDL3 platform layer (the PS5 compiled
+  `platform_ps5.cpp` instead), the D3D11 backend and its shader path (`VCS_HAVE_D3D11` was Windows-only), paraLLEl-GS
+  (built on Windows only; the PS5 already had the `gs_gpu_none.cpp` stub), the launcher and its CI workflow, the sampling
+  profiler (empty stubs on the PS5), the window / full-screen / placement / background settings (registered only off
+  the PS5), the Graphics API setting (one choice on the PS5, so never shown), the keyboard and mouse paths - bindings,
+  the mouse camera, driving keys, the menus' key capture and hotkeys, F1 / F3 / F4 / F12, the runtime pad's keyboard
+  half (`platform::keyDown` / `mouseDown` were always false on the PS5, the mouse motion always 0, and ImGui got only
+  the pad's gamepad keys: no Escape, Q / E or mouse reached the menus), the Windows / Linux write watches (the PS5 had
+  neither: plain memory, as now), the Windows / Linux branches of the crash handler, the disc reader (the PS5 read with
+  pread only), the card's creation times and main.cpp, the clang-cl / MSVC build flags, and the PC-only tools (the PC
+  build, the Visual Studio setup, the launcher's helpers, the automation that started a local game: rig, tour, scenes,
+  regression, mission / drive / soak / bench, the controls / trainer / finale / saves / sound checks, keys and
+  screenshots to a window, a Windows debugger, the DVD ripper). They are in the git history (commit 611a2a3).
+- **Kept for the PS5, though the first pass had them out**: the presenter's starting size (640x448, as before), every
+  frame-rate cap choice (30 ... 240; only "Display refresh" became "TV refresh"), the build machine's CMake / Ninja
+  search and their pinned Linux downloads, the build folder elsewhere (`VCS_BUILD_DIR` or `.vcs-build-dir`; the
+  `build_dir.py` front end needed the removed doctor), `tools/clean.py` (the build folder's scratch output). The
+  control channel stays (the way to drive the console later): it injects DualShock 2 buttons now, not keys.
+- **What changes on the PS5**: the text. Settings help and labels name the TV, the console and the DualSense ("Match the
+  TV", "TV refresh", the Controller page - was Gamepad - with DualSense button names, the trainer's "Cross: ..."); the
+  menus' hints are the DualSense's; the performance overlay names the menu instead of F3 / F4. Every setting keeps its
+  vcs.ini key and values. One addition: Advanced > **Record performance** starts / stops `logs/perf_*.csv` (the F4 key's
+  job). Upstream's runtime debugger (F1, never created by our main) is no longer compiled.
+- **The vendored runtime**: our own PC-only changes went; upstream's portability branches (`_WIN32`, Vita, Android)
+  stay as upstream has them (PS2RECOMP_PATCHES.md), so the tree stays close to upstream.
+- **The controller test builds on its own** (`ps5/tests/CMakeLists.txt`: the controller's path and nothing of the
+  game), since there is no PC build of the game to link against any more; it runs in CI after the compile check.
+- Checked: `compile-check` compiles and links the PS5 build, `padtest` 62 / 62, the recompiler configures and builds
+  for the build machine from the new top-level CMakeLists.txt. VERSION 0.0.4.

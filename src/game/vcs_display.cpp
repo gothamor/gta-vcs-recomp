@@ -154,7 +154,7 @@ namespace vcs
         if (const char *e = std::getenv("VCS_WIDESCREEN"); e && *e) // testing: force the game's own (Vert-) preference
             g_gamePreference.store(*e == '0' ? 0 : 1, std::memory_order_relaxed);
         // VCS's render targets by what they are (game-internals.md 6g; docs/FULLY_NATIVE.md step 3d). The reflection map
-        // is only ever sampled (vehicles' paint), so it follows "Internal resolution: Match window" like the picture.
+        // is only ever sampled (vehicles' paint), so it follows "Internal resolution: Match the TV" like the picture.
         gsHwSetTargetRole(140u, 10u, "frame", false);
         gsHwSetTargetRole(0u, 10u, "shown picture (the previous frame)", false);
         gsHwSetTargetRole(280u, 10u, "Z buffer", false);

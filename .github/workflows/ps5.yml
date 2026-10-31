@@ -1,7 +1,7 @@
 # The PS5 build (docs/PS5.md) compiled on every change to the code it builds: tools/ps5.py compile-check, against
-# stand-in generated code (no game code exists here - it only ever exists on a player's PC) and the upstream PS5 payload
-# SDK release the SDK fork builds on (its headers and libc++ are what the game compiles against; the link needs the
-# fork and RADV, which a player's ps5-plume-triangle build brings).
+# stand-in generated code (no game code exists here - it only ever exists on a player's build machine) and the upstream
+# PS5 payload SDK release the SDK fork builds on (its headers and libc++ are what the game compiles against; the link
+# needs the fork and RADV, which a player's ps5-plume-triangle build brings). Then the controller test (padtest).
 name: ps5
 
 on:
@@ -36,3 +36,6 @@ jobs:
 
       - name: Compile check
         run: python3 tools/ps5.py compile-check --sdk "$RUNNER_TEMP/ps5-payload-sdk"
+
+      - name: Controller test
+        run: python3 tools/ps5.py padtest

@@ -1,4 +1,4 @@
-// [gta-recomp] Hardware GS renderer (D3D11 through the RHI). See runtime/gs/gs_hw.h.
+// [gta-recomp] Hardware GS renderer (Vulkan through the RHI). See runtime/gs/gs_hw.h.
 #include "runtime/ps2_pad.h" // [gta-recomp] the frame's input time
 #include "runtime/ps2_present.h" // [gta-recomp] ps2NoteFramesTaken
 #include "runtime/ps2_perf.h" // [gta-recomp]
@@ -9,7 +9,7 @@
 
 #include "runtime/ps2_control.h" // [gta-recomp] keys: physical or injected
 
-#include "render/gs_shaders.h" // [gta-recomp] D3D11 (RHI) execution
+#include "render/gs_shaders.h" // [gta-recomp] the RHI's shaders
 #include "rhi/rhi.h"
 #include "runtime/ps2_hle_survey.h"
 
@@ -29,7 +29,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <cmath>  // [gta-recomp] libstdc++ (Linux) does not bring it in
+#include <cmath>  // [gta-recomp] the PS5's libc++ does not bring it in
 
 namespace
 {
@@ -55,7 +55,7 @@ namespace
                 return &g_targetRoles[i];
         return nullptr;
     }
-    // [gta-recomp] any role at fbp (whatever its width) wants the window's scale
+    // [gta-recomp] any role at fbp (whatever its width) wants the native frame's scale
     bool windowScaleAt(uint32_t fbp)
     {
         const uint32_t n = g_targetRoleCount.load(std::memory_order_acquire);
@@ -113,7 +113,7 @@ static int64_t steadyNs()
 {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-// [gta-recomp] gsHwFrameBuildNs: input snapshot -> frame ready for the window (game, render worker, GS stage), the 95th
+// [gta-recomp] gsHwFrameBuildNs: input snapshot -> frame ready for the TV (game, render worker, GS stage), the 95th
 // percentile of the last 64 frames - the frame lead's estimate (docs/PERFORMANCE.md 19). GS stage thread writes.
 static std::atomic<int64_t> g_frameBuildNs{0};
 static void noteFrameBuild(int64_t inputNs, int64_t readyNs)
@@ -191,7 +191,7 @@ GSHwOptions GSHwOptions::fromEnvironment()
     GSHwOptions o;
     if (const char *s = std::getenv("PS2X_HW_SCALE"))
     {
-        // [gta-recomp] 0: the native frame (the picture's targets at the window's resolution, the rest at 1x)
+        // [gta-recomp] 0: the native frame (the picture's targets at the output's resolution, the rest at 1x)
         const int v = std::atoi(s);
         o.nativeFrame = v == 0 && s[0] == '0';
         o.scale = o.nativeFrame ? 1u : std::clamp<uint32_t>(static_cast<uint32_t>(v), 1u, 8u);
@@ -500,7 +500,7 @@ namespace
     std::mutex g_drawSourcesMutex;
     DrawSources g_drawSources; // guarded by g_drawSourcesMutex (the executor and gsHwDrawSourceReport)
 
-    // [gta-recomp] The GS samples pixel X (coverage, colour, texture coordinates) at its integer position X; D3D at
+    // [gta-recomp] The GS samples pixel X (coverage, colour, texture coordinates) at its integer position X; the GPU at
     // X + 0.5. Draws move by half a pixel so each pixel samples where the GS would: without it a plain bilinear copy
     // (u = x + 0.5: texel X's centre on the GS) averaged texels X and X + 1, and VCS copies its frame every frame
     // (the shown picture, motion blur) - softer than the PS2 and shifted. PS2X_HW_PIXEL_CENTRE=0 = before.
@@ -577,7 +577,7 @@ namespace
 
     // ------------------------------------------------------------------------------------------------------
     // [gta-recomp] Execution on the renderer's RHI device (main thread). Render targets keep PS2 rows top-down
-    // (texture row = PS2 row); the vertex shader flips Y for D3D's NDC.
+    // (texture row = PS2 row); the vertex shader flips Y for HLSL's clip space.
     // ------------------------------------------------------------------------------------------------------
     struct DrawConstants // render/shaders/gs_draw.hlsl, cbuffer Draw
     {
@@ -675,7 +675,7 @@ namespace
         return true;
     }
 
-    // F12 / PS2X_HW_DUMP: one line per draw of the dumped frame (state + bounds).
+    // PS2X_HW_DUMP: one line per draw of the dumped frame (state + bounds).
     void logDraw(const Frame &f, const DrawCmd &d)
     {
         const HwState &s = d.s;
@@ -976,7 +976,7 @@ namespace
             if ((g_hudLayer.load(std::memory_order_relaxed) || m_frameScale.x > 0.0f) && w && h)
             {
                 uint32_t ow = g_outputW.load(std::memory_order_relaxed), oh = g_outputH.load(std::memory_order_relaxed);
-                // PS2X_HW_OUTPUT=WxH (testing): the output size of a full-screen window whatever the window
+                // PS2X_HW_OUTPUT=WxH (testing): the output size whatever the TV's
                 static const std::pair<uint32_t, uint32_t> forced = [] {
                     unsigned fw = 0, fh = 0;
                     if (const char *e = std::getenv("PS2X_HW_OUTPUT"))
@@ -991,7 +991,7 @@ namespace
                 }
                 if (ow >= 64u && oh >= 64u && ow <= 8192u && oh <= 8192u)
                 {
-                    // never below the render targets' resolution (a small window; screenshots are taken larger)
+                    // never below the render targets' resolution (a small output; screenshots are taken larger)
                     const double up = std::max(1.0, static_cast<double>(h) / oh);
                     w = static_cast<uint32_t>(std::lround(ow * up));
                     h = static_cast<uint32_t>(std::lround(oh * up));
@@ -1075,7 +1075,7 @@ namespace
             endPass();
         }
 
-        // F12 / PS2X_HW_DUMP: render targets and the display as PPM files.
+        // PS2X_HW_DUMP: render targets and the display as PPM files.
         void dump()
         {
             endPass();
@@ -1096,7 +1096,7 @@ namespace
 
     private:
         // [gta-recomp] target pixels per PS2 pixel: the integer internal scale, or for the picture's own targets in the
-        // native frame the window's size over 640x448 (setFrameSize)
+        // native frame the output's size over 640x448 (setFrameSize)
         struct Scale
         {
             float x = 1.0f, y = 1.0f;
@@ -1298,7 +1298,7 @@ namespace
         }
 
         // grows the target to at least w x h (PS2 pixels) at scale s, keeping its contents (rescaled when s changed:
-        // the native frame follows the window)
+        // the native frame follows the output)
         void growRt(Rt &rt, uint32_t w, uint32_t h, Scale s, uint32_t samples)
         {
             if (rt.color && rt.w >= w && rt.h >= h && rt.scale == s && rt.samples == samples)
@@ -2094,7 +2094,7 @@ namespace
                 Depth *depth = nullptr;
                 if (depthOn)
                 {
-                    // D3D binds a depth buffer only with a colour target of the same size: grow whichever is smaller
+                    // a depth buffer is bound only with a colour target of the same size: grow whichever is smaller
                     depth = &depthFor(s.zbp, rt.w, rt.h, rt.scale, rt.samples);
                     growRt(rt, depth->w, depth->h, rt.scale, rt.samples);
                 }
@@ -2237,7 +2237,7 @@ namespace
                           ma = (s.fbmsk & 0xFF000000u) != 0xFF000000u;
             uint8_t mask = static_cast<uint8_t>(mr | (mg << 1) | (mb << 2) | (ma << 3));
             if (layer && layer->opaque)
-                mask &= 7u; // the shown picture stays opaque (the GS writes the source alpha, the window would show it)
+                mask &= 7u; // the shown picture stays opaque (the GS writes the source alpha, the swapchain would show it)
             bool zwrite = depthOn && !s.zmsk;
 
             // pass 1: pixels passing the alpha test (or all of them)
@@ -2268,7 +2268,7 @@ namespace
             submit(drawPipeline(b, mask, depthOn, s.ztst, zwrite, s.mode, drawSampleMode(c)));
         }
 
-        // a draw that samples its own target reads a copy (D3D cannot sample a bound render target)
+        // a draw that samples its own target reads a copy (a bound render target cannot be sampled)
         rhi::Texture *feedbackCopy(rhi::Texture &target)
         {
             const rhi::TextureDesc &td = target.desc();
@@ -4028,9 +4028,9 @@ namespace
             }
             if (!m_rhi->ready())
                 return false;
-            if (m_nativeFrame) // [gta-recomp] the picture's targets follow the window (gsHwSetFrameSize)
+            if (m_nativeFrame) // [gta-recomp] the picture's targets follow the output (gsHwSetFrameSize)
             {
-                // PS2X_HW_FRAME=WxH (testing): a full-screen window's frame size whatever the window
+                // PS2X_HW_FRAME=WxH (testing): the frame size whatever the output
                 static const std::pair<uint32_t, uint32_t> forced = [] {
                     unsigned fw = 0, fh = 0;
                     if (const char *e = std::getenv("PS2X_HW_FRAME"))
@@ -4078,12 +4078,8 @@ namespace
             const int64_t takenNs = steadyNs();
             if (!frames.empty())
             {
-                // [gta-recomp] F12 (or PS2X_HW_DUMP=<frame>): list the next frame's draws and dump its targets
+                // [gta-recomp] PS2X_HW_DUMP=<frame>: list that frame's draws and dump its targets
                 static const long dumpAt = std::getenv("PS2X_HW_DUMP") ? std::atol(std::getenv("PS2X_HW_DUMP")) : -1;
-                const bool f12 = ps2control::keyDown(301 /* KEY_F12 */);
-                if (f12 && !m_f12Down)
-                    m_dumpPending = true;
-                m_f12Down = f12;
                 if (dumpAt >= 0 && !m_dumped && m_executedFrames + frames.size() >= static_cast<uint64_t>(dumpAt))
                     m_dumpPending = true;
                 // the next batch that draws anything (the game draws in every other VBlank at 30 fps)
@@ -4855,12 +4851,11 @@ namespace
         std::vector<std::unique_ptr<Frame>> m_freeFrames; // executed frames for reuse (m_queueMutex)
 
         // main thread
-        std::unique_ptr<RhiExecutor> m_rhi; // [gta-recomp] the renderer (D3D11)
+        std::unique_ptr<RhiExecutor> m_rhi; // [gta-recomp] the renderer (Vulkan)
         uint64_t m_executedFrames = 0;
         uint32_t m_loggedTransfers = 0, m_loggedTextures = 0;
         bool m_dumped = false;
-        bool m_f12Down = false; // [gta-recomp]
-        bool m_dumpPending = false; // [gta-recomp] F12 / PS2X_HW_DUMP waiting for a frame with draws
+        bool m_dumpPending = false; // [gta-recomp] PS2X_HW_DUMP waiting for a frame with draws
         int m_dumpBatchesLeft = 0;  // [gta-recomp] PS2X_HW_DUMP_BATCHES
         uint32_t m_3dHistory = ~0u; // [gta-recomp] showing3d: had3d of the last 32 frames, newest in bit 0
         std::atomic<bool> m_showing3d{true}; // main thread writes, the game thread's Submit reads

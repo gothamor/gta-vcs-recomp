@@ -1,7 +1,7 @@
 # Controls
 
 The DualSense drives the game's PS2 controller (a DualShock 2 in analog mode: the buttons and both sticks; the game
-reads no pressure bytes - game-internals.md 12a). Every binding can be changed on the settings menu's **Gamepad** page
+reads no pressure bytes - game-internals.md 12a). Every binding can be changed on the settings menu's **Controller** page
 (src/game/vcs_input.cpp). The DualSense's side is the PS5 platform layer (src/platform/platform_ps5.cpp, docs/PS5.md).
 
 ## Default bindings
@@ -26,7 +26,7 @@ Start or Cross skips the intro movie; the Rockstar logos before it can't be skip
 movies skips both). While driving, Cross accelerates, Square brakes then reverses and R1 is the handbrake (measured in
 game: game-internals.md 12a).
 
-## Gamepad page
+## Controller page
 
 - **Buttons**: the DualSense input for each PS2 button (any button, L2 / R2, the stick clicks, the d-pad, the touchpad
   click, or none); several PS2 buttons may share one.
@@ -55,7 +55,10 @@ button is up.
 
 ## Checked
 
-`python3 tools/ps5.py padtest` (`ps5/tests/padtest.cpp`) runs the real platform layer with the console's pad functions
-mocked through the real bindings to the report the game reads: every button, both sticks, the triggers, Select tap and
-hold, the menu chords, a controller gone and back, the motors, and the pad as the menus' gamepad keys (62 checks).
-`VCS_INPUT_MAP=0` falls back to the runtime's fixed built-in mapping (`ps2_pad.cpp`).
+`python3 tools/ps5.py padtest` (`ps5/tests/`: built on its own for the build machine) runs the real platform layer
+with the console's pad functions mocked through the real bindings to the report the game reads: every button, both
+sticks, the triggers, Select tap and hold, the menu chords, a controller gone and back, the motors, the Controller page,
+and the pad as the menus' gamepad keys (62 checks). `VCS_INPUT_MAP=0` falls back to the runtime's fixed built-in
+mapping (`ps2_pad.cpp`: the same buttons by position). The DualSense is the only input: there is no keyboard or mouse
+path anywhere in the game; the control channel (`runtime/ps2_control.h`, not reachable on the console yet) injects
+DualShock 2 buttons (`button <name> down|up`, `press <name>`).

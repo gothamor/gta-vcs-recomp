@@ -1,5 +1,5 @@
-// The one supported disc: what identifies it, shared by vcs.exe (src/main.cpp) and the launcher (launcher/), so the
-// two can't disagree. tools/vcs_disc.py holds the same values for the build (KNOWN_BUILDS).
+// The one supported disc: what identifies it (src/main.cpp). tools/vcs_disc.py holds the same values for the build
+// (KNOWN_BUILDS).
 #pragma once
 
 #include <string>
@@ -11,7 +11,7 @@ namespace vcs::disc
     constexpr const char *kElfSha1 = "d1832508caf0990c2291c0f255c96a889cce9f88";
     constexpr const char *kTitle = "GTA: Vice City Stories - USA (SLUS-21590) v1.00";
 
-    // vcs.exe's exit codes for a start that never reached the game (the launcher names the reason)
+    // The exit codes for a start that never reached the game (the log and the notification name the reason)
     enum ExitCode : int
     {
         kExitOk = 0,
@@ -19,7 +19,7 @@ namespace vcs::disc
         kExitNoDisc = 2,      // no disc image given or found
         kExitDiscUnreadable = 3,
         kExitWrongDisc = 4,   // not SLUS_215.90, or another build of it
-        kExitInitFailed = 5,  // the runtime (window, renderer, sound) could not start
+        kExitInitFailed = 5,  // the runtime (the picture on the TV, sound) could not start
     };
 
     // A disc's boot executable named by SYSTEM.CNF ("BOOT2 = cdrom0:\SLES_546.22;1" -> "SLES_546.22"), empty when

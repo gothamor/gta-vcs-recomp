@@ -3,20 +3,7 @@
 
 #include <fstream>
 
-#if defined(_WIN32) // [gta-recomp] file creation times (card directory order)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#elif defined(__linux__)
-#include <fcntl.h>    // AT_FDCWD
-#include <sys/stat.h> // statx: the birth time
-#elif defined(__FreeBSD__)
-#include <sys/stat.h> // [gta-recomp] the PS5: st_birthtim
-#endif
+#include <sys/stat.h> // [gta-recomp] file creation times (card directory order): the PS5's st_birthtim
 
 namespace ps2_stubs
 {
@@ -306,31 +293,16 @@ namespace ps2_stubs
             }
         }
 
-        // Creation time where the host has one (Windows; Linux file systems with a birth time, ext4 / btrfs / xfs; the
-        // PS5's FreeBSD), else the last write. Only an order between new entries: .ps2x-order holds the card's order once known.
+        // [gta-recomp] Creation time (the PS5's FreeBSD keeps a birth time), else the last write. Only an order between
+        // new entries: .ps2x-order holds the card's order once known.
         uint64_t mcCreationTime(const std::filesystem::directory_entry &entry)
         {
-#if defined(_WIN32)
-            WIN32_FILE_ATTRIBUTE_DATA data{};
-            if (GetFileAttributesExW(entry.path().c_str(), GetFileExInfoStandard, &data))
-            {
-                return (static_cast<uint64_t>(data.ftCreationTime.dwHighDateTime) << 32) | data.ftCreationTime.dwLowDateTime;
-            }
-#elif defined(__linux__)
-            struct statx st{};
-            if (statx(AT_FDCWD, entry.path().c_str(), 0, STATX_BTIME | STATX_MTIME, &st) == 0)
-            {
-                const statx_timestamp &t = (st.stx_mask & STATX_BTIME) ? st.stx_btime : st.stx_mtime;
-                return static_cast<uint64_t>(t.tv_sec) * 1000000000ull + t.tv_nsec;
-            }
-#elif defined(__FreeBSD__)
-            struct stat st{}; // FreeBSD keeps a birth time (the PS5's exFAT / UFS: tv_sec -1 or 0 when there is none)
+            struct stat st{}; // (exFAT / UFS: tv_sec -1 or 0 when there is no birth time)
             if (::stat(entry.path().c_str(), &st) == 0)
             {
                 const timespec &t = st.st_birthtim.tv_sec > 0 ? st.st_birthtim : st.st_mtim;
                 return static_cast<uint64_t>(t.tv_sec) * 1000000000ull + static_cast<uint64_t>(t.tv_nsec);
             }
-#endif
             std::error_code ec;
             return static_cast<uint64_t>(entry.last_write_time(ec).time_since_epoch().count());
         }

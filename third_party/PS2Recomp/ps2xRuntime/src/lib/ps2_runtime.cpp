@@ -447,27 +447,27 @@ static struct
 } g_burst;
 
 // [gta-recomp] Shows the GPU renderer's newest picture. False when there is no GPU renderer.
-// `owned` is our texture for pictures made on the CPU; `shown` is what the window draws (owned, or the HW renderer's).
+// `owned` is our texture for pictures made on the CPU; `shown` is what the TV shows (owned, or the HW renderer's).
 static bool UploadGpuFrame(present::Picture &owned, present::Picture &shown, PS2Runtime *rt, uint32_t &outWidth,
                            uint32_t &outHeight)
 {
     if (GSHwBackendHandle *hw = rt->hwRenderer())
     {
-        // [gta-recomp] the HW renderer draws on the window's device: its display texture is shown directly
+        // [gta-recomp] the HW renderer draws on the presenter's device: its display texture is shown directly
         rhi::Texture *display = nullptr;
         uint32_t w = 0, h = 0;
         {
-            // [gta-recomp] the size the picture is shown at: the window's letterboxed area (the native HUD layer)
-            int windowW = 0, windowH = 0;
-            platform::windowSize(windowW, windowH);
-            // the window's letterboxed area at an aspect, inside the game's frame as the presenter places it
-            // ([gta-recomp] present::fitRect: a 4:3 menu sits in the frame, not over the window)
+            // [gta-recomp] the size the picture is shown at: the letterboxed area on the TV (the native HUD layer)
+            int outputW = 0, outputH = 0;
+            platform::outputSize(outputW, outputH);
+            // the output's letterboxed area at an aspect, inside the game's frame as the presenter places it
+            // ([gta-recomp] present::fitRect: a 4:3 menu sits in the frame, not over the whole screen)
             auto letterbox = [&](float aspect, uint32_t &outW, uint32_t &outH) {
                 outW = outH = 0;
-                if (windowW <= 0 || windowH <= 0 || aspect <= 0.0f)
+                if (outputW <= 0 || outputH <= 0 || aspect <= 0.0f)
                     return;
                 float x0 = 0.0f, y0 = 0.0f, w = 0.0f, h = 0.0f;
-                present::fitRect(aspect, present::displayAspect(true), static_cast<float>(windowW), static_cast<float>(windowH), x0, y0, w, h);
+                present::fitRect(aspect, present::displayAspect(true), static_cast<float>(outputW), static_cast<float>(outputH), x0, y0, w, h);
                 outW = static_cast<uint32_t>(std::lround(w));
                 outH = static_cast<uint32_t>(std::lround(h));
             };
@@ -499,9 +499,9 @@ static bool UploadGpuFrame(present::Picture &owned, present::Picture &shown, PS2
         return false;
     static uint64_t s_lastSeq = 0u;
     static uint32_t s_width = 640u, s_height = 448u;
-    int windowW = 0, windowH = 0;
-    platform::windowSize(windowW, windowH);
-    gpu->setOutputSize(static_cast<uint32_t>(windowW), static_cast<uint32_t>(windowH));
+    int outputW = 0, outputH = 0;
+    platform::outputSize(outputW, outputH);
+    gpu->setOutputSize(static_cast<uint32_t>(outputW), static_cast<uint32_t>(outputH));
     static const bool s_noShow = std::getenv("PS2X_GPU_NOSHOW") != nullptr; // debugging
     if (const GSGpuFrame *frame = s_noShow ? nullptr : gpu->takeFrame(s_lastSeq))
     {
@@ -535,7 +535,7 @@ namespace
     std::condition_variable g_tickCv;
     uint64_t g_hostTick = 0, g_tickTaken = 0;
     std::atomic<bool> g_hostPaced{false};
-    std::atomic<uint64_t> g_framesPosted{0}, g_framesTaken{0}; // frames on their way to the window
+    std::atomic<uint64_t> g_framesPosted{0}, g_framesTaken{0}; // frames on their way to the TV
     int g_deferredTick = -1; // a tick held back by a backlog: frames allowed on their way when it goes (g_tickMutex)
 
     // a tick, when no more than `allowed` frames are on their way; held back until then otherwise (g_tickMutex held)
@@ -613,7 +613,7 @@ bool ps2WaitHostTick()
         return false;
     ps2perf::PhaseScope waiting(ps2perf::Phase::Wait);
     std::unique_lock<std::mutex> lock(g_tickMutex);
-    // the 100 ms timeout is a guard (a main thread held up: a window being dragged), not pacing
+    // the 100 ms timeout is a guard (a main thread held up), not pacing
     g_tickCv.wait_for(lock, std::chrono::milliseconds(100), [] { return g_hostTick != g_tickTaken; });
     g_tickTaken = g_hostTick;
     return true;
@@ -1245,18 +1245,13 @@ bool PS2Runtime::initialize(const char *title)
 #if defined(PLATFORM_VITA)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
-        // [gta-recomp] Host window, input and audio through the platform layer (SDL3); PS2X_HIDDEN=1: no window on the
-        // desktop (runtime/ps2_control.h). The window is drawn through the RHI (D3D11 / Vulkan, render/presenter.h);
-        // host frames are paced to 60/s by platform::waitNextFrame().
-        platform::WindowDesc window;
-        window.title = title;
-        window.width = HOST_WINDOW_WIDTH;
-        window.height = HOST_WINDOW_HEIGHT;
-        window.hidden = ps2control::hiddenMode();
-        window.vulkan = present::backendNeedsVulkanWindow();
-        if (!platform::init(window) || !present::init(window.width, window.height))
+        // [gta-recomp] The controller, audio and the Dear ImGui context through the PS5 platform layer; the picture goes
+        // to the TV through the RHI (Vulkan, render/presenter.h); host frames are paced to 60/s by
+        // platform::waitNextFrame().
+        (void)title;
+        if (!platform::init() || !present::init(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT))
         {
-            std::cerr << "Failed to create the window" << std::endl;
+            std::cerr << "Failed to start the picture on the TV" << std::endl;
             return false;
         }
         // [gta-recomp] "burst DIR N": the next N presented frames as DIR/burst_NNNN.png, one line each in DIR/burst.txt (the
@@ -1885,7 +1880,7 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
 #if defined(_MSC_VER)
         __debugbreak();
 #elif defined(__clang__)
-        __builtin_debugtrap(); // [gta-recomp] Linux: SIGTRAP, stops in a debugger
+        __builtin_debugtrap(); // [gta-recomp] clang: SIGTRAP, stops in a debugger
 #endif
     }
 
@@ -3128,7 +3123,7 @@ void PS2Runtime::run()
     m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
 
     RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
-    ThreadNaming::SetCurrentThreadName("MainThread"); // [gta-recomp] window, presenting, the HW backend's frames (VCS_PROFILE_THREAD)
+    ThreadNaming::SetCurrentThreadName("MainThread"); // [gta-recomp] presenting, the HW backend's frames
 
     // A blank image to use as a framebuffer
     present::Picture frameTex = present::createPicture(FB_WIDTH, FB_HEIGHT, false);
@@ -3136,7 +3131,7 @@ void PS2Runtime::run()
         const std::vector<uint32_t> blank(static_cast<size_t>(FB_WIDTH) * FB_HEIGHT, 0u);
         present::updatePicture(frameTex, blank.data());
     }
-    present::Picture shownTex = frameTex; // [gta-recomp] what the window shows (frameTex or another renderer's)
+    present::Picture shownTex = frameTex; // [gta-recomp] what the TV shows (frameTex or another renderer's)
 
     std::atomic<bool> gameThreadFinished{false};
 
@@ -3230,7 +3225,7 @@ void PS2Runtime::run()
                 presentWidth = static_cast<uint32_t>(g_movieFrame.width);
                 presentHeight = static_cast<uint32_t>(g_movieFrame.height);
                 aspect = g_movieFrame.aspect;
-                frameAspect = 0.0f; // movies: the whole window, as before
+                frameAspect = 0.0f; // movies: the whole screen, as before
             }
         }
         static float lastAspect = 0.0f; // [gta-recomp] log the presentation shape when it changes
@@ -3278,22 +3273,21 @@ void PS2Runtime::run()
             }
             ++hostFrame;
         }
-        ps2perf::drawOverlay(); // [gta-recomp] F3 overlay, F4 CSV recording
+        ps2perf::drawOverlay(); // [gta-recomp] the performance overlay and its CSV recording (PS2X_PERF_LOG)
         if (m_debugUiInitialized && m_debugUiDrawCallback)
         {
             m_debugUiDrawCallback(*this, m_debugUiUserData);
         }
         platform::endUiFrame();
-        int windowWidth = 0, windowHeight = 0;
-        platform::windowSize(windowWidth, windowHeight);
-        present::drawWindow(shownTex, srcWidth, srcHeight, aspect, windowWidth, windowHeight, frameAspect);
+        int outputWidth = 0, outputHeight = 0;
+        platform::outputSize(outputWidth, outputHeight);
+        present::drawOutput(shownTex, srcWidth, srcHeight, aspect, outputWidth, outputHeight, frameAspect);
 
-        // [gta-recomp] control channel (runtime/ps2_control.h): screenshots render the same picture off-screen, so
-        // they work with the window hidden or covered
+        // [gta-recomp] control channel (runtime/ps2_control.h): screenshots render the same picture off-screen
         auto capturePng = [&](const std::string &path) -> std::string
             {
-                int w = std::max(windowWidth, 960), h = std::max(windowHeight, 672); // readable when hidden
-                // PS2X_CAPTURE_SIZE=WxH: a fixed size whatever the window (comparable test screenshots)
+                int w = std::max(outputWidth, 960), h = std::max(outputHeight, 672);
+                // PS2X_CAPTURE_SIZE=WxH: a fixed size whatever the TV mode (comparable test screenshots)
                 static const std::pair<int, int> fixedSize = [] {
                     int fw = 0, fh = 0;
                     if (const char *e = std::getenv("PS2X_CAPTURE_SIZE"))
@@ -3344,14 +3338,7 @@ void PS2Runtime::run()
                 ps2HostTick(true);
             });
         }
-        platform::waitNextFrame();
-
-        if (platform::quitRequested())
-        {
-            RUNTIME_LOG("[run] window close requested, breaking out of loop");
-            requestStop();
-            break;
-        }
+        platform::waitNextFrame(); // [gta-recomp] the system ends the app (PS button, Close Game): no quit request
     }
 
     requestStop();

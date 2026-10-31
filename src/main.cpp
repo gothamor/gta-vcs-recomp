@@ -1,22 +1,14 @@
-// GTA: Vice City Stories (PS2) native launcher.
+// GTA: Vice City Stories (PS2) as a native PS5 app (docs/PS5.md).
 //
-// Finds the user's disc image, checks it holds the supported executable,
-// maps it as cdrom0: and boots the recompiled game.
-//
-//   vcs.exe [path\to\Grand Theft Auto - Vice City Stories (USA).iso]
-//
-// Without an argument it uses "iso=" from vcs.ini next to the exe, then the
-// first *.iso in the exe's folder or the current folder.
-//
-// The PS5 (docs/PS5.md): the app's folder is /app0 (vcs.ini, userdata/ for the memory card, logs/vcs.log); the disc
-// is "iso=" from vcs.ini, the first .iso in /app0/disc or /app0, or a "*Vice City Stories*.iso" on a USB drive.
+// Finds the user's disc image, checks it holds the supported executable, maps it as cdrom0: and boots the recompiled
+// game. The app's folder is /app0 (vcs.ini, userdata/ for the memory card, logs/vcs.log); the disc is "iso=" from
+// vcs.ini, the first .iso in /app0/disc or /app0, or a "*Vice City Stories*.iso" on a USB drive.
 #include "ps2_runtime.h"
 #include "runtime/gs/gs_hw.h"
 #include "runtime/ps2_disc_image.h"
 #include "runtime/ps2_perf.h"
 
 #include "debug/crash.h"
-#include "debug/profiler.h"
 #include "debug/rig.h"
 #include "game/vcs_trainer.h"
 #include "debug/selftest.h"
@@ -53,18 +45,10 @@
 #include <string>
 #include <vector>
 
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#endif
-
-#if defined(__PROSPERO__)
 #include <immintrin.h>
-#endif
 
 #if defined(PS2X_PGO_GEN)
-extern "C" int __llvm_profile_write_file(void); // clang's profile runtime (instrumented build, tools/build.py --opt pgo)
+extern "C" int __llvm_profile_write_file(void); // clang's profile runtime (instrumented build, PS2X_PGO=GEN)
 #endif
 
 namespace fs = std::filesystem;
@@ -118,41 +102,15 @@ namespace
         const vcs::IsoImage &m_iso;
     };
 
-    fs::path exeDirectory()
-    {
-#if defined(__PROSPERO__)
-        return fs::path("/app0"); // the app's folder (writable: a homebrew app runs from /data/homebrew/<title id>)
-#elif defined(_WIN32)
-        wchar_t buffer[MAX_PATH];
-        const DWORD n = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-        if (n > 0 && n < MAX_PATH)
-            return fs::path(buffer).parent_path();
-#elif defined(__linux__)
-        std::error_code ec;
-        const fs::path self = fs::read_symlink("/proc/self/exe", ec);
-        if (!ec && !self.empty())
-            return self.parent_path();
-#endif
-        return fs::current_path();
-    }
+    // The app's folder (writable: a homebrew app runs from /data/homebrew/<title id>, mounted as /app0).
+    fs::path appDirectory() { return fs::path("/app0"); }
 
     fs::path dataDirectory()
     {
         // VCS_DATA_DIR: another save / cache folder (scripted test runs start from an empty memory card)
         if (const char *dir = std::getenv("VCS_DATA_DIR"); dir && *dir)
             return fs::path(dir);
-#if defined(__PROSPERO__)
-        return exeDirectory() / "userdata"; // no HOME on the PS5: the card and the cache live with the app
-#endif
-#if defined(_WIN32)
-        if (const char *local = std::getenv("LOCALAPPDATA"))
-            return fs::path(local) / "VCSRecomp";
-#endif
-        if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg == '/') // absolute only (the XDG spec)
-            return fs::path(xdg) / "VCSRecomp";
-        if (const char *home = std::getenv("HOME"))
-            return fs::path(home) / ".local/share/VCSRecomp";
-        return exeDirectory() / "userdata";
+        return appDirectory() / "userdata"; // the card and the cache live with the app
     }
 
     fs::path isoFromIni(const fs::path &ini)
@@ -174,32 +132,25 @@ namespace
         return {};
     }
 
-    void setEnv(const char *name, const std::string &value)
-    {
-#if defined(_WIN32)
-        _putenv_s(name, value.c_str());
-#else
-        setenv(name, value.c_str(), 1);
-#endif
-    }
+    void setEnv(const char *name, const std::string &value) { setenv(name, value.c_str(), 1); }
 
     // Display aspect limits: narrower than 4:3 would cut the original view (Hor+ only widens), wider than 32:9 is not
     // checked (the horizontal view reaches 124 degrees at 32:9 with the game's 70-degree FOV).
     constexpr float kNarrowestAspect = 4.0f / 3.0f, kWidestAspect = 32.0f / 9.0f;
     float g_appliedAspect = 0.0f;
 
-    // The window's shape for "Match window", false while there is no window (or it is minimised).
-    bool windowAspect(float &aspect)
+    // The TV mode's shape for "Match the TV".
+    bool outputAspect(float &aspect)
     {
         int w = 0, h = 0;
-        platform::windowSize(w, h);
+        platform::outputSize(w, h);
         if (w <= 0 || h <= 0)
             return false;
         aspect = std::clamp(static_cast<float>(w) / static_cast<float>(h), kNarrowestAspect, kWidestAspect);
         return true;
     }
 
-    // display.aspect: 43, 1610, 169, 219, 329, or 0 = the window's shape
+    // display.aspect: 43, 1610, 169, 219, 329, or 0 = the TV's shape
     float aspectFor(int code)
     {
         switch (code)
@@ -214,8 +165,8 @@ namespace
             return 32.0f / 9.0f;
         case 0:
         {
-            float a = g_appliedAspect > 0.0f ? g_appliedAspect : 4.0f / 3.0f; // no window yet: followWindowAspect
-            windowAspect(a);
+            float a = g_appliedAspect > 0.0f ? g_appliedAspect : 4.0f / 3.0f;
+            outputAspect(a);
             return a;
         }
         default:
@@ -237,26 +188,11 @@ namespace
         std::fprintf(stderr, "[settings] display aspect %.3f, HUD %s\n", aspect, hud == 0 ? "4:3" : hud == 2 ? "screen edges" : "stretched");
     }
 
-    // Each host frame: Alt+Enter switches between full screen and the window (the game's pad leaves Enter alone while
-    // Alt is held, so it does not also press Start). An environment override (VCS_FULLSCREEN) switches for this run only.
-    void altEnter()
-    {
-        auto down = [](int k) { return platform::keyDown(k) || ps2control::keyDown(k); };
-        auto pressed = [](int k) { return platform::keyPressed(k) || ps2control::keyPressed(k); };
-        if (!(down(platform::KEY_LEFT_ALT) || down(platform::KEY_RIGHT_ALT)) ||
-            !(pressed(platform::KEY_ENTER) || pressed(platform::KEY_KP_ENTER)))
-            return;
-        const int next = platform::fullscreen() ? 0 : 1;
-        if (!settings::set("display.window", next))
-            platform::setFullscreen(next != 0);
-        std::fprintf(stderr, "[settings] Alt+Enter: %s\n", next ? "full screen" : "windowed");
-    }
-
-    // Each host frame: "Match window" follows the window as it is resized, moved to another monitor or made full screen.
-    void followWindowAspect()
+    // Each host frame: "Match the TV" follows the TV mode (known once the picture's surface is made).
+    void followOutputAspect()
     {
         float aspect = 0.0f;
-        if (settings::value("display.aspect") == 0 && windowAspect(aspect) && std::fabs(aspect - g_appliedAspect) > 1e-3f)
+        if (settings::value("display.aspect") == 0 && outputAspect(aspect) && std::fabs(aspect - g_appliedAspect) > 1e-3f)
             applyAspect();
     }
 
@@ -330,7 +266,7 @@ namespace
     }
 
     // The player settings (settings/settings.h). The menu shows pages (tabs) in the order they first appear here, each
-    // page's sections likewise, and the rows of a section in this order. vcs.ini next to vcs.exe holds them along
+    // page's sections likewise, and the rows of a section in this order. vcs.ini in the app's folder holds them along
     // with iso=; a setting's vcs.ini key stays the same when it moves to another page.
     void registerSettings()
     {
@@ -344,7 +280,7 @@ namespace
         s.section = "Presets";
         s.label = "Authentic (PS2)";
         s.help = "The PS2's picture and timing: 4:3, original resolution, no anti-aliasing, 30 fps. Sets the Display and "
-                 "Graphics pages; controls, sound and the window mode stay as they are.";
+                 "Graphics pages; controls, sound and the TV output stay as they are.";
         s.type = Type::Action;
         s.button = "Apply";
         s.onChange = [](int) { applyAuthentic(); };
@@ -355,9 +291,9 @@ namespace
         s.page = "Display";
         s.section = "Presets";
         s.label = "Enhanced";
-        s.help = "Widescreen in the window's shape with the HUD at the screen edges, rendered at the window's resolution, "
-                 "4x anti-aliasing, 16x texture filtering and frame-rate independent timing at the display's refresh rate. "
-                 "Needs a reasonably modern graphics card; resolution, anti-aliasing and timing apply after a restart.";
+        s.help = "Widescreen in the TV's shape with the HUD at the screen edges, rendered at the TV's resolution, 4x "
+                 "anti-aliasing, 16x texture filtering and frame-rate independent timing at the TV's refresh rate. "
+                 "Resolution, anti-aliasing and timing apply after a restart.";
         s.type = Type::Action;
         s.button = "Apply";
         s.onChange = [](int) { applyPreset("Enhanced", kEnhanced); };
@@ -368,14 +304,13 @@ namespace
         s.page = "Display";
         s.section = "Presets";
         s.label = "Widescreen, light";
-        s.help = "Widescreen and 60 fps for older PCs and integrated graphics: the original resolution, no anti-aliasing, "
-                 "4x texture filtering. Resolution and timing apply after a restart.";
+        s.help = "Widescreen at 60 fps with the most frame time to spare: the original resolution, no anti-aliasing, 4x "
+                 "texture filtering. Resolution and timing apply after a restart.";
         s.type = Type::Action;
         s.button = "Apply";
         s.onChange = [](int) { applyPreset("Widescreen, light", kLight); };
         settings::add(s);
 
-#if defined(__PROSPERO__)
         // The TV's mode (src/platform/platform_ps5.cpp): read when the picture starts
         s = {};
         s.key = "display.ps5_output";
@@ -391,33 +326,15 @@ namespace
         s.env = "VCS_PS5_OUTPUT";
         s.onChange = [](int v) { setEnv("VCS_PS5_OUTPUT", std::to_string(v)); };
         settings::add(s);
-#else
-        s = {};
-        s.key = "display.window";
-        s.page = "Display";
-        s.section = "Screen";
-        s.label = "Window mode";
-        s.help = "Full screen covers the monitor the window is on, at the desktop's resolution (borderless: switching "
-                 "and Alt+Tab are instant). Alt+Enter switches too.";
-        s.type = Type::Choice;
-        s.choices = {{"Windowed", 0}, {"Full screen", 1}};
-        s.defaultValue = 0;
-        s.env = "VCS_FULLSCREEN";
-        s.onChange = [](int v) { platform::setFullscreen(v != 0); };
-        s.read = [] { return platform::fullscreen() ? 1 : 0; };
-        settings::add(s);
-#endif
-
         s = {};
         s.key = "display.aspect";
         s.page = "Display";
         s.section = "Screen";
         s.label = "Aspect ratio";
-        s.help = "Widescreen and ultrawide show more to the sides (Hor+); 4:3 is the original picture. Match window "
-                 "follows the window's shape (between 4:3 and 32:9), for monitors such as 3440x1440 that are not "
-                 "exactly 21:9.";
+        s.help = "Widescreen shows more to the sides (Hor+); 4:3 is the original picture. Match the TV takes the TV "
+                 "mode's shape (16:9). The wider ratios show the picture in a strip between bars.";
         s.type = Type::Choice;
-        s.choices = {{"4:3 (original)", 43}, {"16:10", 1610}, {"16:9", 169}, {"21:9", 219}, {"32:9", 329}, {"Match window", 0}};
+        s.choices = {{"4:3 (original)", 43}, {"16:10", 1610}, {"16:9", 169}, {"21:9", 219}, {"32:9", 329}, {"Match the TV", 0}};
         s.defaultValue = 43;
         s.env = "VCS_ASPECT";
         s.onChange = [](int) { applyAspect(); };
@@ -444,10 +361,10 @@ namespace
         s.section = "Image quality";
         s.label = "Internal resolution";
         s.help = "Renders the game at a multiple of 640x448 (in widescreen as many times wider as the view: 1x at 16:9 "
-                 "is 853x448), or at the window's own resolution (sharpest; the effects keep the original's look). "
+                 "is 853x448), or at the TV output's own resolution (sharpest; the effects keep the original's look). "
                  "Costs GPU time.";
         s.type = Type::Choice;
-        s.choices = {{"1x (original)", 1}, {"2x", 2}, {"3x", 3}, {"4x", 4}, {"6x", 6}, {"8x", 8}, {"Match window", 0}};
+        s.choices = {{"1x (original)", 1}, {"2x", 2}, {"3x", 3}, {"4x", 4}, {"6x", 6}, {"8x", 8}, {"Match the TV", 0}};
         s.defaultValue = 1;
         s.apply = Apply::Restart;
         s.env = "PS2X_HW_SCALE";
@@ -506,9 +423,9 @@ namespace
         s.page = "Display";
         s.section = "Frame rate";
         s.label = "Game timing";
-        s.help = "Frame-rate independent (the default): paced by the PC's clock to the frame rate cap, game time follows "
-                 "real time. Original: the game paces itself on the PS2's 60 Hz VBlank (30 fps, or 60 with a cap of 60 or "
-                 "more) and slows down when the PC can't keep up. Behaviour at high frame rates is still being fixed.";
+        s.help = "Frame-rate independent (the default): paced by the console's clock to the frame rate cap, game time "
+                 "follows real time. Original: the game paces itself on the PS2's 60 Hz VBlank (30 fps, or 60 with a cap "
+                 "of 60 or more) and slows down when the console can't keep up.";
         s.type = Type::Choice;
         s.choices = {{"Original (PS2)", 0}, {"Frame-rate independent", 1}};
         s.defaultValue = 1;
@@ -523,9 +440,8 @@ namespace
         s.section = "Frame rate";
         s.label = "Frame rate cap";
         s.help = "60 is the default, 30 the original. With original timing anything above 30 runs at 60 (the VBlank "
-                 "allows no more); "
-                 "with frame-rate independent timing the game runs up to the cap - at most 240 (above that the game's "
-                 "shortest time step makes it run slightly fast).";
+                 "allows no more); with frame-rate independent timing the game runs up to the cap - at most 240 (above "
+                 "that the game's shortest time step makes it run slightly fast). A 60 Hz TV shows at most 60.";
         s.type = Type::Choice;
         s.choices = {{"30 (original)", 30},
                      {"60", 60},
@@ -534,7 +450,7 @@ namespace
                      {"144", 144},
                      {"165", 165},
                      {"240", 240},
-                     {"Display refresh (up to 240)", vcs::kCapRefresh},
+                     {"TV refresh (up to 240)", vcs::kCapRefresh},
                      {"Unlimited (up to 240)", vcs::kCapUnlimited}};
         s.defaultValue = 60;
         s.env = "VCS_FPS";
@@ -546,11 +462,11 @@ namespace
         s.page = "Display";
         s.section = "Frame rate";
         s.label = "Vertical sync";
-        s.help = "Off: each frame is shown as soon as it is ready, never torn. On: frames wait for the monitor's refresh "
-                 "(smoothest with a cap of Display refresh, at a little more input delay). Off, allow tearing: the lowest "
-                 "delay, and for G-Sync / FreeSync monitors (with a cap a few fps below the refresh rate).";
+        s.help = "Off: each frame is shown as soon as it is ready, never torn. On: frames wait for the TV's refresh "
+                 "(smoothest with a cap of TV refresh, at a little more input delay). Off, allow tearing: the lowest "
+                 "delay, frames shown mid-refresh.";
         s.type = Type::Choice;
-        s.choices = {{"Off", 0}, {"On", 1}, {"Off, allow tearing (VRR)", 2}};
+        s.choices = {{"Off", 0}, {"On", 1}, {"Off, allow tearing", 2}};
         s.defaultValue = 0;
         s.env = "VCS_VSYNC";
         s.onChange = [](int v) { present::setPresentMode(v); };
@@ -561,7 +477,7 @@ namespace
         s.page = "Display";
         s.section = "Frame rate";
         s.label = "Show frame rate";
-        s.help = "The game's frames per second in a corner of the screen (F3 shows the full performance overlay).";
+        s.help = "The game's frames per second in a corner of the screen (Advanced > Performance overlay shows more).";
         s.type = Type::Choice;
         s.choices = {{"Off", 0}, {"Top left", 1}, {"Top right", 2}, {"Bottom left", 3}, {"Bottom right", 4}};
         s.defaultValue = 0;
@@ -579,20 +495,6 @@ namespace
         s.env = "VCS_SKIP_MOVIES";
         s.onChange = [](int v) { vcs::setSkipIntroMovies(v != 0); };
         settings::add(s);
-
-#if !defined(__PROSPERO__) // the PS5 suspends the app itself when it leaves the screen
-        s = {};
-        s.key = "game.background";
-        s.page = "Game";
-        s.section = "Window";
-        s.label = "In the background";
-        s.help = "When another window is in front (Alt+Tab): the game keeps running and playing sound as on a console, runs "
-                 "silently, or pauses until you come back.";
-        s.type = Type::Choice;
-        s.choices = {{"Keep running", 0}, {"Mute", 1}, {"Pause", 2}};
-        s.defaultValue = 0;
-        settings::add(s);
-#endif
 
         s = {};
         s.key = "display.msaa";
@@ -624,36 +526,30 @@ namespace
         s.onChange = [](int v) { setEnv("PS2X_HW_ANISO", std::to_string(v)); };
         settings::add(s);
 
-        // The graphics API, when the build has more than one (Windows with VCS_RHI_VULKAN); VCS_RHI=d3d11|vulkan|null
-        // chooses for one run (render/presenter.h).
-        s = {};
-        s.key = "display.renderer";
-        s.page = "Graphics";
-        s.section = "Renderer";
-        s.label = "Graphics API";
-        s.help = "The graphics API the game draws with. D3D11 is the reference on Windows; Vulkan is the one on Linux.";
-        s.type = Type::Choice;
-        for (rhi::Backend b : {rhi::Backend::D3D11, rhi::Backend::Vulkan})
-            if (rhi::backendBuilt(b))
-                s.choices.push_back({rhi::backendName(b), static_cast<int>(b)});
-        s.defaultValue = static_cast<int>(rhi::defaultBackend());
-        s.apply = Apply::Restart;
-        s.onChange = [](int v) { present::setBackend(v); };
-        if (s.choices.size() > 1)
-            settings::add(s);
-
-        vcs::input::registerSettings(); // the Keyboard & mouse and Gamepad pages (game/vcs_input.h)
+        vcs::input::registerSettings(); // the Controller page (game/vcs_input.h)
 
         s = {};
         s.key = "graphics.perf_overlay";
         s.page = "Advanced";
         s.section = "Diagnostics";
         s.label = "Performance overlay";
-        s.help = "Frame times and counters in the corner (F3 toggles it too; F4 records a CSV).";
+        s.help = "Frame times, the frame-time graph and the renderer's counters in the corner.";
         s.type = Type::Toggle;
         s.env = "VCS_PERF_OVERLAY";
         s.onChange = [](int v) { ps2perf::setOverlay(v != 0); };
         s.read = [] { return ps2perf::overlayOn() ? 1 : 0; };
+        settings::add(s);
+
+        s = {};
+        s.key = "graphics.perf_record";
+        s.page = "Advanced";
+        s.section = "Diagnostics";
+        s.label = "Record performance";
+        s.help = "Starts or stops writing the overlay's numbers for every frame to logs/perf_<date>_<time>.csv in the app's "
+                 "folder (tools/perf_report.py summarises it). The overlay shows REC while it runs.";
+        s.type = Type::Action;
+        s.button = "Start / stop";
+        s.onChange = [](int) { ps2perf::setRecording(!ps2perf::recording(), (appDirectory() / "logs").string()); };
         settings::add(s);
 
         s = {};
@@ -662,8 +558,7 @@ namespace
         s.section = "Reset";
         s.label = "Reset all settings";
         s.help = "Every setting on every page back to its default (the PS2's picture at 60 fps with frame-rate independent "
-                 "timing, the default controls). "
-                 "The disc path and the window's place are kept.";
+                 "timing, the default controls). The disc path is kept.";
         s.type = Type::Action;
         s.button = "Reset everything";
         s.confirm = true;
@@ -674,35 +569,6 @@ namespace
             std::fprintf(stderr, "[settings] all reset to defaults\n");
         };
         settings::add(s);
-    }
-
-    // The window opens where it was last closed (monitor, position, size, maximized): window.* in vcs.ini, written
-    // by the platform layer's callback whenever the window settles somewhere new. Deleting those lines resets it.
-    void restoreWindowPlacement()
-    {
-        platform::WindowPlacement p;
-        p.display = settings::state("window.display");
-        p.displayX = std::atoi(settings::state("window.display_x").c_str());
-        p.displayY = std::atoi(settings::state("window.display_y").c_str());
-        p.x = std::atoi(settings::state("window.x").c_str());
-        p.y = std::atoi(settings::state("window.y").c_str());
-        p.width = std::atoi(settings::state("window.width").c_str());
-        p.height = std::atoi(settings::state("window.height").c_str());
-        p.maximized = settings::state("window.maximized") == "1";
-        if (!p.display.empty() && p.width > 0 && p.height > 0)
-            platform::setStartPlacement(p);
-        platform::onPlacementChanged([](const platform::WindowPlacement &now) {
-            settings::setState({
-                {"window.display", now.display},
-                {"window.display_x", std::to_string(now.displayX)},
-                {"window.display_y", std::to_string(now.displayY)},
-                {"window.x", std::to_string(now.x)},
-                {"window.y", std::to_string(now.y)},
-                {"window.width", std::to_string(now.width)},
-                {"window.height", std::to_string(now.height)},
-                {"window.maximized", now.maximized ? "1" : "0"},
-            });
-        });
     }
 
     fs::path firstIsoIn(const fs::path &dir)
@@ -739,31 +605,24 @@ namespace
     {
         if (argc >= 2 && argv[1] && argv[1][0])
             return fs::u8path(argv[1]);
-        if (fs::path p = isoFromIni(exeDirectory() / "vcs.ini"); !p.empty())
+        if (fs::path p = isoFromIni(appDirectory() / "vcs.ini"); !p.empty())
             return p;
-#if defined(__PROSPERO__)
-        if (fs::path p = firstIsoIn(exeDirectory() / "disc"); !p.empty())
+        if (fs::path p = firstIsoIn(appDirectory() / "disc"); !p.empty())
             return p;
-        if (fs::path p = firstIsoIn(exeDirectory()); !p.empty())
+        if (fs::path p = firstIsoIn(appDirectory()); !p.empty())
             return p;
         for (int usb = 0; usb < 8; ++usb) // USB drives (exFAT / FAT32), the top folder and a games/ folder
             for (const char *sub : {"", "games"})
                 if (fs::path p = namedIsoIn(fs::path("/mnt/usb" + std::to_string(usb)) / sub); !p.empty())
                     return p;
         return {};
-#else
-        if (fs::path p = firstIsoIn(exeDirectory()); !p.empty())
-            return p;
-        return firstIsoIn(fs::current_path());
-#endif
     }
 
-#if defined(__PROSPERO__)
-    // The PS5 has no console window: stdout and stderr go to /app0/logs/vcs.log (the run before kept as vcs.prev.log),
+    // No console to print to: stdout and stderr go to /app0/logs/vcs.log (the run before kept as vcs.prev.log),
     // line by line so a crash keeps the end.
     void ps5Log()
     {
-        const fs::path dir = exeDirectory() / "logs";
+        const fs::path dir = appDirectory() / "logs";
         std::error_code ec;
         fs::create_directories(dir, ec);
         fs::rename(dir / "vcs.log", dir / "vcs.prev.log", ec);
@@ -776,28 +635,28 @@ namespace
             std::setvbuf(stdout, nullptr, _IOLBF, 0);
     }
 
-    // The app's start-up code sets the IEEE floating-point state (MXCSR 0x1f80, as on a PC) before main; the console's
-    // own is flush-to-zero with denormals-are-zero (0x9fe0), which the game's numerics were never checked against.
+    // The app's start-up code sets the IEEE floating-point state (MXCSR 0x1f80, the x86-64 default) before main; the
+    // console's own is flush-to-zero with denormals-are-zero (0x9fe0), which the game's numerics were never checked
+    // against.
     void ps5FloatingPoint()
     {
         const unsigned csr = _mm_getcsr();
         if ((csr & ~0x3Fu) != 0x1F80u) // (the low six bits are sticky exception flags)
         {
-            std::fprintf(stderr, "[main] MXCSR 0x%04x at start: set to 0x1f80 (the PC's)\n", csr);
+            std::fprintf(stderr, "[main] MXCSR 0x%04x at start: set to 0x1f80 (IEEE, the game's)\n", csr);
             _mm_setcsr(0x1F80u);
         }
     }
-#endif
 
-    // A start-up failure, in the log and for the player (the PS5's notification: there is no console window there).
+    // A start-up failure, in the log and for the player (the system's notification).
     void reportStartFailure(const std::string &message)
     {
         std::cerr << message << std::endl;
         platform::notify(("Vice City Stories - " + message).c_str());
     }
 
-    // Writes the guest ELF from the disc into the cache folder (runtime loads it from a file). 0, or vcs.exe's exit
-    // code for the failure (vcs_disc_id.h) with `error` set.
+    // Writes the guest ELF from the disc into the cache folder (runtime loads it from a file). 0, or the exit code for
+    // the failure (vcs_disc_id.h) with `error` set.
     int stageElf(const vcs::IsoImage &iso, const fs::path &out, std::string &error)
     {
         vcs::IsoEntry entry;
@@ -831,34 +690,25 @@ namespace
 
 int main(int argc, char *argv[])
 {
-#if defined(__PROSPERO__)
     ps5Log();
     ps5FloatingPoint();
-#endif
     vcs::installCrashHandlers();
     try
     {
-        // the hardware (D3D11) renderer unless PS2X_GS says otherwise: the runtime's own default is the software GS
-        // (~5 fps), which only tools/run.py and the test tools used to override - vcs.exe started on its own got it
+        // the hardware (Vulkan) renderer unless PS2X_GS says otherwise: the runtime's own default is the software GS
+        // (~5 fps)
         if (const char *gs = std::getenv("PS2X_GS"); !gs || !*gs)
             setEnv("PS2X_GS", "hw");
         registerSettings();
-        settings::load(exeDirectory() / "vcs.ini");
+        settings::load(appDirectory() / "vcs.ini");
         if (ps2control::hiddenMode())
             settings::keepFile(); // a test run never changes the player's settings
         settings::applyAll();
-        restoreWindowPlacement();
         const fs::path isoPath = locateIso(argc, argv);
         if (isoPath.empty())
         {
-#if defined(__PROSPERO__)
             reportStartFailure("No disc image found. Copy your Vice City Stories (USA) .iso into the app's disc folder "
                                "(/data/homebrew/<title id>/disc/) or onto a USB drive.");
-#else
-            std::cerr << "No disc image found. Pass your Vice City Stories (USA) .iso as the first argument,\n"
-                         "put iso=<path> in vcs.ini next to vcs.exe, or place the .iso next to vcs.exe."
-                      << std::endl;
-#endif
             return vcs::disc::kExitNoDisc;
         }
 
@@ -894,7 +744,7 @@ int main(int argc, char *argv[])
         }
 
         // the card in our data folder from the start: the runtime's default (the working directory) left empty mc0 / mc1
-        // folders next to vcs.exe, made before loadELF below set the paths
+        // folders there, made before loadELF below set the paths
         {
             PS2Runtime::IoPaths early = PS2Runtime::getIoPaths();
             early.mcRoot = data / "mc0";
@@ -905,12 +755,10 @@ int main(int argc, char *argv[])
         // the settings menu draws in the runtime's UI hook (registered before initialize(), which runs the init hook)
         runtime.setDebugUiCallbacks([](PS2Runtime &, void *) {},
                                     [](PS2Runtime &, void *) {
-                                        altEnter();
-                                        followWindowAspect();
+                                        followOutputAspect();
                                         ui::drawSettingsMenu();
                                         ui::drawTrainerMenu();
                                         ps2control::setGameInputBlocked(ui::settingsMenuBlocksInput() || ui::trainerMenuBlocksInput());
-                                        vcs::input::onHostFrame(ui::settingsMenuOpen() || ui::trainerMenuBlocksInput());
                                         vcs::volume::onHostFrame();
                                         drawFrameRateCounter();
                                     },
@@ -935,9 +783,9 @@ int main(int argc, char *argv[])
 
         vcs::rig::install(runtime); // control-channel automation commands (debug/rig.h)
         vcs::trainer::install(runtime); // the trainer's control-channel command (game/vcs_trainer.h)
-        vcs::input::install(runtime);   // the player's bindings feed the pad (game/vcs_input.h)
+        vcs::input::install();          // the player's bindings feed the pad (game/vcs_input.h)
         vcs::volume::install(runtime);  // the game's music / effects levels follow the settings (game/vcs_volume.h)
-        // setting <key> [value] -> ok <value>: a setting read or changed (a hidden run never writes vcs.ini)
+        // setting <key> [value] -> ok <value>: a setting read or changed (a test run never writes vcs.ini)
         ps2control::addCommand("setting", [](const std::string &args, ps2control::Reply reply) {
             const size_t space = args.find(' ');
             const std::string key = args.substr(0, space);
@@ -953,7 +801,7 @@ int main(int argc, char *argv[])
                 return reply("error refused");
             reply("ok " + std::to_string(settings::value(key)));
         });
-        // menu <page>|close|scroll <0..1> -> ok: the settings menu opened on a page (screenshots of it in hidden runs)
+        // menu <page>|close|scroll <0..1> -> ok: the settings menu opened on a page (screenshots of it in test runs)
         ps2control::addCommand("menu", [](const std::string &args, ps2control::Reply reply) {
             if (args == "close")
                 ui::closeSettingsMenu();
@@ -966,7 +814,6 @@ int main(int argc, char *argv[])
         vcs::configureWatch(runtime.memory().getRDRAM());
         vcs::runSelfTest(runtime);
         vcs::startWatchdog(runtime);
-        vcs::startProfiler(runtime);
         runtime.run();
 #if defined(PS2X_PGO_GEN)
         __llvm_profile_write_file(); // instrumented build: _Exit skips the atexit handler that writes the profile

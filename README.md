@@ -77,7 +77,7 @@ The DualSense is the DualShock 2, button for button:
 
 Hold the touchpad and press **Options** for the settings menu, **R1** for the trainer, **L1** for the free camera (the
 game sees neither button). In the menus Cross selects, Circle backs out, L1 / R1 change pages. Every button can be
-rebound on the settings menu's Gamepad page. More in [docs/CONTROLS.md](docs/CONTROLS.md).
+rebound on the settings menu's Controller page. More in [docs/CONTROLS.md](docs/CONTROLS.md).
 
 ## Features
 
@@ -127,8 +127,10 @@ The build's output is in `build/ps5/build.log` (`build/ps5/configure.log` for th
 | `python3 tools/ps5.py deploy --host IP [--iso F]` | the app folder to `/data/homebrew/<title id>` over FTP |
 | `python3 tools/ps5.py ffmpeg` | FFmpeg for the PS5 (the movies) |
 | `python3 tools/ps5.py compile-check --sdk DIR` | the PS5 build compiled against stand-in code: no disc needed (CI) |
-| `python3 tools/ps5.py padtest` | the DualSense → DualShock 2 path checked with the console's pad functions mocked (62 checks) |
-| `python3 tools/release.py --ps5` | the release zip: the source and `PS5-README.txt`, through a guard that refuses game files |
+| `python3 tools/ps5.py padtest` | the DualSense → DualShock 2 path checked with the console's pad functions mocked (62 checks; built on its own) |
+| `python3 tools/release.py` | the release zip: the source and `PS5-README.txt`, through a guard that refuses game files |
+| `python3 tools/clean.py [--apply]` | delete what the build folder holds besides the builds (scratch output, logs) |
+| `python3 tools/perf_report.py F.csv` | a performance recording (settings menu: Advanced > Record performance) |
 | `python3 tools/ghidra_analyze.py` | redo the Ghidra analysis (Ghidra 12 + JDK 21) |
 
 All tools are Python 3 scripts using only the standard library. [AGENTS.md](AGENTS.md) is the guide to working on the

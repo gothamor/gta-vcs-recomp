@@ -1750,7 +1750,7 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   `pad + 0x99` (the large motor's level 0..255); when it reaches 0, once more with both 0 (0x284870). A second caller
   is FUN_00285258 (0x285294). A grenade's explosion 2 m from Vic gives level 128 (`tools/controls_check.py`).
   The host maps the large motor to the DualSense's low-frequency motor and the small one to the high-frequency one,
-  scaled by Gamepad > Vibration.
+  scaled by Controller > Vibration.
 - **The pad's stick curve** (2026-10-29, FUN_002842e8, called for the four stick bytes in FUN_002843d8; decompiled):
   v = byte - 128; |v| <= 42 is 0, past that (|v| - 42) * 127 / 85 (integer, truncated), sign kept - **a third of the
   stick's travel is dead** on top of any gamepad deadzone. The results are CPad 0 (`0x5147A8`, 0xD4 bytes per pad,
