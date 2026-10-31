@@ -1890,6 +1890,15 @@ hidden run (rig `peek` / `poke`, snapshots diffed).
   from about Vic's head. Front = (-cos beta cos alpha, -sin beta cos alpha, sin alpha): beta is the follow camera's
   convention (12b). `TheCamera + 0x950 / 0x954` = 0.53 / 0.47: the third-person crosshair's place on screen (VC's
   m_f3rdPersonCHairMultX / Y), used to offset the lock-on view for guns.
+- **Blend or cut**: CCamera::CamControl (FUN_00372450) decides each mode change. **FUN_001F1698(ped) = the ped's weapon
+  lets him move while aiming** (`FUN_00407120(type)` byte 0, bit 7): going from the lock-on camera (11, or 28) back to
+  the follow camera (4) it is asked (call at 0x375B3C, return 0x375B44); 0 - a gun that stands Vic still (types 20 Equalizer,
+  21-23 the shotguns, 25 Scorpion, 27 SMG, 28 / 29 the rifles, 33-35 flame-thrower, M249, minigun; 19 pistol, 24 Micro
+  SMG and 26 Mac 10 walk - checked locked on in free aim, one hidden run per gun) - takes the jump cut: no blend (+0x8D0 left 0), +0x8AC set, the new CCam's heading at +0x190 set from its
+  +0x80 / +0x84 plus pi. Otherwise CCamera::StartTransition (**FUN_0037C9C8**, the only writer of the durations: 1350,
+  then the pair's own) blends. Found by a write watch on +0x8DC (pc 0x37CFEC / 0x37D1E8 inside FUN_0037C9C8) for a
+  pistol and an AK release, then its callers (three, all in CamControl) and the decompile. vcs_aim.cpp answers 1 to that
+  call in the frames after free aim ends, so every gun's aim ends in the same blend.
 - **The blend between cameras**: when the active camera's mode changes, CCamera::Process blends the old view into the
   new one; **TheCamera + 0x8D0** (byte) is set while it runs, **+0x8D8** its start (CTimer ms, 0x4CD104), **+0x8DC** and
   **+0x8E0** its durations in ms - 400 / 350 into the lock-on (free-aim) camera, 350 / 350 out of it; the camera eases

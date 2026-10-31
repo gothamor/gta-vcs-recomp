@@ -735,3 +735,8 @@ from them: Vic moves while free aiming exactly when he can move locked on with t
   snapped to another angle for one frame: the follow camera's first update resets its heading; that frame's view is now
   turned back to the aim's heading in the hook after CCam::Process, before the frame's camera is built (the pad read's
   hand-back came a frame late). The hand-back needs the free camera's hook (VCS_FREECAM=0 leaves it out).
+- (the user, next) With guns that stand Vic still the aim's end was instant, unlike the walking guns. The game does that
+  on purpose: CCamera::CamControl jump-cuts from the lock-on camera to the follow camera when the weapon can't move
+  while aiming (FUN_001F1698). Free aim answers that one question (its call in CamControl, only in the frames after the
+  aim ends) with yes, so all guns end in the same blend; Vic still stands still with those guns while aiming, and the
+  PS2 lock-on (free aim off) keeps its cut.

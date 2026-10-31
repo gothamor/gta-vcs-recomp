@@ -57,7 +57,8 @@ game-internals.md 12c):
   the target button ends the aim at once (the camera leaves it 2 frames later), shots or not.
 - **Moving while aiming** is what the game allows locked on with that gun - a pistol walks and strafes; no new movement
   is added. Letting go leaves the camera looking where the aim did. The camera moves into the aim in 0.1 s and out of
-  it in 0.2 s (the game blends 0.35-0.4 s; its other camera changes keep their blends).
+  it in 0.2 s, with every gun (the game blends 0.35-0.4 s, and cuts out of the aim with the guns that stand Vic still;
+  its other camera changes keep their blends and cuts).
 - Fists, melee weapons, thrown weapons and the scoped guns (sniper rifles, rocket launcher, camera, binoculars) keep
   R1 as on the PS2. There is no aim assist on the gamepad.
 - It is the game's own free aim (R1 then L3 on the PS2: the left stick moves an aiming point while Vic stands still),

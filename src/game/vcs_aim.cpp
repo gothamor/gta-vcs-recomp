@@ -43,6 +43,8 @@ namespace vcs::aim
         constexpr uint32_t kGameProcess = 0x003BA8D8u;   // CGame::Process: scripts, the world (peds move, guns fire)
         constexpr uint32_t kCameraProcess = 0x00378DD8u; // CCamera::Process: after the world, before the HUD
         constexpr uint32_t kShotLine = 0x002D0870u;      // the weapons' line test (CWorld::ProcessLineOfSight, 8 args)
+        constexpr uint32_t kMovesAiming = 0x001F1698u;   // the ped's weapon lets him move while aiming (info byte 0 bit 7)
+        constexpr uint32_t kMovesAimingCamReturn = 0x00375B44u; // its call in CCamera::CamControl (FUN_00372450)
         constexpr uint32_t kShotLineReturn = 0x002C47A4u; // its call in FireInstantHit (0x2c3e48) for a locked-on shooter
         // Guest memory for the shot's start point: the EE kernel's area below the game (0x00000-0x7FFFF), unused by the
         // recompiled runtime and the game (all zero in play, 2026-10-31).
@@ -55,7 +57,8 @@ namespace vcs::aim
         constexpr uint32_t kCamModeFollowPed = 4;
         constexpr float kStickRate = 2.0f;      // radians a second at full tilt (gamepad)
 
-        PS2Runtime::RecompiledFunction g_origGame = nullptr, g_origCamera = nullptr, g_origShotLine = nullptr;
+        PS2Runtime::RecompiledFunction g_origGame = nullptr, g_origCamera = nullptr, g_origShotLine = nullptr,
+                                       g_origMovesAiming = nullptr;
         uint8_t *g_rdram = nullptr;
 
         enum class State
@@ -191,6 +194,22 @@ namespace vcs::aim
             g_origCamera(rdram, ctx, runtime);
         }
 
+        // Does the ped's weapon let him move while aiming (FUN_001F1698, a0 the ped)? CCamera::CamControl asks when the
+        // camera goes from the lock-on camera back to the follow camera: with a gun that stands Vic still (shotguns,
+        // rifles, the SMG, heavy weapons) it cuts to the follow camera at once, with one that walks it blends (game-
+        // internals.md 12c). Leaving free aim, that question is answered yes for the camera, so every gun's aim ends
+        // in the same blend (the user's report: the stand-still guns' end was instant). Nothing else asks it here.
+        PS2_GUEST_CC void movesAiming(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_handBack > 0 && GPR_U32(ctx, 31) == kMovesAimingCamReturn)
+            {
+                SET_GPR_U64(ctx, 2, 1);
+                ctx->pc = GPR_U32(ctx, 31);
+                return;
+            }
+            g_origMovesAiming(rdram, ctx, runtime);
+        }
+
         // The weapons' line test (from a0 to a1; t1 the shooter). For the player's free-aim shot (FireInstantHit's call
         // for a locked-on shooter) the line is the camera's through the circle: from the point on it level with the gun
         // to as far as the gun reaches. The gun's own start (a0) is left for the tracer and the impact's effects; the
@@ -240,11 +259,13 @@ namespace vcs::aim
         g_origGame = runtime.lookupFunction(kGameProcess);
         g_origCamera = runtime.lookupFunction(kCameraProcess);
         g_origShotLine = runtime.lookupFunction(kShotLine);
-        if (!g_origGame || !g_origCamera || !g_origShotLine)
+        g_origMovesAiming = runtime.lookupFunction(kMovesAiming);
+        if (!g_origGame || !g_origCamera || !g_origShotLine || !g_origMovesAiming)
             return;
         runtime.replaceFunction(kGameProcess, &gameProcess);
         runtime.replaceFunction(kCameraProcess, &cameraProcess);
         runtime.replaceFunction(kShotLine, &shotLine);
+        runtime.replaceFunction(kMovesAiming, &movesAiming);
         // aimstate -> ok active=<0|1> shots=<shots down the camera ray so far> (tools/controls_check.py)
         ps2control::addCommand("aimstate", [](const std::string &, ps2control::Reply reply) {
             char text[96];
