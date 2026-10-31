@@ -2,6 +2,7 @@
 
 #include "game/vcs_input.h"
 #include "ps2_runtime.h"
+#include "settings/settings.h"
 #include "ui/settings_menu.h"
 
 #include "imgui.h"
@@ -44,12 +45,13 @@ namespace ui::frontend
         bool g_startSubmenu = false;
         bool g_quitConfirm = false;
         std::atomic<bool> g_pauseDismissed{false};
-        ImTextureData *g_background = nullptr, *g_font = nullptr;
+        ImTextureData *g_background = nullptr, *g_font = nullptr, *g_scriptFont = nullptr;
         bool g_backgroundTried = false;
         bool g_sawBootLoading = false;
 
         constexpr const char *kPalmBackground = "db7fe6220bfa99e-400b40212c17643-00006213.png";
         constexpr const char *kMenuFont = "3ece7b57667e958b-f663bcea3bca5023-00006213.png";
+        constexpr const char *kScriptFont = "87ad416320b92240-59ab262d214c676c-00006214.png";
         constexpr ImU32 kCyan = IM_COL32(18, 211, 215, 255);
         constexpr ImU32 kPink = IM_COL32(194, 91, 142, 255);
         constexpr ImU32 kWhite = IM_COL32(225, 225, 225, 255);
@@ -111,6 +113,7 @@ namespace ui::frontend
             const std::filesystem::path replacements = std::filesystem::u8path(pack) / "replacements";
             g_background = loadTexture(replacements / kPalmBackground, true);
             g_font = loadTexture(replacements / kMenuFont, false);
+            g_scriptFont = loadTexture(replacements / kScriptFont, false);
         }
 
         struct Glyph
@@ -157,19 +160,22 @@ namespace ui::frontend
             return glyph(c, g) ? ((g.x1 - g.x0) + 1.0f) * scale : 8.0f * scale;
         }
 
-        ImVec2 textSize(const char *text, float scale)
+        ImVec2 textSize(const char *text, float scale, ImTextureData *font = nullptr, float xScale = 1.0f)
         {
-            if (!g_font)
+            font = font ? font : g_font;
+            if (!font)
                 return ImGui::CalcTextSize(text);
             float width = 0.0f;
             for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text); *p; ++p)
-                width += glyphAdvance(*p, scale);
+                width += glyphAdvance(*p, scale) * xScale;
             return ImVec2(width, 22.0f * scale);
         }
 
-        void drawText(ImDrawList *draw, ImVec2 pos, const char *text, ImU32 color, float scale)
+        void drawText(ImDrawList *draw, ImVec2 pos, const char *text, ImU32 color, float scale,
+                      ImTextureData *font = nullptr, float xScale = 1.0f)
         {
-            if (!g_font)
+            font = font ? font : g_font;
+            if (!font)
             {
                 draw->AddText(pos, color, text);
                 return;
@@ -178,62 +184,116 @@ namespace ui::frontend
             {
                 if (*p == ' ')
                 {
-                    pos.x += glyphAdvance(*p, scale);
+                    pos.x += glyphAdvance(*p, scale) * xScale;
                     continue;
                 }
                 Glyph g;
                 if (!glyph(*p, g))
                 {
-                    pos.x += glyphAdvance(*p, scale);
+                    pos.x += glyphAdvance(*p, scale) * xScale;
                     continue;
                 }
-                const float width = (g.x1 - g.x0) * scale, height = (g.y1 - g.y0) * scale;
-                draw->AddImage(g_font->GetTexRef(), pos, ImVec2(pos.x + width, pos.y + height),
+                const float width = (g.x1 - g.x0) * scale * xScale, height = (g.y1 - g.y0) * scale;
+                draw->AddImage(font->GetTexRef(), pos, ImVec2(pos.x + width, pos.y + height),
                                ImVec2(g.x0 / 256.0f, g.y0 / 256.0f), ImVec2(g.x1 / 256.0f, g.y1 / 256.0f), color);
-                pos.x += glyphAdvance(*p, scale);
+                pos.x += glyphAdvance(*p, scale) * xScale;
             }
         }
 
-        bool menuItem(const char *label, float width, float textScale, float height = 34.0f)
+        bool menuItem(const char *label, float width, float textScale, float xScale, float height = 34.0f)
         {
             ImGui::SetCursorPosX((ImGui::GetWindowSize().x - width) * 0.5f);
             const ImVec2 p = ImGui::GetCursorScreenPos();
             ImGui::InvisibleButton(label, ImVec2(width, height));
             const bool selected = ImGui::IsItemHovered() || ImGui::IsItemFocused();
-            const ImVec2 text = textSize(label, textScale);
+            const ImVec2 text = textSize(label, textScale, nullptr, xScale);
             drawText(ImGui::GetWindowDrawList(), ImVec2(p.x + (width - text.x) * 0.5f, p.y + (height - text.y) * 0.5f),
-                     label, selected ? kPink : kCyan, textScale);
+                     label, selected ? kPink : kCyan, textScale, nullptr, xScale);
             return ImGui::IsItemActivated();
         }
 
-        void footer(const ImGuiViewport &vp, float scale)
+        struct MenuCanvas
         {
-            ImDrawList *draw = ImGui::GetWindowDrawList();
-            const float y = vp.WorkPos.y + vp.WorkSize.y - 53.0f;
-            drawText(draw, ImVec2(vp.WorkPos.x + 30.0f, y), "<", kCyan, scale);
-            drawText(draw, ImVec2(vp.WorkPos.x + 52.0f, y), "BACK", kWhite, scale);
-            drawText(draw, ImVec2(vp.WorkPos.x + 30.0f, y + 25.0f), "X", kPink, scale);
-            drawText(draw, ImVec2(vp.WorkPos.x + 52.0f, y + 25.0f), "SELECT", kWhite, scale);
-            const char *move = "ARROWS  STICK  MOVE";
-            const ImVec2 size = textSize(move, scale);
-            drawText(draw, ImVec2(vp.WorkPos.x + vp.WorkSize.x - size.x - 26.0f, y + 25.0f), move, kWhite, scale);
+            ImVec2 pos, size;
+            float scale, xScale;
+        };
+
+        MenuCanvas menuCanvas(const ImGuiViewport &vp)
+        {
+            const int hud = settings::value("display.hud");
+            if (hud != 0)
+                return {vp.WorkPos, vp.WorkSize, vp.WorkSize.y / 480.0f,
+                        hud == 1 ? (vp.WorkSize.x / vp.WorkSize.y) / (4.0f / 3.0f) : 1.0f};
+            const float width = std::min(vp.WorkSize.x, vp.WorkSize.y * (4.0f / 3.0f));
+            const float height = width * (3.0f / 4.0f);
+            return {ImVec2(vp.WorkPos.x + (vp.WorkSize.x - width) * 0.5f,
+                           vp.WorkPos.y + (vp.WorkSize.y - height) * 0.5f),
+                    ImVec2(width, height), height / 480.0f, 1.0f};
         }
 
-        void drawBackground(ImDrawList *draw, const ImGuiViewport &vp)
+        float promptWidth(const char *text, float scale, float xScale)
+        {
+            return textSize(text, scale, nullptr, xScale).x + scale * xScale;
+        }
+
+        void drawPrompt(ImDrawList *draw, ImVec2 pos, const char *text, ImU32 color, float scale, float xScale)
+        {
+            // The control legend uses the same game face with a second, one-pixel offset pass for its heavier weight.
+            drawText(draw, ImVec2(pos.x + scale * xScale, pos.y), text, color, scale, nullptr, xScale);
+            drawText(draw, pos, text, color, scale, nullptr, xScale);
+        }
+
+        void footer(const MenuCanvas &canvas, bool showBack)
+        {
+            ImDrawList *draw = ImGui::GetWindowDrawList();
+            const float scale = canvas.scale * 0.7f;
+            const float y = canvas.pos.y + canvas.size.y - 53.0f * canvas.scale;
+            const float left = canvas.pos.x + 30.0f * canvas.scale;
+            if (showBack)
+            {
+                drawText(draw, ImVec2(left, y), "<", kCyan, scale, nullptr, canvas.xScale);
+                drawPrompt(draw, ImVec2(left + 22.0f * canvas.scale * canvas.xScale, y), "BACK", kWhite, scale,
+                           canvas.xScale);
+            }
+            drawText(draw, ImVec2(left, y + 25.0f * canvas.scale), "X", kPink, scale, nullptr, canvas.xScale);
+            drawPrompt(draw, ImVec2(left + 22.0f * canvas.scale * canvas.xScale, y + 25.0f * canvas.scale),
+                       "SELECT", kWhite, scale, canvas.xScale);
+            const char *move = "ARROWS  STICK  MOVE";
+            const float width = promptWidth(move, scale, canvas.xScale);
+            drawPrompt(draw, ImVec2(canvas.pos.x + canvas.size.x - width - 26.0f * canvas.scale,
+                                    y + 25.0f * canvas.scale), move, kWhite, scale, canvas.xScale);
+        }
+
+        void drawBackground(ImDrawList *draw, const ImGuiViewport &vp, const MenuCanvas &canvas)
         {
             const ImVec2 viewportEnd(vp.WorkPos.x + vp.WorkSize.x, vp.WorkPos.y + vp.WorkSize.y);
             draw->AddRectFilled(vp.WorkPos, viewportEnd, IM_COL32(25, 0, 35, 255));
             if (!g_background || g_background->Width <= 0 || g_background->Height <= 0)
                 return;
+            draw->AddImage(g_background->GetTexRef(), canvas.pos,
+                           ImVec2(canvas.pos.x + canvas.size.x, canvas.pos.y + canvas.size.y));
+        }
 
-            // Keep replacement artwork at its authored aspect ratio. Fit the complete image inside the viewport and
-            // use the menu purple for any side/top bars instead of deforming it to the current display mode.
-            const float fit = std::min(vp.WorkSize.x / static_cast<float>(g_background->Width),
-                                       vp.WorkSize.y / static_cast<float>(g_background->Height));
-            const ImVec2 size(g_background->Width * fit, g_background->Height * fit);
-            const ImVec2 start(vp.WorkPos.x + (vp.WorkSize.x - size.x) * 0.5f,
-                               vp.WorkPos.y + (vp.WorkSize.y - size.y) * 0.5f);
-            draw->AddImage(g_background->GetTexRef(), start, ImVec2(start.x + size.x, start.y + size.y));
+        void drawGameHeading(ImDrawList *draw, const MenuCanvas &canvas)
+        {
+            if (!g_scriptFont)
+            {
+                drawText(draw, ImVec2(canvas.pos.x + 28.0f * canvas.scale, canvas.pos.y + 24.0f * canvas.scale),
+                         "GAME", kPink, canvas.scale, nullptr, canvas.xScale);
+                return;
+            }
+            // The game's script atlas: exact G, a, m and e rectangles in its logical 256x256 texture.
+            static constexpr Glyph letters[] = {{183, 69, 207, 116}, {2, 198, 26, 226},
+                                                 {273, 198, 308, 226}, {105, 198, 127, 226}};
+            ImVec2 pos(canvas.pos.x + 28.0f * canvas.scale, canvas.pos.y + 24.0f * canvas.scale);
+            for (const Glyph &g : letters)
+            {
+                const float width = (g.x1 - g.x0) * 0.5f * canvas.scale * canvas.xScale;
+                const float height = (g.y1 - g.y0) * 0.5f * canvas.scale;
+                draw->AddImage(g_scriptFont->GetTexRef(), pos, ImVec2(pos.x + width, pos.y + height),
+                               ImVec2(g.x0 / 512.0f, g.y0 / 512.0f), ImVec2(g.x1 / 512.0f, g.y1 / 512.0f), kPink);
+                pos.x += width;
+            }
         }
 
         void requestQuit(PS2Runtime &runtime)
@@ -283,37 +343,43 @@ namespace ui::frontend
         if (ImGui::Begin(startup ? "VCS Front End" : "VCS Pause Actions", nullptr, flags))
         {
             ImDrawList *draw = ImGui::GetWindowDrawList();
-            drawBackground(draw, *vp);
+            const MenuCanvas canvas = menuCanvas(*vp);
+            drawBackground(draw, *vp, canvas);
 
-            const float scale = std::clamp(vp->WorkSize.y / 448.0f, 0.85f, 1.8f);
+            const float scale = std::clamp(canvas.scale, 0.70f, 1.8f);
             ImGui::SetWindowFontScale(1.35f * scale);
-            const float contentWidth = std::min(420.0f * scale, vp->WorkSize.x * 0.72f);
-            ImGui::SetCursorPos(ImVec2((vp->WorkSize.x - contentWidth) * 0.5f, vp->WorkSize.y * 0.25f));
+            const float contentWidth = std::min(420.0f * scale, canvas.size.x * 0.72f);
+            ImGui::SetCursorPos(ImVec2(canvas.pos.x - vp->WorkPos.x + (canvas.size.x - contentWidth) * 0.5f,
+                                       canvas.pos.y - vp->WorkPos.y + canvas.size.y * 0.25f));
             if (startup)
             {
                 if (!g_startSubmenu)
                 {
-                    if (menuItem("START GAME", contentWidth, scale)) { g_startSubmenu = true; g_quitConfirm = false; }
-                    if (menuItem("OPTIONS", contentWidth, scale)) { openSettingsMenu(""); g_quitConfirm = false; }
-                    if (menuItem(g_quitConfirm ? "ARE YOU SURE" : "QUIT GAME", contentWidth, scale)) requestQuit(runtime);
+                    if (menuItem("START GAME", contentWidth, scale, canvas.xScale)) { g_startSubmenu = true; g_quitConfirm = false; }
+                    if (menuItem("OPTIONS", contentWidth, scale, canvas.xScale)) { openSettingsMenu(""); g_quitConfirm = false; }
+                    if (menuItem(g_quitConfirm ? "ARE YOU SURE" : "QUIT GAME", contentWidth, scale, canvas.xScale)) requestQuit(runtime);
                 }
                 else
                 {
-                    if (menuItem("LOAD GAME", contentWidth, scale)) begin(StartupAction::LoadGame);
-                    if (menuItem("NEW GAME", contentWidth, scale)) begin(StartupAction::NewGame);
-                    if (menuItem("DELETE GAME", contentWidth, scale)) begin(StartupAction::DeleteGame);
-                    if (menuItem("BACK", contentWidth, scale)) g_startSubmenu = false;
+                    if (menuItem("LOAD GAME", contentWidth, scale, canvas.xScale)) begin(StartupAction::LoadGame);
+                    if (menuItem("NEW GAME", contentWidth, scale, canvas.xScale)) begin(StartupAction::NewGame);
+                    if (menuItem("DELETE GAME", contentWidth, scale, canvas.xScale)) begin(StartupAction::DeleteGame);
+                    if (menuItem("BACK", contentWidth, scale, canvas.xScale)) g_startSubmenu = false;
                 }
             }
             else
             {
-                if (menuItem("OPTIONS", contentWidth, scale)) { openSettingsMenu(""); g_quitConfirm = false; }
-                if (menuItem(g_quitConfirm ? "ARE YOU SURE" : "QUIT GAME", contentWidth, scale)) requestQuit(runtime);
-                if (menuItem("BACK TO PAUSE MENU", contentWidth, scale)) { g_pauseDismissed = true; g_quitConfirm = false; }
+                if (menuItem("OPTIONS", contentWidth, scale, canvas.xScale)) { openSettingsMenu(""); g_quitConfirm = false; }
+                if (menuItem(g_quitConfirm ? "ARE YOU SURE" : "QUIT GAME", contentWidth, scale, canvas.xScale)) requestQuit(runtime);
+                if (menuItem("BACK TO PAUSE MENU", contentWidth, scale, canvas.xScale)) { g_pauseDismissed = true; g_quitConfirm = false; }
             }
             ImGui::SetWindowFontScale(1.0f);
-            drawText(draw, ImVec2(vp->WorkPos.x + 28.0f, vp->WorkPos.y + 24.0f), startup ? "GAME" : "OPTIONS", kPink, scale);
-            footer(*vp, scale * 0.7f);
+            if (startup)
+                drawGameHeading(draw, canvas);
+            else
+                drawText(draw, ImVec2(canvas.pos.x + 28.0f * scale, canvas.pos.y + 24.0f * scale),
+                         "OPTIONS", kPink, scale, nullptr, canvas.xScale);
+            footer(canvas, !startup || g_startSubmenu);
         }
         ImGui::End();
         ImGui::PopStyleVar();

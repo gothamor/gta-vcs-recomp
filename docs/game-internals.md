@@ -698,6 +698,11 @@ font atlas. Uppercase A-G occupy logical y 24..46 with x boundaries 144,158,173,
 y 47..69 with boundaries 0,15,22,34,49,61,82,98,114,128,144,159,173,188,204,220,242; X-Z occupy y 70..93 with
 boundaries 0,16,31,45. The back marker `<` is x 69..82, y 24..46. These rectangles were found by inspecting the
 atlas at its original logical scale and comparing the glyph sequence to the game's pause screen.
+Two `00006214` replacements provide other menu faces: `87ad416320b92240` is the script atlas used for
+the `Game` heading (512-grid G 181..208/64..128, a 0..27/192..256, m 270..310/192..256, e 103..128/192..256), and
+`64e22c1534c81341` is a heavier block atlas. The latter cannot reuse the proportional atlas's rectangles: its glyph
+packing is distinct, so the host footer uses a heavy double-pass of the already mapped game menu face. Identified by
+reducing each 4096x4096 replacement to its logical grid and matching the original pause-menu screenshot.
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 

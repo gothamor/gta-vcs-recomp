@@ -29,10 +29,11 @@ The presentation is intentionally isolated in `src/ui/frontend_menu.cpp`. When t
 `db7fe6220bfa99e-400b40212c17643-00006213.png`, the menu uses its original purple palm artwork and black footer. When
 it also contains `3ece7b57667e958b-f663bcea3bca5023-00006213.png`, labels are drawn directly from the game's proportional
 font atlas, including its original outlines, rather than approximated with an OS font. Missing artwork or font files
-fall back independently to the dark-purple background or Dear ImGui font. Cyan/pink selection and the bottom control
-legend follow the original pause-menu layout. Artwork is fitted and centred at its authored aspect ratio; unused display
-space uses the menu purple rather than stretching the texture. Styling can be replaced without changing the boot/save
-logic.
+fall back independently to the dark-purple background or Dear ImGui font. The `Game` heading uses the original script
+atlas (`87ad416320b92240-59ab262d214c676c-00006214.png`) and the footer uses a heavier double-pass of the game menu
+face. The initial page omits **Back**, because it has no parent; it
+appears in the Start Game submenu and pause actions. **Display > HUD** also governs this host menu: Keep 4:3 uses a
+centred 4:3 canvas, while Screen edges and Stretch use the full display. Styling remains separate from boot/save logic.
 
 ## Checks
 
