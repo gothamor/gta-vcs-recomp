@@ -30,7 +30,9 @@ The presentation is intentionally isolated in `src/ui/frontend_menu.cpp`. When t
 it also contains `3ece7b57667e958b-f663bcea3bca5023-00006213.png`, labels are drawn directly from the game's proportional
 font atlas, including its original outlines, rather than approximated with an OS font. Missing artwork or font files
 fall back independently to the dark-purple background or Dear ImGui font. Cyan/pink selection and the bottom control
-legend follow the original pause-menu layout. Styling can be replaced without changing the boot/save logic.
+legend follow the original pause-menu layout. Artwork is fitted and centred at its authored aspect ratio; unused display
+space uses the menu purple rather than stretching the texture. Styling can be replaced without changing the boot/save
+logic.
 
 ## Checks
 

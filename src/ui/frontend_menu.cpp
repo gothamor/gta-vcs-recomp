@@ -219,6 +219,23 @@ namespace ui::frontend
             drawText(draw, ImVec2(vp.WorkPos.x + vp.WorkSize.x - size.x - 26.0f, y + 25.0f), move, kWhite, scale);
         }
 
+        void drawBackground(ImDrawList *draw, const ImGuiViewport &vp)
+        {
+            const ImVec2 viewportEnd(vp.WorkPos.x + vp.WorkSize.x, vp.WorkPos.y + vp.WorkSize.y);
+            draw->AddRectFilled(vp.WorkPos, viewportEnd, IM_COL32(25, 0, 35, 255));
+            if (!g_background || g_background->Width <= 0 || g_background->Height <= 0)
+                return;
+
+            // Keep replacement artwork at its authored aspect ratio. Fit the complete image inside the viewport and
+            // use the menu purple for any side/top bars instead of deforming it to the current display mode.
+            const float fit = std::min(vp.WorkSize.x / static_cast<float>(g_background->Width),
+                                       vp.WorkSize.y / static_cast<float>(g_background->Height));
+            const ImVec2 size(g_background->Width * fit, g_background->Height * fit);
+            const ImVec2 start(vp.WorkPos.x + (vp.WorkSize.x - size.x) * 0.5f,
+                               vp.WorkPos.y + (vp.WorkSize.y - size.y) * 0.5f);
+            draw->AddImage(g_background->GetTexRef(), start, ImVec2(start.x + size.x, start.y + size.y));
+        }
+
         void requestQuit(PS2Runtime &runtime)
         {
             if (!g_quitConfirm)
@@ -266,12 +283,7 @@ namespace ui::frontend
         if (ImGui::Begin(startup ? "VCS Front End" : "VCS Pause Actions", nullptr, flags))
         {
             ImDrawList *draw = ImGui::GetWindowDrawList();
-            if (g_background)
-                draw->AddImage(g_background->GetTexRef(), vp->WorkPos,
-                               ImVec2(vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y));
-            else
-                draw->AddRectFilled(vp->WorkPos, ImVec2(vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y),
-                                    IM_COL32(25, 0, 35, 255));
+            drawBackground(draw, *vp);
 
             const float scale = std::clamp(vp->WorkSize.y / 448.0f, 0.85f, 1.8f);
             ImGui::SetWindowFontScale(1.35f * scale);
