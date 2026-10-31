@@ -51,6 +51,8 @@ namespace ui::frontend
         bool g_quitConfirm = false;
         std::atomic<bool> g_pauseDismissed{false};
         ImTextureData *g_background = nullptr, *g_font = nullptr, *g_scriptFont = nullptr;
+        ImTextureData *g_pricedown = nullptr, *g_backIcon = nullptr, *g_selectIcon = nullptr;
+        ImTextureData *g_moveIcons[4] = {};
         ImFont *g_optionsFont = nullptr;
         bool g_backgroundTried = false;
         bool g_sawBootLoading = false;
@@ -121,8 +123,19 @@ namespace ui::frontend
             g_background = loadTexture(replacements / kPalmBackground, true);
             g_font = loadTexture(replacements / kMenuFont, false);
             g_scriptFont = loadTexture(replacements / kScriptFont, false);
+            g_pricedown = loadTexture(replacements / "64e22c1534c81341-d49e156c51372d1c-00006214.png", false);
+            g_backIcon = loadTexture(replacements / "d0d9f396c36b7411-bd20758f94447ef8-00005113.png", false);
+            g_selectIcon = loadTexture(replacements / "60a3a644467171e5-acbe9ae672fed823-00005113.png", false);
+            static constexpr const char *arrows[] = {
+                "784c33b4a3241b19-b97a81b80c22e4c8-00005113.png",
+                "a1b7cc92002291c5-b97a81b80c22e4c8-00005113.png",
+                "3c60f292c5015937-b97a81b80c22e4c8-00005113.png",
+                "47e8e408d74357d8-b97a81b80c22e4c8-00005113.png"};
+            for (unsigned i = 0; i < 4; ++i)
+                g_moveIcons[i] = loadTexture(replacements / arrows[i], false);
             // These PS2 font masks store full opacity as 0x80, rather than PNG's 0xff.
-            for (ImTextureData *font : {g_font, g_scriptFont})
+            for (ImTextureData *font : {g_font, g_scriptFont, g_pricedown, g_backIcon, g_selectIcon,
+                                       g_moveIcons[0], g_moveIcons[1], g_moveIcons[2], g_moveIcons[3]})
                 if (font)
                     for (size_t i = 3, n = static_cast<size_t>(font->Width) * font->Height * 4; i < n; i += 4)
                         font->Pixels[i] = static_cast<unsigned char>(std::min(255, font->Pixels[i] * 2));
@@ -325,8 +338,9 @@ namespace ui::frontend
             }
         }
 
-        bool menuItem(const char *label, float width, float textScale, float xScale, float height = 34.0f)
+        bool menuItem(const char *label, float width, float textScale, float xScale)
         {
+            const float height = 48.0f * textScale;
             ImGui::SetCursorPosX((ImGui::GetWindowSize().x - width) * 0.5f);
             const ImVec2 p = ImGui::GetCursorScreenPos();
             ImGui::InvisibleButton(label, ImVec2(width, height));
@@ -356,25 +370,59 @@ namespace ui::frontend
                     ImVec2(width, height), height / 480.0f, 1.0f};
         }
 
+        bool pricedownGlyph(char c, Glyph &g)
+        {
+            static constexpr float ag[] = {246, 284, 322, 360, 398, 436, 474, 511};
+            static constexpr float ht[] = {0, 38, 56, 94, 132, 162, 220, 258, 296, 334, 372, 410, 448, 488};
+            static constexpr float uz[] = {0, 39, 82, 148, 186, 224, 261};
+            if (c >= 'a' && c <= 'g') { unsigned i = c - 'a'; g = {ag[i], 94, ag[i + 1] - 1, 142}; return true; }
+            if (c >= 'h' && c <= 't') { unsigned i = c - 'h'; g = {ht[i], 174, ht[i + 1] - 1, 222}; return true; }
+            if (c >= 'u' && c <= 'z') { unsigned i = c - 'u'; g = {uz[i], 254, uz[i + 1] - 1, 302}; return true; }
+            return false;
+        }
+
+        void footerText(ImDrawList *draw, ImVec2 pos, const char *text, float scale, float xScale)
+        {
+            if (!g_pricedown)
+                return drawText(draw, pos, text, kWhite, scale, nullptr, xScale);
+            for (const char *p = text; *p; ++p)
+            {
+                Glyph g;
+                if (!pricedownGlyph(*p, g)) { pos.x += 7 * scale * xScale; continue; }
+                const float width = (g.x1 - g.x0) * 0.32f * scale * xScale;
+                draw->AddImage(g_pricedown->GetTexRef(), pos, ImVec2(pos.x + width, pos.y + 15.36f * scale),
+                               ImVec2(g.x0 / 512, g.y0 / 512), ImVec2(g.x1 / 512, g.y1 / 512), kWhite);
+                pos.x += width + scale * xScale;
+            }
+        }
+
+        void footerIcon(ImDrawList *draw, ImTextureData *icon, ImVec2 pos, float size, float xScale, const char *fallback)
+        {
+            if (icon)
+                draw->AddImage(icon->GetTexRef(), pos, ImVec2(pos.x + size * xScale, pos.y + size));
+            else
+                drawText(draw, pos, fallback, kWhite, size / 23, nullptr, xScale);
+        }
+
         bool footer(const MenuCanvas &canvas, bool showBack)
         {
             ImDrawList *draw = ImGui::GetWindowDrawList();
-            const float scale = canvas.scale * 0.7f;
+            const float scale = canvas.scale;
             const float y = canvas.pos.y + canvas.size.y - 53.0f * canvas.scale;
             const float left = canvas.pos.x + 30.0f * canvas.scale;
             if (showBack)
             {
-                drawText(draw, ImVec2(left, y), "<", kCyan, scale, nullptr, canvas.xScale);
-                drawText(draw, ImVec2(left + 22.0f * canvas.scale * canvas.xScale, y), "back", kWhite, scale,
-                         nullptr, canvas.xScale);
+                footerIcon(draw, g_backIcon, ImVec2(left, y - 2 * scale), 20 * scale, canvas.xScale, "<");
+                footerText(draw, ImVec2(left + 26 * scale * canvas.xScale, y), "back", scale, canvas.xScale);
             }
-            drawText(draw, ImVec2(left, y + 25.0f * canvas.scale), "X", kPink, scale, nullptr, canvas.xScale);
-            drawText(draw, ImVec2(left + 22.0f * canvas.scale * canvas.xScale, y + 25.0f * canvas.scale),
-                     "select", kWhite, scale, nullptr, canvas.xScale);
-            const char *move = "arrows  stick  move";
-            const float width = textSize(move, scale, nullptr, canvas.xScale).x;
-            drawText(draw, ImVec2(canvas.pos.x + canvas.size.x - width - 26.0f * canvas.scale,
-                                  y + 25.0f * canvas.scale), move, kWhite, scale, nullptr, canvas.xScale);
+            footerIcon(draw, g_selectIcon, ImVec2(left, y + 23 * scale), 20 * scale, canvas.xScale, "X");
+            footerText(draw, ImVec2(left + 26 * scale * canvas.xScale, y + 25 * scale), "select", scale, canvas.xScale);
+            const float right = canvas.pos.x + canvas.size.x - 26 * scale;
+            const float arrowSize = 16 * scale;
+            for (unsigned i = 0; i < 4; ++i)
+                footerIcon(draw, g_moveIcons[i], ImVec2(right - (4 - i) * arrowSize * canvas.xScale, y),
+                           arrowSize, canvas.xScale, i == 0 ? "<" : i == 2 ? ">" : " ");
+            footerText(draw, ImVec2(right - 64 * scale * canvas.xScale, y + 25 * scale), "move", scale, canvas.xScale);
             if (showBack)
             {
                 ImGui::SetCursorScreenPos(ImVec2(left, y));
@@ -403,13 +451,14 @@ namespace ui::frontend
             }
             // The common baseline is y=36 in 512-atlas units. G has a descender, so its bottom must not be
             // mistaken for its baseline. Render both titles 70% larger than the earlier half-scale crops.
-            struct Letter { Glyph uv; float top; };
-            static constexpr Letter game[] = {{{232, 69, 259, 117}, 6}, {{1, 205, 23, 220}, 22},
-                                               {{274, 205, 305, 220}, 22}, {{93, 205, 111, 220}, 22}};
-            static constexpr Letter opts[] = {{{40, 128, 69, 163}, 2}, {{352, 204, 384, 238}, 21},
-                                               {{452, 190, 481, 221}, 7}, {{187, 195, 203, 220}, 12},
-                                               {{332, 205, 348, 220}, 22}, {{306, 205, 331, 220}, 22},
-                                               {{432, 205, 451, 220}, 22}};
+            struct Letter { Glyph uv; float top, advance; };
+            // Advance widths account for the script's slanted strokes; visible bounds must overlap slightly.
+            static constexpr Letter game[] = {{{232, 69, 259, 117}, 6, 22}, {{1, 205, 23, 220}, 22, 19},
+                                               {{274, 205, 305, 220}, 22, 27}, {{93, 205, 111, 220}, 22, 18}};
+            static constexpr Letter opts[] = {{{40, 128, 69, 163}, 2, 22}, {{352, 204, 384, 238}, 21, 22},
+                                               {{452, 190, 481, 221}, 7, 19}, {{187, 195, 203, 220}, 12, 12},
+                                               {{332, 205, 348, 220}, 22, 14}, {{306, 205, 331, 220}, 22, 22},
+                                               {{432, 205, 451, 220}, 22, 19}};
             const Letter *letters = options ? opts : game;
             const unsigned count = options ? 7 : 4;
             ImVec2 pos(canvas.pos.x + 28.0f * canvas.scale, canvas.pos.y + 24.0f * canvas.scale);
@@ -421,7 +470,7 @@ namespace ui::frontend
                 const float y = pos.y + letters[i].top * 0.85f * canvas.scale;
                 draw->AddImage(g_scriptFont->GetTexRef(), ImVec2(pos.x, y), ImVec2(pos.x + width, y + height),
                                ImVec2(g.x0 / 512.0f, g.y0 / 512.0f), ImVec2(g.x1 / 512.0f, g.y1 / 512.0f), kPink);
-                pos.x += width;
+                pos.x += letters[i].advance * 0.85f * canvas.scale * canvas.xScale;
             }
         }
 
@@ -466,6 +515,7 @@ namespace ui::frontend
             ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.40f, 0.38f, 0.18f, 1));
             ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.30f, 0.28f, 0.12f, 1));
             ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.40f, 0.38f, 0.18f, 1));
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4 * scale, 7 * scale));
             const ImVec2 area(canvas.size.x - 56 * scale, canvas.size.y - 155 * scale);
             if (ImGui::BeginChild("native options", area, ImGuiChildFlags_NavFlattened))
             {
@@ -516,6 +566,7 @@ namespace ui::frontend
                 }
             }
             ImGui::EndChild();
+            ImGui::PopStyleVar();
             ImGui::PopStyleColor(13);
             if (font)
                 ImGui::PopFont();

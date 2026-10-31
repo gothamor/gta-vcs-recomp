@@ -700,7 +700,7 @@ boundaries 0,16,31,45. The back marker `<` is x 69..82, y 24..46. These rectangl
 atlas at its original logical scale and comparing the glyph sequence to the game's pause screen.
 Two `00006214` replacements provide other menu faces: `87ad416320b92240` is the script atlas used for
 the `Game` heading (512-grid padded bounds G 232..259/69..117, a 1..23/205..220, m 274..305/205..220,
-e 93..111/205..220), and `64e22c1534c81341` is the heavier block atlas previously used for the footer. Measured from the
+e 93..111/205..220), and `64e22c1534c81341` is the Pricedown atlas used for the footer. Measured from the
 alpha masks, rather than the RGB padding: block a-g start at x 246,284,322,360,398,436,474 in y 94..142;
 h-t at 0,38,56,94,132,162,220,258,296,334,372,410,448 in y 174..222; u-z at 0,39,82,148,186,224 in
 y 254..302. These two masks use 0x80 for opaque, requiring alpha doubling when drawn directly by Dear ImGui.
@@ -717,6 +717,12 @@ measured in the 512-grid at 40..69/128..163, 352..384/204..238, 452..481/190..22
 332..348/205..220, 306..331/205..220, 432..451/205..220. G's descender extends below its baseline: aligning its
 bottom made the capital sit too high. The host now positions both script titles on baseline 36 and renders at 0.85
 times the 512-grid glyph size (previously 0.5). Verified with native Game and Audio/Options screenshots.
+The script title crops need advance widths independent of their visible bounds to account for slant: the host's
+Game advances are 22,19,27,18 and Options advances 22,22,19,12,14,22,19 in 512-grid units. Verified visually against
+the earlier spaced-apart titles. Footer icon pixel hashes are `d0d9f396c36b7411` (Triangle), `60a3a644467171e5`
+(Cross), `784c33b4a3241b19` (left), `a1b7cc92002291c5` (up), `3c60f292c5015937` (right), and
+`47e8e408d74357d8` (down). Identified in the texture contact sheet and by inspecting the PNGs; their maximum alpha is
+also 0x80. The native footer presents Back/Select on the left and the four arrow icons with Move below on the right.
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 
