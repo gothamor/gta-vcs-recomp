@@ -10,7 +10,9 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <vector>
 
 namespace ps2perf
 {
@@ -90,6 +92,17 @@ namespace ps2perf
     // [gta-recomp] Main thread: the F3 overlay's state (settings menu).
     void setOverlay(bool on);
     bool overlayOn();
+    // [gta-recomp] A second F3 panel under the perf numbers with the game's state (player, vehicle, camera, scripts):
+    // the game-specific code fills `lines` (main thread, each host frame while the overlay is on). `color` is an
+    // IM_COL32 value (0 = the panel's default); `header` lines start a section (drawn dim, a little apart).
+    struct InfoLine
+    {
+        std::string text;
+        uint32_t color = 0;
+        bool header = false;
+    };
+    using InfoProvider = std::function<void(std::vector<InfoLine> &lines)>;
+    void setInfoProvider(InfoProvider provider);
     // The overlay's numbers for the last second as one line (control channel "perf").
     std::string summaryLine();
     // Closes a running recording (end of run).

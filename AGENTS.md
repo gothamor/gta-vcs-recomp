@@ -47,7 +47,7 @@ choices).
 | `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders (HLSL; DXBC by fxc, SPIR-V by `tools/hlsl_spirv.py`), the RHI (backends `d3d11/`, `vulkan/`, `null/`; only they see a graphics API), SDL3 platform layer |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
 | `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2), the trainer menu (F5) |
-| `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch |
+| `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch, the F3 game-state panel (`game_info.cpp`, also `gamectl.py gameinfo`) |
 | `third_party/PS2Recomp/ps2xRuntime` | The runtime (EE, VIF, VU1, GS HW backend, IOP host, stubs); our changes marked `[gta-recomp]` |
 | `game/vcs/` | Recompiler config, function map, VU1 upload list |
 | `tools/` | Python 3 tools (standard library only) - see below |
@@ -82,6 +82,7 @@ python tools/run.py 60 name --control       # + control channel for tools/gamect
 python tools/scenes.py capture OUT          # reference scenes from an empty card (screenshots + perf)
 python tools/scenes.py compare REF NEW      # picture / perf diff of two captures
 python tools/gamectl.py press F2|screenshot f.png|perf|quit
+python tools/gamectl.py gameinfo           # player position / heading / state, vehicle, camera, clock, pauses, scripts (F3's panel)
 python tools/rig.py start --save build/rig/saves/fortbaxter   # straight into gameplay from a card copy
 python tools/rig.py player|scripts|peekf 0x4e4910 1|scm <hex>  # inspect / drive the running game
 python tools/tour.py OUT [--every 9 --limit 18]               # world tour (quick subset with --every/--limit)

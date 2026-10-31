@@ -1453,8 +1453,10 @@ below (e.g. 0x0023 terminates, 0x0289 loads a mission, 0x0238 names a script).
 
 `CRunningScript` (0x218 bytes, pool around `0x738948`): +0 next, +4 prev, +8 id, +0x10 IP, +0x14 16-word stack
 (gosub), +0x54 0x6A-word local variables (timers at locals 0x68 / 0x69), +0x1FC local frame base, +0x200 wake
-time, +0x208 active, +0x20A mission script, +0x20C NOT flag of the current condition, +0x20D, +0x20F name (8
-chars; `Init` writes `"id%02i"`), +0x217 "is the mission" (cleared by terminate). **The stack** (read from a running
+time, +0x208 active, +0x20A "mission script" (but set on ambient scripts too: `ambtaxi`, `rampage`, `usj`, `carpark` ... in
+free roam with no mission running; seen 2026-10-31 in the F3 game-state panel), +0x20C NOT flag of the current condition, +0x20D, +0x20F name (8
+chars; `Init` writes `"id%02i"`), +0x217 "is the mission" (cleared by terminate; with Shakedown launched only its
+cutscene script `ch_jerr` has it - the F3 panel's `mission` line uses it). **The stack** (read from a running
 mission's slot, 2026-10-29): a GOSUB pushes its return IP as it is, a CALL a packed word (not a plain IP: the caller's
 frame goes with it, e.g. 0x0884077D); **+0x204 (u16) is the depth**, and a CALL adds its frame offset to +0x1FC.
 Setting IP, depth 1, frame 0 and local 0 between frames (rig `pause on`, `poke`) puts a mission back at its state
@@ -1771,7 +1773,9 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   [0] after a lock-on and after getting out of a car). Fields (relative to the CCam): **+0 mode** (4 follow ped on
   foot, 11 locked on with R1 - with fists too -, 18 behind a vehicle; VC's numbering), +0x10 front, **+0x78 alpha
   (pitch; negative looks down, about -1.48 .. 0.79)**, **+0x7C beta (heading, 0..2 pi; the stick to the right makes it
-  fall)**, +0x130 / +0x140 pitch / heading speeds, +0x134 FOV (70), +0x1A0 the target point, **+0x220 / +0x230 the
+  fall; it is the angle from +x of the target-to-camera direction: 270 deg behind a car heading north, where GTA's
+  heading - 0 = +y, counter-clockwise - reads 0; the F3 panel shows the heading from Front instead)**, +0x130 / +0x140
+  pitch / heading speeds, +0x134 FOV (70), +0x1A0 the target point, **+0x220 / +0x230 the
   source points** (where the camera stands). Found by diffing TheCamera while the right stick turned it, poking each
   candidate, then a write watch on alpha / beta (`watch`): the writer is **FUN_0029dab0 = the follow-ped camera**
   (decompiled with `tools/eedecomp.py`).

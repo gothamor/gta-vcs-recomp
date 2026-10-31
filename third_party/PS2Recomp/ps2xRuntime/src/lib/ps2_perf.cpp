@@ -18,6 +18,7 @@
 #include <ctime>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ps2perf
@@ -324,19 +325,73 @@ namespace ps2perf
             return buf;
         }
 
-        void drawOverlayPanel(const std::vector<Sample> &samples, bool recording, const std::string &csvName)
+        // [gta-recomp] Panels sized to their text: a line never runs past the panel (the font shrinks when the screen is
+        // too narrow for the widest line, and a line still too long is cut with "..."), and nothing is drawn outside it.
+        struct Line
         {
-            const int screenH = screenHeight();
-            const int fs = std::max(10, screenH / 56);   // font size
-            const int lh = fs + fs / 4;                  // line height
-            const int pad = fs / 2;
-            const int w = std::min(screenWidth() - 16, fs * 36);
-            const int graphH = fs * 7;
-            const int lines = 8; // [gta-recomp] + draw sources
-            const int h = pad * 3 + lines * lh + graphH + lh;
-            const int x = 8, y = 8;
-            rect(x, y, w, h, rgba(0, 0, 0, 175));
+            std::string text;
+            Color color;
+            bool header = false;
+        };
+        struct Metrics
+        {
+            int fs, lh, pad;
+        };
+        Metrics metricsFor(int fs) { return {fs, fs + fs / 4, fs / 2}; }
+        constexpr int kMinFont = 8;
+        constexpr int kMargin = 8; // from the screen's edges and between the panels
 
+        int widest(const std::vector<Line> &lines, int fs)
+        {
+            int w = 0;
+            for (const Line &l : lines)
+                w = std::max(w, textWidth(l.text.c_str(), static_cast<float>(fs)));
+            return w;
+        }
+
+        std::string cutToWidth(const std::string &t, int fs, int maxW)
+        {
+            if (textWidth(t.c_str(), static_cast<float>(fs)) <= maxW)
+                return t;
+            std::string s = t;
+            while (!s.empty() && textWidth((s + "...").c_str(), static_cast<float>(fs)) > maxW)
+                s.pop_back();
+            return s + "...";
+        }
+
+        // The font size at which `textW(fs)` plus the padding fits `availW`, from `fs` down to kMinFont.
+        template <typename Measure>
+        int fitFont(int fs, int availW, Measure textW)
+        {
+            for (int pass = 0; pass < 3 && fs > kMinFont; ++pass)
+            {
+                const int need = textW(fs) + fs; // + 2 x pad
+                if (need <= availW)
+                    break;
+                fs = std::max(kMinFont, std::min(fs - 1, fs * availW / std::max(need, 1)));
+            }
+            return fs;
+        }
+
+        void drawLines(const std::vector<Line> &lines, int x, int &ty, int w, const Metrics &m)
+        {
+            for (size_t i = 0; i < lines.size(); ++i)
+            {
+                const Line &l = lines[i];
+                if (l.header && i)
+                    ty += m.pad / 2;
+                text(cutToWidth(l.text, m.fs, w - m.pad * 2).c_str(), x + m.pad, ty, m.fs, l.color);
+                ty += m.lh;
+            }
+        }
+
+        struct PanelRect
+        {
+            int x, y, w, h, fs;
+        };
+
+        PanelRect drawOverlayPanel(const std::vector<Sample> &samples, bool recording, const std::string &csvName)
+        {
             // numbers: the last second, and the graph window for percentiles
             std::vector<Sample> lastSecond;
             for (auto it = samples.rbegin(); it != samples.rend(); ++it)
@@ -348,39 +403,59 @@ namespace ps2perf
             const Summary now = summarize(lastSecond);
             const Summary win = summarize(samples);
             const Color white = rgba(235, 235, 235, 255), dim = rgba(170, 170, 175, 255);
-            int ty = y + pad;
-            auto addLine = [&](const std::string &t, Color c) {
-                text(t.c_str(), x + pad, ty, fs, c);
-                ty += lh;
-            };
+            std::vector<Line> lines;
             const Color fpsColor = now.fps >= 55.0 ? rgba(120, 230, 120, 255) : now.fps >= 28.0 ? rgba(240, 210, 90, 255) : rgba(245, 100, 90, 255);
-            addLine(fmt("GAME  %5.1f fps  %5.1f ms   p95 %.1f  p99 %.1f  max %.1f", now.fps, now.avgMs, win.p95, win.p99, win.maxMs), fpsColor);
-            addLine(fmt("VBLANK %4.1f/s   HOST %4.0f fps %4.1f ms   GPU %4.1f ms", now.vblanksPerS, now.hostFps, now.hostMs, now.glMs), white);
-            addLine(fmt("EE ms   game %4.1f  render %4.1f  iop %4.1f  wait %4.1f", now.phaseMs[0], now.phaseMs[1], now.phaseMs[2],
-                        now.phaseMs[3]),
-                    white);
-            addLine(fmt("GS  %5.0f draws  %5.1fk verts  %3.0f tex uploads", now.counters[0], now.counters[1] / 1000.0, now.counters[2]), white);
-            addLine(fmt("DMA %5.0f tags   VU1 %5.0f programs", now.counters[3], now.counters[4]), white);
-            { // [gta-recomp] draw sources
+            lines.push_back({fmt("GAME  %5.1f fps  %5.1f ms   p95 %.1f  p99 %.1f  max %.1f", now.fps, now.avgMs, win.p95, win.p99, win.maxMs), fpsColor});
+            lines.push_back({fmt("VBLANK %4.1f/s   HOST %4.0f fps %4.1f ms   GPU %4.1f ms", now.vblanksPerS, now.hostFps, now.hostMs, now.glMs), white});
+            lines.push_back({fmt("EE ms   game %4.1f  render %4.1f  iop %4.1f  wait %4.1f", now.phaseMs[0], now.phaseMs[1], now.phaseMs[2],
+                                 now.phaseMs[3]),
+                             white});
+            lines.push_back({fmt("GS  %5.0f draws  %5.1fk verts  %3.0f tex uploads", now.counters[0], now.counters[1] / 1000.0, now.counters[2]), white});
+            lines.push_back({fmt("DMA %5.0f tags   VU1 %5.0f programs", now.counters[3], now.counters[4]), white});
+            { // [gta-recomp] draw sources (two lines: one ran past the panel)
                 const auto *c = now.counters;
                 const auto n = [](Counter k) { return static_cast<size_t>(k); };
-                addLine(fmt("NATIVE %4.0f draws %3.0f packed %3.0f hud %2.0f post  GS PATH %4.0f (vu1 %.0f hle %.0f p2 %.0f p3 %.0f)",
-                            c[n(Counter::NativeDraws)], c[n(Counter::PackedDraws)], c[n(Counter::HudDraws)], c[n(Counter::PostDraws)],
-                            c[n(Counter::GsDraws)],
-                            c[n(Counter::GsVu1)], c[n(Counter::GsHle)], c[n(Counter::GsPath2)], c[n(Counter::GsPath3)]),
-                        white);
+                lines.push_back({fmt("NATIVE %4.0f draws  %3.0f packed  %3.0f hud  %2.0f post", c[n(Counter::NativeDraws)],
+                                     c[n(Counter::PackedDraws)], c[n(Counter::HudDraws)], c[n(Counter::PostDraws)]),
+                                 white});
+                lines.push_back({fmt("GS PATH %4.0f draws  vu1 %.0f  hle %.0f  p2 %.0f  p3 %.0f", c[n(Counter::GsDraws)], c[n(Counter::GsVu1)],
+                                     c[n(Counter::GsHle)], c[n(Counter::GsPath2)], c[n(Counter::GsPath3)]),
+                                 white});
             }
-            addLine(fmt("AUDIO %3.0f ms queued   %llu underruns (last %zu frames)", now.audioMs, static_cast<unsigned long long>(win.underruns),
-                        samples.size()),
-                    now.audioMs < 20.0 ? rgba(245, 100, 90, 255) : white);
-            addLine(recording ? fmt("REC %s   [F4] stop   [F3] hide", csvName.c_str()) : std::string("[F4] record CSV   [F3] hide"),
-                    recording ? rgba(245, 90, 90, 255) : dim);
+            lines.push_back({fmt("AUDIO %3.0f ms queued   %llu underruns (last %zu frames)", now.audioMs, static_cast<unsigned long long>(win.underruns),
+                                 samples.size()),
+                             now.audioMs < 20.0 ? rgba(245, 100, 90, 255) : white});
+            lines.push_back({recording ? fmt("REC %s   [F4] stop   [F3] hide", csvName.c_str()) : std::string("[F4] record CSV   [F3] hide"),
+                             recording ? rgba(245, 90, 90, 255) : dim});
+
+            // scale: 0-67 ms, or 133 / 267 ms when the frames do not fit
+            const float maxMs = win.p95 <= 60.0 ? 66.7f : win.p95 <= 125.0 ? 133.3f : 266.7f;
+            const std::string caption = fmt("last %zu frames, frame time 0-%.0f ms", std::min(samples.size(), kGraphSamples), maxMs);
+            auto legendWidth = [&](int fs) {
+                const float ls = static_cast<float>(fs * 3 / 4 + 1);
+                int lw = 0;
+                for (const char *p : kPhaseNames)
+                    lw += fs * 3 / 4 + textWidth(p, ls) + fs * 3 / 4;
+                return lw + textWidth(caption.c_str(), ls);
+            };
+            auto contentWidth = [&](int fs) { return std::max(widest(lines, fs), legendWidth(fs)); };
+
+            const int x = kMargin, y = kMargin;
+            const int availW = std::max(screenWidth() - x - kMargin, 64);
+            const Metrics m = metricsFor(fitFont(std::max(10, screenHeight() / 56), availW, contentWidth));
+            const int fs = m.fs, lh = m.lh, pad = m.pad;
+            const int w = std::min(availW, std::max(fs * 30, contentWidth(fs) + pad * 2));
+            const int graphH = fs * 7;
+            const int h = pad * 3 + static_cast<int>(lines.size()) * lh + graphH + lh;
+            ImDrawList *dl = ImGui::GetBackgroundDrawList();
+            dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + h), true);
+            rect(x, y, w, h, rgba(0, 0, 0, 175));
+            int ty = y + pad;
+            drawLines(lines, x, ty, w, m);
 
             // graph: one stacked bar per game frame, EE thread phases (they add up to the frame time); a red cap marks a
             // frame past the scale
             const int gx = x + pad, gy = ty + pad / 2, gw = w - pad * 2;
-            // scale: 0-67 ms, or 133 / 267 ms when the frames do not fit
-            const float maxMs = win.p95 <= 60.0 ? 66.7f : win.p95 <= 125.0 ? 133.3f : 266.7f;
             rect(gx, gy, gw, graphH, rgba(20, 20, 25, 200));
             const float barW = static_cast<float>(gw) / kGraphSamples;
             const size_t first = samples.size() > kGraphSamples ? samples.size() - kGraphSamples : 0;
@@ -407,15 +482,15 @@ namespace ps2perf
                 {100.0f, "100 ms", rgba(245, 100, 90, 200)},
                 {200.0f, "200 ms", rgba(245, 100, 90, 200)},
             };
-            for (const auto &m : marks)
+            for (const auto &mk : marks)
             {
-                if (m.ms >= maxMs)
+                if (mk.ms >= maxMs)
                     continue;
-                const int my = gy + graphH - static_cast<int>(m.ms / maxMs * graphH);
-                line(gx, my, gx + gw, my, m.c);
-                const int lw = textWidth(m.label, fs * 3 / 4); // backing so the label reads over the bars
+                const int my = gy + graphH - static_cast<int>(mk.ms / maxMs * graphH);
+                line(gx, my, gx + gw, my, mk.c);
+                const int lw = textWidth(mk.label, fs * 3 / 4); // backing so the label reads over the bars
                 rect(gx + gw - lw - 4, my - fs * 3 / 4, lw + 4, fs * 3 / 4, rgba(20, 20, 25, 220));
-                text(m.label, gx + gw - lw - 2, my - fs * 3 / 4, fs * 3 / 4, m.c);
+                text(mk.label, gx + gw - lw - 2, my - fs * 3 / 4, fs * 3 / 4, mk.c);
             }
             // legend
             int lx = gx;
@@ -424,9 +499,63 @@ namespace ps2perf
             {
                 rect(lx, ly + fs / 4, fs / 2, fs / 2, kPhaseColors[p]);
                 text(kPhaseNames[p], lx + fs * 3 / 4, ly, fs * 3 / 4 + 1, dim);
-                lx += textWidth(kPhaseNames[p], fs * 3 / 4 + 1) + fs * 3 / 2;
+                lx += fs * 3 / 4 + textWidth(kPhaseNames[p], fs * 3 / 4 + 1) + fs * 3 / 4;
             }
-            text(fmt("last %zu frames, frame time 0-%.0f ms", std::min(samples.size(), kGraphSamples), maxMs).c_str(), lx, ly, fs * 3 / 4 + 1, dim);
+            text(cutToWidth(caption, fs * 3 / 4 + 1, gx + gw - lx).c_str(), lx, ly, fs * 3 / 4 + 1, dim);
+            dl->PopClipRect();
+            return {x, y, w, h, fs};
+        }
+
+        // [gta-recomp] The game-state panel (setInfoProvider): under the perf panel, or beside it when the screen has no
+        // room below; at the perf panel's font size, narrower only to fit the screen.
+        InfoProvider g_infoProvider; // main thread
+
+        void drawInfoPanel(const PanelRect &perf)
+        {
+            std::vector<InfoLine> info;
+            g_infoProvider(info);
+            if (info.empty())
+                return;
+            const Color white = rgba(235, 235, 235, 255), dim = rgba(150, 175, 205, 255);
+            std::vector<Line> lines;
+            lines.reserve(info.size());
+            for (const InfoLine &l : info)
+                lines.push_back({l.text, l.color ? static_cast<Color>(l.color) : l.header ? dim : white, l.header});
+            auto contentWidth = [&](int fs) { return widest(lines, fs); };
+            auto heightFor = [&](const Metrics &m) {
+                int headers = 0;
+                for (size_t i = 1; i < lines.size(); ++i)
+                    headers += lines[i].header ? 1 : 0;
+                return m.pad * 2 + static_cast<int>(lines.size()) * m.lh + headers * (m.pad / 2);
+            };
+            const int screenW = screenWidth(), screenH = screenHeight();
+            // below the perf panel; beside it when the lines would leave the screen there and they fit to the right; else
+            // below in a smaller font, down to kMinFont (and what is still too tall is clipped at the screen's edge)
+            int x = perf.x, y = perf.y + perf.h + kMargin;
+            Metrics m = metricsFor(fitFont(perf.fs, std::max(screenW - x - kMargin, 64), contentWidth));
+            const int besideX = perf.x + perf.w + kMargin;
+            const Metrics full = metricsFor(perf.fs);
+            if (y + heightFor(m) > screenH - kMargin)
+            {
+                if (screenW - besideX - kMargin >= contentWidth(full.fs) + full.fs && perf.y + heightFor(full) <= screenH - kMargin)
+                {
+                    x = besideX;
+                    y = perf.y;
+                    m = full;
+                }
+                else
+                    while (m.fs > kMinFont && y + heightFor(m) > screenH - kMargin)
+                        m = metricsFor(m.fs - 1);
+            }
+            const int availW = std::max(screenW - x - kMargin, 64);
+            const int w = std::min(availW, std::max(m.fs * 20, contentWidth(m.fs) + m.pad * 2));
+            const int h = std::min(heightFor(m), std::max(screenH - y - kMargin, m.lh));
+            ImDrawList *dl = ImGui::GetBackgroundDrawList();
+            dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + h), true);
+            rect(x, y, w, h, rgba(0, 0, 0, 175));
+            int ty = y + m.pad;
+            drawLines(lines, x, ty, w, m);
+            dl->PopClipRect();
         }
     }
 
@@ -509,7 +638,11 @@ namespace ps2perf
                 samples = recent(kGraphSamples);
         }
         if (g_overlay)
-            drawOverlayPanel(samples, recording, csvName);
+        {
+            const PanelRect perf = drawOverlayPanel(samples, recording, csvName);
+            if (g_infoProvider)
+                drawInfoPanel(perf); // [gta-recomp] the game's state
+        }
         else if (recording)
             text("REC", 10, 10, std::max(10, screenHeight() / 46), rgba(245, 90, 90, 255));
     }
@@ -580,6 +713,8 @@ namespace ps2perf
     void setOverlay(bool on) { g_overlay = on; }
 
     bool overlayOn() { return g_overlay; }
+
+    void setInfoProvider(InfoProvider provider) { g_infoProvider = std::move(provider); }
 
     std::string summaryLine()
     {
