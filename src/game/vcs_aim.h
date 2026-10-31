@@ -28,7 +28,8 @@ namespace vcs::aim
     // What the pad report gets.
     struct Output
     {
-        bool own = false;   // free aim has the target button: R1 is `r1` (not the bindings'), the right stick is centred
+        bool own = false;    // free aim has the target button: R1 is `r1` and L3 `l3`, not the bindings'
+        bool camera = false; // and the camera: the right stick centred, the mouse camera left alone
         bool r1 = false, l3 = false;
     };
     Output update(const Input &in);

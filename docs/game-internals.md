@@ -1935,6 +1935,10 @@ hidden run (rig `peek` / `poke`, snapshots diffed).
   keeps its own copy of the source (s6) for what follows. The other calls of the wrapper in FireInstantHit: 0x2C41A4
   (vehicle targets), 0x2C490C, 0x2C4C98 (vehicle guns), 0x2C4F10 (no target). FUN_002CB7C0 is the drive-by shot,
   FUN_002CDA88 / FUN_002CD288 the NPCs' / doom aim corrections, FUN_002CEA70 = IsTypeMelee (weapon info +4 == 0).
+- **A gun running dry** (clip and total at the slot's +8 / +0xC poked to 5, fired in free aim): about 100 frames in
+  (60 fps) the game drops the lock and puts the fists in his hand (slot 0) - even with an SMG in another slot. R1 still
+  held with the fists is the PS2's lock-on, on a ped near Vic (free aim used to pass it on; not observed directly - the
+  user's report and the fists' lock-on checked elsewhere).
 - **Weapon changes on foot**: R2 the next weapon, L2 the previous (one step a press); locked on they change the target.
   The current slot is the s8 at ped **+0x789**; slot n's weapon at +0x578 + n x 0x1C (type first).
 - **Scopes and first-person weapon cameras** (FUN_00297CB8: modes 7 sniper, 8 rocket launcher, 34 M16, 45, 46 camera, 47

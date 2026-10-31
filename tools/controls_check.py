@@ -443,6 +443,37 @@ class Check:
         self.ok("the wheel changes weapon", slots[1] != slots[0] and slots[2] == slots[0] and slots[3] not in (slots[0], slots[1]),
                 "slots %s" % slots)
 
+        # a gun running dry while free aiming (people around): the game puts the fists in his hand; with the button
+        # still held there is no lock-on (no R1 for the game) until it is let go, and the wheel's next gun aims again
+        self.setting("mouse.free_aim", 1)
+        self.give(19)
+        ped = g.player()[0]
+        slot = g.peek(ped + self.PED_SLOT, 1)[0]
+        g.cmd("poke 0x%x %s" % (ped + 0x578 + slot * 0x1C + 8, (5).to_bytes(4, "little").hex() * 2))  # 5 rounds
+        self.ped_ahead(4.0, 1.5)
+        self.ped_ahead(5.0, -1.5)
+        time.sleep(1.0)
+        g.cmd("key mouseright down")
+        time.sleep(0.6)
+        g.cmd("key mouseleft down")
+        time.sleep(2.5)
+        g.cmd("key mouseleft up")
+        time.sleep(0.5)
+        dry = g.peek(ped + self.PED_SLOT, 1)[0], self.aim()[0], self.pad()["buttons"], g.u32(ped + self.PED_TARGET), self.cam()[0]
+        for _ in range(4):  # the wheel to the SMG, the button still held
+            if g.peek(ped + self.PED_SLOT, 1)[0] == 5:
+                break
+            g.cmd("press wheeldown 50")
+            time.sleep(0.5)
+        time.sleep(0.6)
+        again = g.peek(ped + self.PED_SLOT, 1)[0], self.aim()[0], self.cam()[0]
+        g.cmd("key mouseright up")
+        time.sleep(1.0)
+        self.setting("mouse.free_aim", 0)
+        self.ok("a gun running dry while aiming: no lock-on, the next gun aims",
+                dry == (0, 0, 0, 0, 4) and again == (5, 1, 11),
+                "dry: slot %d aim %d buttons %04x target 0x%x mode %d; wheel: slot %d aim %d mode %d" % (dry + again))
+
     def run(self):
         g = self.g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="controls_check",
                                     port=self.port, data_dir=os.path.join(ROOT, "build", "controls", "data"),

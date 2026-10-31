@@ -740,3 +740,9 @@ from them: Vic moves while free aiming exactly when he can move locked on with t
   while aiming (FUN_001F1698). Free aim answers that one question (its call in CamControl, only in the frames after the
   aim ends) with yes, so all guns end in the same blend; Vic still stands still with those guns while aiming, and the
   PS2 lock-on (free aim off) keeps its cut.
+- (the user, next) A gun running dry in free aim switched to the lock-on and flicked in and out. The game puts the
+  fists in Vic's hand when the gun is empty; free aim then let R1 through (fists lock on, as on the PS2), and retrying
+  the free-aim entry (R1 + L3) while Vic was busy could leave the game a frame of R1 alone - a lock-on to a ped - before
+  giving up and trying again. Now: once a free aim has ended because the gun went, R1 stays up until the button is let
+  go (a gun back in hand, e.g. by the wheel, aims again); an entry the game answers with a ped lock is let go at once,
+  and every retry waits 8 frames with R1 up. Starting with fists or melee is the PS2's R1 as before.

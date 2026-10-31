@@ -66,11 +66,15 @@ namespace vcs::aim
             Idle,     // not aiming
             Entering, // R1 + L3 sent: waiting for the game's free-aim lock
             Active,   // the dummy is ours
-            Released, // one report with R1 up (a lock that went wrong), then Idle again
+            Released, // R1 up for a few reports (a lock that went wrong: a ped instead of the dummy, or none), then
+                      // Idle again - the game never sees R1 held long enough to lock on to a ped
+            Held,     // the gun went (ran dry: the game puts the fists in his hand; or changed) while the button is
+                      // held: R1 up until it is let go or a gun is back in hand (then free aim again)
         };
         // game thread
         State g_state = State::Idle;
-        int g_wait = 0;
+        int g_wait = 0;               // Entering: frames waited; Released: frames left with R1 up
+        constexpr int kRetryFrames = 8;
         uint32_t g_dummy = 0;
         float g_yaw = 0, g_pitch = 0; // the aim from Vic's shoulders: yaw from +x toward +y, pitch up
         int g_quickBlend = 0;         // frames left to shorten the camera's blend into / out of free aim
@@ -302,11 +306,23 @@ namespace vcs::aim
     {
         Output out;
         const uint32_t ped = g_rdram && g_origGame ? rd32(kPlayerPed) : 0;
-        if (!ped || !in.want || !onFoot(ped) || !gunInHand())
+        if (g_handBack > 0)
+            --g_handBack; // the camera hasn't come back to the follow camera in time: leave it
+        if (!ped || !in.want || !onFoot(ped))
         {
-            stop(!in.want ? "released" : "no gun / not on foot");
-            if (g_handBack > 0)
-                --g_handBack; // the camera hasn't come back to the follow camera in time: leave it
+            stop(!in.want ? "released" : "not on foot");
+            return out;
+        }
+        if (!gunInHand())
+        {
+            // fists or melee from the start: the PS2's R1 (lock-on). The gun gone during a free aim (it ran dry and
+            // the game put the fists in his hand, or the player changed weapon): R1 stays up until the button is let
+            // go - no lock-on on whoever is near, and no free aim flicking on and off (the user's report)
+            if (g_state == State::Idle)
+                return out;
+            stop("no gun in hand");
+            g_state = State::Held;
+            out.own = true;
             return out;
         }
         out.own = true;
@@ -314,8 +330,10 @@ namespace vcs::aim
         switch (g_state)
         {
         case State::Released:
-            g_state = State::Idle; // R1 up for this report; the next one enters again
+            if (--g_wait <= 0)
+                g_state = State::Idle; // R1 up until now; the next report enters again
             return out;
+        case State::Held: // a gun in hand again, the button still held: free aim again
         case State::Idle:
         {
             // aim where the camera looks
@@ -327,6 +345,7 @@ namespace vcs::aim
             g_quickBlend = 30; // until a few frames after the free-aim lock is there
             g_blendMs = kBlendInMs;
             g_handBack = 0;
+            out.camera = true;
             out.r1 = out.l3 = true;
             return out;
         }
@@ -335,9 +354,15 @@ namespace vcs::aim
             const uint32_t target = rd32(ped + kPedTarget);
             if (!(isObject(target) && freeAimBit(ped)))
             {
-                out.r1 = ++g_wait < 20; // not yet (Vic may still be busy); after ~20 frames let go and try again
+                // not yet (Vic may still be busy: firing, reloading, changing weapon). The game took R1 without L3
+                // and locked on to a ped, or ~20 frames went by: let go a few frames, then try again
+                out.camera = true;
+                out.r1 = !target && ++g_wait < 20;
                 if (!out.r1)
+                {
                     g_state = State::Released;
+                    g_wait = kRetryFrames;
+                }
                 return out;
             }
             g_dummy = target;
@@ -351,10 +376,12 @@ namespace vcs::aim
             {
                 stop("lock lost");
                 g_state = State::Released;
+                g_wait = kRetryFrames;
                 return out;
             }
             break;
         }
+        out.camera = true;
 
         // turn the aim, and the camera by the same amount before its update (as the mouse turns the follow camera:
         // the camera then has nothing left to catch up, game-internals.md 12c)

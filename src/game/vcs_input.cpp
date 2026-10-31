@@ -468,7 +468,7 @@ namespace vcs::input
                     g_mouse.aim = aim::update(in);
                 }
 
-                if (g_mouse.aim.own)
+                if (g_mouse.aim.camera)
                 {
                     // free aim turns the camera itself (aim::update)
                 }
@@ -556,7 +556,7 @@ namespace vcs::input
                 for (size_t i = 0; i < kControlCount; ++i)
                     for (int k : m.keys[i])
                         wheelBound = wheelBound || k == KEY_WHEEL_UP || k == KEY_WHEEL_DOWN;
-                if (!m.mouseWheel || wheelBound || game.driving || g_mouse.aim.own || aim::aiming())
+                if (!m.mouseWheel || wheelBound || game.driving || g_mouse.aim.camera || aim::aiming())
                     g_mouse.wheelSteps = 0;
                 else if (zoomMode(mode))
                 {
@@ -584,9 +584,11 @@ namespace vcs::input
             buttons |= g_mouse.wheelButton;
             if (g_mouse.aim.own)
             {
-                // free aim has the target button (R1 + L3 to enter the game's free aim, then R1 held) and the camera
+                // free aim has the target button (R1 + L3 to enter the game's free aim, then R1 held; R1 up while the
+                // button is held after the gun ran dry) and, aiming, the camera
                 buttons = static_cast<uint16_t>((buttons & ~(kR1 | kL3)) | (g_mouse.aim.r1 ? kR1 : 0) | (g_mouse.aim.l3 ? kL3 : 0));
-                rx = ry = 0.0f;
+                if (g_mouse.aim.camera)
+                    rx = ry = 0.0f;
             }
 
             const uint16_t word = static_cast<uint16_t>(~buttons);
