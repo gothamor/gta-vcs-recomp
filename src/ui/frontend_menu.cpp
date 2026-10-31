@@ -375,7 +375,13 @@ namespace ui::frontend
             static constexpr float ag[] = {246, 284, 322, 360, 398, 436, 474, 511};
             static constexpr float ht[] = {0, 38, 56, 94, 132, 162, 220, 258, 296, 334, 372, 410, 448, 488};
             static constexpr float uz[] = {0, 39, 82, 148, 186, 224, 261};
-            if (c >= 'a' && c <= 'g') { unsigned i = c - 'a'; g = {ag[i], 94, ag[i + 1] - 1, 142}; return true; }
+            if (c >= 'a' && c <= 'g')
+            {
+                unsigned i = c - 'a';
+                // b's ascender begins above the shared lowercase body; clipping it makes Back read as Dack.
+                g = {ag[i], c == 'b' ? 82.0f : 94.0f, ag[i + 1] - 1, 142};
+                return true;
+            }
             if (c >= 'h' && c <= 't') { unsigned i = c - 'h'; g = {ht[i], 174, ht[i + 1] - 1, 222}; return true; }
             if (c >= 'u' && c <= 'z') { unsigned i = c - 'u'; g = {uz[i], 254, uz[i + 1] - 1, 302}; return true; }
             return false;
@@ -390,7 +396,9 @@ namespace ui::frontend
                 Glyph g;
                 if (!pricedownGlyph(*p, g)) { pos.x += 7 * scale * xScale; continue; }
                 const float width = (g.x1 - g.x0) * 0.32f * scale * xScale;
-                draw->AddImage(g_pricedown->GetTexRef(), pos, ImVec2(pos.x + width, pos.y + 15.36f * scale),
+                const float height = (g.y1 - g.y0) * 0.32f * scale;
+                const ImVec2 top(pos.x, pos.y + 15.36f * scale - height);
+                draw->AddImage(g_pricedown->GetTexRef(), top, ImVec2(pos.x + width, pos.y + 15.36f * scale),
                                ImVec2(g.x0 / 512, g.y0 / 512), ImVec2(g.x1 / 512, g.y1 / 512), kWhite);
                 pos.x += width + scale * xScale;
             }

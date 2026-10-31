@@ -723,6 +723,10 @@ the earlier spaced-apart titles. Footer icon pixel hashes are `d0d9f396c36b7411`
 (Cross), `784c33b4a3241b19` (left), `a1b7cc92002291c5` (up), `3c60f292c5015937` (right), and
 `47e8e408d74357d8` (down). Identified in the texture contact sheet and by inspecting the PNGs; their maximum alpha is
 also 0x80. The native footer presents Back/Select on the left and the four arrow icons with Move below on the right.
+Pricedown b's alpha bounds are y 82..142, above the row's usual lowercase body y 94..142 (x 284..322).
+Cropping every letter to the body removes b's ascender, making `back` read as `dack`. The footer preserves its full
+height and aligns glyph bottoms to the common baseline. Confirmed by sampling the PNG alpha; the other letters in
+Back/Select/Move fit their existing body rectangles.
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 
