@@ -21,6 +21,7 @@ namespace ImGui
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -43,6 +44,8 @@ namespace ui::frontend
         std::atomic<bool> g_pauseOpen{false};
         std::atomic<int> g_pendingAction{-1};
         bool g_startSubmenu = false;
+        bool g_optionsOpen = false;
+        int g_optionsPage = -1;
         bool g_quitConfirm = false;
         std::atomic<bool> g_pauseDismissed{false};
         ImTextureData *g_background = nullptr, *g_font = nullptr, *g_scriptFont = nullptr, *g_promptFont = nullptr;
@@ -360,9 +363,103 @@ namespace ui::frontend
             }
             runtime.requestStop();
         }
+
+        void openOptions()
+        {
+            resetEmbeddedSettings();
+            g_optionsOpen = true;
+            g_optionsPage = -1;
+            g_quitConfirm = false;
+        }
+
+        void drawOptions(const MenuCanvas &canvas, const ImGuiViewport &vp)
+        {
+            const float scale = canvas.scale;
+            drawText(ImGui::GetWindowDrawList(), ImVec2(canvas.pos.x + 28 * scale, canvas.pos.y + 24 * scale),
+                     "OPTIONS", kPink, scale, nullptr, canvas.xScale);
+            const auto pages = settings::pages();
+            ImGui::SetCursorPos(ImVec2(canvas.pos.x - vp.WorkPos.x + 28 * scale,
+                                       canvas.pos.y - vp.WorkPos.y + 75 * scale));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.07f, 0.83f, 0.84f, 1));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.04f, 0, 0.07f, 0.85f));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.12f, 0.02f, 0.16f, 0.9f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.45f, 0.12f, 0.30f, 1));
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.30f, 0.06f, 0.22f, 0.8f));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.45f, 0.12f, 0.30f, 1));
+            const ImVec2 area(canvas.size.x - 56 * scale, canvas.size.y - 155 * scale);
+            if (ImGui::BeginChild("native options", area, ImGuiChildFlags_NavFlattened))
+            {
+                auto label = [&](const std::string &text) {
+                    // Preserve numbers and punctuation in registry labels whose glyphs are not mapped in this face.
+                    if (std::any_of(text.begin(), text.end(), [](unsigned char c) {
+                            return !std::isalpha(c) && c != ' ';
+                        }))
+                    {
+                        ImGui::TextUnformatted(text.c_str());
+                        return;
+                    }
+                    std::string upper = text;
+                    for (char &c : upper)
+                    {
+                        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                        if (c != ' ' && (c < 'A' || c > 'Z')) c = ' ';
+                    }
+                    float size = scale * 0.65f;
+                    const float width = textSize(upper.c_str(), size, nullptr, canvas.xScale).x;
+                    if (width > ImGui::GetContentRegionAvail().x && width > 0)
+                        size *= ImGui::GetContentRegionAvail().x / width;
+                    drawText(ImGui::GetWindowDrawList(), ImGui::GetCursorScreenPos(), upper.c_str(), kCyan,
+                             size, nullptr, canvas.xScale);
+                    ImGui::Dummy(ImVec2(1, std::max(ImGui::GetTextLineHeight(), 22 * size)));
+                };
+                if (g_optionsPage < 0)
+                {
+                    for (size_t i = 0; i < pages.size(); ++i)
+                    {
+                        std::string upper = pages[i];
+                        for (char &c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                        if (menuItem(upper.c_str(), area.x * 0.8f, scale * 0.85f, canvas.xScale))
+                            g_optionsPage = static_cast<int>(i);
+                    }
+                    if (menuItem("BACK", area.x * 0.8f, scale * 0.85f, canvas.xScale) ||
+                        ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+                        g_optionsOpen = false;
+                }
+                else if (g_optionsPage < static_cast<int>(pages.size()))
+                {
+                    if (ImGui::Button("< Back to options"))
+                    {
+                        resetEmbeddedSettings();
+                        g_optionsPage = -1;
+                    }
+                    else
+                    {
+                        ImGui::SameLine();
+                        label(pages[g_optionsPage]);
+                        if (drawEmbeddedSettings(pages[g_optionsPage], label))
+                        {
+                            resetEmbeddedSettings();
+                            g_optionsPage = -1;
+                        }
+                    }
+                }
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor(6);
+            footer(canvas, true);
+        }
     }
 
     void armStartup() { g_startupArmed.store(true, std::memory_order_release); }
+
+    void openOptionsPage(const std::string &page)
+    {
+        openOptions();
+        const auto pages = settings::pages();
+        for (size_t i = 0; i < pages.size(); ++i)
+            if (pages[i] == page)
+                g_optionsPage = static_cast<int>(i);
+    }
 
     bool selectStartup(StartupAction action)
     {
@@ -390,7 +487,8 @@ namespace ui::frontend
         loadArtwork();
         ImGui::SetNextWindowPos(vp->WorkPos, ImGuiCond_Always);
         ImGui::SetNextWindowSize(vp->WorkSize, ImGuiCond_Always);
-        ImGui::SetNextWindowFocus();
+        if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+            ImGui::SetNextWindowFocus();
         const ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground |
                                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
@@ -400,6 +498,14 @@ namespace ui::frontend
             ImDrawList *draw = ImGui::GetWindowDrawList();
             const MenuCanvas canvas = menuCanvas(*vp);
             drawBackground(draw, *vp, canvas);
+
+            if (g_optionsOpen)
+            {
+                drawOptions(canvas, *vp);
+                ImGui::End();
+                ImGui::PopStyleVar();
+                return;
+            }
 
             const float scale = std::clamp(canvas.scale, 0.70f, 1.8f);
             ImGui::SetWindowFontScale(1.35f * scale);
@@ -411,7 +517,7 @@ namespace ui::frontend
                 if (!g_startSubmenu)
                 {
                     if (menuItem("START GAME", contentWidth, scale, canvas.xScale)) { g_startSubmenu = true; g_quitConfirm = false; }
-                    if (menuItem("OPTIONS", contentWidth, scale, canvas.xScale)) { openSettingsMenu(""); g_quitConfirm = false; }
+                    if (menuItem("OPTIONS", contentWidth, scale, canvas.xScale)) openOptions();
                     if (menuItem(g_quitConfirm ? "ARE YOU SURE" : "QUIT GAME", contentWidth, scale, canvas.xScale)) requestQuit(runtime);
                 }
                 else
@@ -424,7 +530,7 @@ namespace ui::frontend
             }
             else
             {
-                if (menuItem("OPTIONS", contentWidth, scale, canvas.xScale)) { openSettingsMenu(""); g_quitConfirm = false; }
+                if (menuItem("OPTIONS", contentWidth, scale, canvas.xScale)) openOptions();
                 if (menuItem(g_quitConfirm ? "ARE YOU SURE" : "QUIT GAME", contentWidth, scale, canvas.xScale)) requestQuit(runtime);
                 if (menuItem("BACK TO PAUSE MENU", contentWidth, scale, canvas.xScale)) { g_pauseDismissed = true; g_quitConfirm = false; }
             }

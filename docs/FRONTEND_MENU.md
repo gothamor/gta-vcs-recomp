@@ -10,7 +10,11 @@ enabled), immediately before the opening sequence begins.
 - **Start Game > Load Game** continues booting, waits until the original front end is available, then opens its
   **Game > Load Game** screen. Slot selection, confirmation and loading remain entirely the game's code.
 - **Start Game > Delete Game** does the same for the original **Game > Delete Game** screen.
-- **Options** opens the same registry-generated pages as F2. Closing Options returns to the startup menu.
+- **Options** opens integrated pages over the native palm background, with game-font headings, category buttons and
+  setting labels. The controls reuse F2's registry, binding checks, confirmations, help, reset and restart markers.
+  Back returns from a settings page to the category list, then to the startup or pause menu.
+- **F2** continues to open the original standalone settings window. It temporarily covers the native menu; closing it
+  restores the same native Options page. Both views edit the same settings and values.
 - **Quit Game** asks for confirmation and requests a clean runtime shutdown.
 
 The return from `CMoviePlayer::Play` for `INTRO.PSS` arms the gate. The frame hook then observes the following boot
@@ -21,7 +25,7 @@ altered. Merely hooking `LoadingScreen` would be wrong because that function is 
 ## Pause menu
 
 When the game's own user-pause flag is set, a small **Port Menu** panel appears over the original pause screen with
-**Options**, **Quit Game**, and **Back to Pause Menu**. Options reuses the F2 pages. Back dismisses the panel for that
+**Options**, **Quit Game**, and **Back to Pause Menu**. Options opens the integrated settings pages. Back dismisses the panel for that
 pause and restores input to all original VCS tabs; the panel returns the next time the player pauses. Code pauses and
 loading waits do not open it.
 
@@ -41,3 +45,6 @@ centred 4:3 canvas, while Screen edges and Stretch use the full display. Styling
 Hidden runs can select the startup path through `frontend new|load|delete` on the control channel. Save navigation
 uses the same original-menu route checked by `tools/saves.py`; injected controller reports stop after reaching the
 Load/Delete screen, where the player takes over.
+`frontend options [page]` opens the native category list or a registry page for isolated captures; `menu <page>` and F2
+still open the standalone view. Setting value widgets and explanatory help retain the readable ImGui font; page headings
+and labels use the game's atlas.

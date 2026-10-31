@@ -897,12 +897,17 @@ int main(int argc, char *argv[])
         });
         // frontend new|load|delete -> ok: deterministic startup-menu checks in hidden runs.
         ps2control::addCommand("frontend", [](const std::string &args, ps2control::Reply reply) {
+            if (args == "options" || args.rfind("options ", 0) == 0)
+            {
+                ui::frontend::openOptionsPage(args.size() > 8 ? args.substr(8) : "");
+                return reply("ok");
+            }
             using ui::frontend::StartupAction;
             const StartupAction action = args == "load" ? StartupAction::LoadGame
                                          : args == "delete" ? StartupAction::DeleteGame
                                                             : StartupAction::NewGame;
             if (args != "new" && args != "load" && args != "delete")
-                return reply("error usage: frontend new|load|delete");
+                return reply("error usage: frontend new|load|delete|options [page]");
             reply(ui::frontend::selectStartup(action) ? "ok" : "error startup menu is not open");
         });
         vcs::configureWatch(runtime.memory().getRDRAM());

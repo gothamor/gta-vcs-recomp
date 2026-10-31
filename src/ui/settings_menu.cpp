@@ -208,7 +208,8 @@ namespace ui
 
         // The label, then the setting's control. A row is hovered when the mouse is anywhere across it (label, control or
         // the space between); clicking anywhere on a toggle's row flips it.
-        void row(const settings::Spec &s, std::string &focusedNow)
+        void row(const settings::Spec &s, std::string &focusedNow,
+                 const std::function<void(const std::string &)> &label = {})
         {
             const ImGuiStyle &style = ImGui::GetStyle();
             const bool locked = settings::overridden(s.key);
@@ -217,7 +218,9 @@ namespace ui
             ImGui::TableNextColumn();
             const float top = ImGui::GetCursorScreenPos().y - style.CellPadding.y;
             ImGui::AlignTextToFramePadding();
-            if (locked) // greyed out with the reason beside it, so a click that does nothing doesn't look like a bug
+            if (label)
+                label(s.label);
+            else if (locked) // greyed out with the reason beside it, so a click that does nothing doesn't look like a bug
                 ImGui::TextDisabled("%s (%s)", s.label.c_str(), s.env.c_str());
             else
                 ImGui::TextUnformatted(s.label.c_str());
@@ -337,6 +340,55 @@ namespace ui
 
     bool settingsMenuOpen() { return g_open; }
 
+    void resetEmbeddedSettings()
+    {
+        settings::refresh();
+        g_capturing.clear();
+        g_confirming.clear();
+        g_refusal.clear();
+        g_helpKey.clear();
+    }
+
+    bool drawEmbeddedSettings(const std::string &page, const std::function<void(const std::string &)> &label)
+    {
+        const bool popup = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const bool back = g_capturing.empty() && !popup && !g_popupWasOpen &&
+            (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false));
+        std::string focused;
+        if (ImGui::BeginChild("embedded rows", ImVec2(0, -95), ImGuiChildFlags_NavFlattened))
+            for (const std::string &section : sections(page))
+            {
+                if (!section.empty())
+                {
+                    label(section);
+                    ImGui::Separator();
+                }
+                if (ImGui::BeginTable(section.c_str(), 2, ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthStretch, 0.52f);
+                    ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.48f);
+                    for (const settings::Spec &s : settings::all())
+                        if (s.page == page && s.section == section && !s.hidden)
+                            row(s, focused, label);
+                    ImGui::EndTable();
+                }
+                ImGui::Spacing();
+            }
+        ImGui::EndChild();
+        if (!focused.empty())
+            g_helpKey = focused;
+        if (!g_refusal.empty())
+            ImGui::TextWrapped("%s", g_refusal.c_str());
+        else if (const settings::Spec *s = findSpec(g_helpKey))
+            ImGui::TextWrapped("%s", helpText(*s).c_str());
+        if (ImGui::Button("Reset page to defaults"))
+            for (const settings::Spec &s : settings::all())
+                if (s.page == page && s.type != settings::Type::Action)
+                    settings::set(s.key, s.defaultValue);
+        g_popupWasOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        return back;
+    }
+
     void openSettingsMenu(const std::string &page)
     {
         const std::vector<std::string> pages = settings::pages();
@@ -358,7 +410,7 @@ namespace ui
 
     void drawSettingsMenu()
     {
-        if (ps2control::hiddenMode() && !g_open) // a hidden run opens it only through openSettingsMenu
+        if (ps2control::hiddenMode() && !g_open && !ps2control::keyPressed(settings::value("controls.menu_key")))
         {
             g_releaseWait = false; // no physical input to wait for
             return;

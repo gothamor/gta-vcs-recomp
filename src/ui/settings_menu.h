@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <functional>
 
 namespace ui
 {
@@ -17,4 +18,8 @@ namespace ui
     void drawSettingsMenu();
     bool settingsMenuOpen();
     bool settingsMenuBlocksInput(); // open, or its keys still held after closing (main.cpp blocks the game's input)
+    // Shared setting controls hosted by the game's styled Options page. Returns true for Back, except while
+    // cancelling a binding or closing a popup. The label callback draws game-font labels at the current cursor.
+    bool drawEmbeddedSettings(const std::string &page, const std::function<void(const std::string &)> &label);
+    void resetEmbeddedSettings();
 }

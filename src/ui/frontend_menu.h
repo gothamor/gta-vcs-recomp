@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 class PS2Runtime;
 
@@ -21,6 +22,7 @@ namespace ui::frontend
     // Main thread, inside the runtime's Dear ImGui frame.
     void draw(PS2Runtime &runtime);
     bool blocksInput();
+    void openOptionsPage(const std::string &page); // host/control channel: native Options, optional registry page
 
     // Game thread, at the normal frame boundary. Tracks the original pause menu and drives the verified route to its
     // Load / Delete screens after a startup choice.

@@ -2,6 +2,9 @@
 
 ## 2026-10-31 - Native startup and pause actions
 
+- Native Options now has integrated category/settings pages with the palm artwork and game-font labels. F2 retains
+  the original standalone settings window; both reuse the same registry and setting controls. The native page is
+  restored after closing F2. See `docs/FRONTEND_MENU.md`.
 - A host title menu appears after the intro movies, before the game starts: New Game, Load Game, Delete Game, Options
   (the F2 pages), and confirmed Quit. The original game owns save enumeration, loading and deletion.
 - It opens after the boot loading splash has finished and renders labels from the game's proportional font atlas when
