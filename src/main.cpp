@@ -597,7 +597,7 @@ namespace
         s.page = "Graphics";
         s.section = "Image quality";
         s.label = "Texture replacements";
-        s.help = "Use your PCSX2 PNG texture pack from SLUS-21590/replacements. Missing textures use the originals.";
+        s.help = "Use your PCSX2 PNG texture pack from textures/SLUS-21590/replacements. Missing textures use the originals.";
         s.type = Type::Toggle;
         s.defaultValue = 0;
         s.apply = Apply::Restart;
@@ -767,6 +767,7 @@ int main(int argc, char *argv[])
             if (path.empty())
             {
                 for (const auto &candidate : {exeDirectory() / "textures" / "SLUS-21590",
+                                             exeDirectory().parent_path() / "textures" / "SLUS-21590",
                                              exeDirectory() / "SLUS-21590", exeDirectory().parent_path() / "SLUS-21590"})
                 {
                     std::error_code ec;

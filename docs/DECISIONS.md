@@ -647,3 +647,7 @@ copy per pack image, and bound the replacement cache by bytes (512 MiB by defaul
 from physical replacement sizes, including non-integer scales and region wrap. Start with the format actually
 provided (full-texture PNGs); DDS, archives and separate region/mipmap files are outside this first implementation.
 The pack remains external, ignored by git and rejected by the release guard. See `docs/TEXTURE_PACKS.md`.
+
+The user subsequently requested `textures/SLUS-21590/`: automatic discovery checks `textures/` beside the exe and,
+for the default source build, in the checkout root before the older bare serial folders. The pack-check tool uses
+this layout by default too. Tests were skipped at the user's request for this folder-discovery change.
