@@ -37,4 +37,9 @@ namespace vcs::aim
     bool gunInHand();
     // Free aim is on (the game's free-aim lock is held), as of the last pad read.
     bool aiming();
+
+    // Game thread, right after the CCam `cam`'s update (CCam::Process) and before the frame's camera is built from it
+    // (game/vcs_freecam.cpp's hook on FUN_002A2ED0 calls it while the free camera is off): the follow camera, back after
+    // free aim, looks where the aim did from its first frame.
+    void cameraUpdated(uint32_t cam);
 }

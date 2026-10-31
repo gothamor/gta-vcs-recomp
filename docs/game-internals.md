@@ -1894,11 +1894,15 @@ hidden run (rig `peek` / `poke`, snapshots diffed).
   new one; **TheCamera + 0x8D0** (byte) is set while it runs, **+0x8D8** its start (CTimer ms, 0x4CD104), **+0x8DC** and
   **+0x8E0** its durations in ms - 400 / 350 into the lock-on (free-aim) camera, 350 / 350 out of it; the camera eases
   (0.5, 1.0, 0.5 m a frame cut to 100 ms). Found with the rig's `trace` of TheCamera + 0x800..0x9FF per frame through
-  an aim. Lowering both durations after the blend has started shortens it smoothly (vcs_aim.cpp: 100 ms, 3-4 frames at
-  30 fps, instead of 12-13).
-- Leaving any aim back to the follow camera (mode 4) keeps beta but the follow camera eases toward its source points
-  (+0x220 / +0x230, 12b), which still hold the view from before the aim: a ~1.6 rad swing back. vcs_aim.cpp turns them to
-  the aim's heading on the first frame back.
+  an aim. Lowering both durations after the blend has started shortens it smoothly (vcs_aim.cpp: 100 ms in, 200 ms
+  out).
+- Leaving any aim back to the follow camera (mode 4): **the follow camera's first update starts it afresh** - beta and
+  the source points (+0x220 / +0x230, 12b) set to one heading of its own (156 deg in two releases whose aims were 100
+  and 188 deg; the rig's `trace` of the CCam per frame), and that frame's view is built from it: a one-frame snap to
+  another angle (the user saw it), then the follow camera eases toward its source points - a swing back to the view
+  from before the aim when they are left. vcs_aim.cpp, in the hook after CCam::Process (FUN_002A2ED0, shared with the
+  free camera), turns that first frame's whole view about Vic to the aim's heading - beta, source points, Source,
+  Front, Up, the target point - before the frame's camera is built.
 - **Shots** (a write watch on the shot ped's health with `VCS_WATCH_STACK=1`): FUN_002C3E48 = **CWeapon::FireInstantHit**
   (weapon, shooter, source, ...) -> FUN_002C6460 (the bullet's impact: damage through FUN_001D7940, effects) and
   FUN_002C5320 (tracers / shells). For a shooter with a target (+0x820) and ped +0x35C bit 0 (set while aiming) the end

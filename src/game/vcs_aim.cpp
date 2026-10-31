@@ -37,7 +37,7 @@ namespace vcs::aim
         // durations in ms (400 into the lock-on / free-aim camera, 350 out of it)
         constexpr uint32_t kTransition = kTheCamera + 0x8D0u;
         constexpr uint32_t kTransitionDurations[2] = {kTheCamera + 0x8DCu, kTheCamera + 0x8E0u};
-        constexpr uint32_t kQuickTransitionMs = 100;
+        constexpr uint32_t kBlendInMs = 100, kBlendOutMs = 200;
 
         // the hooked functions
         constexpr uint32_t kGameProcess = 0x003BA8D8u;   // CGame::Process: scripts, the world (peds move, guns fire)
@@ -71,6 +71,7 @@ namespace vcs::aim
         uint32_t g_dummy = 0;
         float g_yaw = 0, g_pitch = 0; // the aim from Vic's shoulders: yaw from +x toward +y, pitch up
         int g_quickBlend = 0;         // frames left to shorten the camera's blend into / out of free aim
+        uint32_t g_blendMs = kBlendInMs; // to this
         int g_handBack = 0;           // frames left to give the follow camera the aim's heading when it is back
         float g_handBeta = 0;
         std::atomic<bool> g_active{false};
@@ -129,30 +130,32 @@ namespace vcs::aim
                 std::fprintf(stderr, "[aim] free aim off (%s)\n", why);
                 // the follow camera comes back looking where the aim did (game-internals.md 12c)
                 g_handBeta = rdf(activeCam() + kCamBeta);
-                g_handBack = 10;
+                g_handBack = 30;
                 g_quickBlend = 10;
+                g_blendMs = kBlendOutMs;
             }
             g_state = State::Idle;
             g_active = false;
         }
 
-        // The follow camera, back after free aim, starts from the lock-on camera's heading but eases toward its source
-        // points (+0x220 / +0x230: where it stood before the aim, game-internals.md 12b) - a swing back to the old view.
-        // Its first frame back, both are put where the aim camera looked: the heading, and the source points turned
-        // about Vic to it (their distance and height kept).
-        void handBack(uint32_t ped)
+        // Turns the follow camera's view about Vic by `delta` radians (about z): its heading, its source points
+        // (+0x220 / +0x230), and this frame's Source, Front, Up and target point.
+        void turnFollowCamera(uint32_t cam, uint32_t ped, float delta)
         {
-            const uint32_t cam = activeCam();
-            if (rd32(cam) != kCamModeFollowPed)
-                return;
-            g_handBack = 0;
-            wrf(cam + kCamBeta, g_handBeta);
-            const float px = rdf(ped + kPedPos), py = rdf(ped + kPedPos + 4);
-            for (uint32_t at : {cam + 0x220u, cam + 0x230u})
+            const float px = rdf(ped + kPedPos), py = rdf(ped + kPedPos + 4), c = std::cos(delta), s = std::sin(delta);
+            const float beta = std::fmod(rdf(cam + kCamBeta) + delta, 6.2831855f);
+            wrf(cam + kCamBeta, beta < 0.0f ? beta + 6.2831855f : beta);
+            for (uint32_t at : {cam + 0x220u, cam + 0x230u, cam + kCamSource, cam + 0x1A0u})
             {
-                const float ox = rdf(at) - px, oy = rdf(at + 4) - py, r = std::sqrt(ox * ox + oy * oy);
-                wrf(at, px + r * std::cos(g_handBeta));
-                wrf(at + 4, py + r * std::sin(g_handBeta));
+                const float ox = rdf(at) - px, oy = rdf(at + 4) - py;
+                wrf(at, px + ox * c - oy * s);
+                wrf(at + 4, py + ox * s + oy * c);
+            }
+            for (uint32_t at : {cam + 0x10u, cam + 0x60u})
+            {
+                const float x = rdf(at), y = rdf(at + 4);
+                wrf(at, x * c - y * s);
+                wrf(at + 4, x * s + y * c);
             }
         }
 
@@ -170,8 +173,9 @@ namespace vcs::aim
         // CCamera::Process: the camera and then the HUD see free aim again (its camera centres the dummy, its circle is
         // drawn on it).
         // Also: the blend between the follow camera and the free-aim camera, started by the update when the mode changes
-        // (400 ms in, 350 ms out, eased), is cut to 100 ms the frames after free aim starts or ends - a PC shooter's aim
-        // comes up at once. Other blends (cutscenes, vehicles, the PS2 lock-on) are the game's.
+        // (400 ms in, 350 ms out, eased), is cut to 100 ms in and 200 ms out the frames after free aim starts or ends -
+        // a PC shooter's aim comes up at once; going out takes about as long as Vic's raising the gun takes going in
+        // (the user's ask). Other blends (cutscenes, vehicles, the PS2 lock-on) are the game's.
         PS2_GUEST_CC void cameraProcess(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (g_state == State::Active)
@@ -182,7 +186,7 @@ namespace vcs::aim
                 --g_quickBlend;
                 if (rdram[kTransition])
                     for (uint32_t at : kTransitionDurations)
-                        wr32(at, std::min(rd32(at), kQuickTransitionMs));
+                        wr32(at, std::min(rd32(at), g_blendMs));
             }
             g_origCamera(rdram, ctx, runtime);
         }
@@ -260,6 +264,19 @@ namespace vcs::aim
 
     bool aiming() { return g_active.load(std::memory_order_relaxed); }
 
+    // The follow camera's first update after free aim starts it afresh behind Vic (a heading of its own, whatever the
+    // aim's), and the view showed that for a frame (the user's report: a one-frame snap to another angle). Here, after
+    // that update and before the frame's camera is built from it, the whole view is turned back to the aim's heading;
+    // the follow camera carries on from there.
+    void cameraUpdated(uint32_t cam)
+    {
+        if (g_handBack <= 0 || !g_rdram || cam != activeCam() || (rd32(cam) & 0xFFFFu) != kCamModeFollowPed)
+            return;
+        g_handBack = 0;
+        if (const uint32_t ped = rd32(kPlayerPed))
+            turnFollowCamera(cam, ped, std::remainder(g_handBeta - rdf(cam + kCamBeta), 6.2831855f));
+    }
+
     Output update(const Input &in)
     {
         Output out;
@@ -267,11 +284,10 @@ namespace vcs::aim
         if (!ped || !in.want || !onFoot(ped) || !gunInHand())
         {
             stop(!in.want ? "released" : "no gun / not on foot");
-            if (ped && g_handBack > 0 && --g_handBack >= 0)
-                handBack(ped);
+            if (g_handBack > 0)
+                --g_handBack; // the camera hasn't come back to the follow camera in time: leave it
             return out;
         }
-        g_handBack = 0;
         out.own = true;
         const uint32_t cam = activeCam();
         switch (g_state)
@@ -288,6 +304,8 @@ namespace vcs::aim
             g_state = State::Entering;
             g_wait = 0;
             g_quickBlend = 30; // until a few frames after the free-aim lock is there
+            g_blendMs = kBlendInMs;
+            g_handBack = 0;
             out.r1 = out.l3 = true;
             return out;
         }

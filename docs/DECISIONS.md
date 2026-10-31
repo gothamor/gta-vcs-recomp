@@ -730,3 +730,8 @@ from them: Vic moves while free aiming exactly when he can move locked on with t
   after a left click) also held aims fired with the right button down - 15-17 frames after a shot. The hold is now
   for shots fired without the target button only, and letting go of it clears the hold: 2 frames from the release to
   the camera leaving the aim, shots or not (measured with the rig's `trace`).
+- (the user, next) Leaving the aim felt quicker than entering it - the camera blends were the same (100 ms, measured),
+  but entering also has Vic raising the gun. The exit blend is 200 ms now (the user's choice). And on release the view
+  snapped to another angle for one frame: the follow camera's first update resets its heading; that frame's view is now
+  turned back to the aim's heading in the hook after CCam::Process, before the frame's camera is built (the pad read's
+  hand-back came a frame late). The hand-back needs the free camera's hook (VCS_FREECAM=0 leaves it out).

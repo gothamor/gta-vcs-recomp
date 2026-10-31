@@ -1,6 +1,7 @@
 // See vcs_freecam.h and docs/TRAINER.md.
 #include "game/vcs_freecam.h"
 
+#include "game/vcs_aim.h"
 #include "game/vcs_input.h"
 #include "game/vcs_trainer.h"
 #include "ps2_runtime.h"
@@ -130,6 +131,7 @@ namespace vcs::freecam
             if (!flying())
             {
                 end();
+                aim::cameraUpdated(cam); // free aim's hand-back to the follow camera (game/vcs_aim.h)
                 return g_origHeight(rdram, ctx, runtime);
             }
             if (!g_flying)
