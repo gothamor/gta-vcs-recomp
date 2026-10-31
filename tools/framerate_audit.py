@@ -24,6 +24,7 @@ Scenarios (each from a fresh teleport, so earlier ones don't leak into later one
           acceleration
   carwater the car dropped into the sea at 15 m/s: its speed 1 s after it reaches the water (the water's drag)
   bikewater the PCJ-600 dropped into the sea: how deep it settles
+  ferris  the player in a ferris wheel carriage for 10 s: how long he stays where he stood in it, how far he drifts
   clock   game clock ms per frame vs the step; frames per simulated second
   heat    PHI_A2's heat bar: its floor and the heat at +1 a frame, per simulated second (starts the mission: last)
 
@@ -396,6 +397,55 @@ def scenario_bikewater(s):
     return {"depth_m": water - sum(zs) / len(zs)}
 
 
+OBJECT_POOL = 0x487AA4  # CPool of objects: 475 entries of 0x220 bytes (game-internals.md 12)
+FERRIS_CARRIAGE = 7069  # the model of the ferris wheel's 12 carriages, which turn in the plane x = 342.19
+FERRIS_SPOT = (342.0, -250.0)  # on the ground beside the wheel
+
+
+def pool_objects(g, model):
+    """The addresses of the objects of one model in the object pool."""
+    import struct
+    pool = g.u32(OBJECT_POOL)
+    ent, flags, n = g.u32(pool), g.u32(pool + 4), g.u32(pool + 8)
+    used = g.peek(flags, n)
+    raw = b"".join(g.peek(ent + o, min(4096, n * 0x220 - o)) for o in range(0, n * 0x220, 4096))
+    return [ent + i * 0x220 for i in range(n)
+            if not used[i] & 0x80 and struct.unpack_from("<h", raw, i * 0x220 + 0x56)[0] == model]
+
+
+def scenario_ferris(s):
+    """The player put in the lowest ferris wheel carriage, then 10 s of the ride: how long he stays where he stood in it
+    (within 1 m) and how far he drifts. The wheel (FUN_00175620) gave its carriages a move speed of (new position - old)
+    / max(step, 1.0): above 50 fps too small, and at 144 fps he slid out of the carriage within 2 s (issue 10)."""
+    g, S = s.g, rig.Scm
+    leave_vehicle(s)
+    x, y = FERRIS_SPOT
+    s.place(x, y)
+    carriages = pool_objects(g, FERRIS_CARRIAGE)
+    if not carriages:
+        raise RuntimeError("no ferris wheel carriages")
+    carriage = min(carriages, key=lambda a: g.peekf(a + 0x38, 1)[0])
+    cx, cy, cz = g.peekf(carriage + 0x30, 3)
+    g.scm(S.op(S.SET_CHAR_COORDINATES, S.PLAYER, S.f(cx), S.f(cy), S.f(cz + 0.5)))
+    s.wait_sim(0.5)  # lands on its floor
+    ped = g.player()[0]
+    path = os.path.join(ROOT, "build", "audit", "trace_%d_ferris.txt" % s.step)
+    g.cmd("trace %s 0x%x 3 0x%x 3" % (path, ped + 0x30, carriage + 0x30))
+    try:
+        s.wait_sim(10.0)
+    finally:
+        g.cmd("trace off")
+    rows = [[float(v) for v in line.split()] for line in open(path)]
+    t0 = rows[0][1]
+    offsets = [((r[1] - t0) / 1000.0, [r[3 + k] - r[6 + k] for k in range(3)]) for r in rows]
+    start = offsets[0][1]
+    drift = [(t, math.dist(o, start)) for t, o in offsets]
+    riding = next((t for t, d in drift if d > 1.0), drift[-1][0])
+    leave = S.op(S.SET_CHAR_COORDINATES, S.PLAYER, S.f(x), S.f(y), S.f(-100.0))  # off the wheel for what follows
+    g.scm(leave)
+    return {"riding_s": riding, "drift": "%.2f m" % max(d for _, d in drift)}
+
+
 def scenario_heat(s):
     """PHI_A2 "Boomshine Blowout": the heat's floor (+0.015 a frame in the script) and the heat at a rate of +1 a frame,
     per simulated second (0.45 / 30 at the PS2's 30 fps). The mission is walked to its forklift state: into Phil's
@@ -471,6 +521,7 @@ SCENARIOS = {
     "bikelean": scenario_bikelean,
     "carwater": scenario_carwater,
     "bikewater": scenario_bikewater,
+    "ferris": scenario_ferris,
     "heat": scenario_heat,  # starts a mission: last
 }
 

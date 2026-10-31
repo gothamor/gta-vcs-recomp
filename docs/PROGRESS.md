@@ -417,6 +417,13 @@ dropped on uploads (lazy render-target patching).
       brake's constants patched to load from guest RAM 0x7FF00..), and CBike's lean `max(step, 0.5)` patched like the
       ped one (a gentle turn leant 22 degrees at 144 fps against 30). After: coasting 3.45 / 3.45 / 3.45 m/s^2 at 1/30
       / 60 / 144, the run-over pitch rate 0.042 / 0.043 / 0.041, the bike past a body upright at all three.
+- [x] Ferris wheel and escalators above 50 fps (2026-10-31, GitHub issue 10: Vic fell out of the ferris wheel at 60
+      fps). The wheel (FUN_00175620) and the escalators (FUN_002469A0) give their objects the move speed `displacement /
+      max(step, 1.0)`, step times too small above 50 fps (0.35 at 144); a ped on them moves with that speed, so he
+      slid off - out of a carriage within 2 s at 144 fps. Patched to max(step, 0.001) (overrides.toml; steps >= 1
+      unchanged). `framerate_audit.py` scenario `ferris` (seconds he keeps his place in a carriage, of 10): 10 / 10 / 10
+      at 1/30 / 60 / 144, 1.3 at 144 unpatched (11 m off). An escalator step's move speed at 144 equals 30's (0.0147 /
+      0.0148). game-internals.md 4.
       `framerate_audit.py` scenarios coast, runover, bikebody, bikecoast, bikelean; game-internals.md 4. Found with the
       rig's new `trace` (a vehicle's state every frame) and write watches attributing its speed changes to callers.
       Then the same `max(step, 0.5)` in vehicles and bikes in water and a boat's rudder, patched: at 144 fps a car kept

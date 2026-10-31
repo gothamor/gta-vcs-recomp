@@ -242,6 +242,36 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
     (at 30 fps and 16 m/s a frame moves the car 0.55 m into it). The per-frame part is what made them grow.
   - **Still per frame** (read in ProcessWheel, not measured or fixed): a burst tyre's wobble - a random sideways amount
     added every frame when the wheel status (last argument) is 1.
+- **Moving platforms: `1 / max(step, 1.0)`** (found 2026-10-31 from GitHub issue 10: Vic fell out of the ferris wheel
+  at 60 fps, not at 30). Objects that the game places itself each frame get the move speed `(new position - old) * 1 /
+  max(ms_fTimeStep, 1.0)`, so that a ped standing on them moves with them. On the PS2 the step is 1.67 and the 1.0 never
+  matters; above 50 fps (step < 1) the speed came out step times too small. Patched (game/vcs/overrides.toml: the max.s
+  becomes max(step, 0.001) through the two nops behind it, as the 1.0 register is also the division's numerator; steps
+  >= 1 unchanged):
+  - **FUN_00175620, the ferris wheel** (Funland; no reVC counterpart). Globals: 0x486020 the hub object (its matrix
+    turns), 0x486024 the angular speed (0.05; * step * 0.02 a frame = 0.05 rad/s, ~1.15 m/s at the carriages), 0x486028
+    the angle, 0x48602C the angle left to a stop, 0x486030 the state (0 starting: speed += step * 0.0002 up to 0.05; 1
+    running; 2 stopping, when 0x486031 is set; 3 stopped), 0x48603C the radius (23.0), 0x486040 / 0x486044 the swing's
+    spring and damping (0.1 / 0.95), 0x486034 / 0x486038 the swing's push while starting / stopping (0.001). The 12
+    carriages (model 7069, created within 275 m of the camera by FUN_001763E0, removed past 300 m by FUN_00176680) are
+    at 0x72D258; each is put at angle + i * 30 degrees in the plane x = 342.19 around (y -243.2, z 37.1), its move speed
+    set (FUN_003562C0 at 0x1760A8) and its matrix tilted by its own swing (angle 0x72D228, speed 0x72D1F8: `w = (w + push
+    - angle * 0.1) * 0.95; angle += w * step` - per frame, but the wheel runs steadily, the angles read 0 and the push
+    only settles them at 0.01 rad; left as it is). Measured (rig, a ped dropped into the lowest carriage): at 1/30 he
+    keeps his place in it (offset within 0.01 m for 15 s) and his move speed equals the carriage's (0.023 units = 1.15
+    m/s); at 1/144 the carriage's speed read 0.0079 (0.40 m/s), he took that, slid 0.75 m/s towards its edge and fell
+    out after 1.8 s. Found with the object pool (below), a write watch on a carriage's move speed +0x140 (writer FUN_003562C0,
+    ra 0x1760B0) and the function's decompile.
+  - **FUN_002469A0, the escalators** (CEscalator::Update as in reVC: N step objects moved along three segments on a
+    16.384 s cycle of the game clock, `m_snTimeInMilliseconds & 0x3FFF`; created within 25 m of the camera). Same
+    division at 0x246EB4 - riders slid against the steps the same way. Found by scanning the generated code for a
+    max.s of the step against 1.0 followed by a div.s (`framerate_audit.py` covers the wheel only: `ferris`). The list:
+    count 0x4CD2E8, records from `*(0x4CD2EC)`, 0x150 bytes each: path points +0x00 / +0x10 / +0x20 / +0x30, a matrix
+    +0x40, active +0x90, reversed +0x94, step count +0x98 (31), segment ends +0x9C / +0xA0 (0.113 / 0.85), centre +0xB0,
+    radius +0xC0, step objects from +0xC4. All 8 are in the mall interior around (406-422, 1052-1200, -198). After the
+    patch a step's move speed at 1/144 is 1/30's (0, 0.0147, -0.0095 against 0, 0.0148, -0.0095).
+  - Not checked: FUN_0029DAB0 / FUN_0029FAF0 (0x29EA50 / 0x2A0790, camera code by their neighbours) divide an angle's
+    change by `max(step, 1.0)` the same way - a rate that would read low above 50 fps.
 - **Physics read for the audit**: ped -> its vehicle at ped+0x450 (also +0x480 / +0x484; found by scanning the ped for
   the address of the car it was warped into); **CPhysical move speed (x, y, z) at +0x140** (units per 1/50 s, x 50 =
   m/s; z found at +0x148 mid-fall, y at +0x144 in a car driving north); written through a vector setter
@@ -1692,7 +1722,10 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
 - **Pools** (`CPool`: +0 entries, +4 flag bytes (bit 0x80 = free, low 7 bits = the handle's generation), +8 size;
   lookup `FUN_00471788(pool, handle)`: slot = handle >> 8, the low byte must equal the flag byte): peds `*(0x487A94)`
   (70 entries of 0xD20 bytes from 0x1D3FF80 in a game started from the Fort Baxter card), vehicles `*(0x487A98)`
-  (entries 0x8C0). A script char handle 0x1006 = ped slot 0x10, generation 6.
+  (entries 0x8C0). A script char handle 0x1006 = ped slot 0x10, generation 6. **Objects** `*(0x487AA4)`: 475 entries of
+  0x220 bytes (found 2026-10-31: object positions near the ferris wheel 0x220 apart, then the pool header with 475);
+  the matrix at +0, model at +0x56, move speed at +0x140 as other CPhysicals. The pointers around it: 0x487A8C (40000
+  entries), 0x487A90 (5200), 0x487A9C (6858), 0x487AA8 (20), 0x487AAC (3407), 0x487AB0 (192) - not identified.
 - **Ped fields for the trainer** (found 2026-10-26 by setting each value with a script command and searching the ped
   for it): +0x4E4 health (float), +0x4E8 armour (float), +0x480 the vehicle it is in (0 on foot; +0x450 / +0x484 hold
   it too), **+0x8C4 state** (1 on foot, 0x37 driving; +0x8A4 read 0 in these runs), +0x578 weapon slots: 10 x 0x1C

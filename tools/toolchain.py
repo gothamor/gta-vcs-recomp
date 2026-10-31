@@ -61,6 +61,19 @@ def exe(path):
     return path + ".exe" if IS_WINDOWS else path
 
 
+GHIDRA_VERSION = "12.1.4"  # the analysed EE project and the ghidra-emotionengine-reloaded extension are for this one
+
+
+def ghidra_home(env_var="GHIDRA_HOME"):
+    """The Ghidra install the analysis tools use: `env_var`, else scoop's GHIDRA_VERSION, else scoop's current. Scoop
+    moves `current` to newer releases (12.2 wants JDK 25, so the headless tools stopped starting, 2026-10-31)."""
+    if os.environ.get(env_var):
+        return os.environ[env_var]
+    apps = os.path.join(os.path.expanduser("~"), "scoop", "apps", "ghidra")
+    pinned = sorted(d for d in (os.listdir(apps) if os.path.isdir(apps) else []) if d.startswith(GHIDRA_VERSION))
+    return os.path.join(apps, pinned[-1] if pinned else "current")
+
+
 def game_exe(build_dir):
     """vcs.exe of a build tree: the main one (build/release) puts it at the top of build/ (CMakeLists.txt), others
     (build/pgo-gen) in their own runtime folder."""

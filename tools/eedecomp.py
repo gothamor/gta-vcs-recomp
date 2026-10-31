@@ -23,7 +23,7 @@ def main():
     a = ap.parse_args()
 
     home = os.path.expanduser("~")
-    ghidra = os.environ.get("GHIDRA_HOME", os.path.join(home, "scoop", "apps", "ghidra", "current"))
+    ghidra = tc.ghidra_home()
     env = dict(os.environ)
     env.setdefault("JAVA_HOME", os.path.join(home, "scoop", "apps", "temurin21-jdk", "current"))
     headless = os.path.join(ghidra, "support", "analyzeHeadless" + (".bat" if tc.IS_WINDOWS else ""))

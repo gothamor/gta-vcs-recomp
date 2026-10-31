@@ -88,6 +88,33 @@ value = "0x3C013A83"
 address = "0x001A2468"
 value = "0x3C013A83"
 
+# Moving platforms: the ferris wheel (FUN_00175620, 12 carriages) and the escalators (FUN_002469A0, CEscalator::Update)
+# place their objects each frame and give them the move speed `(new position - old) * 1 / max(ms_fTimeStep, 1.0)`. Above
+# 50 fps (step < 1.0) that speed came out step times too small - 0.83 at 60 fps, 0.35 at 144 - and a ped standing on
+# the object, who moves with its move speed, slid off it: Vic fell out of a ferris wheel carriage within 2 s at 144 fps
+# (issue 10). The 1.0 register is also the numerator and is used elsewhere, so the max.s itself changes, using the two
+# hazard nops behind it: `lui $at, 0x3A83; mtc1 $at, $fK; max.s $fD, $fS, $fK` = max(step, 0.001), as the patches above.
+# $fK is written before any read after it ($f4 at 0x176144 in the wheel, $f3 at 0x246EC4 in the escalator); $at is
+# loaded again before its next use. Steps >= 1.0 run exactly as before. (game-internals.md 4)
+[[patches]]
+address = "0x00176078"
+value = "0x3C013A83"
+[[patches]]
+address = "0x00176080"
+value = "0x44812000"
+[[patches]]
+address = "0x00176084"
+value = "0x46040028"
+[[patches]]
+address = "0x00246EB4"
+value = "0x3C013A83"
+[[patches]]
+address = "0x00246EB8"
+value = "0x44811800"
+[[patches]]
+address = "0x00246EBC"
+value = "0x46030868"
+
 # CVehicle::ProcessWheel (FUN_003E6C18 cars, FUN_003E7618 bikes): with neither gas nor brake the wheel's rolling
 # resistance is a brake of 0.9 / mass (0.09 under 500 kg, 0.18 for the RC Bandit, 0.54 / (mass + 200) for bikes; the
 # bike version uses 0.18 under 500 kg) - per frame, never multiplied by the time step (reVC: `brake *=
