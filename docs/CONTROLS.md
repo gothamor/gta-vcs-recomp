@@ -53,7 +53,8 @@ game-internals.md 12c):
   stick, 2 rad/s at full tilt, finer near the centre) turns the aim and the camera with it, 1:1 like the camera on foot
   (Mouse sensitivity, Invert mouse up / down apply; zoomed views turn slower).
 - The left button (Circle) fires **through the circle**: a shot hits what is under it, whatever the gun's own line.
-  Firing a gun from the hip with the left button aims too (the aim is held 0.6 s after the last shot).
+  Firing a gun from the hip with the left button aims too (the aim is held 0.6 s after the last shot). Letting go of
+  the target button ends the aim at once (the camera leaves it 2 frames later), shots or not.
 - **Moving while aiming** is what the game allows locked on with that gun - a pistol walks and strafes; no new movement
   is added. Letting go leaves the camera looking where the aim did. The camera moves into and out of the aim in 0.1 s
   (the game blends 0.35-0.4 s; its other camera changes keep their blends).

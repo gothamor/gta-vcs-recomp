@@ -302,6 +302,7 @@ namespace vcs::input
             float pitch = 0.0f;        // on foot: radians still to turn up (+) or down
             aim::Output aim;           // free aim's say over R1 / L3 / the right stick, for the frame's reads
             std::chrono::steady_clock::time_point hipUntil{}; // free aim held this long after the last shot from the hip
+            bool aimHeld = false;      // the target button was held at the last game frame
             bool wheelWas[2] = {};     // a wheel notch (up, down) was down at the last game frame
             int wheelSteps = 0;        // weapon changes still to press (+ next / R2, - previous / L2), one a frame
             uint16_t wheelButton = 0;  // the button the wheel presses for this frame
@@ -457,8 +458,12 @@ namespace vcs::input
                 g_mouse.aim = {};
                 if (m.freeAimMouse || m.freeAimPad || aim::aiming())
                 {
-                    if (m.freeAimMouse && keyCircle && aim::gunInHand())
+                    // the hold is for shots from the hip only: letting go of the target button ends the aim at once
+                    if (keyR1 || g_mouse.aimHeld)
+                        g_mouse.hipUntil = {};
+                    else if (m.freeAimMouse && keyCircle && aim::gunInHand())
                         g_mouse.hipUntil = now + std::chrono::milliseconds(600);
+                    g_mouse.aimHeld = keyR1;
                     const bool mouseWant = m.freeAimMouse && (keyR1 || now < g_mouse.hipUntil);
                     const bool padWant = m.freeAimPad && padR1;
                     aim::Input in;

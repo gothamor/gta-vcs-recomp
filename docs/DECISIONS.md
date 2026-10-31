@@ -726,3 +726,7 @@ from them: Vic moves while free aiming exactly when he can move locked on with t
   350 ms out. Both blends are cut to 100 ms, only those two (the frames after free aim starts or ends): not an
   instant cut, which jumps the view by about 2 m, and the game's other blends (vehicles, cutscenes, the PS2
   lock-on) stay as they are.
+- (the user, after that) A lag between letting go of the right button and the aim ending: the hip-fire hold (0.6 s
+  after a left click) also held aims fired with the right button down - 15-17 frames after a shot. The hold is now
+  for shots fired without the target button only, and letting go of it clears the hold: 2 frames from the release to
+  the camera leaving the aim, shots or not (measured with the rig's `trace`).
