@@ -597,6 +597,13 @@ dropped on uploads (lazy render-target patching).
   follow camera FUN_0029dab0), DECISIONS.md. `tools/controls_check.py`: 36 checks, 0 failed (11 new: mouse heading /
   pitch / invert / off, the pause menu, lock-on, driving keys, lean rebind, W drives and Space stops the car, the mouse
   on the vehicle camera, mouse look after leaving the car).
+- **Mouse pitch as direct as the heading** (2026-10-31, reported by the user: up / down far more sluggish than left /
+  right): on foot the mouse's pitch went through the stick, capped at its top speed (1.5 rad/s, the rest carried over,
+  past 0.6 rad dropped) and then eased by the game (20% of the gap a 1/50 s step, 10% indoors). Now it is written in
+  the game as the heading: alpha and the source points turned up / down about the target point, in the game's pitch
+  limits (src/game/vcs_input.cpp; why: game-internals.md 12b). The gamepad keeps the game's own speeds (pitch 0.6 x the
+  heading's). `tools/controls_check.py`: "mouse pitch at once" (120 counts -> +0.300 two frames later, still +0.300
+  after 22); 47 checks, 0 failed.
 - **Free aim with the mouse and the gamepad** (2026-10-31, asked for by the user): Keyboard > Free aim / Gamepad > Free
   aim (off by default): with a gun, holding R1's button aims where the mouse / right stick points with the game's own
   circle, shots go through it, Vic moves as he does locked on with that gun; fists / melee / thrown / scoped weapons keep

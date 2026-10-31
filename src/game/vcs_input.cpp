@@ -114,8 +114,9 @@ namespace vcs::input
         constexpr uint32_t kScopeZoom = 0x00487E2Cu; // the FOV a zooming scope eases toward
         constexpr uint32_t kPad0 = 0x005147A8u;        // CPad 0: +0x96 DisablePlayerControls (s16)
         constexpr uint32_t kCamStickLocked = 0x00488EB4u; // the follow camera ignores the stick's turn while set
-        constexpr uint32_t kInvertLook = 0x00487A58u;  // the game's own: the right stick's y negated
-        constexpr uint32_t kTimeStep = 0x004CD110u;    // CTimer::ms_fTimeStep (1.0 = 1/50 s)
+        constexpr uint32_t kCamTable = 0x00487B30u;    // the follow camera's tuning, outdoors (+0x3C indoors): +0x34 / +0x38
+                                                       // the pitch limits up / down
+        constexpr uint32_t kCamIndoors = 0x00489F7Cu;  // the table indoors when neither 0 nor 4 (FUN_0029dab0)
         constexpr uint32_t kFrameCounter = 0x004CD124u; // CTimer::m_FrameCounter
         constexpr uint32_t kUserPause = 0x004CD2ACu;   // CTimer::m_UserPause (the pause menu), m_CodePause: bytes
         constexpr uint32_t kCodePause = 0x004CD11Cu;
@@ -290,16 +291,15 @@ namespace vcs::input
             return static_cast<uint8_t>(v < 0.0f ? 128.0f + v * 128.0f : 128.0f + v * 127.0f);
         }
 
-        // The mouse camera. On foot the mouse turns the follow camera itself: its heading is written in the game, its
-        // pitch (which the camera rebuilds from where it stands every frame) goes through the stick's pitch speed, with
-        // the game's squared stick curve undone. Every other camera (vehicles, aiming) gets the mouse's speed (counts
-        // per second) as the right stick, so it turns as far for the same hand movement at any frame rate.
+        // The mouse camera. On foot the mouse turns the follow camera itself: its heading and pitch are written in the
+        // game, with the points the camera stands at turned to match. Every other camera (vehicles, aiming) gets the
+        // mouse's speed (counts per second) as the right stick, so it turns as far for the same hand movement at any
+        // frame rate.
         struct MouseCamera
         {
             std::chrono::steady_clock::time_point last{};
             uint32_t frame = 0;        // the game frame (m_FrameCounter) it was worked out for
             float x = 0.0f, y = 0.0f;  // the right stick's deflection from the mouse
-            float pitch = 0.0f;        // on foot: radians still to turn up (+) or down
             aim::Output aim;           // free aim's say over R1 / L3 / the right stick, for the frame's reads
             std::chrono::steady_clock::time_point hipUntil{}; // free aim held this long after the last shot from the hip
             bool aimHeld = false;      // the target button was held at the last game frame
@@ -312,15 +312,9 @@ namespace vcs::input
         float g_injectedX = 0.0f, g_injectedY = 0.0f; // "mouse <dx> <dy>" (tests): counts, as from the mouse
 
         // The game's stick curve (FUN_002842e8, game-internals.md 12a): v = byte - 128; |v| <= 42 is 0, past that
-        // (|v| - 42) 127 / 85, truncated - the first third of the travel does nothing.
-        int gameStick(int v)
-        {
-            const int a = std::abs(v);
-            const int g = a <= 42 ? 0 : (a - 42) * 127 / 85;
-            return v < 0 ? -g : g;
-        }
-        // The smallest deflection (byte - 128) the game reads as `g` (-127..127) or a little more, and that deflection
-        // as the float toByte turns back into exactly that byte.
+        // (|v| - 42) 127 / 85, truncated - the first third of the travel does nothing. The smallest deflection the game
+        // reads as `g` (-127..127) or a little more, and that deflection as the float toByte turns back into exactly
+        // that byte.
         int rawFor(int g)
         {
             if (g == 0)
@@ -329,10 +323,6 @@ namespace vcs::input
             return g < 0 ? -a : a;
         }
         float stickFloat(int raw) { return raw == 0 ? 0.0f : (raw + 0.5f) / (raw > 0 ? 127.0f : 128.0f); }
-
-        // The follow camera's pitch speed for the game's stick value y (-127..127) is |y| y 4.9e-5 0.000536 FOV per
-        // time step (FUN_0029dab0, game-internals.md 12b).
-        float pitchSpeed(int y, float fov) { return std::abs(y) * y * 4.9e-5f * 0.0005357144f * fov; }
 
         bool readPad(uint8_t *data)
         {
@@ -479,7 +469,9 @@ namespace vcs::input
                 }
 
                 if (g_mouse.aim.own)
-                    g_mouse.pitch = 0.0f;
+                {
+                    // free aim turns the camera itself (aim::update)
+                }
                 else if (on && scopeMode(mode) && !game.driving)
                 {
                     // the scopes and first-person weapon views turn by the mouse itself, as the follow camera's heading:
@@ -490,7 +482,6 @@ namespace vcs::input
                     float beta = std::fmod(rdf(cam + 0x7C) + turn, 6.2831855f);
                     wrf(cam + 0x7C, beta < 0.0f ? beta + 6.2831855f : beta);
                     wrf(cam + 0x78, rdf(cam + 0x78) + up * look);
-                    g_mouse.pitch = 0.0f;
                 }
                 else if (on && game.footCamera)
                 {
@@ -511,21 +502,35 @@ namespace vcs::input
                             wrf(at + 4, py + ox * s + oy * c);
                         }
                     }
-                    // pitch: as the stick's speed (the game's curve undone), at most its top speed a step; the rest the
-                    // next frames
-                    g_mouse.pitch = std::clamp(g_mouse.pitch + up * m.mouseLook, -0.6f, 0.6f);
-                    const float step = std::clamp(rdf(kTimeStep), 0.05f, 3.4f);
-                    float fov = rdf(kCam + 0x134);
-                    fov = fov >= 10.0f && fov <= 130.0f ? fov : 70.0f;
-                    const float want = std::min(127.0f, std::sqrt(std::fabs(g_mouse.pitch / step) / pitchSpeed(1, fov)));
-                    const int raw = rawFor(static_cast<int>(want + 0.5f) * (g_mouse.pitch < 0.0f ? -1 : 1));
-                    g_mouse.pitch -= pitchSpeed(gameStick(raw), fov) * step;
-                    // a stick pulled back (y > 0) looks up; the game's own invert flips it
-                    g_mouse.y = stickFloat(rd32(kInvertLook) ? -raw : raw);
+                    // pitch (up +), as the heading: the camera eases it toward the pitch its source points stand at, seen
+                    // from the target point (+0x1A0, which it placed them around), so those turn up / down about it by
+                    // the same angle. Through the stick it was capped at the stick's top speed (0.03 a step) and then
+                    // eased (20% of the gap a step), slower than the heading. Kept in the game's limits.
+                    const uint32_t indoors = rd32(kCamIndoors);
+                    const uint32_t table = kCamTable + (indoors != 0 && indoors != 4 ? 0x3Cu : 0u);
+                    const float alpha = rdf(kCam + 0x78);
+                    const float tilt = std::clamp(alpha + up * m.mouseLook, -rdf(table + 0x38), rdf(table + 0x34)) - alpha;
+                    if (tilt != 0.0f)
+                    {
+                        wrf(kCam + 0x78, alpha + tilt);
+                        const float tx = rdf(kCam + 0x1A0), ty = rdf(kCam + 0x1A4), tz = rdf(kCam + 0x1A8);
+                        for (uint32_t at : {kCam + 0x220u, kCam + 0x230u})
+                        {
+                            const float ox = rdf(at) - tx, oy = rdf(at + 4) - ty, oz = rdf(at + 8) - tz;
+                            const float h = std::sqrt(ox * ox + oy * oy), d = std::sqrt(h * h + oz * oz);
+                            if (h < 1e-4f)
+                                continue;
+                            // looking up is a source point below the target
+                            const float e = std::clamp(std::atan2(-oz, h) + tilt, -1.55f, 1.55f);
+                            const float k = d * std::cos(e) / h;
+                            wrf(at, tx + ox * k);
+                            wrf(at + 4, ty + oy * k);
+                            wrf(at + 8, tz - d * std::sin(e));
+                        }
+                    }
                 }
                 else
                 {
-                    g_mouse.pitch = 0.0f;
                     if (on && dt > 0.0f && dt < 0.25f)
                     {
                         // the mouse's speed as the game's stick value, past its dead third

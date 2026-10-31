@@ -165,6 +165,18 @@ class Check:
         turn, up = self.mouse_moves(30, 10, -3)  # 400 counts a radian at 100%: -0.75 heading (right), +0.225 pitch (up)
         self.ok("mouse turns the camera on foot", mode == 4 and abs(turn + 0.75) < 0.03 and abs(up - 0.225) < 0.02,
                 "mode %d heading %+.3f pitch %+.3f" % (mode, turn, up))
+        # up / down at once as left / right: 120 counts up are +0.3 two frames later (through the stick's top speed and
+        # the game's easing it was under 0.06) and stay there
+        _, p0, _ = self.cam()
+        g.cmd("mouse 0 -120")
+        g.wait_frames(2)
+        _, p1, _ = self.cam()
+        g.wait_frames(20)
+        _, p2, _ = self.cam()
+        self.ok("mouse pitch at once", abs(p1 - p0 - 0.3) < 0.02 and abs(p2 - p1) < 0.02,
+                "pitch %+.3f after 2 frames, %+.3f after 22" % (p1 - p0, p2 - p0))
+        g.cmd("mouse 0 120")
+        g.wait_frames(20)
         self.setting("mouse.invert_y", 1)
         _, up = self.mouse_moves(10, 0, -4)
         self.setting("mouse.invert_y", 0)

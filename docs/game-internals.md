@@ -1836,10 +1836,23 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
 - **Mouse look** (src/game/vcs_input.cpp, Keyboard > Mouse camera): on foot (mode 4, no script camera, controls on, not
   paused: the pause menu leaves the mode at 4, `m_UserPause` 0x4CD2AC / `m_CodePause` 0x4CD11C are bytes) the
   pad read adds the mouse's turn to beta and turns +0x220 / +0x230 about the player by the same angle (exact: 300
-  counts in 30 moves -> -0.750 rad, 400 counts a radian), and sends the pitch as the stick's pitch speed with the curve
-  above undone, carrying what is over the stick's top speed to the next frames (90 counts -> +0.225 rad). Other
-  cameras (vehicles, aiming, lock-on) get the mouse's speed as the right stick, past the dead third. Checked by
-  `tools/controls_check.py` (the `mouse dx dy` control command moves the mouse in hidden runs).
+  counts in 30 moves -> -0.750 rad, 400 counts a radian), and does the same for the pitch: alpha += the tilt, and
+  +0x220 / +0x230 turned up / down by it about the target point +0x1A0 (90 counts -> +0.225 rad; 120 counts -> +0.3
+  two frames later, and it stays). Other cameras (vehicles, aiming, lock-on) get the mouse's speed as the right stick,
+  past the dead third. Checked by `tools/controls_check.py` (the `mouse dx dy` control command moves the mouse in
+  hidden runs).
+- **Why up / down was slower than left / right** (2026-10-31, FUN_0029dab0 decompiled again; until then the mouse's
+  pitch went through the stick): the stick's pitch speed (+0x130 = 0.8^step x the stick's term + the rest x the last
+  one: hardly smoothed) does not move alpha. It moves the pitch the source points are placed at (the camera's stand
+  pitch = asin(Front.z) from +0x220 minus 0.15, table +8, plus the zoom's offset), and alpha eases toward that stand
+  pitch, clamped to the limits: `alpha += clamp((1 - 0.8^step) x (stand - alpha), +-0.1 x step)` (table +0x14 / +0x18;
+  indoors 0.9: twice as slow). The heading's speed (+0x140) is smoothed instead (0.8^step x the last), then added to
+  beta directly. So on the pad the pitch is 0.6 x the heading's top speed (0.000536 / 0.000893: the game's own design,
+  kept) with one ~90 ms lag on each axis; the mouse's pitch through the stick was capped at 1.5 rad/s and eased (the
+  heading had neither). The follow camera's table at `0x487B30` (outdoors; +0x3C indoors, picked by `0x489F7C` being
+  neither 0 nor 4), read from the ELF: +0 0.6 (target height), +4 2, +8 0.15 (pitch offset), +0xC 2, +0x10 4, +0x14 0.8
+  (alpha ease), +0x18 0.1 (its cap a step), +0x1C 0.5, +0x20 0.8 (the speeds' smoothing), +0x24 0.1 (the speeds' cap),
+  +0x28 0.1, +0x2C 0.02, +0x30 1, **+0x34 0.7854 up / +0x38 1.4835 down** (indoors 0.7854 both).
 - **The camera update** (2026-10-30, for the trainer's free camera; FUN_00378dd8 decompiled with `tools/eedecomp.py`):
   FUN_00378dd8 = CCamera::Process. At `0x378FC0` it calls **FUN_00294540 = CCam::Process** on the active CCam
   (`TheCamera + 0x70 + ActiveCam x 0x270`, ActiveCam = byte `TheCamera + 0x50`; the only caller), then
