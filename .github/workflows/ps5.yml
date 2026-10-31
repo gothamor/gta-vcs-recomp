@@ -1,0 +1,38 @@
+# The PS5 build (docs/PS5.md) compiled on every change to the code it builds: tools/ps5.py compile-check, against
+# stand-in generated code (no game code exists here - it only ever exists on a player's PC) and the upstream PS5 payload
+# SDK release the SDK fork builds on (its headers and libc++ are what the game compiles against; the link needs the
+# fork and RADV, which a player's ps5-plume-triangle build brings).
+name: ps5
+
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "ps5/**", "third_party/PS2Recomp/ps2xRuntime/**", "third_party/PS2Recomp/ps2xIOP/**",
+            "CMakeLists.txt", "tools/ps5.py", "tools/ps5_link.py", "tools/toolchain.py", ".github/workflows/ps5.yml"]
+  pull_request:
+    paths: ["src/**", "ps5/**", "third_party/PS2Recomp/ps2xRuntime/**", "third_party/PS2Recomp/ps2xIOP/**",
+            "CMakeLists.txt", "tools/ps5.py", "tools/ps5_link.py", "tools/toolchain.py", ".github/workflows/ps5.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-19 lld-19 llvm-19 glslang-tools ninja-build cmake
+
+      - name: PS5 payload SDK (v0.42, pinned)
+        run: |
+          wget -q https://github.com/ps5-payload-dev/sdk/releases/download/v0.42/ps5-payload-sdk.zip
+          echo "8cfbc7cd5811e719eb4f0c47eea668d3dc7b40bc8ab11c4a5031d40c23ec02da  ps5-payload-sdk.zip" | sha256sum -c
+          unzip -q ps5-payload-sdk.zip -d "$RUNNER_TEMP"
+
+      - name: Compile check
+        run: python3 tools/ps5.py compile-check --sdk "$RUNNER_TEMP/ps5-payload-sdk"

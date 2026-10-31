@@ -1,6 +1,9 @@
 #include "iso_image.h"
 
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -21,6 +24,18 @@ namespace vcs
         {
             return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
         }
+
+#if !defined(_WIN32)
+        bool readWithPread()
+        {
+#if defined(__PROSPERO__)
+            return true; // no file mappings of big files on the PS5
+#else
+            const char *v = std::getenv("VCS_ISO_PREAD");
+            return v && *v && *v != '0';
+#endif
+        }
+#endif
     }
 
     IsoImage::~IsoImage()
@@ -104,15 +119,21 @@ namespace vcs
         }
         struct stat st{};
         fstat(fd, &st);
-        void *view = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-        ::close(fd);
-        if (view == MAP_FAILED)
-        {
-            m_error = "cannot map " + path.string();
-            return false;
-        }
-        m_data = static_cast<const uint8_t *>(view);
         m_size = static_cast<uint64_t>(st.st_size);
+        if (readWithPread())
+            m_fd = fd; // read sector by sector (readBytes); the directory index below reads through it too
+        else
+        {
+            void *view = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+            ::close(fd);
+            if (view == MAP_FAILED)
+            {
+                m_size = 0;
+                m_error = "cannot map " + path.string();
+                return false;
+            }
+            m_data = static_cast<const uint8_t *>(view);
+        }
 #endif
 
         if (m_size < 17 * kSectorSize)
@@ -121,7 +142,13 @@ namespace vcs
             close();
             return false;
         }
-        const uint8_t *pvd = m_data + 16 * kSectorSize;
+        uint8_t pvd[kSectorSize];
+        if (!readBytes(16 * kSectorSize, kSectorSize, pvd))
+        {
+            m_error = "cannot read " + path.string();
+            close();
+            return false;
+        }
         if (pvd[0] != 1 || std::memcmp(pvd + 1, "CD001", 5) != 0)
         {
             m_error = "not an ISO 9660 image";
@@ -144,7 +171,13 @@ namespace vcs
             m_error = "corrupt directory tree";
             return false;
         }
-        const uint8_t *dir = m_data + uint64_t(lba) * kSectorSize;
+        std::vector<uint8_t> records(size);
+        if (!readBytes(uint64_t(lba) * kSectorSize, size, records.data()))
+        {
+            m_error = "corrupt directory tree";
+            return false;
+        }
+        const uint8_t *dir = records.data();
         Children &kids = m_children[normalizePath(prefix)];
         uint32_t pos = 0;
         while (pos < size)
@@ -155,6 +188,10 @@ namespace vcs
                 // Records never cross a sector boundary; zero means skip to the next sector.
                 pos = (pos / kSectorSize + 1) * kSectorSize;
                 continue;
+            }
+            if (length < 34 || pos + length > size)
+            {
+                break; // a record that does not fit its directory: the rest is not readable
             }
             const uint8_t *rec = dir + pos;
             pos += length;
@@ -201,8 +238,13 @@ namespace vcs
         {
             munmap(const_cast<uint8_t *>(m_data), m_size);
         }
+        if (m_fd >= 0)
+        {
+            ::close(m_fd);
+        }
 #endif
         m_data = nullptr;
+        m_fd = -1;
         m_mapping = nullptr;
         m_file = nullptr;
         m_size = 0;
@@ -229,14 +271,35 @@ namespace vcs
 
     bool IsoImage::readBytes(uint64_t offset, size_t byteCount, void *dst) const
     {
-        if (!m_data || offset >= m_size)
+        if (!isOpen() || offset >= m_size)
         {
             std::memset(dst, 0, byteCount);
             return false;
         }
         const uint64_t available = m_size - offset;
         const size_t n = available < byteCount ? static_cast<size_t>(available) : byteCount;
-        std::memcpy(dst, m_data + offset, n);
+#if !defined(_WIN32)
+        if (m_fd >= 0)
+        {
+            // pread: no shared file position, so the streaming, sound and IOP threads read at once
+            uint8_t *out = static_cast<uint8_t *>(dst);
+            size_t done = 0;
+            while (done < n)
+            {
+                const ssize_t got = ::pread(m_fd, out + done, n - done, static_cast<off_t>(offset + done));
+                if (got < 0 && errno == EINTR)
+                    continue;
+                if (got <= 0)
+                {
+                    std::memset(out + done, 0, byteCount - done);
+                    return false;
+                }
+                done += static_cast<size_t>(got);
+            }
+        }
+        else
+#endif
+            std::memcpy(dst, m_data + offset, n);
         if (n < byteCount)
         {
             std::memset(static_cast<uint8_t *>(dst) + n, 0, byteCount - n);

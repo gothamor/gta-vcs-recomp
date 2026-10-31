@@ -82,6 +82,9 @@ trainer: Up / Down or numpad 8 / 2 or the D-pad select, Left / Right or numpad 4
 5 / A applies, Backspace / numpad 0 / Escape / B goes back (and closes it on the first page). The game gets no input
 while a menu is open.
 
+On the PS5 (docs/PS5.md) the touchpad click is Back / Select (the Create button is the system's): touchpad + Options
+opens the settings, touchpad + R1 the trainer, touchpad + L1 the free camera. There is no keyboard or mouse there.
+
 ## Window
 
 Alt+Enter switches between full screen and the window (Display > Window mode; saved in vcs.ini). Enter with Alt

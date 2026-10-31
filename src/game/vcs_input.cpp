@@ -485,7 +485,11 @@ namespace vcs::input
                     {"Left stick click", GAMEPAD_LEFT_STICK},
                     {"Right stick click", GAMEPAD_RIGHT_STICK},
                     {"Start / Options", GAMEPAD_START},
+#if defined(__PROSPERO__)
+                    {"Touchpad click", GAMEPAD_BACK}, // the PS5's Back (platform_ps5.cpp: Create is the system's)
+#else
                     {"Back / View / Share", GAMEPAD_BACK},
+#endif
                     {"D-pad up", GAMEPAD_DPAD_UP},
                     {"D-pad down", GAMEPAD_DPAD_DOWN},
                     {"D-pad left", GAMEPAD_DPAD_LEFT},
@@ -500,6 +504,11 @@ namespace vcs::input
         settings::Spec s;
         auto onChange = [](int) { rebuild(); };
         const std::string kKeys = "Keyboard", kPad = "Gamepad";
+#if defined(__PROSPERO__)
+        constexpr bool kNoKeyboard = true; // the PS5: the DualSense only (the page's settings keep their defaults)
+#else
+        constexpr bool kNoKeyboard = false;
+#endif
 
         for (const Control &c : kControls)
         {
@@ -509,6 +518,7 @@ namespace vcs::input
                 s = {};
                 s.key = "mouse.camera";
                 s.page = kKeys;
+                s.hidden = kNoKeyboard;
                 s.section = "Mouse";
                 s.label = "Mouse camera";
                 s.help = "Moving the mouse turns the camera, and the mouse is held in the window while you play (free again "
@@ -522,6 +532,7 @@ namespace vcs::input
                 s = {};
                 s.key = "mouse.sensitivity";
                 s.page = kKeys;
+                s.hidden = kNoKeyboard;
                 s.section = "Mouse";
                 s.label = "Mouse sensitivity";
                 s.help = "How far the camera turns for a mouse movement (100%: 400 counts, half an inch at 800 DPI, turn the "
@@ -538,6 +549,7 @@ namespace vcs::input
                 s = {};
                 s.key = "mouse.invert_y";
                 s.page = kKeys;
+                s.hidden = kNoKeyboard;
                 s.section = "Mouse";
                 s.label = "Invert mouse up / down";
                 s.help = "Moving the mouse forward looks down instead of up.";
@@ -550,6 +562,7 @@ namespace vcs::input
             s = {};
             s.key = keyId(c, 0);
             s.page = kKeys;
+            s.hidden = kNoKeyboard;
             s.section = c.section;
             s.label = c.label;
             s.help = c.driving ? (c.target == Target::Stick
@@ -581,6 +594,7 @@ namespace vcs::input
                 s = {};
                 s.key = "keys.walk_speed";
                 s.page = kKeys;
+                s.hidden = kNoKeyboard;
                 s.section = c.section;
                 s.label = "Walking speed";
                 s.help = "How far the left stick is tilted while Walk is held (the game walks below about half).";
@@ -598,6 +612,7 @@ namespace vcs::input
         s = {};
         s.key = "controls.menu_key";
         s.page = kKeys;
+        s.hidden = kNoKeyboard;
         s.section = "Menus";
         s.label = "Settings menu";
         s.help = "Opens and closes this menu. On a gamepad: press Back + Start together.";
@@ -609,6 +624,7 @@ namespace vcs::input
         s = {};
         s.key = "controls.trainer_key";
         s.page = kKeys;
+        s.hidden = kNoKeyboard;
         s.section = "Menus";
         s.label = "Trainer menu";
         s.help = "Opens and closes the trainer (god mode, weapons, vehicles, teleports...). On a gamepad: press Back + RB "
@@ -621,6 +637,7 @@ namespace vcs::input
         s = {};
         s.key = "controls.freecam_key";
         s.page = kKeys;
+        s.hidden = kNoKeyboard;
         s.section = "Menus";
         s.label = "Free camera";
         s.help = "Turns the trainer's free camera on and off: fly with W / A / S / D, E and Q, the mouse; Shift faster, "

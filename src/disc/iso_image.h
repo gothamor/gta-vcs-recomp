@@ -1,6 +1,8 @@
 // Read-only access to the user's PS2 disc image (ISO 9660, 2048-byte sectors).
 // The whole image is memory-mapped once; reads are plain memcpy, so the game's
 // sector streaming costs nothing beyond page faults.
+// The PS5 reads with pread instead (docs/PS5.md: a file mapping of a disc image froze the console in the gta4-ps5
+// port); VCS_ISO_PREAD=1 does the same on a PC, to check that path there.
 #pragma once
 
 #include <cstddef>
@@ -34,7 +36,7 @@ namespace vcs
         // Maps the image and indexes every file. Returns false with error() set on failure.
         bool open(const std::filesystem::path &path);
         void close();
-        bool isOpen() const { return m_data != nullptr; }
+        bool isOpen() const { return m_data != nullptr || m_fd >= 0; }
         const std::string &error() const { return m_error; }
 
         // Path lookup is case-insensitive, accepts '/' or '\', an optional
@@ -50,7 +52,7 @@ namespace vcs
         // Copies byteCount bytes starting at a byte offset into the image.
         bool readBytes(uint64_t offset, size_t byteCount, void *dst) const;
 
-        // Direct pointer into the mapping (valid while open).
+        // Direct pointer into the mapping (valid while open); null when the image is read with pread (the PS5).
         const uint8_t *sectorPtr(uint32_t lba) const;
 
         const std::unordered_map<std::string, IsoEntry> &entries() const { return m_entries; }
@@ -65,6 +67,7 @@ namespace vcs
         bool indexDirectory(uint32_t lba, uint32_t size, const std::string &prefix, int depth);
 
         const uint8_t *m_data = nullptr;
+        int m_fd = -1; // pread instead of a mapping (the PS5, VCS_ISO_PREAD=1)
         uint64_t m_size = 0;
         void *m_file = nullptr;
         void *m_mapping = nullptr;

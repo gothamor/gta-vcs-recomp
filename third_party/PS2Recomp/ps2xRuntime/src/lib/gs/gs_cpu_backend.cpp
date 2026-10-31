@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <memory>
 
 using namespace GSInternal;
 
@@ -2048,9 +2049,12 @@ PresentationFrame GSCpuBackend::Present(const GSPresentationRequest &request)
     if (snapshot.empty())
         return {};
 
-    thread_local GSCpuBackend snapshotBackend;
-    snapshotBackend.Initialize(snapshot.data(), static_cast<uint32_t>(snapshot.size()));
-    return snapshotBackend.PresentFromLocalMemory(request);
+    // [gta-recomp] on the heap: the backend is 64-byte aligned, more than a thread_local may be on the PS5 (32)
+    thread_local std::unique_ptr<GSCpuBackend> snapshotBackend;
+    if (!snapshotBackend)
+        snapshotBackend = std::make_unique<GSCpuBackend>();
+    snapshotBackend->Initialize(snapshot.data(), static_cast<uint32_t>(snapshot.size()));
+    return snapshotBackend->PresentFromLocalMemory(request);
 }
 
 PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationRequest &request)

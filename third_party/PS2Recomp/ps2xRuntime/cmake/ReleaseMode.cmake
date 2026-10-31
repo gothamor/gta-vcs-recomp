@@ -46,8 +46,13 @@ function(EnableFastReleaseMode TargetName)
     # -fno-strict-aliasing (MSVC compatibility) and the runtime and generated code read guest memory through casts, so
     # say it here. No stack protector / CET (Ubuntu turns them on; clang-cl gets /GS-, no CET).
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT MSVC)
+        # [gta-recomp] the PS5 (VCS_PS5, docs/PS5.md): its own CPU, Zen 2 (x86-64-v3 and more)
+        set(_ps2x_march -march=x86-64-v3)
+        if(VCS_PS5)
+            set(_ps2x_march -march=znver2)
+        endif()
         target_compile_options(${TargetName} PRIVATE
-            $<$<CONFIG:Release>:-O2 -DNDEBUG -march=x86-64-v3 -ffp-contract=off -fno-math-errno -fno-strict-aliasing
+            $<$<CONFIG:Release>:-O2 -DNDEBUG ${_ps2x_march} -ffp-contract=off -fno-math-errno -fno-strict-aliasing
                                 -fno-stack-protector -fcf-protection=none>
         )
         get_target_property(_type ${TargetName} TYPE)

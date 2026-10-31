@@ -239,6 +239,8 @@ namespace rhi
     {
         const char *const *(*instanceExtensions)(uint32_t *count) = nullptr; // for the surface
         bool (*createSurface)(void *instance, uint64_t *surface) = nullptr;  // VkInstance -> VkSurfaceKHR
+        // the driver's vkGetInstanceProcAddr when it is linked into the game (the PS5's RADV); null: the system's loader
+        void *(*getInstanceProcAddr)() = nullptr;
     };
 
     struct DeviceDesc

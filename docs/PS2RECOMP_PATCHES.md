@@ -219,3 +219,9 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRuntime/src/lib/ps2_pad.cpp`, `include/runtime/ps2_pad.h` | `PSPadBackend::lastInputNs`: the input snapshot the last pad read saw | Same |
 | `ps2xRuntime/src/lib/ps2_write_watch.cpp`, `include/runtime/ps2_write_watch.h` | Linux write watch: userfaultfd asynchronous write-protect + `PAGEMAP_SCAN`; opt-in there (`PS2X_WRITE_WATCH=1`) | The RSL skip on Linux; correct, but page faults on the game thread cancel its gain (PERFORMANCE.md 20) |
 | `ps2xRuntime/CMakeLists.txt` | `FFMPEG_PREBUILT_URL` set only when not given (`-DFFMPEG_PREBUILT_URL=<local zip>`) | A release bundles the FFmpeg archive in `deps/` so the build needs no download (tools/deps.py, docs/LAUNCHER.md) |
+| `ps2xRuntime/include/ps2_guest_cc.h` | `PS2_GUEST_CC` empty on the PS5 / PS4 targets (`__SCE__`) | clang refuses `preserve_none` for them (docs/PS5.md) |
+| `ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp` | The snapshot backend of `Present` a `thread_local unique_ptr` | It is 64-byte aligned: more than a `thread_local` may be on the PS5 (32) |
+| `ps2xRuntime/include/ThreadNaming.h` | FreeBSD's `pthread_set_name_np` | The PS5 |
+| `ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp` | FreeBSD's creation time (`st_birthtim`, else mtime) | Card directory order on the PS5 (game-internals.md 10c) |
+| `ps2xRuntime/cmake/ReleaseMode.cmake` | `-march=znver2` instead of x86-64-v3 for `VCS_PS5` | The PS5's CPU |
+| `ps2xRuntime/CMakeLists.txt` | FFmpeg for `VCS_PS5`: the static libraries `tools/ps5.py ffmpeg` builds (`VCS_PS5_FFMPEG`) | No pkg-config on the console's side |

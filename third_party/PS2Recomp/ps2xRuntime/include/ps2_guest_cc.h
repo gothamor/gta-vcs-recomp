@@ -6,9 +6,11 @@
 // a guest call (the guest's state lives in R5900Context). Host code calling a guest function pays for the saves at that
 // one boundary instead (the scheduler, an override calling the original), which is rare against guest-to-guest calls.
 // docs/PERFORMANCE.md 8. PS2X_GUEST_CC_DEFAULT=1 (a define) keeps the platform's convention.
+// The PS5 (and PS4) targets refuse preserve_none ("not supported for this target", clang 19): the platform's
+// convention there (docs/PS5.md).
 #pragma once
 
-#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64)) && !defined(PS2X_GUEST_CC_DEFAULT)
+#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64)) && !defined(PS2X_GUEST_CC_DEFAULT) && !defined(__SCE__)
 #define PS2_GUEST_CC __attribute__((preserve_none))
 #else
 #define PS2_GUEST_CC

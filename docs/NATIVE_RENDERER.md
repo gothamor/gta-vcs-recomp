@@ -51,6 +51,7 @@ Title flyover, i7-7700K, `PS2X_GS=hw` (see PROGRESS.md, performance table):
                                                │
  src/platform    platform.h (window, events, input, audio, time)
                  platform_sdl3/ (SDL3; only place with SDL / windows.h)
+                 platform_ps5   (the PS5's own libraries: docs/PS5.md)
 ```
 
 Rules:

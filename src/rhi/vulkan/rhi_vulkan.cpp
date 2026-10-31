@@ -379,7 +379,11 @@ namespace rhi
 
             bool create(const DeviceDesc &desc, std::string &error)
             {
-                if (volkInitialize() != VK_SUCCESS)
+                // a driver linked into the game (the PS5's RADV, docs/PS5.md) stands in for the loader library
+                void *linked = desc.vulkan.getInstanceProcAddr ? desc.vulkan.getInstanceProcAddr() : nullptr;
+                if (linked)
+                    volkInitializeCustom(reinterpret_cast<PFN_vkGetInstanceProcAddr>(linked));
+                else if (volkInitialize() != VK_SUCCESS)
                 {
                     error = "no Vulkan loader (libvulkan.so.1 / vulkan-1.dll): install the GPU's Vulkan driver";
                     return false;

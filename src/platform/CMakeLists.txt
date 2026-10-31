@@ -1,24 +1,27 @@
 # Host platform layer (docs/NATIVE_RENDERER.md): SDL3 window / input / audio and the Dear ImGui context with its
 # input backend. The runtime links it (with src/render) through ps2_host_backend (PS2X_HOST_PLATFORM_TARGET).
+# The PS5 (VCS_PS5, docs/PS5.md) has its own: platform_ps5.cpp, on the console's own libraries (no SDL).
 include(FetchContent)
 
-set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-set(SDL_STATIC ON CACHE BOOL "" FORCE)
-set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
-set(SDL_TESTS OFF CACHE BOOL "" FORCE)
-set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
-# Linux: XTest only serves SDL's global mouse warp (the game captures the mouse through XInput2's relative motion);
-# off, so the build needs one package less (SDL stops at a missing one it was asked for)
-set(SDL_X11_XTEST OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    SDL3
-    GIT_REPOSITORY "https://github.com/libsdl-org/SDL.git"
-    GIT_TAG "release-3.4.18"
-    GIT_SHALLOW TRUE
-    GIT_PROGRESS TRUE
-)
-FetchContent_MakeAvailable(SDL3)
+if(NOT VCS_PS5)
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+    set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+    set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+    # Linux: XTest only serves SDL's global mouse warp (the game captures the mouse through XInput2's relative motion);
+    # off, so the build needs one package less (SDL stops at a missing one it was asked for)
+    set(SDL_X11_XTEST OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        SDL3
+        GIT_REPOSITORY "https://github.com/libsdl-org/SDL.git"
+        GIT_TAG "release-3.4.18"
+        GIT_SHALLOW TRUE
+        GIT_PROGRESS TRUE
+    )
+    FetchContent_MakeAvailable(SDL3)
+endif()
 
 # Same version the runtime's debug panel was written against; the runtime reuses this target.
 FetchContent_Declare(
@@ -48,10 +51,26 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(zlib)
 
-add_library(vcs_platform STATIC
-    platform_sdl3.cpp
-    "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
-)
+if(VCS_PS5)
+    # the TV's Vulkan surface (VK_KHR_display) is made here, as SDL makes the window's: the headers only (the driver,
+    # RADV, is linked into the game by tools/ps5_link.py)
+    FetchContent_Declare(
+        VulkanHeaders
+        GIT_REPOSITORY "https://github.com/KhronosGroup/Vulkan-Headers.git"
+        GIT_TAG "vulkan-sdk-1.4.350.1"
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(VulkanHeaders)
+    add_library(vcs_platform STATIC platform_ps5.cpp platform_common.cpp)
+    target_compile_definitions(vcs_platform PRIVATE VK_NO_PROTOTYPES)
+    target_link_libraries(vcs_platform PUBLIC imgui PRIVATE Vulkan::Headers zlibstatic)
+else()
+    add_library(vcs_platform STATIC
+        platform_sdl3.cpp
+        platform_common.cpp
+        "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
+    )
+    target_link_libraries(vcs_platform PUBLIC imgui PRIVATE SDL3::SDL3-static zlibstatic)
+endif()
 target_include_directories(vcs_platform PUBLIC "${CMAKE_SOURCE_DIR}/src"
                            PRIVATE "${imgui_SOURCE_DIR}/backends" "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
-target_link_libraries(vcs_platform PUBLIC imgui PRIVATE SDL3::SDL3-static zlibstatic)

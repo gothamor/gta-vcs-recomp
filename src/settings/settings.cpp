@@ -124,7 +124,7 @@ namespace settings
     {
         std::vector<std::string> out;
         for (const Spec &s : g_specs)
-            if (std::find(out.begin(), out.end(), s.page) == out.end())
+            if (!s.hidden && std::find(out.begin(), out.end(), s.page) == out.end()) // (a page of hidden rows: none)
                 out.push_back(s.page);
         return out;
     }

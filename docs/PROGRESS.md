@@ -676,6 +676,31 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 - [ ] A PC with nothing installed (Windows Sandbox): setup_vs.py's real install. A real DVD drive. CI's first run and
       the first tagged release. Code signing.
 
+## Milestone 10 - the PS5 (started 2026-10-31)
+
+The user's request: the PC port as a native PS5 game (jailbroken consoles, homebrew), with the gta4-ps5 port as the
+reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
+- [x] Toolchain: `ps5/cmake/ps5-toolchain.cmake` (the host's clang 19+ for `x86_64-sie-ps5`, the payload SDK's headers
+      and libc++, znver2); the recompiler stays on the host; `-march=znver2` in ReleaseMode.
+- [x] The link (`tools/ps5_link.py`, CMake's link rule): ps5-plume-triangle's recipe - RADV, the SDK fork's platform
+      layer (direct-memory heap, thread stacks, the missing libc functions), libc++, the start-up code; emulated TLS and
+      `stat` wrapper in `ps5/runtime`.
+- [x] Packaging and the rest (`tools/ps5.py`): check, build, package (eboot.bin, libc.prx, param.json, a drawn icon,
+      the RELRO padding fallback), ffmpeg, deploy (FTP), compile-check; CI `.github/workflows/ps5.yml`.
+- [x] Platform layer `src/platform/platform_ps5.cpp`: the TV through VK_KHR_display, the DualSense (scePad; touchpad =
+      Select), sceAudioOut, TSC frame pacing, Dear ImGui from the pad, notifications. platform.h:
+      `vulkanGetInstanceProcAddr`, `notify`; key names and the PNG writer shared (`platform_common.cpp`).
+- [x] Vulkan on RADV without a loader (`volkInitializeCustom`); the disc read with pread (`VCS_ISO_PREAD=1` on a PC);
+      `/app0` paths and `logs/vcs.log`; start-up errors as notifications; the MXCSR check; crash reports with offsets
+      into vcs.elf; *TV output* setting; keyboard page and PC-only settings hidden.
+- [x] Runtime: `preserve_none` off for the PS5 target (refused by clang), the 64-byte `thread_local` on the heap, FreeBSD
+      thread names and card birth times (PS2RECOMP_PATCHES.md).
+- [x] Checked here: every library and object compiles for the PS5 and the game links (stand-in generated code, an
+      empty RADV archive); the packaging (a stand-in converter, padding path included); pread reads byte-identical to
+      the mapping (ASan / UBSan); the Linux build and its start-up messages unchanged.
+- [ ] The first run on a console (docs/PS5.md's checklist); FFmpeg for the PS5 built and the movies checked; frame
+      rate there; ThinLTO; 120 Hz / VRR; DualSense extras; the control channel on the LAN.
+
 ## Useful switches
 | Env var | Effect |
 |---|---|

@@ -209,6 +209,13 @@ option(PS2X_ENABLE_FFMPEG "Enable FFmpeg-backed MPEG video decoding" ${PS2X_ENAB
 if(NOT PS2X_ENABLE_FFMPEG)
     message(STATUS "FFmpeg disabled; MPEG video decode falls back to stub frames")
     add_library(ffmpeg INTERFACE)
+elseif(VCS_PS5)
+    # [gta-recomp] the PS5: static libraries built for the console (tools/ps5.py ffmpeg -> VCS_PS5_FFMPEG); only the
+    # MPEG-2 video decoder and swscale are used
+    add_library(ffmpeg INTERFACE)
+    target_include_directories(ffmpeg INTERFACE "${VCS_PS5_FFMPEG}/include")
+    target_link_libraries(ffmpeg INTERFACE "${VCS_PS5_FFMPEG}/lib/libswscale.a" "${VCS_PS5_FFMPEG}/lib/libavcodec.a"
+                          "${VCS_PS5_FFMPEG}/lib/libavutil.a")
 elseif(WIN32)
     include(ExternalProject)
 

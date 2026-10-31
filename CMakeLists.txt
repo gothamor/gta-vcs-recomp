@@ -11,6 +11,14 @@ set(PS2X_LTO "THIN" CACHE STRING "Link-time optimisation for the game: THIN (def
 set(PS2X_PGO "" CACHE STRING "Profile-guided optimisation: empty (off), GEN (instrumented), or a .profdata path (tools/build.py --opt)")
 option(VCS_BUILD_TOOLS "Build the PS2Recomp recompiler/analyzer" ON)
 
+# The PS5 (docs/PS5.md): a cross build (ps5/cmake/ps5-toolchain.cmake sets VCS_PS5). The recompiler runs on the host
+# (tools/recompile.py, the PC build tree), so it is not built here; the game's link is tools/ps5_link.py.
+option(VCS_PS5 "PS5 build (set by ps5/cmake/ps5-toolchain.cmake)" OFF)
+if(VCS_PS5)
+    set(VCS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    include("${CMAKE_SOURCE_DIR}/ps5/cmake/ps5.cmake")
+endif()
+
 set(PS2X_BUILD_RECOMP ${VCS_BUILD_TOOLS} CACHE BOOL "" FORCE)
 set(PS2X_BUILD_ANALYZER ${VCS_BUILD_TOOLS} CACHE BOOL "" FORCE)
 set(PS2X_BUILD_TEST OFF CACHE BOOL "" FORCE)
@@ -88,6 +96,9 @@ if(VCS_HAVE_GENERATED)
     endif()
     target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_link_libraries(ps2EntryRunner PRIVATE vcs_host) # main.cpp: settings menu (Dear ImGui), presenter aspect
+    if(VCS_PS5)
+        vcs_ps5_game(ps2EntryRunner) # ps5/cmake/ps5.cmake: the console's start-up pieces, the link, the eboot's name
+    endif()
     # Our own sources aren't generated code; keep them out of the unity batches.
     set_source_files_properties(${VCS_SOURCES} "${CMAKE_SOURCE_DIR}/src/main.cpp"
         TARGET_DIRECTORY ps2EntryRunner
@@ -122,6 +133,8 @@ elseif(VCS_RUNTIME_DEBUG_INFO)
     if(VCS_HAVE_GENERATED)
         set_source_files_properties(${VCS_SOURCES} "${CMAKE_SOURCE_DIR}/src/main.cpp"
             TARGET_DIRECTORY ps2EntryRunner PROPERTIES COMPILE_OPTIONS "-gline-tables-only;-fno-omit-frame-pointer")
-        target_link_options(ps2EntryRunner PRIVATE -rdynamic)
+        if(NOT VCS_PS5) # the PS5's crash report walks frame pointers and prints offsets into the ELF (src/debug/crash.cpp)
+            target_link_options(ps2EntryRunner PRIVATE -rdynamic)
+        endif()
     endif()
 endif()

@@ -1,6 +1,7 @@
 // Host platform layer: window, events, keyboard / mouse / gamepad, audio output, frame pacing and the Dear ImGui
 // frame. The runtime and the renderer talk to the host only through this header (docs/NATIVE_RENDERER.md);
-// platform_sdl3.cpp implements it with SDL3. No SDL, windows.h or graphics-API types appear here.
+// platform_sdl3.cpp implements it with SDL3 (Windows, Linux), platform_ps5.cpp with the PS5's own libraries
+// (docs/PS5.md); platform_common.cpp holds what both share. No SDL, windows.h or graphics-API types appear here.
 //
 // Threads: init / shutdown / pumpEvents / the frame calls and keyPressed belong to the main thread. The input
 // queries (keyDown, mouseDown, gamepad*) read a snapshot taken by pumpEvents and may be called from any thread
@@ -158,6 +159,13 @@ namespace platform
     // For the Vulkan renderer (rhi::VulkanWindow), on a window made with WindowDesc::vulkan. Main thread.
     const char *const *vulkanInstanceExtensions(uint32_t *count); // the instance extensions the surface needs
     bool vulkanCreateSurface(void *instance, uint64_t *surface);  // VkInstance -> VkSurfaceKHR
+    // The Vulkan driver's vkGetInstanceProcAddr (a PFN_vkGetInstanceProcAddr) when the driver is linked into the game
+    // (the PS5's RADV: there is no loader library); null when the system's loader is to be loaded (volk).
+    void *vulkanGetInstanceProcAddr();
+
+    // A short message for the player outside the game's picture, for when the game cannot start (no disc...): the PS5's
+    // notification. Elsewhere nothing: the caller's log line is on the console / in the log.
+    void notify(const char *message);
 
     // Main thread, once per host frame, in this order:
     //   pumpEvents()      events + input snapshot

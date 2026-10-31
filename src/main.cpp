@@ -7,6 +7,9 @@
 //
 // Without an argument it uses "iso=" from vcs.ini next to the exe, then the
 // first *.iso in the exe's folder or the current folder.
+//
+// The PS5 (docs/PS5.md): the app's folder is /app0 (vcs.ini, userdata/ for the memory card, logs/vcs.log); the disc
+// is "iso=" from vcs.ini, the first .iso in /app0/disc or /app0, or a "*Vice City Stories*.iso" on a USB drive.
 #include "ps2_runtime.h"
 #include "runtime/gs/gs_hw.h"
 #include "runtime/ps2_disc_image.h"
@@ -54,6 +57,10 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
+
+#if defined(__PROSPERO__)
+#include <immintrin.h>
 #endif
 
 #if defined(PS2X_PGO_GEN)
@@ -113,7 +120,9 @@ namespace
 
     fs::path exeDirectory()
     {
-#if defined(_WIN32)
+#if defined(__PROSPERO__)
+        return fs::path("/app0"); // the app's folder (writable: a homebrew app runs from /data/homebrew/<title id>)
+#elif defined(_WIN32)
         wchar_t buffer[MAX_PATH];
         const DWORD n = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
         if (n > 0 && n < MAX_PATH)
@@ -132,6 +141,9 @@ namespace
         // VCS_DATA_DIR: another save / cache folder (scripted test runs start from an empty memory card)
         if (const char *dir = std::getenv("VCS_DATA_DIR"); dir && *dir)
             return fs::path(dir);
+#if defined(__PROSPERO__)
+        return exeDirectory() / "userdata"; // no HOME on the PS5: the card and the cache live with the app
+#endif
 #if defined(_WIN32)
         if (const char *local = std::getenv("LOCALAPPDATA"))
             return fs::path(local) / "VCSRecomp";
@@ -363,6 +375,23 @@ namespace
         s.onChange = [](int) { applyPreset("Widescreen, light", kLight); };
         settings::add(s);
 
+#if defined(__PROSPERO__)
+        // The TV's mode (src/platform/platform_ps5.cpp): read when the picture starts
+        s = {};
+        s.key = "display.ps5_output";
+        s.page = "Display";
+        s.section = "Screen";
+        s.label = "TV output";
+        s.help = "The resolution the PS5 sends to the TV. Automatic is 4K when the TV takes it; 1080p suits 1080p TVs that "
+                 "also report 4K. The game's own picture is scaled to it (Graphics > Internal resolution).";
+        s.type = Type::Choice;
+        s.choices = {{"Automatic (4K when the TV has it)", 0}, {"1080p", 1080}, {"1440p", 1440}, {"4K (2160p)", 2160}};
+        s.defaultValue = 0;
+        s.apply = Apply::Restart;
+        s.env = "VCS_PS5_OUTPUT";
+        s.onChange = [](int v) { setEnv("VCS_PS5_OUTPUT", std::to_string(v)); };
+        settings::add(s);
+#else
         s = {};
         s.key = "display.window";
         s.page = "Display";
@@ -377,6 +406,7 @@ namespace
         s.onChange = [](int v) { platform::setFullscreen(v != 0); };
         s.read = [] { return platform::fullscreen() ? 1 : 0; };
         settings::add(s);
+#endif
 
         s = {};
         s.key = "display.aspect";
@@ -550,6 +580,7 @@ namespace
         s.onChange = [](int v) { vcs::setSkipIntroMovies(v != 0); };
         settings::add(s);
 
+#if !defined(__PROSPERO__) // the PS5 suspends the app itself when it leaves the screen
         s = {};
         s.key = "game.background";
         s.page = "Game";
@@ -561,6 +592,7 @@ namespace
         s.choices = {{"Keep running", 0}, {"Mute", 1}, {"Pause", 2}};
         s.defaultValue = 0;
         settings::add(s);
+#endif
 
         s = {};
         s.key = "display.msaa";
@@ -687,15 +719,81 @@ namespace
         return {};
     }
 
+    // The first "*Vice City Stories*.iso" in `dir` (any case), for folders that hold other games too (USB drives).
+    fs::path namedIsoIn(const fs::path &dir)
+    {
+        std::error_code ec;
+        for (const auto &entry : fs::directory_iterator(dir, ec))
+        {
+            std::string name = entry.path().filename().string();
+            for (char &c : name)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (name.find("vice city stories") != std::string::npos && name.size() > 4 &&
+                name.compare(name.size() - 4, 4, ".iso") == 0 && entry.is_regular_file(ec))
+                return entry.path();
+        }
+        return {};
+    }
+
     fs::path locateIso(int argc, char *argv[])
     {
         if (argc >= 2 && argv[1] && argv[1][0])
             return fs::u8path(argv[1]);
         if (fs::path p = isoFromIni(exeDirectory() / "vcs.ini"); !p.empty())
             return p;
+#if defined(__PROSPERO__)
+        if (fs::path p = firstIsoIn(exeDirectory() / "disc"); !p.empty())
+            return p;
+        if (fs::path p = firstIsoIn(exeDirectory()); !p.empty())
+            return p;
+        for (int usb = 0; usb < 8; ++usb) // USB drives (exFAT / FAT32), the top folder and a games/ folder
+            for (const char *sub : {"", "games"})
+                if (fs::path p = namedIsoIn(fs::path("/mnt/usb" + std::to_string(usb)) / sub); !p.empty())
+                    return p;
+        return {};
+#else
         if (fs::path p = firstIsoIn(exeDirectory()); !p.empty())
             return p;
         return firstIsoIn(fs::current_path());
+#endif
+    }
+
+#if defined(__PROSPERO__)
+    // The PS5 has no console window: stdout and stderr go to /app0/logs/vcs.log (the run before kept as vcs.prev.log),
+    // line by line so a crash keeps the end.
+    void ps5Log()
+    {
+        const fs::path dir = exeDirectory() / "logs";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        fs::rename(dir / "vcs.log", dir / "vcs.prev.log", ec);
+        const std::string log = (dir / "vcs.log").string();
+        if (FILE *f = std::fopen(log.c_str(), "w")) // a new, empty log; both streams then append to it (one offset)
+            std::fclose(f);
+        if (std::freopen(log.c_str(), "a", stderr))
+            std::setvbuf(stderr, nullptr, _IOLBF, 0);
+        if (std::freopen(log.c_str(), "a", stdout))
+            std::setvbuf(stdout, nullptr, _IOLBF, 0);
+    }
+
+    // The app's start-up code sets the IEEE floating-point state (MXCSR 0x1f80, as on a PC) before main; the console's
+    // own is flush-to-zero with denormals-are-zero (0x9fe0), which the game's numerics were never checked against.
+    void ps5FloatingPoint()
+    {
+        const unsigned csr = _mm_getcsr();
+        if ((csr & ~0x3Fu) != 0x1F80u) // (the low six bits are sticky exception flags)
+        {
+            std::fprintf(stderr, "[main] MXCSR 0x%04x at start: set to 0x1f80 (the PC's)\n", csr);
+            _mm_setcsr(0x1F80u);
+        }
+    }
+#endif
+
+    // A start-up failure, in the log and for the player (the PS5's notification: there is no console window there).
+    void reportStartFailure(const std::string &message)
+    {
+        std::cerr << message << std::endl;
+        platform::notify(("Vice City Stories - " + message).c_str());
     }
 
     // Writes the guest ELF from the disc into the cache folder (runtime loads it from a file). 0, or vcs.exe's exit
@@ -733,6 +831,10 @@ namespace
 
 int main(int argc, char *argv[])
 {
+#if defined(__PROSPERO__)
+    ps5Log();
+    ps5FloatingPoint();
+#endif
     vcs::installCrashHandlers();
     try
     {
@@ -749,16 +851,21 @@ int main(int argc, char *argv[])
         const fs::path isoPath = locateIso(argc, argv);
         if (isoPath.empty())
         {
+#if defined(__PROSPERO__)
+            reportStartFailure("No disc image found. Copy your Vice City Stories (USA) .iso into the app's disc folder "
+                               "(/data/homebrew/<title id>/disc/) or onto a USB drive.");
+#else
             std::cerr << "No disc image found. Pass your Vice City Stories (USA) .iso as the first argument,\n"
                          "put iso=<path> in vcs.ini next to vcs.exe, or place the .iso next to vcs.exe."
                       << std::endl;
+#endif
             return vcs::disc::kExitNoDisc;
         }
 
         vcs::IsoImage iso;
         if (!iso.open(isoPath))
         {
-            std::cerr << "Cannot read disc image " << isoPath.string() << ": " << iso.error() << std::endl;
+            reportStartFailure("Cannot read disc image " + isoPath.string() + ": " + iso.error());
             return vcs::disc::kExitDiscUnreadable;
         }
 
@@ -767,7 +874,7 @@ int main(int argc, char *argv[])
         std::string error;
         if (const int code = stageElf(iso, elfPath, error))
         {
-            std::cerr << error << std::endl;
+            reportStartFailure(error);
             return code;
         }
 
@@ -810,7 +917,7 @@ int main(int argc, char *argv[])
                                     nullptr, nullptr);
         if (!runtime.initialize("GTA: Vice City Stories"))
         {
-            std::cerr << "Failed to initialize runtime" << std::endl;
+            reportStartFailure("Failed to initialize runtime");
             return vcs::disc::kExitInitFailed;
         }
         if (!runtime.loadELF(elfPath.string()))

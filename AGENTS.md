@@ -19,6 +19,7 @@ detailed knowledge lives in `docs/`:
 | [docs/TRAINER.md](docs/TRAINER.md) | The trainer (F5): what it does, how (the game's script commands), its check |
 | [docs/LINUX.md](docs/LINUX.md) | The Linux build: packages, flags, the Vulkan backend, what differs from Windows, the work list |
 | [docs/LAUNCHER.md](docs/LAUNCHER.md) | The launcher and releases: what a release holds, the player's flow, the tools behind each button, the `@vcs` events, what was checked |
+| [docs/PS5.md](docs/PS5.md) | The PS5 build (jailbroken consoles): toolchain, the link recipe, packaging, the PS5 platform layer, what differs, the first-run checklist, the work list |
 
 **When you learn something about the game, write it into docs/game-internals.md in the same change.**
 Record addresses and how you found them. When something is weird, use judgment, fix or work around it,
@@ -30,8 +31,9 @@ choices).
 - GTA: Vice City Stories (PS2, SLUS-21590 USA) statically recompiled to C++ (PS2Recomp, vendored and
   heavily modified in `third_party/PS2Recomp`), turned step by step into a native port: native D3D11
   rendering of the game's models (`src/game/vcs_hle_world.cpp`), SDL3 platform layer, settings menu.
-- Windows and Linux (docs/LINUX.md: clang, Vulkan; a plain host build). macOS later is possible (SDL3 + the RHI); the
-  Steam Deck is postponed.
+- Windows and Linux (docs/LINUX.md: clang, Vulkan; a plain host build), and the PS5 as a homebrew app (docs/PS5.md:
+  the host's clang for `x86_64-sie-ps5`, the Vulkan renderer on RADV, its own platform layer; built on Linux). macOS
+  later is possible (SDL3 + the RHI); the Steam Deck is postponed.
 - Distribution is source-only, bring your own disc. **Never commit game code or data**: no ISO, no
   ELF, no generated C++ (`generated/`), no disassembly listings, no extracted assets. Analysis dumps go
   to `build/analysis/` (ignored). Function maps (names + addresses) and docs describing behaviour are
@@ -44,7 +46,7 @@ choices).
 |---|---|
 | `src/main.cpp` | Launcher: ISO, settings registration, runtime start |
 | `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`), frame timing (`vcs_framerate.cpp`, per-frame mission meters `vcs_script_timing.cpp`), the player's controls (`vcs_input.cpp`), the game's music / effects levels as settings (`vcs_volume.cpp`) |
-| `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders (HLSL; DXBC by fxc, SPIR-V by `tools/hlsl_spirv.py`), the RHI (backends `d3d11/`, `vulkan/`, `null/`; only they see a graphics API), SDL3 platform layer |
+| `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders (HLSL; DXBC by fxc, SPIR-V by `tools/hlsl_spirv.py`), the RHI (backends `d3d11/`, `vulkan/`, `null/`; only they see a graphics API), platform layer (SDL3; `platform_ps5.cpp` on the PS5) |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
 | `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2), the trainer menu (F5) |
 | `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch |
@@ -52,6 +54,7 @@ choices).
 | `game/vcs/` | Recompiler config, function map, VU1 upload list |
 | `tools/` | Python 3 tools (standard library only) - see below |
 | `launcher/` | `VCSLauncher.exe` (SDL3 + Dear ImGui, a CMake project of its own): disc, build tools, build, play - a front end over `tools/` (docs/LAUNCHER.md) |
+| `ps5/` | The PS5 build's own pieces: the CMake toolchain file and link rule (`cmake/`), start-up code linked into the game (`runtime/`: emulated TLS, `stat` wrapper, RELRO padding) - docs/PS5.md |
 
 ## Build and run
 
@@ -92,6 +95,8 @@ python tools/soundcheck.py all OUT [--mission N]             # native sound vs t
 python tools/trainer_check.py [OUT] [--vehicles all]          # every trainer feature, checked in the game's memory
 python tools/finale_check.py [OUT] [--story] [--full]         # Last Stand's end from the trainer: final cutscene, credits
 python tools/controls_check.py [OUT]                          # bindings, presets, reset, vibration, volume levels; menu screenshots
+python3 tools/ps5.py check|build|package|ffmpeg|deploy        # the PS5 build (docs/PS5.md): build/ps5/app/<title id>
+python3 tools/ps5.py compile-check --sdk DIR                  # the PS5 build compiled against stand-in code (no disc; CI)
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```
@@ -161,6 +166,8 @@ card copies to start from (never the user's live card).
 - A mission stuck after a ped should talk, or peds vanishing: check the mission audio slots and who deletes the ped
   (`VCS_TRACE_PED_REMOVE`, game-internals.md 12); Shakedown's was the recompiler's 32-bit compare-with-zero branches.
 - Something wrong only above 100 fps: a `ms_fTimeStep < 0.5` branch the PS2 never takes (game-internals.md 4).
+- A PS5-only failure: start from docs/PS5.md's first-run checklist (`logs/vcs.log` in the app's folder on the console);
+  crash lines give offsets into `build/ps5/vcs.elf` and the `llvm-symbolizer` command for them.
 - A mission bar / meter / timer faster at high frame rates: the mission script adds a fixed amount every frame; add
   the instruction to `src/game/vcs_script_timing.cpp` (game-internals.md 11f has the survey and how to read a mission).
 - Load Game stuck on "Loading..." then a return to text (`0x4548435F`) from the script VM: host code took a game

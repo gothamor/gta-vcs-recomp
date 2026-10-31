@@ -10,6 +10,11 @@ The build reads the executable from your disc, and the finished game reads every
 Status: in development. See [docs/PROGRESS.md](docs/PROGRESS.md) for what works, and [docs/LINUX.md](docs/LINUX.md)
 for the Linux build in detail.
 
+**PS5 (jailbroken consoles, homebrew):** the same game builds as a native PS5 app too - the Vulkan renderer on the
+console's RADV driver, the DualSense, 4K output - on a Linux PC with the toolchain of the gta4-ps5 port
+(ps5-plume-triangle). Not run on a console yet: [docs/PS5.md](docs/PS5.md) has the build, the install and the
+first-run checklist (`python3 tools/ps5.py check`, then `build`).
+
 ## Install on Windows: the launcher (easiest)
 
 1. Download the newest `VCS-Recomp-<version>-windows.zip` from the [Releases](../../releases) page and extract it

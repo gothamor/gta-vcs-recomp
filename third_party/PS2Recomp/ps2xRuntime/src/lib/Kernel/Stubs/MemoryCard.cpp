@@ -14,6 +14,8 @@
 #elif defined(__linux__)
 #include <fcntl.h>    // AT_FDCWD
 #include <sys/stat.h> // statx: the birth time
+#elif defined(__FreeBSD__)
+#include <sys/stat.h> // [gta-recomp] the PS5: st_birthtim
 #endif
 
 namespace ps2_stubs
@@ -304,8 +306,8 @@ namespace ps2_stubs
             }
         }
 
-        // Creation time where the host has one (Windows; Linux file systems with a birth time, ext4 / btrfs / xfs), else
-        // the last write. Only an order between new entries: .ps2x-order holds the card's order once known.
+        // Creation time where the host has one (Windows; Linux file systems with a birth time, ext4 / btrfs / xfs; the
+        // PS5's FreeBSD), else the last write. Only an order between new entries: .ps2x-order holds the card's order once known.
         uint64_t mcCreationTime(const std::filesystem::directory_entry &entry)
         {
 #if defined(_WIN32)
@@ -320,6 +322,13 @@ namespace ps2_stubs
             {
                 const statx_timestamp &t = (st.stx_mask & STATX_BTIME) ? st.stx_btime : st.stx_mtime;
                 return static_cast<uint64_t>(t.tv_sec) * 1000000000ull + t.tv_nsec;
+            }
+#elif defined(__FreeBSD__)
+            struct stat st{}; // FreeBSD keeps a birth time (the PS5's exFAT / UFS: tv_sec -1 or 0 when there is none)
+            if (::stat(entry.path().c_str(), &st) == 0)
+            {
+                const timespec &t = st.st_birthtim.tv_sec > 0 ? st.st_birthtim : st.st_mtim;
+                return static_cast<uint64_t>(t.tv_sec) * 1000000000ull + static_cast<uint64_t>(t.tv_nsec);
             }
 #endif
             std::error_code ec;

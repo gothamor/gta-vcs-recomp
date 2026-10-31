@@ -672,3 +672,33 @@ every file came out up to 13.5 h in the future, newer than any build.ninja CMake
   reports them (it changes nothing). A build tree that already looped recovers without being deleted (checked).
 - Ninja's "still dirty" still gets its own failure (`file_dates`) for what the repair can't reach - a clock that is
   wrong, a read-only file.
+
+## 2026-10-31 - The PS5: a native homebrew app on the gta4-ps5 port's toolchain
+
+The user asked for the PC port to become a native PS5 game, with the gta4-ps5 port (GTA IV on jailbroken PS5s) as a
+reference. docs/PS5.md has the whole of it.
+- **The same game, a third platform.** Not a fork: one source, `VCS_PS5` (set by `ps5/cmake/ps5-toolchain.cmake`) and
+  `__PROSPERO__` where the code differs. The Linux build's Vulkan renderer draws on the PS5 too; only the platform
+  layer (`platform_ps5.cpp`), the start-up pieces (`ps5/runtime`), the link and the packaging are the PS5's.
+- **The toolchain gta4-ps5 shipped with**, not a new one: ps5-plume-triangle's payload SDK fork, PS5_Mesa's RADV,
+  start-up code, libc.prx and ps5-native-tool - the pieces proven on consoles. The player builds the triangle once;
+  nothing of it is copied here except what had to change (the emutls fix and `stat` wrapper, from gta4-ps5, GPL-3.0).
+  The recipe gta4-ps5 runs as a shell script is Python here (`tools/ps5_link.py`, `tools/ps5.py`: the repository's
+  rule), and the link is CMake's link rule, so a rebuild relinks as on a PC.
+- **The host's clang 19+**, the PC builds' compiler, not a bundled one: the same generated code and numerics.
+- **No SDL**: SDL3 has no backend for the PS5's display, pad and audio (gta4-ps5 builds SDL with dummy drivers and
+  writes its own anyway); platform.h was already free of SDL, so a second implementation is the smaller thing.
+- **The disc is read with pread**: a file mapping of a disc image froze the console in gta4-ps5. On a PC the mapping
+  stays (`VCS_ISO_PREAD=1` takes the pread path there, to check it).
+- **The touchpad click is Select**: the Create button is the system's. The PC's pad chords (Back + Start, Back + R1,
+  Back + L1) then open the menus with no new code.
+- **The platform's calling convention for guest functions**: clang refuses `preserve_none` for the PS5 target. 3-7% of
+  game-thread time on the PC (PERFORMANCE.md 8); the PS5's Zen 2 has the headroom for 60 fps, to be measured.
+- **Authentic defaults stay**: 4:3, the original resolution scaled to the TV, 60 fps. *TV output* (4K / 1440p / 1080p)
+  replaces *Window mode*; the presets work as on a PC.
+- **Checked without a console**: the whole game compiles and links for the PS5 (stand-in generated code, an empty RADV
+  archive), the packaging runs (a stand-in converter), the pread reads are byte-identical to the mapping, the Linux
+  build is unchanged. Running the triangle's setup scripts, RADV's build and ps5-native-tool was not possible where it
+  was written; the first console run is the next step (docs/PS5.md's checklist).
+- **A homebrew title id**, PPSA94590 (high in the PPSA range like gta4-ps5's PPSA94004; ...590 for SLUS-21590),
+  `--title-id` for another. The home-screen icon is drawn by tools/ps5.py: no artwork of the game's.
