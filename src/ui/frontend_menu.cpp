@@ -6,11 +6,28 @@
 
 #include "imgui.h"
 
+// ImGui 1.92 implements this user-texture path (used by both the D3D11 and RHI backends) but still leaves its
+// experimental declaration out of imgui.h.
+namespace ImGui
+{
+    IMGUI_API void RegisterUserTexture(ImTextureData *texture);
+}
+
+#define STBI_ONLY_PNG
+#define STBI_NO_STDIO
+#include "../../third_party/stb/stb_image.h"
+
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <thread>
+#include <vector>
 
 namespace ui::frontend
 {
@@ -26,6 +43,13 @@ namespace ui::frontend
         bool g_startSubmenu = false;
         bool g_quitConfirm = false;
         std::atomic<bool> g_pauseDismissed{false};
+        ImTextureData *g_background = nullptr;
+        bool g_backgroundTried = false;
+
+        constexpr const char *kPalmBackground = "db7fe6220bfa99e-400b40212c17643-00006213.png";
+        constexpr ImU32 kCyan = IM_COL32(18, 211, 215, 255);
+        constexpr ImU32 kPink = IM_COL32(194, 91, 142, 255);
+        constexpr ImU32 kWhite = IM_COL32(225, 225, 225, 255);
 
         struct Step
         {
@@ -46,31 +70,59 @@ namespace ui::frontend
             g_startSubmenu = false;
         }
 
-        bool menuButton(const char *label)
+        void loadBackground()
         {
-            const float width = ImGui::GetContentRegionAvail().x;
-            return ImGui::Button(label, ImVec2(width, 42.0f));
+            if (g_backgroundTried)
+                return;
+            g_backgroundTried = true;
+            const char *pack = std::getenv("VCS_TEXTURE_PACK");
+            if (!pack || !*pack)
+                return;
+            const std::filesystem::path path = std::filesystem::u8path(pack) / "replacements" / kPalmBackground;
+            std::ifstream file(path, std::ios::binary);
+            if (!file)
+                return;
+            std::vector<unsigned char> encoded((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            int width = 0, height = 0, channels = 0;
+            unsigned char *pixels = stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()), &width, &height, &channels, 4);
+            if (!pixels || width <= 0 || height <= 0)
+            {
+                std::fprintf(stderr, "[frontend] could not decode %s\n", path.string().c_str());
+                stbi_image_free(pixels);
+                return;
+            }
+            g_background = new ImTextureData();
+            g_background->Create(ImTextureFormat_RGBA32, width, height);
+            std::memcpy(g_background->Pixels, pixels, static_cast<size_t>(width) * height * 4u);
+            g_background->UseColors = true;
+            stbi_image_free(pixels);
+            ImGui::RegisterUserTexture(g_background);
+            std::fprintf(stderr, "[frontend] menu artwork %s (%dx%d)\n", path.string().c_str(), width, height);
         }
 
-        void style(bool push)
+        bool menuItem(const char *label, float width, float height = 34.0f)
         {
-            if (push)
-            {
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 3.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14.0f, 9.0f));
-                ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.025f, 0.055f, 0.075f, 0.96f));
-                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.13f, 0.75f, 0.72f, 0.75f));
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.28f, 0.32f, 0.95f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.78f, 0.19f, 0.48f, 0.95f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.94f, 0.35f, 0.61f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.98f, 0.96f, 1.0f));
-            }
-            else
-            {
-                ImGui::PopStyleColor(6);
-                ImGui::PopStyleVar(3);
-            }
+            ImGui::SetCursorPosX((ImGui::GetWindowSize().x - width) * 0.5f);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton(label, ImVec2(width, height));
+            const bool selected = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+            const ImVec2 text = ImGui::CalcTextSize(label);
+            ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + (width - text.x) * 0.5f, p.y + (height - text.y) * 0.5f),
+                                                selected ? kPink : kCyan, label);
+            return ImGui::IsItemActivated();
+        }
+
+        void footer(const ImGuiViewport &vp)
+        {
+            ImDrawList *draw = ImGui::GetWindowDrawList();
+            const float y = vp.WorkPos.y + vp.WorkSize.y - 53.0f;
+            draw->AddText(ImVec2(vp.WorkPos.x + 30.0f, y), kCyan, "<");
+            draw->AddText(ImVec2(vp.WorkPos.x + 52.0f, y), kWhite, "BACK");
+            draw->AddText(ImVec2(vp.WorkPos.x + 30.0f, y + 25.0f), kPink, "X");
+            draw->AddText(ImVec2(vp.WorkPos.x + 52.0f, y + 25.0f), kWhite, "SELECT");
+            const char *move = "ARROWS / STICK  MOVE";
+            const ImVec2 size = ImGui::CalcTextSize(move);
+            draw->AddText(ImVec2(vp.WorkPos.x + vp.WorkSize.x - size.x - 26.0f, y + 25.0f), kWhite, move);
         }
 
         void requestQuit(PS2Runtime &runtime)
@@ -113,54 +165,58 @@ namespace ui::frontend
             return;
 
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
-        style(true);
         const ImGuiViewport *vp = ImGui::GetMainViewport();
-        const ImVec2 size(startup ? 430.0f : 245.0f, startup ? 390.0f : 190.0f);
-        const ImVec2 pos = startup ? ImVec2(vp->WorkPos.x + (vp->WorkSize.x - size.x) * 0.5f,
-                                            vp->WorkPos.y + (vp->WorkSize.y - size.y) * 0.5f)
-                                   : ImVec2(vp->WorkPos.x + vp->WorkSize.x - size.x - 28.0f,
-                                            vp->WorkPos.y + vp->WorkSize.y - size.y - 28.0f);
-        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        loadBackground();
+        ImGui::SetNextWindowPos(vp->WorkPos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(vp->WorkSize, ImGuiCond_Always);
         ImGui::SetNextWindowFocus();
         const ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar;
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground |
+                                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         if (ImGui::Begin(startup ? "VCS Front End" : "VCS Pause Actions", nullptr, flags))
         {
+            ImDrawList *draw = ImGui::GetWindowDrawList();
+            if (g_background)
+                draw->AddImage(g_background->GetTexRef(), vp->WorkPos,
+                               ImVec2(vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y));
+            else
+                draw->AddRectFilled(vp->WorkPos, ImVec2(vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y),
+                                    IM_COL32(25, 0, 35, 255));
+
+            const float scale = std::clamp(vp->WorkSize.y / 448.0f, 0.85f, 1.8f);
+            ImGui::SetWindowFontScale(1.35f * scale);
+            const float contentWidth = std::min(420.0f * scale, vp->WorkSize.x * 0.72f);
+            ImGui::SetCursorPos(ImVec2((vp->WorkSize.x - contentWidth) * 0.5f, vp->WorkSize.y * 0.25f));
             if (startup)
             {
-                ImGui::SetWindowFontScale(1.55f);
-                ImGui::TextUnformatted("VICE CITY STORIES");
-                ImGui::SetWindowFontScale(1.0f);
-                ImGui::TextColored(ImVec4(0.94f, 0.35f, 0.61f, 1.0f), "NATIVE PORT");
-                ImGui::Separator();
-                ImGui::Spacing();
                 if (!g_startSubmenu)
                 {
-                    if (menuButton("START GAME")) { g_startSubmenu = true; g_quitConfirm = false; }
-                    if (menuButton("OPTIONS")) { openSettingsMenu(""); g_quitConfirm = false; }
-                    if (menuButton(g_quitConfirm ? "QUIT GAME - ARE YOU SURE?" : "QUIT GAME")) requestQuit(runtime);
+                    if (menuItem("START GAME", contentWidth)) { g_startSubmenu = true; g_quitConfirm = false; }
+                    if (menuItem("OPTIONS", contentWidth)) { openSettingsMenu(""); g_quitConfirm = false; }
+                    if (menuItem(g_quitConfirm ? "QUIT GAME - ARE YOU SURE?" : "QUIT GAME", contentWidth)) requestQuit(runtime);
                 }
                 else
                 {
-                    ImGui::TextUnformatted("START GAME");
-                    if (menuButton("NEW GAME")) begin(StartupAction::NewGame);
-                    if (menuButton("LOAD GAME")) begin(StartupAction::LoadGame);
-                    if (menuButton("DELETE GAME")) begin(StartupAction::DeleteGame);
-                    if (menuButton("BACK")) g_startSubmenu = false;
+                    if (menuItem("LOAD GAME", contentWidth)) begin(StartupAction::LoadGame);
+                    if (menuItem("NEW GAME", contentWidth)) begin(StartupAction::NewGame);
+                    if (menuItem("DELETE GAME", contentWidth)) begin(StartupAction::DeleteGame);
+                    if (menuItem("BACK", contentWidth)) g_startSubmenu = false;
                 }
             }
             else
             {
-                ImGui::TextColored(ImVec4(0.94f, 0.35f, 0.61f, 1.0f), "PORT MENU");
-                ImGui::Separator();
-                if (menuButton("OPTIONS")) { openSettingsMenu(""); g_quitConfirm = false; }
-                if (menuButton(g_quitConfirm ? "QUIT - ARE YOU SURE?" : "QUIT GAME")) requestQuit(runtime);
-                if (menuButton("BACK TO PAUSE MENU")) { g_pauseDismissed = true; g_quitConfirm = false; }
+                if (menuItem("OPTIONS", contentWidth)) { openSettingsMenu(""); g_quitConfirm = false; }
+                if (menuItem(g_quitConfirm ? "QUIT - ARE YOU SURE?" : "QUIT GAME", contentWidth)) requestQuit(runtime);
+                if (menuItem("BACK TO PAUSE MENU", contentWidth)) { g_pauseDismissed = true; g_quitConfirm = false; }
             }
+            ImGui::SetWindowFontScale(1.0f);
+            draw->AddText(ImVec2(vp->WorkPos.x + 28.0f, vp->WorkPos.y + 24.0f), kPink,
+                          startup ? "Game" : "Options");
+            footer(*vp);
         }
         ImGui::End();
-        style(false);
+        ImGui::PopStyleVar();
     }
 
     void onGameFrame(uint8_t *rdram)

@@ -689,6 +689,8 @@ there (`src/ui/frontend_menu.cpp`). This is deliberately not a `FUN_0021E170` ho
 by later loads. New Game releases the wait; Load/Delete wait for `CWorld::Players[0].m_pPed` (`0x4E4910`) and inject the
 checked pause-menu route to the original save state machine. Found from the boot movie calls at `0x40D8B8`, the
 loading-screen caller survey, and the save sequences in `tools/saves.py`.
+The PCSX2 replacement whose pixel hash is `db7fe6220bfa99e` is the pause front end's 2048x2048 purple palm backdrop
+(including its black footer band); identified by a thumbnail survey of the pack and comparison with the pause screen.
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 

@@ -24,8 +24,10 @@ When the game's own user-pause flag is set, a small **Port Menu** panel appears 
 pause and restores input to all original VCS tabs; the panel returns the next time the player pauses. Code pauses and
 loading waits do not open it.
 
-The first visual theme is intentionally isolated in `src/ui/frontend_menu.cpp`: it uses the existing ImGui font with
-VCS-inspired dark teal and pink colours, so layout and styling can be replaced without changing the boot/save logic.
+The presentation is intentionally isolated in `src/ui/frontend_menu.cpp`. When the configured PCSX2 pack contains
+`db7fe6220bfa99e-400b40212c17643-00006213.png`, the menu uses its original purple palm artwork and black footer;
+otherwise it falls back to a plain dark-purple background. Centered cyan/pink text and the bottom control legend follow
+the original pause-menu layout. Styling can be replaced without changing the boot/save logic.
 
 ## Checks
 
