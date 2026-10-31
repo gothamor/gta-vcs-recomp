@@ -10,7 +10,10 @@ if(NOT PS2X_CPU)
     set(PS2X_CPU "AVX2")
 endif()
 string(TOUPPER "${PS2X_CPU}" PS2X_CPU)
-if(PS2X_CPU STREQUAL "AVX2")
+if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
+    # [gta-recomp] ARM64 has no x86 -march setting; SSE is supplied by sse2neon.
+    set(_ps2x_arch_clang "")
+elseif(PS2X_CPU STREQUAL "AVX2")
     set(_ps2x_arch_msvc "/arch:AVX2")
     set(_ps2x_arch_clang "-march=x86-64-v3")
 elseif(PS2X_CPU STREQUAL "AVX")
@@ -66,21 +69,27 @@ function(EnableFastReleaseMode TargetName)
     # x86-64-v3 is /arch:AVX2 (AVX2, FMA, BMI); -ffp-contract=off for the same reason. clang-cl defaults to
     # -fno-strict-aliasing (MSVC compatibility) and the runtime and generated code read guest memory through casts, so
     # say it here. No stack protector / CET (Ubuntu turns them on; clang-cl gets /GS-, no CET).
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT MSVC)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang)$" AND NOT MSVC)
         target_compile_options(${TargetName} PRIVATE
             $<$<CONFIG:Release>:-O2 -DNDEBUG ${_ps2x_arch_clang} -ffp-contract=off -fno-math-errno -fno-strict-aliasing
-                                -fno-stack-protector -fcf-protection=none>
+                                -fno-stack-protector>
         )
+        if(NOT APPLE)
+            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fcf-protection=none>)
+        endif()
         get_target_property(_type ${TargetName} TYPE)
         if(PS2X_LTO STREQUAL "THIN")
             target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
             if(_type STREQUAL "EXECUTABLE")
-                target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin
+                target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
+                if(NOT APPLE)
+                    target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:
                                     -Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache
                                     -Wl,--thinlto-cache-policy=cache_size_bytes=1g:prune_after=72h>)
                 # ThinLTO's backends run in parallel; each needs memory for a share of the 150 MB game
                 if(PS2X_LTO_JOBS)
                     target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-Wl,--thinlto-jobs=${PS2X_LTO_JOBS}>)
+                endif()
                 endif()
             endif()
         elseif(PS2X_LTO STREQUAL "FULL" AND IPO_SUPPORTED)

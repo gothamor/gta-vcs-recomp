@@ -49,6 +49,7 @@ def show(path):
         return path
     return path if rel.startswith("..") else rel
 IS_WINDOWS = platform.system() == "Windows"
+IS_MACOS = platform.system() == "Darwin"
 
 # our progress lines and the tools' output interleave in order even when stdout is a pipe
 if hasattr(sys.stdout, "reconfigure"):
@@ -412,7 +413,7 @@ def run_with_progress(cmd, log, label, cwd=ROOT, env=None):
 # prints anything (a report from a Xeon E5-2687W, 2026-10-30: "recompiling fails in 1 second", empty log).
 CPU_LEVELS = ("AVX2", "AVX", "SSE4")
 CPU_TEXT = {"AVX2": "AVX2 (Haswell / Zen and newer)", "AVX": "AVX (Sandy Bridge class, no AVX2)",
-            "SSE4": "SSE4.2 (no AVX)"}
+            "SSE4": "SSE4.2 (no AVX)", "ARM64": "Apple Silicon (ARM64)"}
 
 
 def cpu_features():
@@ -448,6 +449,8 @@ def cpu_level():
     """The PS2X_CPU this PC builds for: "AVX2", "AVX" or "SSE4"; None for a CPU without SSE4.2 (not supported).
     VCS_CPU=AVX2|AVX|SSE4 chooses (e.g. to build and test an older CPU's build on a newer one). When the features can't
     be read the default stays (AVX2)."""
+    if IS_MACOS and platform.machine().lower() in ("arm64", "aarch64"):
+        return "ARM64"
     forced = os.environ.get("VCS_CPU", "").strip().upper()
     if forced:
         if forced not in CPU_LEVELS:
@@ -1141,7 +1144,7 @@ def compiler_defines(env):
     if not clang or not clangxx or clang_version(clang) < MIN_CLANG:
         fail("clang %d or newer not found - install it (docs/LINUX.md; e.g. sudo apt install clang-20 lld-20 llvm-20), "
              "or run python tools/build.py --check-deps" % MIN_CLANG)
-    if not _which("ld.lld", env):
+    if not IS_MACOS and not _which("ld.lld", env):
         fail("ld.lld not found (the LLVM linker, next to clang): e.g. sudo apt install lld-%d" % clang_version(clang))
     defines = ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx] + ninja
     gcc = _gcc_with_libstdcxx(clangxx)
@@ -1246,6 +1249,28 @@ def check_linux_deps(env):
     cmd = ("sudo apt install " if family == 0 else "sudo dnf install " if family == 1 else "sudo pacman -S --needed ") + pkgs
     print("[deps] install them with:\n    " + cmd)
     return False
+
+
+def check_mac_deps(env):
+    """Check the native macOS build tools and libraries."""
+    missing = []
+    for program, package in (("cmake", "cmake"), ("ninja", "ninja"), ("git", "git"),
+                             ("glslangValidator", "glslang"), ("pkg-config", "pkgconf")):
+        if not _which(program, env):
+            missing.append((program, package))
+    if not _which("clang++", env):
+        missing.append(("clang++ (install Xcode command line tools)", ""))
+    if _which("pkg-config", env) and subprocess.run(["pkg-config", "--exists", "libavcodec", "libavformat", "libavutil", "libswscale", "libswresample"], env=env).returncode:
+        missing.append(("FFmpeg development libraries", "ffmpeg"))
+    if missing:
+        for name, _ in missing:
+            print("[deps] missing: " + name)
+        packages = list(dict.fromkeys(package for _, package in missing if package))
+        if packages:
+            print("[deps] install them with: brew install " + " ".join(packages))
+        return False
+    print("[deps] macOS build dependencies found")
+    return True
 
 
 _INTERESTING = re.compile(r"error|FAILED|Linking|warning: unused")
