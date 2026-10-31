@@ -84,7 +84,9 @@ for attention) at the display's scale.
   of Downloads / Desktop / Documents / its folder (one level deep, DVD-sized `.iso` files, Vice City Stories names
   first), or **Copy from a DVD drive** (tools/rip_disc.py). The choice goes into `build\vcs.ini` as `iso=` (vcs.exe's
   settings keep lines they don't own).
-- **Build tools**: tools/doctor.py `check_compiler` (vswhere, one `-requires` query per component - `-path` ignores
+- **Build tools**: the processor (doctor's `check_cpu`: which build this PC gets - AVX2, AVX or SSE4,
+  `toolchain.cpu_level`; a CPU without SSE4.2 can't build: `cpu_unsupported`, a red card), and tools/doctor.py
+  `check_compiler` (vswhere, one `-requires` query per component - `-path` ignores
   `-requires`; the clang-cl the build would take: scoop's LLVM, then Visual Studio's, then PATH). Missing parts:
   *Install build tools* runs tools/setup_vs.py.
 - **Game**: built and current, or the reasons not (doctor's `check_build`: no exe, generated/ stale, no / other
@@ -111,7 +113,7 @@ or a disc copy runs. Closing during a task asks first.
 VCSLauncher.exe (launcher/: main.cpp window + CLI, ui.cpp, tasks.cpp, process.cpp, disc_check.cpp, system.cpp, json.cpp)
    ├─ itself: window, disc check, folder dialogs, vcs.ini's iso=, processes (Job Objects), shortcuts, the game
    └─ python\python.exe -I tools\<tool>.py ...  with VCS_PROGRESS=json
-         doctor.py --json     the state: folder, memory, compiler, downloads, disc, build, "next"
+         doctor.py --json     the state: folder, memory, cpu, compiler, downloads, disc, build, "next"
          build.py --recompile-if-needed <iso> --progress json [--opt X]
          setup_vs.py install, backup.py create|list|restore, report.py, update.py check|apply, rip_disc.py list|rip
 ```
@@ -122,7 +124,9 @@ tried first (a py.exe can exist with no Python behind it).
 **Events** (tools/toolchain.py): with `--progress json` / `VCS_PROGRESS=json` the tools print, between their usual
 lines, `@vcs {...}` lines: `{"stage": id, "title": text}`, `{"progress": n, "total": n, "eta": s, "note": text}` (at most
 4 a second), `{"error": code, "message": text, "log": path}` (from `tc.fail(message, code, log)`;
-`configure_failure` / `build_failure` read the code from the log), `{"result": "ok", ...}`. Everything else is log.
+`configure_failure` / `build_failure` read the code from the log; a tool that crashed: `exit_failure` -
+`illegal_instruction`, `missing_dll` - and its log ends with how it ended, `describe_exit`), `{"result": "ok", ...}`.
+Everything else is log.
 
 **State files**: `generated/recompile_stamp.json` (a hash of what the generated code depends on: game/vcs, the
 recompiler, the runtime headers it compiles in, the translate / sync scripts; `recompile.py --check`),

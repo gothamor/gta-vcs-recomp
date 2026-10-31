@@ -2,6 +2,27 @@ include(CheckIPOSupported)
 
 check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
 
+# [gta-recomp] The CPU baseline (PS2X_CPU, set by tools/build.py from the PC that builds): AVX2 (/arch:AVX2,
+# x86-64-v3: AVX2, FMA, BMI1/2), AVX for CPUs before Haswell (/arch:AVX: clang-cl targets Sandy Bridge - SSE4.2,
+# POPCNT, AVX, no FMA) or SSE4 for CPUs without AVX (x86-64-v2). A binary built for AVX2 stops at its first AVX2 / BMI instruction on an older CPU (illegal
+# instruction, before it prints anything). The code checks __AVX2__ / __SSE4_1__ and has a path for each.
+if(NOT PS2X_CPU)
+    set(PS2X_CPU "AVX2")
+endif()
+string(TOUPPER "${PS2X_CPU}" PS2X_CPU)
+if(PS2X_CPU STREQUAL "AVX2")
+    set(_ps2x_arch_msvc "/arch:AVX2")
+    set(_ps2x_arch_clang "-march=x86-64-v3")
+elseif(PS2X_CPU STREQUAL "AVX")
+    set(_ps2x_arch_msvc "/arch:AVX")
+    set(_ps2x_arch_clang "-march=sandybridge")  # the same CPU as clang-cl's /arch:AVX
+elseif(PS2X_CPU STREQUAL "SSE4")
+    set(_ps2x_arch_msvc "/clang:-march=x86-64-v2")  # SSE4.2, SSSE3, POPCNT (clang-cl's /arch has no SSE4 level)
+    set(_ps2x_arch_clang "-march=x86-64-v2")
+else()
+    message(FATAL_ERROR "PS2X_CPU=${PS2X_CPU}: AVX2, AVX or SSE4")
+endif()
+
 function(EnableFastReleaseMode TargetName)
     message("> Enabling optimization for: ${TargetName}")
     # [gta-recomp] clang-cl rejects /Qspectre- and /GL//LTCG need MSVC's own
@@ -12,7 +33,7 @@ function(EnableFastReleaseMode TargetName)
     # FMACs (VU and EE FPU) round the product and the sum separately.
     if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         target_compile_options(${TargetName} PRIVATE
-            $<$<CONFIG:Release>:/O2 /Oi /Gy /Gw /GF /DNDEBUG /arch:AVX2 /GS- /clang:-fno-math-errno /clang:-ffp-contract=off>
+            $<$<CONFIG:Release>:/O2 /Oi /Gy /Gw /GF /DNDEBUG ${_ps2x_arch_msvc} /GS- /clang:-fno-math-errno /clang:-ffp-contract=off>
         )
         if(PS2X_LTO STREQUAL "THIN")
             target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
@@ -47,7 +68,7 @@ function(EnableFastReleaseMode TargetName)
     # say it here. No stack protector / CET (Ubuntu turns them on; clang-cl gets /GS-, no CET).
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT MSVC)
         target_compile_options(${TargetName} PRIVATE
-            $<$<CONFIG:Release>:-O2 -DNDEBUG -march=x86-64-v3 -ffp-contract=off -fno-math-errno -fno-strict-aliasing
+            $<$<CONFIG:Release>:-O2 -DNDEBUG ${_ps2x_arch_clang} -ffp-contract=off -fno-math-errno -fno-strict-aliasing
                                 -fno-stack-protector -fcf-protection=none>
         )
         get_target_property(_type ${TargetName} TYPE)
@@ -91,7 +112,7 @@ function(EnableFastReleaseMode TargetName)
                 /Zc:inline # remove unreferenced inline
                 /fp:fast # fast math (graphics friendly)
                 /DNDEBUG
-                /arch:AVX2 # Advanced Vector Extensions 2
+                ${_ps2x_arch_msvc} # [gta-recomp] PS2X_CPU (was /arch:AVX2)
                 /GS- # Disable Buffer Security Check (faster)
                 /Qspectre- # Disable Spectre mitigations (faster)
             >

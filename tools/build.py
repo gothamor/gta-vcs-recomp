@@ -134,7 +134,7 @@ def write_build_info(iso):
     import recompile
     stamp = recompile.read_stamp() or {}
     info = {"source": tc.source_version(), "generated_inputs": stamp.get("inputs", ""), "opt": built_opt(),
-            "iso": iso or "", "time": int(time.time())}
+            "cpu": tc.cached_value(tc.BUILD_DIR, "PS2X_CPU") or "AVX2", "iso": iso or "", "time": int(time.time())}
     with open(BUILD_INFO, "w", encoding="utf-8") as f:
         json.dump(info, f, indent=1)
 
@@ -228,13 +228,15 @@ def built_opt():
                     cache[key.split(":")[0]] = value.strip()
     except OSError:
         return "optimisation unknown"
+    cpu = tc.cached_value(tc.BUILD_DIR, "PS2X_CPU") or "AVX2"
+    cpu = "" if cpu == "AVX2" else ", for %s CPUs" % cpu
     if cache.get("PS2X_PGO") and cache["PS2X_PGO"] != "GEN":
-        return "optimised: ThinLTO + profile-guided"
+        return "optimised: ThinLTO + profile-guided" + cpu
     if cache.get("PS2X_LTO") == "THIN":
-        return "optimised: ThinLTO"
+        return "optimised: ThinLTO" + cpu
     if cache.get("PS2X_LTO") == "FULL":
-        return "optimised: full LTO"
-    return "quick build, not optimised - python tools/build.py --opt lto for the game to play"
+        return "optimised: full LTO" + cpu
+    return "quick build, not optimised - python tools/build.py --opt lto for the game to play" + cpu
 
 
 PGO_DIR = os.path.join(tc.BUILD, "pgo")
@@ -277,7 +279,8 @@ def iop_tests(env):
     if not os.path.isfile(os.path.join(out, "build.ninja")) or tc.stale_tools(out):
         subprocess.check_call(tc.resolve(["cmake", "-S", os.path.join(tc.ROOT, "third_party", "PS2Recomp", "ps2xIOP"),
                                           "-B", out, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-                                          "-DPS2X_IOP_BUILD_TESTS=ON"] + tc.compiler_defines(env), env), env=env)
+                                          "-DPS2X_IOP_BUILD_TESTS=ON", "-DPS2X_CPU=" + tc.check_cpu()] +
+                                         tc.compiler_defines(env), env), env=env)
     if not tc.cmake_build(env, "ps2_iop_spu2_tests", "build_iop_tests.log", build_dir=out):
         return 1
     return subprocess.call([tc.exe(os.path.join(out, "ps2_iop_spu2_tests"))])

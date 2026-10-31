@@ -375,15 +375,170 @@ class Progress:
 
 
 def run_with_progress(cmd, log, label, cwd=ROOT, env=None):
-    """Runs `cmd` with its output to `log` under an elapsed-time line; returns the exit code."""
+    """Runs `cmd` with its output to `log` under an elapsed-time line; returns the exit code. A failure ends the log
+    with how the program ended (describe_exit): a crash leaves nothing else there."""
     cmd = resolve(cmd, env)
     with open(log, "w", encoding="utf-8") as f, Progress(label) as progress:
         try:
             code = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
         except OSError as e:
             fail("could not start %s: %s" % (cmd[0], e), "no_cmake" if _is_cmake(cmd) else "error")
+        if code != 0:
+            f.write("\n[%s] %s ended after %s: %s\n" % (os.path.basename(sys.argv[0]) or "tools",
+                                                       os.path.basename(cmd[0]), _duration(time.time() - progress.start),
+                                                       describe_exit(code)))
     print(progress.summary())
     return code
+
+
+# ---- the CPU ----------------------------------------------------------------------------------------------------
+# The game and the recompiler are built for the CPU of the PC that builds them (PS2X_CPU, ReleaseMode.cmake): AVX2 by
+# default (Haswell / Zen and newer: AVX2, FMA, BMI), AVX before that (Sandy / Ivy Bridge, AMD's Bulldozer family),
+# SSE4 (SSE4.2 and POPCNT: x86-64-v2) for CPUs without AVX - first-generation Core i, and the Pentium / Celeron / Atom
+# chips that lacked AVX until 2020. A binary built for a newer CPU dies on its first unknown instruction before it
+# prints anything (a report from a Xeon E5-2687W, 2026-10-30: "recompiling fails in 1 second", empty log).
+CPU_LEVELS = ("AVX2", "AVX", "SSE4")
+CPU_TEXT = {"AVX2": "AVX2 (Haswell / Zen and newer)", "AVX": "AVX (Sandy Bridge class, no AVX2)",
+            "SSE4": "SSE4.2 (no AVX)"}
+
+
+def cpu_features():
+    """What this CPU and OS run: a set of "sse4.2", "avx", "avx2" (AVX2 also means FMA and BMI2 here), or None when
+    it can't be told (not x86-64, or a Windows that doesn't know the feature flags)."""
+    machine = platform.machine().lower()
+    if machine not in ("amd64", "x86_64", "x64"):
+        return None
+    if IS_WINDOWS:
+        import ctypes
+        present = ctypes.windll.kernel32.IsProcessorFeaturePresent
+        # PF_SSSE3 36, PF_SSE4_1 37, PF_SSE4_2 38, PF_AVX 39, PF_AVX2 40 (they also say whether the OS saves the
+        # AVX registers); a Windows from before they were added says no to all of them
+        flags = {36: "ssse3", 37: "sse4.1", 38: "sse4.2", 39: "avx", 40: "avx2"}
+        found = {name for pf, name in flags.items() if present(pf)}
+        return found or None
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("flags"):
+                    flags = set(line.partition(":")[2].split())
+                    found = {n for n in ("sse4_2", "avx") if n in flags}
+                    found = {n.replace("_", ".") for n in found}
+                    if {"avx2", "fma", "bmi1", "bmi2"} <= flags:
+                        found.add("avx2")
+                    return found
+    except OSError:
+        pass
+    return None
+
+
+def cpu_level():
+    """The PS2X_CPU this PC builds for: "AVX2", "AVX" or "SSE4"; None for a CPU without SSE4.2 (not supported).
+    VCS_CPU=AVX2|AVX|SSE4 chooses (e.g. to build and test an older CPU's build on a newer one). When the features can't
+    be read the default stays (AVX2)."""
+    forced = os.environ.get("VCS_CPU", "").strip().upper()
+    if forced:
+        if forced not in CPU_LEVELS:
+            fail("VCS_CPU=%s: one of %s" % (forced, ", ".join(CPU_LEVELS)))
+        return forced
+    found = cpu_features()
+    if found is None:
+        return "AVX2"
+    if "avx2" in found:
+        return "AVX2"
+    if "avx" in found:
+        return "AVX"
+    if "sse4.2" in found:
+        return "SSE4"
+    return None
+
+
+def cpu_name():
+    """The CPU's name for messages ("" when unknown)."""
+    if IS_WINDOWS:
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
+                return " ".join(str(winreg.QueryValueEx(key, "ProcessorNameString")[0]).split())
+        except OSError:
+            return ""
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    return " ".join(line.partition(":")[2].split())
+    except OSError:
+        pass
+    return ""
+
+
+def check_cpu():
+    """The CPU level, or stop: a CPU without SSE4.2 can't run the game (code cpu_unsupported)."""
+    level = cpu_level()
+    if level is None:
+        fail("this PC's processor (%s) has no SSE4.2: the game needs a CPU from 2008 or later (Intel Core i / AMD "
+             "Bulldozer or newer)" % (cpu_name() or "unknown"), "cpu_unsupported")
+    return level
+
+
+def cached_value(build_dir, key):
+    """A value from build_dir's CMakeCache.txt (None when absent)."""
+    try:
+        with open(os.path.join(build_dir, "CMakeCache.txt"), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                k, sep, value = line.partition("=")
+                if sep and k.split(":")[0] == key:
+                    return value.strip()
+    except OSError:
+        pass
+    return None
+
+
+# ---- how a program ended ----------------------------------------------------------------------------------------
+# Windows exit codes of a crash (NTSTATUS): the program had no chance to print anything, so the log is empty and the
+# code is all there is.
+CRASH_CODES = {
+    0xC000001D: ("illegal instruction", "the program uses an instruction this CPU doesn't have: built for a newer CPU?"),
+    0xC0000005: ("access violation", "the program crashed"),
+    0xC0000135: ("a DLL was not found", "a library the program needs is missing (Visual C++ runtime?)"),
+    0xC0000139: ("an entry point was not found", "a library the program needs is too old (update the Visual C++ runtime)"),
+    0xC000007B: ("bad image", "a library the program loads is damaged or for another architecture"),
+    0xC00000FD: ("stack overflow", "the program crashed"),
+    0xC0000409: ("stack buffer overrun / fast fail", "the program stopped itself (abort or a failed check)"),
+    0xC0000142: ("DLL initialisation failed", "a library could not start (often an antivirus or a missing runtime)"),
+    0xC0000017: ("out of memory", "not enough memory"),
+}
+
+
+def describe_exit(code):
+    """A line saying how a program ended: "exit code 1", or "exit code 0xC000001D (illegal instruction: ...)"."""
+    if code is None:
+        return "no exit code"
+    if code < 0:  # POSIX: killed by a signal
+        import signal
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = "signal %d" % -code
+        hint = {"SIGILL": "an instruction this CPU doesn't have: built for a newer CPU?", "SIGSEGV": "the program crashed",
+                "SIGKILL": "killed (out of memory?)", "SIGABRT": "the program stopped itself"}.get(name, "")
+        return "killed by %s%s" % (name, " (%s)" % hint if hint else "")
+    status = code & 0xFFFFFFFF
+    if status in CRASH_CODES:
+        what, hint = CRASH_CODES[status]
+        return "exit code 0x%08X (%s: %s)" % (status, what, hint)
+    if status >= 0xC0000000:
+        return "exit code 0x%08X (a crash)" % status
+    return "exit code %d" % code
+
+
+def exit_failure(code):
+    """The launcher's name for a program's crash, or None for an ordinary failure."""
+    status = (code or 0) & 0xFFFFFFFF
+    if status == 0xC000001D or code == -4:  # STATUS_ILLEGAL_INSTRUCTION / SIGILL
+        return "illegal_instruction"
+    if status in (0xC0000135, 0xC0000139):
+        return "missing_dll"
+    return None
 
 
 # ---- compiler environment ---------------------------------------------------------------------------------------
@@ -880,9 +1035,19 @@ def _ahead(seconds):
 
 # ---- CMake ------------------------------------------------------------------------------------------------------
 def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
-    """CMake configure of `build_dir` (first time, when forced, or with `defines`: {"PS2X_LTO": "THIN", ...})."""
+    """CMake configure of `build_dir` (first time, when forced, or with `defines`: {"PS2X_LTO": "THIN", ...}). The
+    CPU baseline follows this PC (cpu_level): a tree set up for another CPU - or from before PS2X_CPU, i.e. AVX2 - is
+    configured again for this one, which rebuilds everything."""
     force = drop_foreign_cache(build_dir, ROOT) or stale_tools(build_dir) or force
-    if os.path.isfile(os.path.join(build_dir, "build.ninja")) and not force and not defines:
+    level = check_cpu()
+    configured = os.path.isfile(os.path.join(build_dir, "build.ninja"))
+    cached = cached_value(build_dir, "PS2X_CPU") or "AVX2"  # CMakeLists.txt's default
+    if not configured or cached != level:
+        if configured:
+            print("[build] %s was built for %s CPUs; this PC's is %s: building it again for this one"
+                  % (show(build_dir), CPU_TEXT.get(cached, cached), CPU_TEXT[level]))
+        defines = dict(defines or {}, PS2X_CPU=level)
+    if configured and not force and not defines:
         return
     cmd = ["cmake", "-S", ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
     cmd += ["-D%s=%s" % (k, v) for k, v in (defines or {}).items()]

@@ -297,6 +297,13 @@ namespace launcher
 
         Status discStatus(const App &app) { return app.discChecked && app.disc.ok ? kGood : kMissing; }
 
+        // a processor the game can't be built for (tools/doctor.py check_cpu: no SSE4.2); older doctors have no "cpu"
+        bool cpuUnsupported(const App &app)
+        {
+            const Json &cpu = app.doctor["cpu"];
+            return cpu.isObject() && !cpu["ok"].boolean();
+        }
+
         Status toolsStatus(const App &app)
         {
             if (!app.doctorDone)
@@ -304,6 +311,8 @@ namespace launcher
             if (app.doctorFailed())
                 return kWarning;
             const Json &d = app.doctor;
+            if (cpuUnsupported(app))
+                return kMissing;
             if (!d["compiler"]["ok"].boolean() || !d["downloads"]["ok"].boolean())
                 return d["build"]["current"].boolean() ? kWarning : kMissing; // only matters for the next build
             return d["memory"]["ok"].boolean() ? kGood : kWarning;
@@ -350,6 +359,8 @@ namespace launcher
                 return "Checking";
             if (app.doctorFailed())
                 return "Couldn't check";
+            if (cpuUnsupported(app))
+                return "Processor too old";
             if (!app.doctor["compiler"]["ok"].boolean())
                 return "Needs installing";
             if (!app.doctor["downloads"]["ok"].boolean())
@@ -733,6 +744,15 @@ namespace launcher
             if (checkFailed(app))
                 return;
             const Json &c = app.doctor["compiler"];
+            const Json &cpu = app.doctor["cpu"];
+            if (cpuUnsupported(app))
+            {
+                beginCard("cpu", rgb(44, 30, 30));
+                text(errorHelp("cpu_unsupported").title, kText, 17, true);
+                gap(4);
+                para(cpu["message"].str() + ". " + errorHelp("cpu_unsupported").fix, kDim, 14.5f, 900);
+                endCard(kRed);
+            }
             if (!c["ok"].boolean())
             {
                 const std::string code = c["code"].str();
@@ -750,6 +770,8 @@ namespace launcher
                 endCard();
             }
             beginCard("tools");
+            if (cpu.isObject())
+                row("Processor", cpu["message"].str(), cpu["ok"].boolean() ? kText : kRed);
             row("Compiler", c["ok"].boolean() ? c["message"].str() : "missing", c["ok"].boolean() ? kText : kRed);
             const Json &d = app.doctor["downloads"];
             row("Libraries", d["bundled"].boolean() ? "Bundled with this release" : d["message"].str(),

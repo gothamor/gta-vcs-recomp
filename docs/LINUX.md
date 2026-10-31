@@ -32,7 +32,8 @@ build (FetchContent), so no Vulkan SDK is needed.
 - **The compiler is clang only** (`tools/toolchain.py` takes the newest LLVM 19+ from `/usr/lib/llvm-<N>/bin` or
   PATH). It is the same compiler as clang-cl on Windows, so the generated code and its numerics are the same; and
   `PS2_GUEST_CC` needs its `preserve_none`. GCC is not supported.
-- **The flags match clang-cl's** (`ps2xRuntime/cmake/ReleaseMode.cmake`): `-march=x86-64-v3` (= `/arch:AVX2`),
+- **The flags match clang-cl's** (`ps2xRuntime/cmake/ReleaseMode.cmake`): `-march=x86-64-v3` (= `/arch:AVX2`; for an
+  older CPU `-march=sandybridge` = `/arch:AVX`, or x86-64-v2 - `PS2X_CPU`, picked from `/proc/cpuinfo`),
   `-ffp-contract=off` (the PS2 rounds a multiply-add twice: DECISIONS.md 2026-10-22), `-fno-math-errno`,
   **`-fno-strict-aliasing`** (clang-cl's default; the runtime and generated code read guest memory through casts), no
   stack protector or CET (Ubuntu turns them on).

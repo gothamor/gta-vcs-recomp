@@ -47,7 +47,8 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   10.0.19041 Windows SDK. clang-cl also handles the huge generated files better
   than cl.exe. `tools/toolchain.py` sets this up (vswhere + vcvars64).
 - Baseline CPU: AVX2 (upstream's `/arch:AVX2`). Revisit if we want pre-Haswell
-  CPUs; the generated code mostly needs SSE4.1.
+  CPUs; the generated code mostly needs SSE4.1. (Revisited 2026-10-31: the build follows
+  the PC's CPU - AVX2, AVX or SSE4; see the entry of that date.)
 
 ## 2026-10-21 - Graphics plan
 1. Bring-up: upstream CPU GS backend (slow, but no extra work).
@@ -672,3 +673,23 @@ every file came out up to 13.5 h in the future, newer than any build.ninja CMake
   reports them (it changes nothing). A build tree that already looped recovers without being deleted (checked).
 - Ninja's "still dirty" still gets its own failure (`file_dates`) for what the repair can't reach - a clock that is
   wrong, a read-only file.
+
+## 2026-10-31 - The CPU baseline follows the PC that builds (AVX2, AVX, SSE4)
+- A player's report (Xeon E5-2687W, Sandy Bridge: AVX but no AVX2): "recompiling MIPS code to C++ fails in 1 second",
+  `recomp.log` empty. Every target was built with `/arch:AVX2`, so `ps2_recomp.exe` - and later `vcs.exe` - stopped at
+  its first AVX2 / BMI instruction (`STATUS_ILLEGAL_INSTRUCTION`, 0xC000001D) before printing a line; the tools didn't
+  say how it ended, and the doctor didn't look at the CPU.
+- Players build on their own PC (source-only releases), so the build is compiled for that PC's CPU:
+  `PS2X_CPU=AVX2|AVX|SSE4` (`ReleaseMode.cmake`; `/arch:AVX2` / `-march=x86-64-v3`, `/arch:AVX` / `-march=sandybridge`,
+  x86-64-v2), chosen by `toolchain.cpu_level()` (Windows `IsProcessorFeaturePresent`, Linux `/proc/cpuinfo`) at every
+  configure; a tree set up for another level is configured again (a full rebuild). `VCS_CPU=AVX|SSE4` builds an older
+  CPU's game on a newer PC (how it was tested). Below SSE4.2 (Core 2, 2006-08) the build stops with `cpu_unsupported`.
+- One binary with runtime dispatch was the alternative: it would need every hot path written twice and picked per call,
+  for a build players make themselves anyway. AVX2 stays the default and what releases are measured with.
+- Numerics are the same at every level: FP contraction is off everywhere (no FMA anywhere since 2026-10-22), and the
+  vector paths (`ps2_vu1_compiled.h`, `__SSE4_1__` in `ps2_runtime_macros.h`) have per-lane fallbacks that do the same
+  operations. `vu1v` (compiled VU1, native VU0) needs only AVX, so it is on `__AVX__` now: AVX builds keep it, SSE4
+  builds take the per-lane version (which had never been compiled: `vcs_vu0_native.cpp` shuffled `__m128` itself).
+  Checked by recompiler output and scene captures (PROGRESS.md, 2026-10-31).
+- A tool that fails now ends its log with how it ended (`toolchain.describe_exit`: the NTSTATUS name, or the signal),
+  and the launcher gets `illegal_instruction` / `missing_dll` instead of a bare `recompiler_failed`.

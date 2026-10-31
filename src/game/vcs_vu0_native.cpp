@@ -270,8 +270,8 @@ namespace
         static vu1v::V sub(vu1v::V a, vu1v::V b) { return operand(vu1v::sub(a, b)); }
         static vu1v::V mul(vu1v::V a, vu1v::V b) { return operand(vu1v::mul(a, b)); }
         // (x, y, z) -> (y, z, x) and (z, x, y): OPMULA / OPMSUB operands
-        static vu1v::V yzx(vu1v::V v) { return _mm_shuffle_ps(v, v, _MM_SHUFFLE(3, 0, 2, 1)); }
-        static vu1v::V zxy(vu1v::V v) { return _mm_shuffle_ps(v, v, _MM_SHUFFLE(3, 1, 0, 2)); }
+        static vu1v::V yzx(vu1v::V v) { return vu1v::yzx(v); }
+        static vu1v::V zxy(vu1v::V v) { return vu1v::zxy(v); }
 
         void itof0(int n)
         {

@@ -83,6 +83,15 @@ namespace launcher
                             "Check that Windows' clock and time zone are right, then build again."}},
             {"build_failed", {"The build failed", "Open the log for the details, or copy a report for help."}},
             {"recompiler_failed", {"Recompiling the game failed", "Open the log for the details, or copy a report for help."}},
+            {"cpu_unsupported", {"This processor is too old for the game",
+                                 "The game needs a processor with SSE4.2: an Intel Core i (2008) or AMD Bulldozer (2011) "
+                                 "or newer."}},
+            {"illegal_instruction", {"A program used an instruction this processor doesn't have",
+                                     "It was built for a newer processor. Build again: the build is set up for this "
+                                     "PC's processor. If it happens again, copy a report for help."}},
+            {"missing_dll", {"A program is missing a library",
+                             "Install the latest Microsoft Visual C++ Redistributable (x64) from Microsoft, then build "
+                             "again."}},
             {"elevation_denied", {"The installer wasn't allowed to run",
                                   "Installing the build tools needs administrator rights: accept the Windows prompt."}},
             {"install_failed", {"The installer didn't finish",

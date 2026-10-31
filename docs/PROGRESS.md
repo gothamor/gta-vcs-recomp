@@ -675,12 +675,34 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
       setup_vs.py dry runs and the Microsoft-signature check; a disc copy from an image file.
 - [ ] A PC with nothing installed (Windows Sandbox): setup_vs.py's real install. A real DVD drive. CI's first run and
       the first tagged release. Code signing.
+- [x] **Older CPUs** (a player's report on 0.0.2, 2026-10-30: Xeon E5-2687W, Sandy Bridge - "recompiling fails in 1
+      second", `recomp.log` empty): every build was `/arch:AVX2`, so `ps2_recomp.exe` died on its first AVX2 / BMI
+      instruction (0xC000001D) before printing. **Fixed 2026-10-31**: the build follows the building PC's CPU,
+      `PS2X_CPU=AVX2|AVX|SSE4` (DECISIONS.md 2026-10-31; `VCS_CPU` forces one); doctor / the launcher show the processor
+      and refuse one without SSE4.2 (`cpu_unsupported`); a tool that fails ends its log with how it ended
+      (`toolchain.describe_exit`, launcher codes `illegal_instruction`, `missing_dll`). `vu1v` moved to `__AVX__` (its
+      per-lane SSE4 version had never compiled). Checked on the i7-7700K with `VCS_CPU`-forced builds (quick, no LTO):
+      - instructions: the AVX vcs.exe / ps2_recomp.exe have no AVX2, FMA, BMI, F16C or MOVBE instruction, the SSE4 ones
+        no AVX either (objdump; the 375 `tzcnt` in every build, AVX2 too, are LLVM's `rep bsf` on inputs known to be
+        non-zero, which pre-BMI CPUs run as `bsf`);
+      - the AVX and SSE4 recompilers write the same 10,386 files as the AVX2 one, byte for byte (= generated/ee);
+      - `VCS_SELFTEST=1`: 0 failures at each level;
+      - scenes: the static ones (loading, pause map) identical at all three levels; AVX and SSE4 identical in the
+        flyover and the cutscene too; the moving scenes differ between levels no more than two runs of the same AVX2
+        exe do (timing);
+      - game thread: AVX2 4.7-4.9 ms, AVX 4.6-4.9 ms (no measurable cost), SSE4 5.5-6.1 ms (~20%: the VU helpers per
+        lane), all at 30 fps;
+      - a tree configured for another CPU is configured again once (`[build] configuring ... PS2X_CPU=AVX`), not again
+        on the next build; a simulated 0xC000001D through `run_logged` gives the named exit code in the log and the
+        `illegal_instruction` event.
+      Not run on a real pre-Haswell CPU (none here): the reporter's PC is the check.
 
 ## Useful switches
 | Env var | Effect |
 |---|---|
 | `PS2X_GS=cpu\|hw\|gpu\|null` | GS renderer (vcs.exe: default hw, set by src/main.cpp; the runtime's own default cpu) |
 | `PS2X_HW_SCALE=n`, `PS2X_HW_DEBUG=1` | hardware renderer scale / stats |
+| `VCS_CPU=AVX2\|AVX\|SSE4` | build tools: the CPU the build is for (default: this PC's, `toolchain.cpu_level`); an older one's build runs here (tests) |
 | `VCS_FPS_LOG=1` | VBlanks and flips per second (was `VCS_FPS=1`; `VCS_FPS` is the frame rate cap) |
 | `VCS_TIMING=0\|1`, `VCS_FPS=30\|60\|120\|144\|-1\|0` | game timing original / frame-rate independent; frame rate cap (-1 display refresh, 0 unlimited) |
 | `VCS_TIMESTEP=N` | independent timing: exactly 1/N s per game frame, unpaced (frame-dependence tests) |
