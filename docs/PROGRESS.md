@@ -424,6 +424,11 @@ dropped on uploads (lazy render-target patching).
       unchanged). `framerate_audit.py` scenario `ferris` (seconds he keeps his place in a carriage, of 10): 10 / 10 / 10
       at 1/30 / 60 / 144, 1.3 at 144 unpatched (11 m off). An escalator step's move speed at 144 equals 30's (0.0147 /
       0.0148). game-internals.md 4.
+- [x] Follow cameras above 50 fps (2026-10-31, found with the ferris wheel's `max(step, 1.0)`): the on-foot camera
+      (FUN_0029DAB0) and the vehicle / boat camera (FUN_0029FAF0) turned themselves behind the player step times too
+      slowly (the stick and mouse were right). Patched the same way. `framerate_audit.py` carcam (the car's lag after a
+      turn halving): 0.47 / 0.58 / 1.86 s at 1/30 / 60 / 144 before, 0.50 / 0.48 / 0.48 after; footcam (the camera
+      following a player running sideways): 96 / 82 / 35 degrees a second before, 97 / 99 / 100 after.
       `framerate_audit.py` scenarios coast, runover, bikebody, bikecoast, bikelean; game-internals.md 4. Found with the
       rig's new `trace` (a vehicle's state every frame) and write watches attributing its speed changes to callers.
       Then the same `max(step, 0.5)` in vehicles and bikes in water and a boat's rudder, patched: at 144 fps a car kept

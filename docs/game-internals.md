@@ -270,8 +270,16 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
     +0x40, active +0x90, reversed +0x94, step count +0x98 (31), segment ends +0x9C / +0xA0 (0.113 / 0.85), centre +0xB0,
     radius +0xC0, step objects from +0xC4. All 8 are in the mall interior around (406-422, 1052-1200, -198). After the
     patch a step's move speed at 1/144 is 1/30's (0, 0.0147, -0.0095 against 0, 0.0148, -0.0095).
-  - Not checked: FUN_0029DAB0 / FUN_0029FAF0 (0x29EA50 / 0x2A0790, camera code by their neighbours) divide an angle's
-    change by `max(step, 1.0)` the same way - a rate that would read low above 50 fps.
+  - **The follow cameras** (patched 2026-10-31, the same way; 12b): FUN_0029DAB0 (mode 4, on foot) and FUN_0029FAF0
+    (mode 18 behind a vehicle, 22 behind a boat; CCam::Process's cases 3 / 0x11 / 0x15) turn beta toward where they
+    want it by a per-frame amount (a share `min(speed x rate x step, 1)` of the gap, capped at rate x step), make that a
+    speed with `/ max(step, 1.0)` (0x29EA50 / 0x2A0790), ease the heading speed +0x140 toward it (pow(k, step)) and add
+    speed x step to beta. Above 50 fps the automatic turn ran step times too slow; the stick's term is added after the
+    division and was right. Measured (`framerate_audit.py` carcam: the car's lag behind it after a left turn halving;
+    footcam: the camera's turn rate while the player runs to its right): before 0.47 / 0.58 / 1.86 s and 96 / 82 / 35
+    degrees a second at 1/30 / 60 / 144, after 0.50 / 0.48 / 0.48 s and 97 / 99 / 100. $f3 (the 1.0) is read again by
+    the `min.s` two instructions on, so the 0.001 goes to $f5. On foot the controls follow the camera: after a turn the
+    player lines up with it, so its own turn shows mainly while he runs sideways.
 - **Physics read for the audit**: ped -> its vehicle at ped+0x450 (also +0x480 / +0x484; found by scanning the ped for
   the address of the car it was warped into); **CPhysical move speed (x, y, z) at +0x140** (units per 1/50 s, x 50 =
   m/s; z found at +0x148 mid-fall, y at +0x144 in a car driving north); written through a vector setter
@@ -1821,7 +1829,8 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   eases toward the pitch the camera stands at (limits from the table: 0.785 up, 1.4835 down). So a heading written
   alone is pulled back (by ~0.1 a frame for many frames) unless the source points turn with it, and an alpha written
   alone is undone in a few frames; the stick's pitch speed integrates exactly (the smoothing sums to 1). The stick's
-  top speeds: heading 0.05, pitch 0.03 radians a step (2.5 / 1.5 rad/s).
+  top speeds: heading 0.05, pitch 0.03 radians a step (2.5 / 1.5 rad/s). The pull and the swing are a per-frame turn
+  divided by `max(step, 1.0)`, too slow above 50 fps until patched (2026-10-31, section 4: the follow cameras).
 - The follow camera ignores the stick while `0x488EB4` is set (FUN_002a2e30) and while CPad +0x96 is set; under a
   script camera TheCamera + 0x888 is 0 (section 12).
 - **Mouse look** (src/game/vcs_input.cpp, Keyboard > Mouse camera): on foot (mode 4, no script camera, controls on, not
