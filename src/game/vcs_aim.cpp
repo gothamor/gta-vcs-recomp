@@ -33,6 +33,11 @@ namespace vcs::aim
         constexpr uint32_t kCamSource = 0x20u, kCamAlpha = 0x78u, kCamBeta = 0x7Cu;
         constexpr uint32_t kCamModeLockOn = 11;
         constexpr uint32_t kTimeStep = 0x004CD110u; // CTimer::ms_fTimeStep (1.0 = 1/50 s)
+        // the camera's blend from one CCam to the next (game-internals.md 12c): a byte set while it runs, and its
+        // durations in ms (400 into the lock-on / free-aim camera, 350 out of it)
+        constexpr uint32_t kTransition = kTheCamera + 0x8D0u;
+        constexpr uint32_t kTransitionDurations[2] = {kTheCamera + 0x8DCu, kTheCamera + 0x8E0u};
+        constexpr uint32_t kQuickTransitionMs = 100;
 
         // the hooked functions
         constexpr uint32_t kGameProcess = 0x003BA8D8u;   // CGame::Process: scripts, the world (peds move, guns fire)
@@ -65,6 +70,7 @@ namespace vcs::aim
         int g_wait = 0;
         uint32_t g_dummy = 0;
         float g_yaw = 0, g_pitch = 0; // the aim from Vic's shoulders: yaw from +x toward +y, pitch up
+        int g_quickBlend = 0;         // frames left to shorten the camera's blend into / out of free aim
         int g_handBack = 0;           // frames left to give the follow camera the aim's heading when it is back
         float g_handBeta = 0;
         std::atomic<bool> g_active{false};
@@ -124,6 +130,7 @@ namespace vcs::aim
                 // the follow camera comes back looking where the aim did (game-internals.md 12c)
                 g_handBeta = rdf(activeCam() + kCamBeta);
                 g_handBack = 10;
+                g_quickBlend = 10;
             }
             g_state = State::Idle;
             g_active = false;
@@ -162,11 +169,21 @@ namespace vcs::aim
 
         // CCamera::Process: the camera and then the HUD see free aim again (its camera centres the dummy, its circle is
         // drawn on it).
+        // Also: the blend between the follow camera and the free-aim camera, started by the update when the mode changes
+        // (400 ms in, 350 ms out, eased), is cut to 100 ms the frames after free aim starts or ends - a PC shooter's aim
+        // comes up at once. Other blends (cutscenes, vehicles, the PS2 lock-on) are the game's.
         PS2_GUEST_CC void cameraProcess(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (g_state == State::Active)
                 if (const uint32_t ped = rd32(kPlayerPed); ped && rd32(ped + kPedTarget) == g_dummy)
                     setFreeAimBit(ped, true);
+            if (g_quickBlend > 0)
+            {
+                --g_quickBlend;
+                if (rdram[kTransition])
+                    for (uint32_t at : kTransitionDurations)
+                        wr32(at, std::min(rd32(at), kQuickTransitionMs));
+            }
             g_origCamera(rdram, ctx, runtime);
         }
 
@@ -270,6 +287,7 @@ namespace vcs::aim
             g_pitch = std::clamp(std::asin(std::clamp(fz, -1.0f, 1.0f)), -kStartPitchLimit, kStartPitchLimit);
             g_state = State::Entering;
             g_wait = 0;
+            g_quickBlend = 30; // until a few frames after the free-aim lock is there
             out.r1 = out.l3 = true;
             return out;
         }

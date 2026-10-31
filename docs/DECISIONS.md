@@ -722,3 +722,7 @@ from them: Vic moves while free aiming exactly when he can move locked on with t
   circle as in a PC shooter.
 - `VCS_FREEAIM=0` installs none of the hooks (the reference). The guest scratch for the shot's start sits at 0x60000 in
   the EE kernel's area, which nothing in the recompiled game uses.
+- (later the same day, the user) Going into and out of free aim was too slow: the game blends the camera 400 ms in and
+  350 ms out. Both blends are cut to 100 ms, only those two (the frames after free aim starts or ends): not an
+  instant cut, which jumps the view by about 2 m, and the game's other blends (vehicles, cutscenes, the PS2
+  lock-on) stay as they are.

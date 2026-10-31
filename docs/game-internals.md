@@ -1890,6 +1890,12 @@ hidden run (rig `peek` / `poke`, snapshots diffed).
   from about Vic's head. Front = (-cos beta cos alpha, -sin beta cos alpha, sin alpha): beta is the follow camera's
   convention (12b). `TheCamera + 0x950 / 0x954` = 0.53 / 0.47: the third-person crosshair's place on screen (VC's
   m_f3rdPersonCHairMultX / Y), used to offset the lock-on view for guns.
+- **The blend between cameras**: when the active camera's mode changes, CCamera::Process blends the old view into the
+  new one; **TheCamera + 0x8D0** (byte) is set while it runs, **+0x8D8** its start (CTimer ms, 0x4CD104), **+0x8DC** and
+  **+0x8E0** its durations in ms - 400 / 350 into the lock-on (free-aim) camera, 350 / 350 out of it; the camera eases
+  (0.5, 1.0, 0.5 m a frame cut to 100 ms). Found with the rig's `trace` of TheCamera + 0x800..0x9FF per frame through
+  an aim. Lowering both durations after the blend has started shortens it smoothly (vcs_aim.cpp: 100 ms, 3-4 frames at
+  30 fps, instead of 12-13).
 - Leaving any aim back to the follow camera (mode 4) keeps beta but the follow camera eases toward its source points
   (+0x220 / +0x230, 12b), which still hold the view from before the aim: a ~1.6 rad swing back. vcs_aim.cpp turns them to
   the aim's heading on the first frame back.
