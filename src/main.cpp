@@ -592,6 +592,19 @@ namespace
         s.onChange = [](int v) { setEnv("PS2X_HW_ANISO", std::to_string(v)); };
         settings::add(s);
 
+        s = {};
+        s.key = "graphics.texture_replacements";
+        s.page = "Graphics";
+        s.section = "Image quality";
+        s.label = "Texture replacements";
+        s.help = "Use your PCSX2 PNG texture pack from SLUS-21590/replacements. Missing textures use the originals.";
+        s.type = Type::Toggle;
+        s.defaultValue = 0;
+        s.apply = Apply::Restart;
+        s.env = "VCS_TEXTURE_REPLACEMENTS";
+        s.onChange = [](int v) { setEnv("VCS_TEXTURE_REPLACEMENTS", std::to_string(v)); };
+        settings::add(s);
+
         // The graphics API, when the build has more than one (Windows with VCS_RHI_VULKAN); VCS_RHI=d3d11|vulkan|null
         // chooses for one run (render/presenter.h).
         s = {};
@@ -745,6 +758,27 @@ int main(int argc, char *argv[])
         if (ps2control::hiddenMode())
             settings::keepFile(); // a test run never changes the player's settings
         settings::applyAll();
+        // A pack path can be set in vcs.ini or overridden for one run. Resolve relative ini paths beside the exe;
+        // also find the source checkout's pack when the executable is in its default build/ directory.
+        if (const char *pack = std::getenv("VCS_TEXTURE_PACK"); !pack || !*pack)
+        {
+            fs::path path = fs::u8path(settings::state("graphics.texture_pack"));
+            if (!path.empty() && path.is_relative()) path = exeDirectory() / path;
+            if (path.empty())
+            {
+                for (const auto &candidate : {exeDirectory() / "textures" / "SLUS-21590",
+                                             exeDirectory() / "SLUS-21590", exeDirectory().parent_path() / "SLUS-21590"})
+                {
+                    std::error_code ec;
+                    if (fs::is_directory(candidate / "replacements", ec)) { path = candidate; break; }
+                }
+            }
+            if (!path.empty())
+            {
+                const auto utf8 = path.u8string();
+                setEnv("VCS_TEXTURE_PACK", std::string(utf8.begin(), utf8.end()));
+            }
+        }
         restoreWindowPlacement();
         const fs::path isoPath = locateIso(argc, argv);
         if (isoPath.empty())

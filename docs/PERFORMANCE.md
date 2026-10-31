@@ -492,6 +492,36 @@ three queued frames might add delay when GPU bound there - to measure (the delay
 - What is left for the game thread is guest code (64-80% of it, flat): deeper code generation in the recompiler
   (guest registers held in host registers across calls) - a project of its own.
 
+### 21. Optional PCSX2 PNG texture packs (2026-10-31)
+
+The shared texture cache can replace a sampled texture with a PCSX2-named PNG (`docs/TEXTURE_PACKS.md`). Pixel
+and palette hashing only runs for cache misses whose format/size occurs in the pack; matches/misses are memoized.
+PNG decoding is on a worker, GPU images shared by pack identity, originals used while a decode is pending.
+
+Windows/D3D11, same quick build, two sequential `bench.py` runs from empty isolated cards, 60 fps independent
+timing, VSync off, 1x, MSAA/anisotropy off, default 512 MiB replacement cache. Off -> on, milliseconds:
+
+| Spot | Game | Render worker | GS stage |
+|---|---|---|---|
+| Fort Baxter | 3.88 -> 4.03 | 1.55 -> 1.52 | 1.20 -> 1.30 |
+| City 575,175 | 2.77 -> 2.98 | 0.50 -> 0.50 | 0.40 -> 0.47 |
+| City -675,1425 | 5.03 -> 4.65 | 1.00 -> 0.82 | 0.80 -> 0.70 |
+| City 1325,-325 | 3.62 -> 3.80 | 2.73 -> 2.88 | 3.05 -> 3.42 |
+| City -1425,-575 | 4.05 -> 3.83 | 0.53 -> 0.50 | 0.47 -> 0.47 |
+| AI drive | 5.50 -> 5.58 | 3.32 -> 3.32 | 2.95 -> 2.97 |
+
+Both runs held 60.0 fps at all spots (16.7 ms). This is one capped pair with changing traffic and the first mission
+running, not a measurement of maximum frame rate or a precise overhead claim. Outputs:
+`build/bench/texture_pack_final/{0,1}/bench.json`. The original pre-change empty-card benchmark is discarded:
+`rig.Game.new_game()` previously accepted the title flyover's area 0 and advancing frames before a player existed.
+
+A 64 MiB cache stress capture exposed eviction on empty alternate VBlanks at original 30 fps: active HUD images
+were repeatedly decoded (938 loads for 25 unique files over the scene sequence). Eviction now protects the current
+and two preceding frames. The targeted five-location 64 MiB / bilinear check loads 25 distinct files, 58 image
+loads including later reloads after changing views, no per-VBlank churn or failures. The active working set is
+protected even when it exceeds the budget. All 160 PNGs decode in the standalone check; pack pixels total 805 MiB
+at RGBA8 before mips, so loading on demand matters.
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker

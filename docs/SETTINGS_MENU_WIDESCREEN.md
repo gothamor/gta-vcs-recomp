@@ -210,7 +210,7 @@ registration order; the vcs.ini keys did not change):
 |---|---|---|
 | Display | Screen | Aspect ratio, HUD |
 | Display | Frame rate | Game timing, Frame rate cap |
-| Graphics | Image quality | Internal resolution, Anti-aliasing (MSAA), Texture filtering |
+| Graphics | Image quality | Internal resolution, Anti-aliasing (MSAA), Texture filtering, Texture replacements |
 | Game | Start-up | Skip intro movies (`display.skip_intro`) |
 | Controls | Menu | Settings menu key |
 | Advanced | Diagnostics | Performance overlay (`graphics.perf_overlay`) |

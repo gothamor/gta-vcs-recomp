@@ -142,6 +142,7 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
 - Internal resolution from 1x (640x448) up to 8x, or the window's own resolution, with the effects keeping their
   original look.
 - Anti-aliasing (MSAA 2x / 4x / 8x) and anisotropic texture filtering (up to 16x).
+- Optional [PCSX2 PNG texture packs](docs/TEXTURE_PACKS.md), enabled in F2 > Graphics > Texture replacements.
 - Windowed or borderless full screen (Alt+Enter).
 
 **Controls**

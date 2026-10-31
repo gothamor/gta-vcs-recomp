@@ -34,7 +34,7 @@ import toolchain as tc  # noqa: E402
 
 DIST = os.path.join(tc.BUILD, "dist")
 CACHE = os.path.join(DIST, "cache")
-FORBIDDEN_DIRS = ("generated/", "build/", "ghidra/project/", "ghidra/export/", "mc0/", "mc1/")
+FORBIDDEN_DIRS = ("generated/", "build/", "ghidra/project/", "ghidra/export/", "mc0/", "mc1/", "SLUS-21590/", "textures/")
 FORBIDDEN_NAME = re.compile(r"(?i)(\.iso|\.gzf|\.chd|\.cso|\.cue)$|(^|/)(SLUS|SLES|SCUS|SLPM|SLPS)_\d{3}\.\d{2}")
 
 

@@ -636,3 +636,14 @@ default, the rest still opt-in.
   trained at original timing (bench / scenes); retrain at the new default if the gap shows.
 - Checked 2026-10-30 in a hidden run: reset -> timing 1, 60; Authentic -> 0, 30; Widescreen, light -> 1, 60; a test
   run -> 0, 30.
+
+## 2026-10-31 - PCSX2 PNG packs as optional host textures
+
+The user supplied `SLUS-21590/replacements` and asked to use its PCSX2 textures in the native port. Accept those
+filenames directly: PCSX2 pixel/palette hashes and format bits, including the older TCC bit. Keep the original
+disc, raster uploads, renderer and fallback intact; match at the shared texture cache so the world, HUD and menus
+all benefit. The option is off by default and applies after restart. Decode PNGs asynchronously, share one GPU
+copy per pack image, and bound the replacement cache by bytes (512 MiB by default). Keep GS logical sizes separate
+from physical replacement sizes, including non-integer scales and region wrap. Start with the format actually
+provided (full-texture PNGs); DDS, archives and separate region/mipmap files are outside this first implementation.
+The pack remains external, ignored by git and rejected by the release guard. See `docs/TEXTURE_PACKS.md`.

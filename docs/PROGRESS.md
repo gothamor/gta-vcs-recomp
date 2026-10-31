@@ -1,5 +1,20 @@
 # Progress
 
+## 2026-10-31 - Optional PCSX2 PNG texture packs
+
+- F2 > Graphics > Texture replacements (restart; off by default), existing `SLUS-21590/replacements` found beside
+  the exe or in the source root. Configurable path, async PNG decoding, shared GPU images, byte-budgeted LRU,
+  original fallback and high-resolution sampling with the game's wrap/region/alpha rules. `docs/TEXTURE_PACKS.md`.
+- Checked: build; loader tests (legacy names, palettes, non-integer PNG sizes, unchanged alpha, asynchronous
+  dedup/reload and corrupt-file fallback); all 160 user PNGs decoded; five actual gameplay locations, 25 pack files
+  matched/loaded; disabled static captures mean difference 0.051 / 0.128 (loading / pause map, tolerance 2.0).
+- Cache-pressure check found empty alternate VBlanks evicting active textures; protect two previous frames too.
+  The targeted 64 MiB / bilinear check passes without repeated per-VBlank reloads. Native render targets unchanged.
+- Same-build off/on benchmark: all six spots held 60 fps; AI drive game 5.50 -> 5.58 ms, worker 3.32 -> 3.32 ms,
+  GS 2.95 -> 2.97 ms. One capped pair; full numbers and conditions in PERFORMANCE.md 21.
+- Fixed the rig's empty-card readiness: area 0 plus advancing frames also described the title flyover. It now
+  requires a player ped; earlier empty-card bench results from that check should not be treated as gameplay.
+
 ## Phase 0 - setup (done)
 - Repo, GPL-3.0, `.gitignore` blocking game files; `tools/vcs_disc.py`
 - PS2Recomp vendored (changes in `docs/PS2RECOMP_PATCHES.md`)
@@ -758,6 +773,8 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `PS2X_HW_WIDE_SCALE=0` | integer scales in widescreen: the picture 640 x scale wide, stretched (as before 2026-10-27) |
 | `PS2X_HW_MSAA=2/4/8` | MSAA for the picture's targets (menu: Anti-aliasing) |
 | `PS2X_HW_ANISO=2..16`, `PS2X_HW_ANISO_LOG=1` | anisotropic filtering of the game's textures (menu: Texture filtering); count the draws per sampling path |
+| `VCS_TEXTURE_REPLACEMENTS=0|1`, `VCS_TEXTURE_PACK=DIR` | optional PCSX2 PNG pack; path to SLUS-21590 or its replacements directory (`graphics.texture_replacements`, `graphics.texture_pack` in vcs.ini) |
+| `VCS_TEXTURE_CACHE_MB=64..4096`, `VCS_TEXTURE_TRACE=1` | replacement GPU cache budget (512 MiB default; active textures protected for two frames); log computed PCSX2 identities |
 | `PS2X_HW_GATHER=0` / `verify` | bilinear game textures through four loads with the wrap per tap (before 2026-10-30) / both paths, a pixel whose texels differ drawn magenta |
 | `PS2X_GPU_TIMING=1` | GPU time per frame by marker (D3D11 timestamp queries; a marker per draw, named by kind, target and texture), every 5 s |
 | `PS2X_RHI_LOG_CREATES=1` | each texture of 256x256 or more as it is created (a target re-created every frame shows as a stream) |

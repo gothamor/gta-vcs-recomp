@@ -187,6 +187,7 @@ float4 fetchTexel(int2 t)
 // target's own resolution instead of once per PS2 texel, so a copy keeps the internal resolution. The wrap / clamp
 // still works on PS2 texels (a clamped coordinate takes the nearest sample inside the allowed texel). At scale 1 this
 // fetches the same texels as fetchTexel.
+// Texture packs use this path too: GS coordinates/wrap stay original, scale maps to the replacement's actual pixels.
 float4 fetchRtFull(int2 c)
 {
     const float2 s = rtScale2();

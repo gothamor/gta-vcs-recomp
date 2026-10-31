@@ -1121,6 +1121,22 @@ planes leave in the sky (seen outside the Little Havana Empire site, 08:28, 16:9
 
 ## 7. Textures: `.XTX`
 
+**Host replacement identity (2026-10-31).** PCSX2 packs match the GS texture as it is sampled, rather than the RAM
+raster pointer or the upload format. Tested against the user's SLUS-21590 pack: the pixel-block XXH3 hash plus the
+expanded current-CLUT hash and TEX0 PSM/TW/TH identify 25 pack files over Fort Baxter and four city spots. This
+includes the game's T4 data sent as CT16 by `FUN_002F62B8` / `FUN_003298D8` (section 6i): hashing the transfer's
+linear bytes would not identify the sampled texture. The host implementation materializes queued uploads on a
+candidate cache miss, then hashes the same GS blocks PCSX2 hashes; the CLUT is read from the CPU backend's loaded
+palette. For nearest/bilinear sampling, the original GS dimensions and region limits still govern wrapping while
+the host samples replacement pixels at their own resolution. See `docs/TEXTURE_PACKS.md`.
+
+**Automation readiness (2026-10-31).** During the title flyover `CGame::currArea` (`0x489F7C`) is already 0 and
+frames advance; that alone is not evidence of a playable game. Found when the first texture-pack city captures
+showed the flyover without a HUD and no matching HUD/radar textures. `rig.Game.new_game()` now also requires the
+`player` control command to return a non-null player ped (`CWorld::Players[0].m_pPed`, `0x4E4910`, as already read by
+`src/debug/rig.cpp`) before reporting success, and keeps pressing Cross while
+waiting. Earlier empty-card benchmarks using only the area check may have measured the title camera.
+
 Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
 - `0x00` magic `"xet\0"`; `0x08` file size; `0x0C` / `0x10` offset of the trailing relocation table
   (0x404B0); `0x60` name (`"loadsc0"`).

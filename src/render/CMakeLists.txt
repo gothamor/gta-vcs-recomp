@@ -87,6 +87,7 @@ add_library(vcs_render STATIC
     presenter.cpp
     gs_shaders.cpp
     ui_renderer.cpp
+    texture_replacements.cpp
     ${VCS_SHADER_HEADERS}
 )
 target_include_directories(vcs_render PUBLIC "${CMAKE_SOURCE_DIR}/src" PRIVATE "${VCS_SHADER_OUT}")
