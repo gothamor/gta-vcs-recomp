@@ -1,12 +1,12 @@
 # Native port roadmap
 
 Status: **approved** (2026-10-22): start with milestones 1-2; FFmpeg for movies; 60 fps as an option,
-off by default; IOP retirement yes; Windows only - milestone 9 out of scope for now (DECISIONS.md). Follows NATIVE_RENDERER.md (stages 0-6 done) and
+off by default; IOP retirement yes; the platform is the PS5 (milestone 9, docs/PS5.md; DECISIONS.md). Follows NATIVE_RENDERER.md (stages 0-6 done) and
 SETTINGS_MENU_WIDESCREEN.md (v1 done).
 
-The goal: GTA: Vice City Stories playable from the first mission to the credits as a native PC
-program - native rendering, audio, streaming, timing and movies, with the PS2 emulation layers kept
-only as references and fallbacks - running at full speed on modest hardware, with authentic output by
+The goal: GTA: Vice City Stories playable from the first mission to the credits as a native PS5
+app - native rendering, audio, streaming, timing and movies, with the PS2 emulation layers kept
+only as references and fallbacks - running at full speed on the console, with authentic output by
 default and the enhancements as options.
 
 ## Where we are
@@ -17,13 +17,13 @@ Updated 2026-10-26 (the table below the "When the roadmap was written" heading i
 |---|---|---|
 | Game code (EE) | Statically recompiled C++; guest registers / memory model | native code, emulated machine state |
 | VU0 (collision, culling, maths) | Native C++ for the programs the game uses | yes |
-| 3D: world, peds, vehicles, props | Draw items at the game's RSL draw calls -> D3D11, recordings checked bit-exact (FULLY_NATIVE.md 4-5) | yes |
+| 3D: world, peds, vehicles, props | Draw items at the game's RSL draw calls -> the RHI (Vulkan), recordings checked bit-exact (FULLY_NATIVE.md 4-5) | yes |
 | Sprites, particles, text, env-map pass, VU1 setup programs | C++ reproductions of the VU1 programs (`vcs_hle_world.cpp`), `vu1_programs` 0 in every mission | yes |
 | HUD, menus, post effects, loading screens, effects | Native layers / packed draws; `gs_draws` 0 (no draw through the emulated GS front end) | yes |
-| Presentation, input, window | SDL3 + RHI (D3D11) | yes |
+| Presentation, input | The PS5 platform layer (the TV, the DualSense) + RHI (Vulkan) | yes |
 | Streaming (CDSTREAM) | Host-thread reads from the disc image (`vcs_stream.cpp`) | yes |
 | Sound driver (CDSTREAM's sound servers, LIBSD) | Ported to the host (`vcs_sound.cpp`, `src/sound/libsd.cpp`) | yes |
-| Sound output / mixer | The SPU2 core (C++) behind the native libsd, mixed to SDL3 - the chosen "native mixer" (DECISIONS.md 2026-10-24) | yes |
+| Sound output / mixer | The SPU2 core (C++) behind the native libsd, mixed to the console's audio output - the chosen "native mixer" (DECISIONS.md 2026-10-24) | yes |
 | IOP | Off: no IRX module loaded or run (`PS2X_IOP=1` brings it back) | retired |
 | Memory card, pad | EE-side HLE (`sceMc*`, pad stubs) | yes |
 | Movies (`INTRO.PSS`, `STINGS.PSS`) | FFmpeg, sound into the same audio output (milestone 5) | yes |
@@ -35,17 +35,17 @@ Updated 2026-10-26 (the table below the "When the roadmap was written" heading i
 |---|---|---|
 | Game code (EE) | Statically recompiled C++ (920k instructions); guest registers / memory model | native code, emulated machine state |
 | VU0 (collision, culling, maths) | Native C++ for the programs the game uses | yes |
-| 3D: world, peds, vehicles, props | Packet-level HLE -> D3D11 (`vcs_hle_world.cpp`, `vs_world` / `vs_lit`), bit-exact checked | mostly: still walks the game's DMA packets |
+| 3D: world, peds, vehicles, props | Packet-level HLE -> the RHI (`vcs_hle_world.cpp`, `vs_world` / `vs_lit`), bit-exact checked | mostly: still walks the game's DMA packets |
 | Sprites, particles, text, env-map pass | VU1 microcode (compiled) -> emulated GS | no |
-| HUD, menus, post effects, loading screens | Emulated GS (HW backend on D3D11) | no |
-| Presentation, input, window | SDL3 + RHI (D3D11) | yes |
+| HUD, menus, post effects, loading screens | Emulated GS (HW backend) | no |
+| Presentation, input | Platform layer + RHI | yes |
 | Streaming (CDSTREAM), sound driver (SDRDRV / LIBSD) | Real IRX modules on the emulated IOP | no |
-| Sound output | SPU2 emulation -> SDL3 | emulated chip |
+| Sound output | SPU2 emulation -> the audio output | emulated chip |
 | Memory card, pad | EE-side HLE (`sceMc*`, pad stubs) | yes |
 | Movies (`INTRO.PSS`, `STINGS.PSS`) | Skipped | missing |
 | Frame rate | Game's own 30 fps cap on a 60 Hz VBlank | authentic only |
 
-Cost per frame then (i7-7700K / GTX 1080 Ti, 33.3 ms budget at 30 fps):
+Cost per frame then (33.3 ms budget at 30 fps):
 
 | Scene | game code | render submit | IOP |
 |---|---|---|---|
@@ -64,11 +64,10 @@ checked by hand.
 2. **Native**: in a normal frame, nothing draws through the emulated GS or VU1, no IOP code is
    interpreted, and audio comes from a native mixer. The emulated paths stay in the source as
    switchable references (`PS2X_HLE=0`-style) for checking, not on the hot path.
-3. **Fast**: a locked 30 fps (authentic) and 60 fps (option) on a 4-core CPU from ~2015 with integrated
-   graphics at 1x, and on mid-range GPUs at 4K.
+3. **Fast**: a locked 30 fps (authentic) and 60 fps (option) on the PS5, at 4K output.
 4. **Authentic by default**: the "Authentic" preset gives the PS2 picture, timing and sound;
    widescreen, resolution, 60 fps, MSAA and the like are opt-in settings.
-5. **Portable**: Windows first; Linux and macOS builds from the same source (SDL3 + RHI backends).
+5. **On the PS5**: a homebrew app for jailbroken consoles, the DualSense as the DualShock 2 (docs/PS5.md).
 
 ## How I work autonomously (applies to every milestone)
 
@@ -76,7 +75,7 @@ checked by hand.
   possible, picture / audio diff otherwise) before it becomes the default.
 - **Machine-checked progress**: each milestone ends with the regression rig (milestone 1) green and
   its numbers recorded in PROGRESS.md; perf before / after for anything on the hot path.
-- **Commit per step**, oddities written up in docs/, test runs visible (memory: window visibility).
+- **Commit per step**, oddities written up in docs/.
 - **What needs you**: feel and taste (handling at 60 fps, audio mix, picture comparisons with real
   hardware), the decisions listed at the end, and play-testing missions that the rig cannot reach.
 
@@ -84,7 +83,7 @@ checked by hand.
 
 ## Part 1 - the next big chunk: a rig that plays the game, then a game that plays right
 
-These two milestones are what lets me cover a large share of the game without you at the keyboard.
+These two milestones are what lets me cover a large share of the game without you at the controller.
 Today I can only see what the scripted boot path (title, intro, first walk at Fort Baxter) shows.
 
 ### Milestone 1 - Automation and coverage rig (L)
@@ -163,7 +162,7 @@ from part 1 is the safety net for all of them.
    "match window") and makes text crisp at any resolution.
 3. **Post effects as shaders**: the colour filter, trails / motion blur, the frame-buffer copies
    (identified in the widescreen work: full-screen strips sampling the frame) re-implemented in HLSL.
-4. **A native frame**: render targets at the window's resolution (not a multiple of 640x448),
+4. **A native frame**: render targets at the output's resolution (not a multiple of 640x448),
    MSAA, anisotropic filtering, higher-precision depth - all possible once nothing reads the PS2
    framebuffer layout. The GS emulation becomes the fallback for anything left unconverted
    (the rig's "unconverted draws" counter must read 0 in normal play).
@@ -222,31 +221,29 @@ Game code is 12-14 ms of the 33 ms frame - the main budget left for 60 fps on mo
   native equivalents behind the rule in DECISIONS.md "Rule for hooks on recompiled functions",
   each checked against the recompiled original.
 
-Done when: game code under ~6 ms in gameplay on the reference machine, 60 fps with headroom on the
-modest-hardware target.
+Done when: game code under ~6 ms in gameplay, 60 fps with headroom on the PS5.
 
 ### Milestone 8 - Settings, controls and polish (M)
 
-- Settings menu growth: window mode / fullscreen / vsync / fps cap, MSAA, AF, resolution, 60 fps,
+- Settings menu growth: TV output / vsync / fps cap, MSAA, AF, resolution, 60 fps,
   audio volumes, the "Authentic" preset, reset to defaults.
-- Controls: rebinding for keyboard / mouse / gamepad, mouse aiming that feels native (the game's
-  free-aim inputs), controller glyphs.
-- First-run flow for players: pick the ISO, check it, build the cache.
+- Controls: rebinding of every PS2 button on the DualSense, controller glyphs.
+- First-run flow for players: find the ISO, check it, build the cache.
 
-### Milestone 9 - Portability and distribution (L)
+### Milestone 9 - The PS5 and distribution (L)
 
-- RHI backends: Vulkan (Linux, also Windows), Metal (macOS); shaders cross-compiled from the HLSL
-  (Slang or DXC + SPIRV-Cross).
-- Toolchain: the recompile + build pipeline on Linux / macOS (clang, CMake), CI building all three.
-- Distribution stays source-only with bring-your-own-disc (DECISIONS.md): a one-command build for
-  players, release notes, crash reports that a player can attach.
+- The RHI's Vulkan backend on the console's RADV driver; shaders compiled from the HLSL to SPIR-V.
+- The PS5 platform layer (the TV, the DualSense, audio), toolchain, link and packaging (docs/PS5.md), CI compiling
+  the PS5 build.
+- Distribution stays source-only with bring-your-own-disc (DECISIONS.md): a few commands for players
+  (`tools/ps5.py setup` / `build` / `deploy`), release notes, a log a player can attach.
 
 ---
 
 ## Order and sizes
 
 ```
-M1 rig ──► M2 correctness ──► M3 native rendering ──► M7 CPU side ──► M9 portability
+M1 rig ──► M2 correctness ──► M3 native rendering ──► M7 CPU side ──► M9 the PS5
               │                     │
               │                     └─► M4 60 fps (needs M3.2 for HUD timing, M7 for headroom)
               ├─► M5 movies (independent, small)
@@ -264,7 +261,7 @@ M8 settings / controls: alongside, as each feature lands
 | 6 | Retire the IOP | L-XL | yes, audio sign-off by you |
 | 7 | CPU side | M-L | yes |
 | 8 | Settings, controls, polish | M | yes, feel by you |
-| 9 | Portability, distribution | L | yes |
+| 9 | The PS5, distribution | L | yes |
 
 **Proposed next step: milestones 1 and 2 as one autonomous run**, committed per step, with a short
 report after the rig's first full world tour (the map of problems) and after each fixed class of bug.
@@ -278,7 +275,7 @@ report after the rig's first full world tour (the map of problems) and after eac
 3. 60 fps: a menu option that stays off by default (authentic), as the goals say - confirm.
 4. IOP retirement: worth the effort for "fully native" even though it costs ~0.6 ms today, or keep the
    emulated IOP as a permanent, isolated audio / streaming device?
-5. Platforms after Windows: Linux first (Vulkan, Steam Deck) or macOS first?
+5. The platform: the PS5 (decided 2026-10-31).
 
 ## Risks
 

@@ -3,7 +3,7 @@
 ## Phase 0 - setup (done)
 - Repo, GPL-3.0, `.gitignore` blocking game files; `tools/vcs_disc.py`
 - PS2Recomp vendored (changes in `docs/PS2RECOMP_PATCHES.md`)
-- Toolchain: clang-cl 23 + MSVC 14.29 STL, CMake, Ninja, Ghidra 12.1.4 + EE ext, JDK 21
+- Toolchain: clang, CMake, Ninja, Ghidra 12.1.4 + EE ext, JDK 21
 
 ## Phase 1 - analysis (done)
 - 9,550 Ghidra functions + 833 indirectly-referenced ones Ghidra missed
@@ -19,9 +19,9 @@
 ## Phase 3 - graphics / performance (in progress)
 - [x] VU1: hctp's throughput-mode VU1 core (13 -> 23 VBlanks/s, GS discarded)
 - [x] IOP time batching (23 -> 60 VBlanks/s, GS discarded) = full speed without GS
-- [x] paraLLEl-GS integrated but opt-in: hangs Pascal GPUs into TDR resets
+- [x] paraLLEl-GS integrated but opt-in: hung the GPU it was tried on (driver resets)
 - [x] GS usage survey (`VCS_GS_STATS`): see docs/game-internals.md
-- [~] Hardware GS backend (`PS2X_GS=hw`, `src/lib/gs/gs_hw.cpp`; D3D11 since stage 3 of NATIVE_RENDERER.md, was OpenGL): runs at
+- [~] Hardware GS backend (`PS2X_GS=hw`, `src/lib/gs/gs_hw.cpp`; on the RHI: NATIVE_RENDERER.md): runs at
       full speed and shows the loading screen. Fixed: overlapping render targets
       (back buffer FBP 140 = FBP 0 + 448 lines), stale page cache for CLUT loads.
 - [x] Loading screens had wrong colours: VIF1 fed the next DMAtag's VIFcodes to
@@ -49,17 +49,18 @@
 ## Phase 4 - audio, input, memory card, movies
 (Audio has been native since milestone 6 - the SPU2-emulation items below describe how it started; the current state
 and the 2026-10-26 audit are under "Milestone 6".)
-- [x] Input: keyboard + mouse + gamepad (docs/CONTROLS.md), verified in game: after the
+- [x] Input: the controller (docs/CONTROLS.md), verified in game: after the
       intro cutscene the player controls Vic at Fort Baxter (HUD, radar, mission marker)
 - [x] Audio: SPU2 emulation (`ps2xIOP/.../iop_spu2.cpp`: 2x24 ADPCM voices, ADSR, loops,
-      IRQ address, AutoDMA, IOP DMA 4/7) mixed to a 48 kHz host audio stream (SDL3 since stage 1 of NATIVE_RENDERER.md). Music, SFX and
+      IRQ address, AutoDMA, IOP DMA 4/7) mixed to a 48 kHz host audio stream. Music, SFX and
       voices confirmed by ear. IOP time follows the wall clock, so audio no longer stutters
       when the game drops below 60 VBlanks/s (0 underruns at 20-60 VBlanks/s).
 - [x] Audio: reverb, noise, pitch modulation, Gaussian interpolation, exact volume sweeps / ADSR timing
       (2026-10-23, from psx-spx; PS2RECOMP_PATCHES.md). VCS keeps reverb off and uses no PMON / NON in gameplay
       (game-internals.md 9), so what is audible is the interpolation and the envelopes
 - [x] Memory card save: the game's own save routine writes its folder, icons and slot file
-      to `%LOCALAPPDATA%/VCSRecomp/mc0` (verified with `VCS_TEST_SAVE`); boot finds the save
+      to the memory card folder (on the PS5 `userdata/` in the app's folder; verified with `VCS_TEST_SAVE`); boot
+      finds the save
 - [x] Memory card load (2026-10-22): the game finds its saves at start-up and loads the newest
       ("Load Successful", back at the save point) since `sceMcGetDir` lists folders in card order
       (PS2RECOMP_PATCHES.md); before, saves were written but never seen. Saving over a slot replaces its
@@ -71,7 +72,7 @@ and the 2026-10-26 audit are under "Milestone 6".)
 - [x] Vic / vehicles / HUD flickering out in busy views: DMA chains were cut at 4096 tags.
       Cost: full frames are 7-14k tags; the title flyover dropped from ~45 to ~16 game fps.
       First perf recording: render submit (VIF/VU1/GS recording) 41 ms of a 61 ms frame,
-      game code 15 ms, IOP 0.7 ms, GL execution 2.5 ms on the main thread.
+      game code 15 ms, IOP 0.7 ms, GPU submission 2.5 ms on the main thread.
 - [~] Performance: render submit (title flyover, frames 10-60 s, ~245k vertices/frame):
       | step | render ms | game fps |
       |---|---|---|
@@ -176,7 +177,7 @@ dropped on uploads (lazy render-target patching).
         sits near (radar left; clock / weapon / money / zone name right; help text left), the elements found from the
         frame's Im2D calls (game-internals.md 6f, DECISIONS.md).
   - [x] **Native HUD layer**: the HUD's primitives kept out of the PS2 frame buffer and drawn over the shown picture
-        at the window's size (NATIVE_RENDERER.md "HUD layer"); on by default, `VCS_HUD_NATIVE=0` = into the frame
+        at the output's size (NATIVE_RENDERER.md "HUD layer"); on by default, `VCS_HUD_NATIVE=0` = into the frame
         buffer. Textures from the GS backend's decoded cache, not a RenderWare raster decoder (DECISIONS.md).
         Checked with `scenes.py` at 4:3 and 16:9 against `VCS_HUD_NATIVE=0` (build/m3/cmp43, cmp169): same HUD, the
         radar round and clipped, the static scenes (loading 0.95, pause map 0.8-0.9 mean difference) as close as two
@@ -210,7 +211,7 @@ dropped on uploads (lazy render-target patching).
       `PS2X_HW_DECODE_FROM_UPLOAD=0` = from VRAM.
 - [x] **Textures named by raster, render targets by role** (2026-10-24, FULLY_NATIVE.md step 3d): every texture made
       over the reference scenes and the drive named by the game's raster (RAM address) through the chain's upload REFs;
-      targets named by the game (`gsHwSetTargetRole`), the reflection map at the window's resolution. Step 3 done.
+      targets named by the game (`gsHwSetTargetRole`), the reflection map at the output's resolution. Step 3 done.
 - [x] **Unchanged world / model blocks not copied** (2026-10-24, FULLY_NATIVE.md step 4a / 4b): guest RAM under the
       OS's write watch; a block whose pages are unchanged since a confirmed copy is replayed from its recording without
       being copied (2.4M decisions checked, 0 wrong). Chain copy per frame 4.6 -> 2.1 MB; drive 50 -> 54 fps, worker
@@ -269,11 +270,11 @@ dropped on uploads (lazy render-target patching).
   - [x] Frame copy and motion blur as native passes (texture copy / one full-screen quad); the self-copy over the
         sky stays a GS draw (depth-tested, read at full resolution).
 - [ ] **Step 4: native frame** (started 2026-10-23; NATIVE_RENDERER.md "Native frame").
-  - [x] Per-target scales; "Internal resolution: Match window" draws the picture's targets at the window's size
+  - [x] Per-target scales; "Internal resolution: Match window" draws the picture's targets at the output's size
         (1920x1080 at 16:9 1080p), the effect buffers at 1x. Default stays 1x (the original).
   - [x] MSAA (2x-8x) and anisotropic filtering (2x-16x) as options, off by default (NATIVE_RENDERER.md "Native frame").
-  - [x] The reflection map at the window's resolution with "Match window" (2026-10-24, FULLY_NATIVE.md step 3d); the
-        radar has no target of its own (drawn in the HUD layer, already at the window's resolution).
+  - [x] The reflection map at the output's resolution with "Match window" (2026-10-24, FULLY_NATIVE.md step 3d); the
+        radar has no target of its own (drawn in the HUD layer, already at the output's resolution).
 - [x] **Draw-source counter** (2026-10-24; NATIVE_RENDERER.md "Draw sources"): what each frame still draws through
       the GS path, by source (VU1 program, C++ reproduction, PATH2, PATH3) - perf line `gs_*`, overlay, the rig's
       `gsdraws`, tour / missions record it. Survey: no PATH3; PATH2 ~15 draws (reflection map, coronas, effect quads);
@@ -321,12 +322,11 @@ dropped on uploads (lazy render-target patching).
       method when one shows up).
 - [ ] Lazy render-target patching (bloom buffers dropped on uploads).
 
-
 ## Milestone 4 - frame rate (started 2026-10-23)
 
 - [x] Main loop, VBlank handler, frame limiter and CTimer mapped (game-internals.md 4).
 - [x] 60 fps switch (Display > Frame rate, `VCS_FPS=60`; off by default): the limiter lets a frame through after one
-      VBlank. On the i7-7700K it reaches 31-37 fps in gameplay: the game thread needs ~27 ms a frame (milestone 7
+      VBlank. It reached 31-37 fps in gameplay: the game thread needs ~27 ms a frame (milestone 7
       first for a steady 60).
 - [x] Performance (milestone 7 work, 2026-10-23): VU0 collision programs 0x020 / 0x3A0 native (bit-exact): game code
       19-24 -> ~12 ms a frame; 60 fps mode 31-37 -> 45-50 fps outside the barracks (render submission ~8 ms is next).
@@ -343,7 +343,7 @@ dropped on uploads (lazy render-target patching).
       outside the barracks at the cap with ~4 ms to spare; driving 26-29 -> 44-54 fps; flyover 42.5 -> 59.9 fps.
       Game code (~17-20 ms driving) is now the limit.
 - [x] Game code (2026-10-23): inline dispatch / checkpoint fast paths (`PS2X_FAST_DISPATCH=0` to compare) and a
-      ThinLTO + profile-guided build (`tools/build.py --opt pgo`, trained on `tools/bench.py` + the reference scenes).
+      ThinLTO + profile-guided build (`PS2X_LTO`, `PS2X_PGO`, trained on `tools/bench.py` + the reference scenes).
       `tools/bench.py`, 60 mode, game-thread ms (two runs each):
 
       | spot | plain /O2 | + fast dispatch | + PGO + ThinLTO |
@@ -525,66 +525,32 @@ dropped on uploads (lazy render-target patching).
       VU0 programs used by collision (`0x0000` in .vutext looked like line/sphere vs triangle
       tests, docs/game-internals.md "VU microcode"), and float edge cases in the recompiled code
       (FP contraction, round-to-zero, denormals). Compare with PS2X_HLE=0 to rule the renderer out.
-- [x] Settings menu (F2) flickered between two layouts while the mouse sat between rows, and a click on a toggle
-      (Skip intro movies) did not register - **fixed 2026-10-24**: the menu was an auto-sized, centred window whose
-      help line grew and shrank with the hovered row, so the rows moved under a still mouse every other frame. Now a
-      fixed-size window with a fixed-height help area (SETTINGS_MENU_WIDESCREEN.md "Menu v2"). Checked with real
-      mouse / keyboard input (a script moving the cursor over the window, rows' boundary, clicks, arrows, Q / E,
-      Escape). Settings locked by an environment variable (tools/run.py sets `VCS_SKIP_MOVIES=1`) now name it beside
-      the label: that alone makes a click do nothing.
-- [x] **Release check from a clean clone** (2026-10-28/29): the README's install (`git clone`, `build.py --recompile`)
-      failed in a fresh folder - `unknown target 'ps2EntryRunner'`: recompile.py configures before generated code exists
-      and build.py never configured again (dev trees were configured after `generated/ee` existed). Fixed in build.py.
-      The first configure took 36 min, almost all of it toml11's test / docs submodules and full histories of three
-      pinned dependencies: shallow, no submodules - a fresh configure 117 s (PS2RECOMP_PATCHES.md). The ThinLTO exe
-      from the clone: full regression suite ok (scenes but the stale baseline's `loading` / `pause_map`, tour as the
-      baseline - (-925, 1175) falling, the known spot -, 5 missions, drive, evening, saves, shakedown, widecull,
-      menushape, controls 25/25); trainer 33/33 with all 110 vehicles. Two test fixes: the trainer's boost check ran
-      into a hedge or a parked car in the Leaf Links garden (0.2 / 6.6 / 26.6 in three runs; now on open ground, 36.2
-      three times), and the meters step's 30 fps reference varies 28.2-30.6 between runs (tolerance 5% -> 10%; the bug
-      it guards against was 4.8x). Started on its own (the README's "Play"), vcs.exe ran the software GS at ~5 fps:
-      only run.py and the test tools set `PS2X_GS=hw`, the runtime's default is cpu. The launcher now defaults to hw
-      (`PS2X_GS=cpu` still picks the software path); a start without run.py's environment: D3D11, movies 0 dropped.
-      The tools no longer set it either (they run the exe's own defaults), and the exe is now `build/vcs.exe` with
-      its DLLs and vcs.ini (DECISIONS.md 2026-10-29). Fort Baxter gameplay with no PS2X_* / VCS_* set: gs_draws 0,
-      vu1_programs 0, native sound, emulated IOP off, render worker on, 60 fps at the default cap.
 - [x] Last Stand (DIA_C5, the story's last mission): after the roof and the final cutscene, "Loading..." over black for
       good (user report 2026-10-29) - **fixed 2026-10-29** in the trainer. Not a hang: the game ran on behind a screen
       left faded out for the credits, which the story starts only when every chapter is done; the mission had been
       started from the trainer's list (the user's newest save is LOU_A3), so nothing faded it in. "Loading..." is the
-      game's own text over the fade (F12 draw log), the same on a PS2. The trainer now rolls the game's credits after a
+      game's own text over the fade (the draw log, `PS2X_HW_DUMP`), the same on a PS2. The trainer now rolls the game's credits after a
       Last Stand it launched (game-internals.md 11g, TRAINER.md); story flags untouched. A first version CALLed the
       credits from trainer bytecode: the CALL's packed return IP cannot point outside ScriptSpace, the RETURN went to
       garbage and the game loop stopped - now a script of its own at the subroutine (`vcs::rig::startScriptAt`). Check:
       `python tools/finale_check.py --full` (9 checks, 0 failed: credits, back below the Mendez building, faded in) and
       `--story` (the story's own credits, one copy only).
-- [x] White lines across the picture in the morning, from the planes' trails in the sky (user report 2026-10-30, seen
-      after the Linux work but not caused by it: at 4:3 too, in every renderer path, with either frame timing) -
+- [x] White lines across the picture in the morning, from the planes' trails in the sky (user report 2026-10-30: at 4:3
+      too, in every renderer path, with either frame timing) -
       **fixed 2026-10-30** in the recompiler. Its `VCLIPw` had the + / - clip bits swapped and compared with w, not
       |w|; RenderWare's Im3D line clipper (EE, `FUN_002F95E0`) then cut a trail segment leaving the view at the
       opposite side plane, next to the camera, and the wrapped projection drew across the screen (game-internals.md
       6k). One generated function changed. Check: `VCS_SELFTEST=1` (12 clip-flag cases); at the Little Havana Empire
-      site at 08:20 the F12 dumps had a near-camera line vertex (Q ~8.9) every frame at 4:3 and 16:9, none after.
+      site at 08:20 the draw dumps had a near-camera line vertex (Q ~8.9) every frame at 4:3 and 16:9, none after.
 
 ## Phase 6 - enhancements
 
-- **Player settings** (2026-10-28, asked for by the user; roadmap milestone 8): every control rebindable - keyboard and
-  mouse buttons / wheel with two slots per PS2 button and stick direction, a walk key, the gamepad's button map, stick
-  deadzones, camera speed, trigger point, swapped sticks, inverted camera, a mouse camera (mouse speed as the right
-  stick) with sensitivity / invert; the game's own vibration on the gamepad (it was dropped by the pad stub; 0-200%);
-  master / movie volume and mono / swapped output; vertical sync (off / on / tearing for VRR); a frame-rate counter;
-  mute or pause in the background; presets (Authentic, Enhanced, Widescreen light) and Reset all settings
-  (docs/CONTROLS.md, SETTINGS_MENU_WIDESCREEN.md "Player settings"). `tools/controls_check.py`: 21 checks, 0 failed;
-  regress step "controls". Defaults unchanged (the old fixed mapping, mouse camera off, vibration as on the PS2).
-- **Mouse look and driving keys** (2026-10-29, asked for by the user): on foot the mouse turns the follow camera itself
-  (heading written in the game with the camera's source points, pitch through the stick's pitch speed with the game's
-  stick curve undone; exact amounts, no top speed for the heading), in other cameras it is the right stick past the
-  game's dead third; Mouse camera on by default, forward looks up. While driving W / S / Space are Cross / Square / R1
-  (accelerate, brake, handbrake) and do nothing else; lean on Keypad 8 / 5 (Keyboard > Driving, a key group of its own).
-  Right click (R1) locks on, checked. game-internals.md 12a / 12b (the stick curve, three pad reads a frame, the
-  follow camera FUN_0029dab0), DECISIONS.md. `tools/controls_check.py`: 36 checks, 0 failed (11 new: mouse heading /
-  pitch / invert / off, the pause menu, lock-on, driving keys, lean rebind, W drives and Space stops the car, the mouse
-  on the vehicle camera, mouse look after leaving the car).
+- **Player settings** (2026-10-28, asked for by the user; roadmap milestone 8): every PS2 button rebindable, stick
+  deadzones, camera speed, trigger point, swapped sticks, inverted camera; the game's own vibration on the
+  controller (it was dropped by the pad stub; 0-200%); master / movie volume and mono / swapped output; vertical
+  sync; a frame-rate counter; presets (Authentic, Enhanced, Widescreen light) and Reset all settings
+  (docs/CONTROLS.md, SETTINGS_MENU_WIDESCREEN.md "Player settings"). Defaults unchanged (the old fixed mapping,
+  vibration as on the PS2).
 - **Music / sound effects volume** (2026-10-28, asked for by the user): Audio > Music and Sound effects are the game's
   own levels, in step with its pause menu both ways and kept across save loads (game-internals.md 9c). controls_check
   checks that the levels reach the game and its prefs, a save load keeps them, and the pause menu's slider changes the
@@ -599,17 +565,13 @@ dropped on uploads (lazy render-target patching).
   was taken by the load: logged). `tools/saves.py` (regress `saves`) now loads with god mode on: before the fix its
   load failed (stuck on "Loading...", the player never back at the save), after it passes with the slot taken logged.
 
-- **Full screen** (2026-10-27, asked for by the user): Display > Window mode (Windowed / Full screen, borderless at
-  the desktop's resolution) and Alt+Enter; the cursor hides after 2 s still in full screen; hidden test runs no longer
-  write vcs.ini (SETTINGS_MENU_WIDESCREEN.md "Full screen").
-
-- **Ultrawide** (2026-10-27, asked for by the user): Aspect ratio 21:9, 32:9 and Match window (the window's own
-  shape, 4:3 .. 32:9, followed live). Checked with the reference scenes and city drives at 21:9 / 32:9 (picture, HUD,
+- **Ultrawide** (2026-10-27, asked for by the user): Aspect ratio 21:9, 32:9 and Match window (the output's own
+  shape, 4:3 .. 32:9). Checked with the reference scenes and city drives at 21:9 / 32:9 (picture, HUD,
   cutscene bars, culling and streaming at the edges); regress step "widecull" covers 21:9 and 32:9. At 32:9 3840x1080
   the render worker costs about twice 16:9 1920x1080 (busiest bench spot 97 fps, drive 103) - details in
   SETTINGS_MENU_WIDESCREEN.md "Ultrawide".
   Same day: the pause menu and loading screens sit inside the game's frame at 4:3 (between the bars of a 32:9 game on
-  a 16:9 monitor), the pause menu switches to 4:3 at once, and no frame is squeezed for one shape and shown in the
+  a 16:9 TV), the pause menu switches to 4:3 at once, and no frame is squeezed for one shape and shown in the
   other (SETTINGS_MENU_WIDESCREEN.md). Then the shifted frame at the switch (VCS shows the previous frame, so the shape
   now follows the displayed picture; checked with every presented frame captured).
   Also: the integer Internal resolutions render wider in widescreen (1x at 32:9 is 1707x448; `PS2X_HW_WIDE_SCALE=0`
@@ -624,13 +586,13 @@ dropped on uploads (lazy render-target patching).
   regress step "widecull" (fails with `VCS_WIDE_CULL=0`: 0.7002); spheres passing the test at 16:9 +8-25% over the
   three bench spots; 4:3 untouched (the wrapper returns before reading memory).
 
-- **Trainer** (2026-10-26, docs/TRAINER.md): an RDR2 Native Trainer style menu (F5 / Back + RB) - god mode, never
+- **Trainer** (2026-10-26, docs/TRAINER.md): an RDR2 Native Trainer style menu (touchpad + R1) - god mode, never
   wanted, wanted level, money, every weapon and loadouts, unlimited ammo, no reload, spawning all 110 vehicles,
   vehicle invincibility / repair / flip / boost / paint, teleports to 13 districts and a saved position, time,
   freeze time, weather, game speed. `tools/trainer_check.py`: 30 checks, 0 failed (with all 110 vehicles).
   Mission launcher added the same day: 59 story missions by title, five side jobs (in their vehicle); 33 checks, 0
   failed.
-- **Free camera and Hide HUD** in the trainer (2026-10-30, docs/TRAINER.md "Camera", F6 / Back + LB): the active
+- **Free camera and Hide HUD** in the trainer (2026-10-30, docs/TRAINER.md "Camera", touchpad + L1): the active
   CCam written after the game's update of it (game-internals.md 12b), real-time speed (20 m/s: 50.7 m in 2.5 s at 30 fps,
   40.3 m in 2 s at 60 fps), the world streamed in 640 m from the player, works driving and in cutscenes, "Teleport
   player here"; Hide HUD skips CHud::Draw. `VCS_FREECAM=0`: the game's camera untouched (checked). `trainer_check.py`
@@ -639,49 +601,12 @@ dropped on uploads (lazy render-target patching).
   drives a cutscene's end); fixed, and a launch turns it off. `--freecam` 8 checks (Soldier's cutscene played out
   under it), 0 failed; the full check 41, 0 failed.
 
-## Milestone 9 - Linux (started 2026-10-30)
-
-Native Linux as a second platform (the user's request; the Steam Deck postponed): docs/LINUX.md has the build, the
-differences and the work list. Written and syntax-checked on the Linux laptop (GCC 13 for checking; the build itself
-needs the packages `build.py --check-deps` lists, clang 20 among them):
-- toolchain: clang 19+ found by `tools/toolchain.py`, clang-cl's flags for clang (`ReleaseMode.cmake`, incl.
-  `-fno-strict-aliasing`), compile / ThinLTO jobs capped by memory, `--check-deps`;
-- host / runtime: exe folder, XDG data folder, the LP64 `long` spots (`fseek`, IOP `strtol`), `_BitScanForward`,
-  control socket SIGPIPE / reuse, card birth time, rig kill and copy;
-- renderer: RHI backend choice (`VCS_RHI`, Graphics > Graphics API), a null backend, the **Vulkan backend**
-  (`src/rhi/vulkan/rhi_vulkan.cpp`), HLSL -> SPIR-V through glslang (`tools/hlsl_spirv.py`; all 15 shaders pass
-  `spirv-val`), Dear ImGui through the RHI (`render/ui_renderer.cpp`);
-- debugging: crash handler on signals (tested), SIGPROF profiler.
-Not run in the game yet: first build, then the checks in docs/LINUX.md (generated code equal to Windows', bit-exact
-HLE / VU0, scenes against the Windows reference, the rig).
-
-## Milestone 9 - distribution: the launcher and releases (2026-10-30)
-
-The user's request: a launcher in releases that finds the game, builds and launches it (Windows first), with the
-Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; DECISIONS.md 2026-10-30 the choices.
-- [x] Tools: `@vcs {json}` events with failure codes (toolchain), `build.py --recompile-if-needed / --progress json /
-      --launcher`, `generated/recompile_stamp.json` + `recompile.py --check`, `build/build_info.json`, `doctor.py`,
-      `vcs_disc.py check`, `setup_vs.py`, `backup.py`, `report.py`, `rip_disc.py`, `deps.py`, `release.py`,
-      `update.py`; `find_iso` reads `build/vcs.ini` too (vcs.exe's); vcs.exe's exit codes per failure
-      (`src/disc/vcs_disc_id.h`, shared with the launcher).
-- [x] `launcher/`: VCSLauncher.exe (SDL3 + Dear ImGui, static, 4 MB): the four steps, the next-step button, tasks with
-      stages / progress / cancel / errors and fixes, play with the log, saves backup / restore, shortcut, report,
-      updates, options; command line `--check / --build / --play / --self-test / --screenshot`.
-- [x] Releases: `tools/release.py` (82 MB zip: source, launcher, embeddable Python, `deps/`, licences; the game-file
-      guard), offline configure from `deps/` (`FETCHCONTENT_FULLY_DISCONNECTED`, the FFmpeg URL - a `[gta-recomp]`
-      CMake change), CI workflow `.github/workflows/launcher.yml` (written, not run yet).
-- [x] Checked: from the release zip in an empty folder, the hidden launcher built the game from scratch (bundled Python,
-      no downloads) in 8 min 42 s, and `--play` started it (the intro movie, 0 dropped); update 0.1.0 -> 0.1.1 in place; backups round-trip on a card copy;
-      setup_vs.py dry runs and the Microsoft-signature check; a disc copy from an image file.
-- [ ] A PC with nothing installed (Windows Sandbox): setup_vs.py's real install. A real DVD drive. CI's first run and
-      the first tagged release. Code signing.
-
 ## Milestone 10 - the PS5 (started 2026-10-31)
 
-The user's request: the PC port as a native PS5 game (jailbroken consoles, homebrew), with the gta4-ps5 port as the
+The user's request: the port as a native PS5 game (jailbroken consoles, homebrew), with the gta4-ps5 port as the
 reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
-- [x] Toolchain: `ps5/cmake/ps5-toolchain.cmake` (the host's clang 19+ for `x86_64-sie-ps5`, the payload SDK's headers
-      and libc++, znver2); the recompiler stays on the host; `-march=znver2` in ReleaseMode.
+- [x] Toolchain: `ps5/cmake/ps5-toolchain.cmake` (the build machine's clang 19+ for `x86_64-sie-ps5`, the payload SDK's headers
+      and libc++, znver2); the recompiler runs on the build machine; `-march=znver2` in ReleaseMode.
 - [x] The link (`tools/ps5_link.py`, CMake's link rule): ps5-plume-triangle's recipe - RADV, the SDK fork's platform
       layer (direct-memory heap, thread stacks, the missing libc functions), libc++, the start-up code; emulated TLS and
       `stat` wrapper in `ps5/runtime`.
@@ -690,26 +615,31 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
 - [x] Platform layer `src/platform/platform_ps5.cpp`: the TV through VK_KHR_display, the DualSense (scePad; touchpad =
       Select), sceAudioOut, TSC frame pacing, Dear ImGui from the pad, notifications. platform.h:
       `vulkanGetInstanceProcAddr`, `notify`; key names and the PNG writer shared (`platform_common.cpp`).
-- [x] Vulkan on RADV without a loader (`volkInitializeCustom`); the disc read with pread (`VCS_ISO_PREAD=1` on a PC);
+- [x] Vulkan on RADV without a loader (`volkInitializeCustom`); the disc read with pread;
       `/app0` paths and `logs/vcs.log`; start-up errors as notifications; the MXCSR check; crash reports with offsets
-      into vcs.elf; *TV output* setting; keyboard page and PC-only settings hidden.
+      into vcs.elf; *TV output* setting; settings that don't apply to the console hidden.
 - [x] Runtime: `preserve_none` off for the PS5 target (refused by clang), the 64-byte `thread_local` on the heap, FreeBSD
       thread names and card birth times (PS2RECOMP_PATCHES.md).
 - [x] Checked here: every library and object compiles for the PS5 and the game links (stand-in generated code, an
       empty RADV archive); the packaging (a stand-in converter, padding path included); pread reads byte-identical to
-      the mapping (ASan / UBSan); the Linux build and its start-up messages unchanged.
+      a mapping of the same image (ASan / UBSan).
 - [x] The DualSense audited (2026-10-31): the DualShock 2's mapping button for button, `tools/ps5.py padtest` (62
       checks through the real platform layer and bindings); pad open fallbacks, trigger bits, the menu chords kept from
-      the game (all platforms), DualSense names in the menus' hints.
+      the game, DualSense names in the menus' hints.
 - [x] `tools/ps5.py setup` (ps5-plume-triangle pinned and built), `build --zip`, `release.py --ps5` (the build kit -
       no game code: DECISIONS.md 2026-10-31); VERSION 0.0.3.
 - [ ] The first run on a console (docs/PS5.md's checklist); FFmpeg for the PS5 built and the movies checked; frame
-      rate there; ThinLTO; 120 Hz / VRR; DualSense extras; the control channel on the LAN.
+      rate there; ThinLTO; 120 Hz / VRR; DualSense extras; the control channel on the LAN; the debug switches below from a
+      file in the app's folder (a homebrew app gets no environment).
 
 ## Useful switches
+
+Environment variables read by the code. A homebrew app started from the PS5's home screen gets no environment,
+so on the console they wait for a way in (docs/PS5.md's work list); the settings menu's choices are in vcs.ini.
+
 | Env var | Effect |
 |---|---|
-| `PS2X_GS=cpu\|hw\|gpu\|null` | GS renderer (vcs.exe: default hw, set by src/main.cpp; the runtime's own default cpu) |
+| `PS2X_GS=cpu\|hw\|gpu\|null` | GS renderer (the game: default hw, set by src/main.cpp; the runtime's own default cpu) |
 | `PS2X_HW_SCALE=n`, `PS2X_HW_DEBUG=1` | hardware renderer scale / stats |
 | `VCS_FPS_LOG=1` | VBlanks and flips per second (was `VCS_FPS=1`; `VCS_FPS` is the frame rate cap) |
 | `VCS_TIMING=0\|1`, `VCS_FPS=30\|60\|120\|144\|-1\|0` | game timing original / frame-rate independent; frame rate cap (-1 display refresh, 0 unlimited) |
@@ -727,15 +657,13 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
 | `VCS_MIN_STEP=x` | independent timing's step floor (default 50/240: the 240 fps ceiling; lower makes an unlimited cap unlimited) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
 | `VCS_GAME_VOLUME=0` | Audio > Music / Sound effects leave the game's own levels alone (no setter hooks, no sync; the reference) |
-| `VCS_INPUT_MAP=0` | the runtime's fixed built-in key / gamepad mapping instead of the player's bindings (`ps2_pad.cpp`; the reference) |
+| `VCS_INPUT_MAP=0` | the runtime's fixed built-in mapping instead of the player's bindings (`ps2_pad.cpp`; the reference) |
 | `VCS_VSYNC=0\|1\|2` | Vertical sync for one run: off, on, off with tearing allowed |
 | `VCS_SCRIPT_TIMESTEP=0` | mission meters that count per frame stay on the frame rate (game-internals.md 11f; the reference) |
 | `VCS_PHYSICS_TIMESTEP=0` | the push of a body under a wheel and the rolling resistance stay per frame (game-internals.md 4; the reference) |
 | `VCS_COLL_LOG=1` | each ApplyCollisionAlt (FUN_0034D670) of the player's vehicle: the other entity, contact point, normal, speeds |
 | `VCS_SCRIPT_TIMESTEP_LOG=1`, `VCS_SCRIPT_TIMESTEP_CHECK=1` | per scaled instruction every 2 s game time: runs, the game's amount vs applied; log each listed instruction found in a newly loaded mission |
 | `VCS_PERF_OVERLAY=0\|1` | the perf overlay setting for one run |
-| `VCS_PROFILE=s` | sampling profiler (guest functions + host symbols) |
-| `VCS_PROFILE_LINES=name` | with `VCS_PROFILE`: source lines of the host functions whose name contains `name` |
 | `PS2X_VIF_UNPACK_FAST=0\|verify` | VIF1 UNPACK general loop only / both, compared |
 | `PS2X_GS_RECT_VERIFY=1` | every 64th rect upload also written pixel by pixel and compared |
 | `PS2X_HW_LAZY_INDEX=0` | lazy uploads to write found by rescanning the queue (the old way) |
@@ -746,11 +674,9 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
 | `PS2X_GS_THREAD=0\|1` | the render worker's GS stage (GS front end + frame building on a second thread; default on with the worker and the HW renderer) |
 | `PS2X_RENDER_THREAD=0\|1` | render submission on the game thread / on its own thread (default with `PS2X_GS=hw`) |
 | `PS2X_RENDER_THREAD_LOG=1`, `PS2X_RENDER_THREAD_AHEAD=n` | worker items / fences every 5 s; frames the game may run ahead (1) |
-| `VCS_PROFILE_THREAD=RenderWorker` | `VCS_PROFILE` samples the render worker instead of the game thread |
 | `PS2X_FAST_DISPATCH=0` | guest calls / loop checkpoints always through the scheduler (no inline fast path) |
-| `VCS_EXE=path` | tools/run.py (and the rig, bench, scenes on top of it) run that build |
 | `VCS_WATCHDOG=s` | EE + IOP thread states |
-| `VCS_WATCH=lo,hi[,val[,mask]]` | guest write watchpoint (rig `watch lo,hi[,val[,mask]]` arms it mid-run) |
+| `VCS_WATCH=lo,hi[,val[,mask]]` | guest write watchpoint |
 | `VCS_WATCH_STACK=1`, `VCS_WATCH_STRIDE=stride,offset` | watch hits also list s2-s7 and the code addresses on the guest stack (callers); only writes to one field of every pool entry (e.g. `d20,1c8`: the peds' flags) |
 | `VCS_TRACE_FILES=1` | game file API / inflate / GTAG relocation trace |
 | `PS2X_TRACE_RPC=n` | first n SIF RPC events |
@@ -769,7 +695,7 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
 | `VCS_DUMP_RAM=s,s,...` | write EE RAM to ram_<s>.bin at those seconds |
 | `PS2X_DMA_HIST=1` | VIF1 payload per MB of RAM every 5 s |
 | `VCS_TRACE_PACKETS=1` | peak use of the game's DMA packet buffer |
-| F3 / F4, `PS2X_PERF_LOG=f.csv` | perf overlay / CSV recording (see CONTROLS.md); `python tools/perf_report.py f.csv` |
+| `PS2X_PERF_LOG=f.csv` | CSV recording of the perf numbers (the overlay: Advanced > Performance overlay); `python3 tools/perf_report.py f.csv` |
 | `PS2X_HLE_CLIPPED=1` | draw world packets that cross the clip planes with GPU clipping (wrong in places, game-internals.md 6h) |
 | `PS2X_HLE_CLIPPER=0` | clipped world packets on the VU1 instead of the C++ clipper |
 | `PS2X_HLE_ENV=0` | the environment-map pass (stage table 0x13) on the VU1 |
@@ -778,28 +704,26 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
 | `VCS_HUD=0/2/1` | HUD in widescreen: keep 4:3 in the middle / screen edges / stretch (the menu's Display > HUD) |
 | `VCS_WIDE_CULL=0` | widescreen: entities culled by the game's 4:3 camera planes (models vanish at the screen edges, as before 2026-10-27) |
 | `VCS_TRACE_VISIBLE=1` | CCamera::IsSphereVisible: visible ratio every 5 s, samples with the camera-space point and the planes |
-| `VCS_HUD_NATIVE=0` | the HUD drawn into the PS2 frame buffer instead of the native layer at the window's size |
+| `VCS_HUD_NATIVE=0` | the HUD drawn into the PS2 frame buffer instead of the native layer at the output's size |
 | `PS2X_HW_PIXEL_CENTRE=0` | draws without the GS pixel-centre offset (softer copies, as before 2026-10-23) |
 | `PS2X_HW_RT_FULL=0` | render targets read once per PS2 texel everywhere (higher internal resolutions lost in the copies) |
 | `PS2X_HW_POSTFX=0` or letters `btc` | effects drawn as recorded / only these native: b bloom, t trails, c frame copy + motion blur |
-| `PS2X_HW_SCALE=0` | native frame: the picture's targets at the window's size (menu: Internal resolution > Match window) |
-| `python tools/rig.py burst DIR N` | the next N presented frames as DIR/burst_NNNN.png + DIR/burst.txt (shape, the renderer's batch) |
+| `PS2X_HW_SCALE=0` | native frame: the picture's targets at the output's size (menu: Internal resolution > Match window) |
 | `PS2X_HW_MENU_SWITCH=0` | widescreen: the pause menu goes 4:3 only after 32 frames without 3D (as before 2026-10-27) |
 | `PS2X_HW_WIDE_SCALE=0` | integer scales in widescreen: the picture 640 x scale wide, stretched (as before 2026-10-27) |
 | `PS2X_HW_MSAA=2/4/8` | MSAA for the picture's targets (menu: Anti-aliasing) |
 | `PS2X_HW_ANISO=2..16`, `PS2X_HW_ANISO_LOG=1` | anisotropic filtering of the game's textures (menu: Texture filtering); count the draws per sampling path |
 | `PS2X_HW_GATHER=0` / `verify` | bilinear game textures through four loads with the wrap per tap (before 2026-10-30) / both paths, a pixel whose texels differ drawn magenta |
-| `PS2X_GPU_TIMING=1` | GPU time per frame by marker (D3D11 timestamp queries; a marker per draw, named by kind, target and texture), every 5 s |
+| `PS2X_GPU_TIMING=1` | GPU time per frame by marker (timestamp queries; a marker per draw, named by kind, target and texture), every 5 s |
 | `PS2X_RHI_LOG_CREATES=1` | each texture of 256x256 or more as it is created (a target re-created every frame shows as a stream) |
 | `PS2X_HW_RT_REUSE=0` | render targets re-created as before 2026-10-30: a new texture at every drop and growth, FBP 420 scaled by each draw's width |
 | `VCS_FPS=60` | 60 fps: the game's limiter waits one VBlank a frame instead of two (menu: Frame rate) |
-| `PS2X_HW_FRAME=WxH` | the native frame's size whatever the window (tests) |
-| `PS2X_HW_DUMP_ALLVERTS=1` | the F12 draw log prints every vertex of every draw |
+| `PS2X_HW_FRAME=WxH` | the native frame's size whatever the output (tests) |
+| `PS2X_HW_DUMP_ALLVERTS=1` | the draw log (`PS2X_HW_DUMP`) prints every vertex of every draw |
 | `VCS_MENU_NATIVE=0` | menus drawn into the PS2 frame buffer instead of the native layer |
 | `VCS_LOADING_NATIVE=0` | loading screens drawn into the PS2 frame buffer instead of the native layer |
 | `PS2X_HW_PATH2_PACKED=0` | PATH2 draw packets (Im2D, effect strips) through the GS front end vertex by vertex instead of recorded whole |
 | `PS2X_TRACE_PATH2_TAGS=1` | PATH2 (VIF DIRECT) packets by the shape of their first GIFtag, and the register sequence of A+D packets that draw, every 5 s (`[path2]`) |
-| `PS2X_WRITE_WATCH=0`, `PS2X_WRITE_WATCH_LOG=1` | guest RAM without the OS's write watch (no block can then be told unchanged); pages written per fold and the fold's cost, every 5 s |
 | `VCS_RSL_ITEMS=0`, `VCS_RSL_ITEMS_VERIFY=1` | world / model draws as packets (no draw items); items built but the original writes the packets, compared with what each item stands for, and each block the walker copies with what an item would copy (FULLY_NATIVE.md step 4c) |
 | `VCS_RSL_SLOW_LOG=1` | kicks whose item resolve takes > 3 ms (items, references, bytes) and chains the render worker takes > 15 ms on |
 | `VCS_RSL_PLUGINS=0`, `VCS_RSL_PLUGIN_LOG=1` | the native flush leaves flushes with plug-in callbacks to the original (as before step 5f); log which callbacks the flushes left to the original would call |
@@ -824,8 +748,8 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
 | `PS2X_HW_CLUT_FROM_UPLOAD=0`, `PS2X_HW_CLUT_VERIFY=1` | CLUT loads read emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] clut from upload`) |
 | `VCS_TRACE_IM2D_DELAY=s`, `VCS_TRACE_IM2D_STACK=1` | start the Im2D trace after s seconds (default 30); print the guest stack's return addresses per call |
 | `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier did not find (positions) |
-| `PS2X_HW_OUTPUT=WxH` | the renderer's output size whatever the window (full-screen sizes in test runs; with `PS2X_CAPTURE_SIZE`) |
-| `PS2X_HW_DUMP_TEX=<key hex>` | write that decoded texture (colour + alpha PPM, keys from the F12 draw log) - analysis only, never commit |
+| `PS2X_HW_OUTPUT=WxH` | the renderer's output size whatever the TV's (tests; with `PS2X_CAPTURE_SIZE`) |
+| `PS2X_HW_DUMP_TEX=<key hex>` | write that decoded texture (colour + alpha PPM, keys from the draw log) - analysis only, never commit |
 | `PS2X_HW_HUD_LOG=1` | the renderer's HUD layers (per frame buffer, stale or not) and the output size, every 2 s |
 | `VCS_TRACE_IM2D=n`, `VCS_TRACE_IM2D_MARKERS=1..5` | log n Im2D calls (caller, primitive, vertices) / the 2D pass's calls, from 30 s on |
 | `PS2X_HLE_STATS=1` | native draw counters; 0x0030 stage tables still on the VU1 every 10 s (+ one code / data sample each) |
@@ -834,39 +758,32 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
 | `VCS_RSL_SHADOW=1` | RSL shadow draw list: each draw call checked against its tag in the frame's chain, 3D tags outside draws listed, each draw program's VU state checked against the draw's RSL state (`[rsl-shadow]`, `state (1b)`; not with `VCS_TRACE_RSL`) |
 | `VCS_RSL_SHADOW_DUMP=n`, `VCS_RSL_SHADOW_FIND=1` | with `VCS_RSL_SHADOW`: n samples of draw state + VU memory (`rsl_shadow_NNN.bin`); where in guest RAM mismatching VU rows are |
 | `PS2X_CHAIN_CENSUS=1` | the VIF1 chain by tag location / id / data source: tags and quadwords per chain, every 5 s (`[chain]`) |
-| `VCS_PROFILE_GUEST_FILE=<path>` | with `VCS_PROFILE`: every guest function's samples per report window, appended (for sums by subsystem) |
-| `VCS_PROFILE_SPIKES=<ms>` | with `VCS_PROFILE`: a frame longer than <ms> gets its own report (`[spike] t=... ms frame`: its samples by guest function / host symbol, with call chains when `VCS_PROFILE_CALLERS` matches); `VCS_PROFILE_THREAD` may list several threads (`GameThread,RenderWorker,GsStage`) |
 | `PS2X_WAIT_LOG=<ms>` | the EE scheduler logs waits longer than <ms> (pacing the EE clock to a deadline, or idle) with every guest thread's state, wait reason and pc / ra |
 | `VCS_NATIVE_INFLATE=0`, `VCS_NATIVE_INFLATE_VERIFY=1`, `VCS_NATIVE_INFLATE_LOG=1` | zlib's inflate_fast recompiled as before; native decode compared with the original's output; counts, time and slowest call every 10 s |
 | `VCS_NATIVE_MODEL_INDEX=0` | MAIN.SCM's model-id search (`FUN_00255188`) recompiled as before |
 | `PS2X_VAG_DECODE=1` | the upstream VAG-to-PCM decode of sound files read through fio (for an unused playback path) as before |
 | `PS2X_HW_DECODE_FAST=0` | textures decoded from their upload through the GS swizzle per texel even when the upload has the texture's own layout |
-| `VCS_PROFILE_CALLERS=name[,name]` | with `VCS_PROFILE`: for samples in host functions whose name contains one of these, the unwound call chain up to the first guest function (`called from <sampled function> < <caller> ...`; an unwind fault ends the chain, not the process) |
 | `VCS_RSL_NATIVE=0`, `VCS_RSL_NATIVE_VERIFY=1`, `VCS_RSL_NATIVE_LOG=1` | the original RSL state flush instead of the native one; the original runs and the native bytes are compared with it; counts every 10 s (`[rsl-native]`) |
 | `PS2X_HLE_PACKED=0`, `PS2X_HW_PACKED_VERIFY=1` | the C++ reproductions' strips / fans through the GS front end; check the packed recording against it per packet |
 | `PS2X_HLE_SETUP=0` | VU1 setup programs (matrices, slot routines, block copy) on the VU1 instead of natively |
 | `PS2X_HLE_DUMP_IMAGES=1` | write the code and data of the first 0x02c0 shine packet of each code image (`shine_<hash>_*.bin`) |
-| `PS2X_HW_DRAW_SOURCES=1`, rig `gsdraws [reset]` | draws still made from GS primitives by kind and source, per frame (logged every 5 s / on request); totals always in the perf line (`gs_draws` ...) |
+| `PS2X_HW_DRAW_SOURCES=1` | draws still made from GS primitives by kind and source, per frame (logged every 5 s); totals always in the perf line (`gs_draws` ...) |
 | `PS2X_CLIP_DUMP=dir[,n]` | with `PS2X_HLE_VERIFY=1`: write n clipped packets (VU memory + the VU's kicks) for offline checks |
 | `PS2X_HW_LAZY_UPLOADS=0`, `PS2X_HW_UPSTATS=1` | write texture uploads immediately / upload stats |
-| `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate a slow PC) |
+| `PS2X_SLOW_VBLANK_MS=n` | stall the EE n ms per VBlank (simulate slow frames) |
 | `PS2X_VU0_VERIFY=1`, `PS2X_VU0_NATIVE=0` | check / disable native VU0 programs |
 | `PS2X_VU1_VERIFY=1`, `PS2X_VU1_COMPILED=0` | check / disable compiled VU1 code |
 | `PS2X_TRACE_VU0=1`, `PS2X_TRACE_VU1=1`, `PS2X_VU1_STAT=1` | VU program statistics |
 | `VCS_COUNT_CALLS=addr,...` | calls per 5 s of guest functions |
 | `VCS_RWATCH=lo,hi` | which code reads a guest range |
 | `PS2X_HW_DUMP=<frame>` | dump HW render targets + display as PPM |
-| `python tools/run.py N name --hidden` + `python tools/gamectl.py ...` | hidden test run driven over the control channel |
-| `python tools/scenes.py capture OUT` / `compare REF NEW` | reference scenes (screenshots + perf) from an empty card; diff two captures |
-| `VCS_DATA_DIR=dir` | save / cache folder instead of %LOCALAPPDATA%/VCSRecomp (Linux: $XDG_DATA_HOME/VCSRecomp) |
-| `PS2X_D3D_DEBUG=1` | D3D11 debug layer (needs Windows' Graphics Tools feature) |
-| `VCS_RHI=d3d11\|vulkan\|null` | the renderer for one run (Graphics > Graphics API when the build has two; docs/LINUX.md) |
-| `PS2X_RHI_DEBUG=1` | the API's validation layer: D3D11 debug layer / Vulkan's Khronos validation |
+| `VCS_DATA_DIR=dir` | save / cache folder instead of the app's folder |
+| `VCS_RHI=vulkan\|null` | the renderer for one run: Vulkan, or the null backend (no GPU work) |
+| `PS2X_RHI_DEBUG=1` | Vulkan's Khronos validation layer, where it is installed |
 | `PS2X_RHI_STATS=1` | Vulkan: draws, descriptor writes, passes, suspended passes, barriers, uploads, CPU waits per frame, and input to GPU done (avg / p50 / p95) every 5 s; gs_hw: the input delay by stage |
 | `PS2X_RHI_GPU_TIME=1` | Vulkan: GPU time of the passes and the whole frame (`PS2X_GPU_TIMING=1`: per draw, breaking passes) |
 | `PS2X_RHI_FULL_BARRIERS=1` | Vulkan: whole-pipeline barriers, as before the layout-based ones |
 | `PS2X_HOST_PACED=0`, `PS2X_FRAME_LEAD=0`, `PS2X_FRAME_LEAD_MARGIN_US=<us>` | frame-rate independent timing: the game's own deadline instead of the host's frames; no frame lead; the lead's margin (1500) - PERFORMANCE.md 19 |
-| `PS2X_WRITE_WATCH=1` (Linux) / `=0` (Windows) | the guest RAM write watch on Linux (opt-in there) / off on Windows - PERFORMANCE.md 20 |
 | `PS2X_HW_SPECIALISE=0` | the GS pixel shader's full version for every draw (not one per texture read; PERFORMANCE.md 18) |
 | `PS2X_HW_QUEUE=<n>`, `PS2X_HW_BATCH_MAX=<n>` | frames the game may queue ahead / frames rendered per host frame (0: all); defaults 1 / 1 with frame-rate independent timing, 3 / all with the original (PERFORMANCE.md 17) |
 | `VCS_VK_DEVICE=<n or name>` | Vulkan: which GPU |
@@ -875,20 +792,12 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
 | `PS2X_HLE_SURVEY=1`, `PS2X_HLE_SURVEY_DUMP=n`, `PS2X_HLE_SURVEY_DUMP_EVERY=n` | VU1 program / layout survey, sample dumps |
 | `PS2X_HLE_STATS=1` | stage tables the native handler passes over |
 | `PS2X_HLE_LIT=0` | draw skinned / lit models through the VU1 program (world stays native) |
-| **F2** (or gamepad Back + Start) | settings menu (docs/SETTINGS_MENU_WIDESCREEN.md); its values live in vcs.ini next to vcs.exe |
-| `display.window=0\|1` in vcs.ini, `VCS_FULLSCREEN=0\|1` for one run, Alt+Enter | windowed / full screen (borderless) |
-| `display.aspect=43\|1610\|169\|219\|329\|0` in vcs.ini, `VCS_ASPECT=...` for one run | aspect ratio (Hor+ widescreen; 0 = match the window) |
+| **touchpad + Options** | settings menu (docs/SETTINGS_MENU_WIDESCREEN.md); its values live in vcs.ini in the app's folder |
+| `display.aspect=43\|1610\|169\|219\|329\|0` in vcs.ini, `VCS_ASPECT=...` for one run | aspect ratio (Hor+ widescreen; 0 = match the output) |
 | `display.hud=0\|1` | widescreen HUD: keep 4:3 in the middle / stretch |
-| `window.*` in vcs.ini | where the window was last (monitor, position, size, maximized); written by the game, delete the lines to reset (docs/SETTINGS_MENU_WIDESCREEN.md) |
-| `python tools/rig.py start --save DIR`, `python tools/rig.py <command>` | automation rig: start from a card copy; peek / poke / findvec / dump / scm / scripts / player / pause |
-| `python tools/tour.py [OUT] [--step 250] [--every K]` | world tour over the map (classes, map.png, screenshots, perf) |
-| `python tools/missions.py [OUT] [--only 45,46]`, `python tools/drive.py [OUT]` | mission smoke test; drive loop |
-| `python tools/regress.py [OUT] [--quick] [--set-baseline]` | regression suite against build/regress/baseline |
 | `PS2X_FRAME_STATS=1` | brightness probe without the control channel (black / dip frames in the perf line and log) |
 | `VCS_TRACE_TELEPORT=1` | log every ped teleport (FUN_0020b3d8) with its caller |
 | `VCS_TRACE_PED_REMOVE=1` | log every ped flagged for removal (FlagToDestroy, FUN_00210780) and deleted (FUN_00198408): handle, position, model, created-by, flags, last script, callers |
 | `display.scale=<1..8>` (old `scale=` still read) | internal render resolution, as `PS2X_HW_SCALE` (the environment wins) |
-| `python tools/vudis.py code.bin --start 0x30 --to-ebit` | VU microcode disassembler |
-| `python tools/sendkey.py Return`, `python tools/screenshot.py f.png` | key press / screenshot (control channel if open, else the window) |
-| `python tools/eedis.py <elf> <addr or name>` | EE disassembly with function names |
-| `python tools/minidbg.py <exe> <iso>` | catch fail-fast crashes with a stack |
+| `python3 tools/vudis.py code.bin --start 0x30 --to-ebit` | VU microcode disassembler |
+| `python3 tools/eedis.py <elf> <addr or name>` | EE disassembly with function names |

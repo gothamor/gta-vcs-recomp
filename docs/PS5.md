@@ -1,9 +1,9 @@
 # PS5
 
-The game as a native PS5 homebrew app, for jailbroken consoles that run homebrew from `/data/homebrew/`. It is the same
-source and the same recompiled game as the Windows and Linux builds: the platform layer, the start-up code and the
-link are the PS5's own, and the Vulkan renderer (the Linux one, `src/rhi/vulkan`) draws through RADV, Mesa's AMD
-driver, linked into the game. No emulator, no SDL. Decisions: DECISIONS.md, 2026-10-31.
+The game as a native PS5 homebrew app, for jailbroken consoles that run homebrew from `/data/homebrew/`: the game's
+own code recompiled to C++, the PS5 platform layer (the TV, the DualSense, audio), the PS5's start-up code and link,
+and the RHI's Vulkan renderer (`src/rhi/vulkan`) drawing through RADV, Mesa's AMD driver, linked into the game. No
+emulator. Decisions: DECISIONS.md, 2026-10-31.
 
 The way to the console is the one the [gta4-ps5](https://github.com/chonzytron/gta4-ps5) port (GTA IV on the PS5)
 takes and has shipped: Nazky's [ps5-plume-triangle](https://github.com/Nazky/ps5-plume-triangle) brings the
@@ -21,7 +21,7 @@ RADV (`libvulkan_radeon.ps5.a`), the app start-up code, the clean-room `libc.prx
 | Platform layer (`src/platform/platform_ps5.cpp`): the TV (VK_KHR_display), the DualSense (scePad), sound (sceAudioOut), TSC frame pacing, Dear ImGui from the pad, notifications | written and compiled; not run on a console yet |
 | The DualSense as the DualShock 2 (`tools/ps5.py padtest`, `ps5/tests/padtest.cpp`) | done: 62 checks pass - the real platform layer with the console's pad functions mocked, through the real bindings to the report the game reads (every button, both sticks, the triggers, Select tap / hold, the menu chords kept from the game, a controller gone and back, the motors, the menus' gamepad keys). The pad's button bits are ps5-plume-triangle's, verified on a console |
 | Vulkan: RADV's entry point instead of a loader (`volkInitializeCustom`) | written; not run on a console yet |
-| The disc read with `pread`, not mapped (`src/disc/iso_image.cpp`) | done: byte-identical to the mapped reads on a test image (every file, past-the-end reads; ASan / UBSan clean), `VCS_ISO_PREAD=1` checks it on a PC |
+| The disc read with `pread`, not mapped (`src/disc/iso_image.cpp`) | done: byte-identical to the mapped reads on a test image (every file, past-the-end reads; ASan / UBSan clean) |
 | Paths (`/app0`), the log file, start-up errors as notifications, the FP state, crash reports | written and compiled; not run on a console yet |
 | FFmpeg for the movies (`tools/ps5.py ffmpeg`) | written, not run (FFmpeg's configure was not run where it was written): without it the movies are skipped |
 | `tools/ps5.py compile-check` + CI (`.github/workflows/ps5.yml`): the PS5 build compiled without a disc | done |
@@ -41,23 +41,23 @@ RADV (`libvulkan_radeon.ps5.a`), the app start-up code, the clean-room `libc.prx
    Graphics (RADV ...)`, `[rhi] Vulkan swapchain 3840x2160, 3 images, fifo` - the picture. A failure names the missing
    piece (a Vulkan 1.3 feature, push descriptors, the display).
 5. `[platform] sound: port ...` - sound.
-6. Then the game as on a PC (the same log lines as docs/LINUX.md's).
+6. Then the game's own log lines (the runtime's `[ee]`, `[gs]`, `[sound]`...).
 
 ## Building
 
-On a Linux PC (Ubuntu 24.04 and WSL 2 work; the payload SDK's tools are Linux programs):
+On the build machine (Ubuntu 24.04 or WSL 2: the payload SDK's tools run there), with Python 3, Git, clang 19+ and
+lld, CMake 3.21+, Ninja and glslang:
 
-1. **The game's code from your disc**, once (as for the PC build): `python3 tools/build.py --check-deps` lists the
-   packages, then `python3 tools/build.py --recompile "<your>.iso"` (or only `python3 tools/recompile.py "<your>.iso"`).
-   `generated/` is what the PS5 build compiles.
+1. **The game's code from your disc**, once: `python3 tools/recompile.py "<your>.iso"` builds the recompiler and turns
+   the disc's executable into C++ (`generated/`, about 200 MB), which the PS5 build compiles.
 2. **The PS5 toolchain**, once: `python3 tools/ps5.py setup` clones ps5-plume-triangle next to this folder at the
    commit this port was checked against (`--triangle <dir>` for elsewhere; remembered) and runs its `make`: the payload
    SDK fork (`.deps/native/ps5-payload-sdk`), RADV (`.deps/native/radv-release`), the start-up code, the libSceAgc
    stubs and ps5-native-tool. It lists the packages that are missing first (meson, glslang, python3-mako...). By hand:
    `git clone https://github.com/Nazky/ps5-plume-triangle` and `make` in it.
 3. `python3 tools/ps5.py check` - what is there and what is missing, with the command for each.
-4. `python3 tools/ps5.py build --zip` - configures `build/ps5` (CMake + Ninja), compiles the game for the PS5 (as long
-   as a PC build: the same ~200 MB of generated C++), links `build/ps5/vcs.elf` and makes the app folder
+4. `python3 tools/ps5.py build --zip` - configures `build/ps5` (CMake + Ninja), compiles the game for the PS5 (the
+   ~200 MB of generated C++: 15-30 minutes the first time), links `build/ps5/vcs.elf` and makes the app folder
    `build/ps5/app/PPSA94590/` and its zip `build/ps5/PPSA94590.zip`. `--lto` for ThinLTO (not measured on a console
    yet), `--title-id` for another id. **The app folder holds the game's code made from your disc: it is for your own
    console, never to publish** (DECISIONS.md: source only).
@@ -68,16 +68,16 @@ On a Linux PC (Ubuntu 24.04 and WSL 2 work; the payload SDK's tools are Linux pr
 and empty bodies for the generated functions the host code names - no game code): a check without a disc or a
 console, which CI runs with the upstream SDK release. With a built triangle (`--triangle`) it links too.
 
-`python3 tools/ps5.py padtest` checks the controller path on Linux: `ps5/tests/padtest.cpp` compiles the real
-`platform_ps5.cpp` with the console's pad, user and TSC functions mocked and links it against a Linux PC build's
-objects (`build/release`, or `--tree`), then feeds DualSense states through the real bindings and checks the DualShock
-2 report the game reads (62 checks).
+`python3 tools/ps5.py padtest` checks the controller path on the build machine: `ps5/tests/padtest.cpp` compiles the
+real `platform_ps5.cpp` with the console's pad, user and TSC functions mocked and links it against the game's objects
+compiled for the build machine (`build/release`, or `--tree`), then feeds DualSense states through the real bindings
+and checks the DualShock 2 report the game reads (62 checks).
 
 ### Releases
 
 A release carries no game code (DECISIONS.md, 2026-10-21): `python3 tools/release.py --ps5` makes
 `build/dist/VCS-Recomp-<version>-ps5.zip`, the source with `PS5-README.txt` (the steps above in short), through the same
-game-file guard as the Windows release. Players build the app from their own disc. There is no ready-to-run PS5 zip to
+game-file guard. Players build the app from their own disc. There is no ready-to-run PS5 zip to
 publish: the eboot is the game recompiled.
 
 ## Installing and playing
@@ -118,7 +118,7 @@ buttons and both sticks; game-internals.md 12a). The defaults:
 | Options | Start | the pause menu |
 | **Touchpad click** | **Select** | the Create button belongs to the system (apps never see it), as in gta4-ps5 |
 
-The PC port's pad chords open the host's menus; the game sees neither button of a chord:
+Pad chords open the menus; the game sees neither button of a chord:
 
 | Hold the touchpad and press | Opens |
 |---|---|
@@ -128,18 +128,18 @@ The PC port's pad chords open the host's menus; the game sees neither button of 
 
 Because a chord starts on the touchpad, Select reaches the game once the touchpad has been held 150 ms on its own, or as
 a short press when it is let go sooner; while it is held, Options / L1 / R1 do not reach the game, and a hold that
-pressed one of them is a chord to the end (`src/game/vcs_input.cpp`; the PC's Back button works the same).
+pressed one of them is a chord to the end (`src/game/vcs_input.cpp`).
 
 The Gamepad page of the settings rebinds every PS2 button and has the dead zones (12%), camera speed, trigger point,
 swapped sticks, inverted camera axes and the vibration strength. The game's rumble drives the DualSense's motors (the
-pad's dual-motor vibration mode). There is no keyboard or mouse page. The controller is the one of the user who started
+pad's dual-motor vibration mode). The controller is the one of the user who started
 the game (else the user in front, any logged-in user, last the system's); one switched on later is found within a
 second.
 
 ## How it works
 
-- **Toolchain** (`ps5/cmake/ps5-toolchain.cmake`): the host's clang 19+ (the same compiler as the PC builds, so the
-  same generated code and numerics) with `--target=x86_64-sie-ps5 -isysroot <sdk>`, the SDK's libc++ headers and the
+- **Toolchain** (`ps5/cmake/ps5-toolchain.cmake`): clang 19+ (the compiler the generated code and its numerics were
+  checked with) with `--target=x86_64-sie-ps5 -isysroot <sdk>`, the SDK's libc++ headers and the
   flags of the SDK's own `prospero-clang++` wrapper (`-femulated-tls -fno-plt -fno-stack-protector`), plus
   `-march=znver2` (the PS5's CPU: x86-64-v3 and more) and `-fdenormal-fp-math=ieee`. Compiler checks build static
   libraries: an executable needs the PS5 link. The recompiler is not built (it runs on the host).
@@ -147,12 +147,12 @@ second.
   flags of the SDK's `prospero-lld` (`-pie`, 16 KB pages, `-mllvm -emulated-tls`) and ps5-plume-triangle's recipe:
   its linker script and start-up objects, RADV whole, the SDK's libc++ / libc++abi / libunwind, compiler-rt's builtins,
   and the fork's `libps5platform.a`: `malloc` and its family wrapped onto a heap in direct memory (libc's own heap runs
-  out long before a game does), `pthread_create` onto 2 MB stacks there (the PC's 1 MB on Windows is known to be
-  enough for the game thread), and 83 libc functions the console lacks or refuses mapped onto the platform's
+  out long before a game does), `pthread_create` onto 2 MB stacks there (twice what the game thread is known to
+  need), and 83 libc functions the console lacks or refuses mapped onto the platform's
   (`--defsym`). The response file is kept (`build/ps5/ps5-link/link.rsp`) with a link map.
 - **Start-up pieces in the game** (`ps5/runtime/`): emulated TLS that runs C++ `thread_local` destructors before
   freeing a thread's TLS (compiler-rt's, as the recipe writes it, with gta4-ps5's fix; its `__cxa_thread_atexit_impl`
-  is weak - newer SDK forks have their own), and `stat("")` answering ENOENT as on Linux (the PS5 says EINVAL, and
+  is weak - newer SDK forks have their own), and `stat("")` answering ENOENT (the PS5 says EINVAL, and
   `std::filesystem` throws on that).
 - **Packaging** (`tools/ps5.py package`): `ps5-native-tool link` (the ELF's layout and imports the PS5 way, module SDK
   0x02000009) and `self --sign` (fake SELF, magic 0x1D3D154F); when the converter finds no room after the RELRO for the
@@ -161,7 +161,7 @@ second.
   over the sea and "VCS"): no artwork of the game's.
 - **The TV** (`platform_ps5.cpp`): a VK_KHR_display surface on the first display that reports modes - 4K at 60 Hz when
   the TV has it (*Display > TV output*: 1080p / 1440p / 4K), a plane that can show it, after
-  `sceSystemServiceHideSplashScreen`. The swapchain and everything after it is the Linux renderer unchanged.
+  `sceSystemServiceHideSplashScreen`. The swapchain and everything after it is the RHI's Vulkan backend.
 - **Vulkan without a loader**: there is no `libvulkan` on the PS5. The platform layer hands the RHI RADV's
   `vk_icdGetInstanceProcAddr` (`platform::vulkanGetInstanceProcAddr`, with the core 1.1 names it may only have under
   their KHR aliases), and volk loads everything through it (`volkInitializeCustom`).
@@ -172,7 +172,7 @@ second.
   the next pump, renewed while it lasts, after `scePadSetVibrationMode(2)`. The pad also drives Dear ImGui's gamepad
   keys (the settings menu, the trainer). All of it is checked by `tools/ps5.py padtest`.
 - **Sound** (`sceAudioOut`): the main port, 48 kHz (the runtime's rate), 256-frame buffers of 16-bit stereo, on a
-  thread that `sceAudioOutOutput` paces; the runtime's ring keeps the delay as on a PC.
+  thread that `sceAudioOutOutput` paces; the runtime's ring keeps the delay (60-250 ms).
 - **Time**: `clock_gettime` is a system call on the PS5, so frame pacing reads the TSC (`sceKernelReadTsc`), sleeping
   while more than 1.5 ms is left and spinning the rest.
 - **The disc is read with `pread`**, not mapped: in gta4-ps5 a file mapping of a disc image froze the whole console.
@@ -182,31 +182,17 @@ second.
   (`VCS_DATA_DIR`'s place), `logs/`. stdout and stderr go to `logs/vcs.log`, line-buffered, both appending (one file
   offset). Start-up failures (no disc, the wrong disc, no renderer) are also sent as a PS5 notification.
 - **Floating point**: a PS5 title starts with MXCSR 0x9fe0 (flush-to-zero and denormals-are-zero); the triangle's
-  start-up code sets 0x1f80, the PC's, before main, and main checks it (the game's numerics were only ever checked in
+  start-up code sets 0x1f80 (IEEE: denormals kept, round to nearest) before main, and main checks it (the game's numerics were only ever checked in
   the IEEE state; threads start with their creator's MXCSR).
 - **Crash reports** (`src/debug/crash.cpp`): SIGSEGV / SIGBUS / SIGILL / SIGFPE on an alternate stack print the fault,
   the frame-pointer chain as offsets into `vcs.elf`, and the `llvm-symbolizer -e build/ps5/vcs.elf ...` command for
   file and line. The console's ucontext has 48 bytes more than FreeBSD's before the machine context (the SDK fork's
   probe measured it): the registers are read at the measured offset, whichever headers built the game.
 - **Guest functions use the platform's calling convention**: clang refuses `preserve_none` for the PS5 (and PS4)
-  targets, so `PS2_GUEST_CC` is empty there (`ps2_guest_cc.h`). That convention cost the PC 3-7% of game-thread time
-  (PERFORMANCE.md 8).
+  targets, so `PS2_GUEST_CC` is empty there (`ps2_guest_cc.h`): every guest call saves and restores the registers
+  `preserve_none` spares (3-7% of game-thread time when it was measured: PERFORMANCE.md 8).
 - **`thread_local` alignment is at most 32 bytes** on the PS5: the CPU GS backend's per-thread snapshot backend
-  (64-byte aligned) is a `thread_local unique_ptr` now, on every platform.
-
-## Differences from the PC builds
-
-| Area | PC | PS5 | Why |
-|---|---|---|---|
-| Platform layer | SDL3 (`platform_sdl3.cpp`) | `platform_ps5.cpp` on the console's libraries | No SDL backend for the PS5's display, pad and audio |
-| Vulkan | volk loads the system's loader | RADV linked in, volk on its entry point | No loader on the PS5 |
-| Window | resizable / full screen, placement remembered | the TV; *TV output* instead of *Window mode*; no *In the background* (the system suspends the app) | |
-| Input | keyboard, mouse, any gamepad | the DualSense; touchpad = Select | Create is the system's |
-| Disc | memory-mapped | `pread` | Mapping a disc image froze the console (gta4-ps5) |
-| Guest calling convention | `preserve_none` | the platform's | clang refuses it for the PS5 target |
-| Movies | FFmpeg (system / prebuilt) | FFmpeg built for the PS5 by `tools/ps5.py ffmpeg`, else skipped | |
-| Control channel, rig, profiler | yes | not yet (the channel listens on 127.0.0.1 only; no `/proc` for the profiler) | |
-| LTO | ThinLTO by default | off by default (`--lto`) | Not measured on a console yet |
+  (64-byte aligned) is a `thread_local unique_ptr`.
 
 ## Work list
 
@@ -218,5 +204,6 @@ second.
 | ThinLTO on the console (`--lto`: lld's LTO code generation with emulated TLS) | to do |
 | 120 Hz output and VRR (`param.json` attribute3 0x40 / 0x40000, as gta4-ps5 declares them) for the 120 fps cap | to do |
 | DualSense extras (light bar, adaptive triggers), as gta4-ps5 has them | later |
+| The debug switches (`PS2X_*` / `VCS_*`, PROGRESS.md) from a file in the app's folder: an app started from the home screen gets no environment | to do |
 | The control channel on the LAN (opt-in), so `tools/gamectl.py` and the rig can drive the console | later |
 | The Vulkan pipeline cache kept between runs (`userdata/`) | later |

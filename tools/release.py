@@ -176,11 +176,13 @@ PS5_README = """{title}
 {underline}
 
 For jailbroken PS5 consoles that run homebrew from /data/homebrew/. This zip is the port's source: no game code or
-data is in it, and none ever is. You build the game from your own disc (USA, SLUS-21590) on a Linux PC (Ubuntu 24.04
-or WSL 2), and the result - an app folder - goes to your PS5.
+data is in it, and none ever is. You build the game from your own disc (USA, SLUS-21590) on a build machine with
+Ubuntu 24.04 or WSL 2, and the result - an app folder - goes to your PS5.
 
-1. The game's code from your disc (packages: python3 tools/build.py --check-deps):
-       python3 tools/build.py --recompile "Grand Theft Auto - Vice City Stories (USA).iso"
+0. The packages, once:
+       sudo apt install python3 git clang-20 lld-20 cmake ninja-build glslang-tools
+1. The game's code from your disc:
+       python3 tools/recompile.py "Grand Theft Auto - Vice City Stories (USA).iso"
 2. The PS5 toolchain, once (ps5-plume-triangle: the PS5 payload SDK, its Vulkan driver RADV, the eboot tools):
        python3 tools/ps5.py setup
 3. Check, then build:
@@ -273,7 +275,7 @@ def main():
     with open(os.path.join(stage, "VERSION"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
     if a.ps5:
-        # the PS5 builder works on Linux with its own Python, and needs the internet anyway (ps5-plume-triangle's
+        # the PS5's build machine has its own Python, and needs the internet anyway (ps5-plume-triangle's
         # setup downloads the SDK and Mesa): no launcher, no bundled Python or libraries
         with open(os.path.join(stage, "PS5-README.txt"), "w", encoding="utf-8") as f:
             title = "GTA: Vice City Stories - native PS5 port, build kit %s" % version

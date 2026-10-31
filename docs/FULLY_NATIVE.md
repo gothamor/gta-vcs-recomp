@@ -56,7 +56,7 @@ before their PRIM: step 3. Missions not re-run for this step.
 
 The last 2D outside the native HUD / menu layer (PROGRESS.md milestone 3 step 2: "Loading screens and the title menu
 over the flyover: not looked at yet"). Same method as the menus: their Im2D / sprite calls drawn in the native layer
-at the window's size, `VCS_..._NATIVE=0`-style switch back, scenes compared at 4:3 / 16:9.
+at the output's size, `VCS_..._NATIVE=0`-style switch back, scenes compared at 4:3 / 16:9.
 
 Done when: the loading screens and the title / start menus draw from the native layer, sharp at 1080p, the static
 `loading` scene unchanged at 1x.
@@ -71,7 +71,7 @@ the pause menu, native since milestone 3.
 RSL_SUBMISSION.md phase 3. Decode the game's rasters (`.XTX`: PSMT4 / T8 + CLUT, game-internals.md 7) into GPU textures
 when they are loaded or streamed, keyed by raster; native draws bind them directly and the game's VRAM uploads stop
 mattering. Render targets read as textures (reflection map, bloom, frame copies, the radar) become native targets -
-this is also what lets the radar and reflection map draw at the window's resolution (PROGRESS.md milestone 3 step 4).
+this is also what lets the radar and reflection map draw at the output's resolution (PROGRESS.md milestone 3 step 4).
 Revisits DECISIONS.md "Textures from the GS backend's decoded cache".
 
 Done when: a normal frame binds no texture decoded from GS memory; the reference scenes match at 1x.
@@ -97,7 +97,7 @@ Phases:
   through it. Details below.
 - **3d - identity by raster, not by VRAM address** (done 2026-10-24): textures named by the game's raster (its RAM
   address), so draws made without packets (steps 4 and 5) can name their texture; render targets named by what they
-  are; the reflection map at the window's resolution (the radar already was: it has no target of its own). Details
+  are; the reflection map at the output's resolution (the radar already was: it has no target of its own). Details
   below.
 
 **3a done 2026-10-24.** `HwBackend::LoadClut` looks for the queued upload that last wrote every 256-byte block the
@@ -144,7 +144,7 @@ point at (-925, 1175) classed "water" this run - the same fall, landing in a wat
   PERFORMANCE.md section 15.) The reflection is faint by design (the game blends it in at
   ~5%), so the picture changes little.
 - **The radar** needed nothing: a frame dump at Fort Baxter shows it drawn straight into the HUD layer from 128x128 T4
-  tile textures under a scissor - at the window's resolution already (game-internals.md 6f corrected: the 128x128 at
+  tile textures under a scissor - at the output's resolution already (game-internals.md 6f corrected: the 128x128 at
   FBP 420 had been taken for the radar's; it is the reflection map).
 - **Textures by raster**: each upload's pixels are a REF to the raster in RAM (`NOP; DIRECTHL n`, game-internals.md 6i).
   The RSL chain observer records where each such payload lands in the chain's copy (packet buffer and CALLed packets
@@ -176,8 +176,9 @@ model blocks are 2.9 MB (740 blocks) and the distinct ones 2.4 MB (470): checkin
 frame would read nearly as much as copying them. Validity without reading the bytes is the prerequisite - for skipping
 the copy now, and for draws made with no chain at all (step 5).
 
-**4a - write watch (done 2026-10-24).** Guest RAM is allocated with the OS's write watch (`runtime/ps2_write_watch.h`,
-Windows `MEM_WRITE_WATCH`): every write is noted - guest code, host threads, the kernel reading the disc into it (the
+**4a - write watch (done 2026-10-24).** Guest RAM is allocated with an OS write watch where the host has one
+(`runtime/ps2_write_watch.h`; the PS5 has none, and there guest RAM is not watched: everything works as before the
+watch, without the skip below): every write is noted - guest code, host threads, the kernel reading the disc into it (the
 stream thread does: page protection was ruled out for that reason) - at no cost until asked. At each VIF1 chain kick
 the written pages are folded into per-page generations: 0.18 ms per frame, ~470 of 8,192 pages written per frame. The
 RSL observer keeps, per marked block, the pages it is made of (a world REF's payload; a CALLed packet's tags and
@@ -548,4 +549,4 @@ round trips (5a, 5b), and most from 5b (texture bytes). Each part is measured A/
 
 Completeness (milestone 2: every mission to the credits), the open fall-through spot (-925, 1175), the stale
 regression baseline for the loading / pause-map scenes (needs the user's picture sign-off), 60 fps fixes (milestone
-4), game code under ~6 ms (milestone 7), settings / controls polish (8), Vulkan / Metal and Linux / macOS (9).
+4), game code under ~6 ms (milestone 7), settings / controls polish (8), the PS5 (9, docs/PS5.md).

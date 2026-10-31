@@ -1,116 +1,61 @@
 # Controls
 
-Keyboard, mouse and a gamepad (anything SDL3 knows: Xbox, DualShock / DualSense, Switch Pro, ...) all drive the
-same PS2 controller (DualShock 2, analog mode), so they can be mixed. Every binding can be changed in the settings
-menu (F2): the **Keyboard** and **Gamepad** pages (src/game/vcs_input.cpp).
+The DualSense drives the game's PS2 controller (a DualShock 2 in analog mode: the buttons and both sticks; the game
+reads no pressure bytes - game-internals.md 12a). Every binding can be changed on the settings menu's **Gamepad** page
+(src/game/vcs_input.cpp). The DualSense's side is the PS5 platform layer (src/platform/platform_ps5.cpp, docs/PS5.md).
 
 ## Default bindings
 
-| PS2 | Keyboard / mouse | Gamepad |
+| DualSense | PS2 | In the game |
 |---|---|---|
-| Left stick | W A S D | Left stick |
-| Right stick (camera) | I J K L, the mouse | Right stick |
-| D-pad | Arrow keys | D-pad |
-| Cross | Shift | A / Cross |
-| Square | Space | X / Square |
-| Triangle | F | Y / Triangle |
-| Circle | Ctrl, left mouse button | B / Circle |
-| L1 | Q | LB |
-| R1 | E, right mouse button | RB |
-| L2 | 1, Z | LT |
-| R2 | 3, X | RT |
-| L3 / R3 | C / V | stick clicks |
-| Start | Enter | Start / Menu |
-| Select | Backspace | Back / View |
-| Walk (hold) | - (unbound) | - (a small stick tilt) |
+| Left stick | Left stick | move |
+| Right stick | Right stick | the camera |
+| D-pad | D-pad | |
+| Cross | Cross | sprint, accelerate |
+| Square | Square | jump, brake / reverse |
+| Triangle | Triangle | enter / leave a vehicle |
+| Circle | Circle | attack |
+| L1 | L1 | |
+| R1 | R1 | target (held: lock on), handbrake |
+| L2 / R2 (the triggers, past *Trigger press point*) | L2 / R2 | |
+| L3 / R3 (stick clicks) | L3 / R3 | |
+| Options | Start | the pause menu |
+| Touchpad click | Select | (the Create button belongs to the system: apps never see it) |
 
-**While driving** (Keyboard page, Driving) these keys do what a PC driving game does, and nothing else meanwhile; on
-foot they keep their bindings above (W walks, Space jumps):
-
-| Driving | Keyboard | PS2 |
-|---|---|---|
-| Accelerate | W | Cross |
-| Brake / reverse | S | Square |
-| Handbrake | Space | R1 |
-| Lean forward / nose down (bikes, aircraft) | Keypad 8 | Left stick up |
-| Lean back / nose up | Keypad 5 | Left stick down |
-
-Steering stays on A / D (the left stick); Shift still accelerates and E / the right mouse button is still R1. The
-game's own PS2 controls apply on top. Start or Cross (Enter / Shift) skips the intro movie; the Rockstar logos before
-it can't be skipped, as on the PS2 (Game > Skip intro movies skips both).
-
-**Right mouse button = R1**: on foot it locks on to the ped nearest in front while held (with fists or a weapon), as R1
-does on the PS2; left mouse button (Circle) attacks / fires.
-
-## Keyboard page
-
-- Every PS2 button, both sticks' directions and **Walk** have two slots. Click a slot, then press a key, a mouse
-  button (left, right, middle, 4, 5) or turn the wheel (each notch is a short press); Esc cancels, a right-click on a
-  slot clears it. Shift / Ctrl / Alt bind both sides, Enter is also Keypad Enter.
-- A key does one thing: binding it to a control takes it from the control that had it. The menu keys (Settings menu
-  F2, Trainer F5, Free camera F6, same page) never take a control's key, and a control can't take theirs - the menu says which setting
-  has it.
-- **Walk (hold)**: the left stick at the **Walking speed** (45% by default) while held - GTA walks below about half
-  a tilt, which keys can't do otherwise.
-- **A driving key** may share its key with an on-foot control (W is Move forward on foot and Accelerate in a car); within
-  the Driving section a key does one thing, and the menu keys stay out of both.
-- **Mouse camera** (on by default): the mouse turns the camera, and the mouse is held in the window while playing (free
-  in the menus and when the window is in the background). **On foot** it turns the camera itself, as in a PC game:
-  every movement turns it by the same angle at any speed and frame rate (100%: 400 counts - half an inch at 800 DPI -
-  a radian), moving the mouse forward looks up. Looking up / down goes through the game's own stick pitch, which has a
-  top speed (about 1.5 rad/s at 100%); a faster movement still arrives, a few frames later. **In vehicles, aiming and
-  locked on** the mouse's speed becomes the right stick's tilt (1,500 counts a second is full tilt), so very fast
-  flicks there turn no faster. **Mouse sensitivity** and **Invert mouse up / down**. (game-internals.md 12b)
+Start or Cross skips the intro movie; the Rockstar logos before it can't be skipped, as on the PS2 (Game > Skip intro
+movies skips both). While driving, Cross accelerates, Square brakes then reverses and R1 is the handbrake (measured in
+game: game-internals.md 12a).
 
 ## Gamepad page
 
-- **Buttons**: the gamepad input for each PS2 button (any button, LT / RT, stick clicks, D-pad, or none); several PS2
-  buttons may share one.
+- **Buttons**: the DualSense input for each PS2 button (any button, L2 / R2, the stick clicks, the d-pad, the touchpad
+  click, or none); several PS2 buttons may share one.
 - **Sticks and triggers**: deadzone per stick (12%; the range past it is stretched, so a small tilt beyond it still
-  counts), **Camera speed** (the right stick's tilt scaled), **Trigger press point** (LT / RT are L2 / R2 buttons),
-  **Swap sticks**, **Invert camera** left / right and up / down.
-- **Vibration**: the DualShock 2's motors on the gamepad's rumble, 0-200% (100% as on the PS2, 0% off). The game
-  drives them itself (crashes, explosions, gunfire; game-internals.md 12a).
+  counts, and the stick's reach is round), **Camera speed** (the right stick's tilt scaled), **Trigger press point**
+  (30%: L2 / R2 are buttons on the PS2), **Swap sticks**, **Invert camera** left / right and up / down.
+- **Vibration**: the DualShock 2's motors on the DualSense, 0-200% (100% as on the PS2, 0% off). The game drives them
+  itself (crashes, explosions, gunfire; game-internals.md 12a): its large motor is the DualSense's low-frequency one,
+  its small one the high-frequency one.
 
 ## Menus
 
-F2 (or Back + Start on a gamepad) opens the settings, F5 (or Back + RB) the trainer (docs/TRAINER.md), F6 (or Back + LB)
-turns the trainer's free camera on and off. Flying: W / A / S / D, E or Space up, Q down, mouse look, Shift faster,
-Ctrl slower, Z / X zoom out / in; gamepad left stick, right stick, RT / LT, A / B, D-pad up / down (fixed keys; the
-game gets no input meanwhile). In the
-trainer: Up / Down or numpad 8 / 2 or the D-pad select, Left / Right or numpad 4 / 6 change a value, Enter / numpad
-5 / A applies, Backspace / numpad 0 / Escape / B goes back (and closes it on the first page). The game gets no input
-while a menu is open.
+Hold the touchpad and press:
 
-The chords keep their buttons from the game: Back (Select) reaches the game once it has been held 150 ms on its own, or
-as a short press when let go sooner, and while it is held Start / LB / RB do not - so opening a menu neither changes
-the view nor pauses the game behind it (`src/game/vcs_input.cpp`, checked by `tools/ps5.py padtest`).
-
-On the PS5 (docs/PS5.md) the touchpad click is Back / Select (the Create button is the system's): touchpad + Options
-opens the settings, touchpad + R1 the trainer, touchpad + L1 the free camera. There is no keyboard or mouse there; the
-menus' hints name the DualSense's buttons (Cross selects / applies, Circle backs out).
-
-## Window
-
-Alt+Enter switches between full screen and the window (Display > Window mode; saved in vcs.ini). Enter with Alt
-held is not Start. Game > **In the background** decides what happens when another window is in front: keep running
-(as before), mute, or pause.
-
-## Debug keys
-| Key | Effect |
+| With the touchpad held | Opens / closes |
 |---|---|
-| F3 | performance overlay: game fps and frame-time percentiles, EE thread time per phase (game / render / IOP / wait), GS and DMA counters, host frame and GPU submit times, audio buffer, and a frame-time graph |
-| F4 | start / stop recording one CSV row per game frame to `perf_<date>_<time>.csv` (working directory); summarise with `python tools/perf_report.py <file>` |
-| F12 | (hardware renderer) list the next frame's draws on stderr and dump its render targets |
+| Options | the settings menu: Cross selects, Circle backs out and closes, L1 / R1 change pages |
+| R1 | the trainer (docs/TRAINER.md): d-pad up / down select, left / right change a value, Cross applies, Circle goes back (and closes it on the first page) |
+| L1 | the trainer's free camera: left stick moves, right stick looks, R2 up, L2 down, Cross faster, Circle slower, d-pad up / down zoom |
 
-## Test runs without a window
-`python tools/run.py 600 test --hidden` starts the game with no window on the desktop, no sound, and the physical
-keyboard / mouse / gamepad ignored (`PS2X_HIDDEN=1`). It listens on 127.0.0.1:47615 (`PS2X_CONTROL_PORT`) for
-`tools/gamectl.py`: `screenshot out.png` (the picture plus the perf overlay, rendered off-screen), `press Return 150`,
-`key W down` / `up` (also `mouseleft`, `mouseright`, `wheelup`, `rshift`, `kpenter`, ...), `perf`, `quit`, and from
-the game layer `setting <key> [value]` (a setting read or changed; an action setting is pressed), `menu <page>` /
-`menu scroll <0..1>` / `menu close` (the settings menu for screenshots), `padstate` (the last pad report the
-bindings made, and the pad reads so far) and `mouse <dx> <dy>` (mouse motion in counts, y down, as the mouse sends it). `--control` (`PS2X_CONTROL=1`) opens the same channel with the window shown; `PS2X_INPUT=injected`
-ignores physical input with the window shown. Injected keys go through the bindings like physical ones:
-`tools/controls_check.py` checks them (also a `regress.py` step). `VCS_INPUT_MAP=0` falls back to the runtime's fixed
-built-in mapping (`ps2_pad.cpp`, the old defaults).
+The game gets no input while a menu is open, and none from a chord: the touchpad (Select) reaches the game once it has
+been held 150 ms on its own, or as a short press when let go sooner; while it is held, Options / L1 / R1 do not reach
+the game, and a hold that pressed one of them is a chord to the end - so opening a menu neither changes the view nor
+pauses the game behind it (`src/game/vcs_input.cpp`). After a menu closes, the game gets the pad back once every
+button is up.
+
+## Checked
+
+`python3 tools/ps5.py padtest` (`ps5/tests/padtest.cpp`) runs the real platform layer with the console's pad functions
+mocked through the real bindings to the report the game reads: every button, both sticks, the triggers, Select tap and
+hold, the menu chords, a controller gone and back, the motors, and the pad as the menus' gamepad keys (62 checks).
+`VCS_INPUT_MAP=0` falls back to the runtime's fixed built-in mapping (`ps2_pad.cpp`).

@@ -170,8 +170,8 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   engine's integration, not a per-frame bug**: the jump heights follow explicit Euler's error exactly - a peak
   v0^2/2g - v0*dt/2 with a continuous peak of 0.893 m predicts 0.726 / 0.81 / 0.85 / 0.868 (measured 0.725 / 0.814 /
   0.864 / 0.884) - and the ped's vertical speed agrees within 1-3% between 1/30 and 1/60 through a whole fall,
-  quadratic air drag included (traced at ped+0x148). Shorter frames are closer to the continuous motion, as on the
-  PC GTAs; matching 1/30 exactly would need a correction term in the integration (not done: <= 6%).
+  quadratic air drag included (traced at ped+0x148). Shorter frames are closer to the continuous motion, as in the
+  later GTAs; matching 1/30 exactly would need a correction term in the integration (not done: <= 6%).
 - **A `max(step, 0.5)` in the bike's lean**: FUN_00337208 is **CBike::ProcessControl** (not ped code, as first noted:
   it calls ProcessWheel FUN_003E7618, the springs FUN_0034E0E8 / FUN_0034E1D8 / FUN_0034E348, and keeps the bike
   fields of reVC's CBike - lean +0x680 / +0x684, wheel ratios +0x540..). At 0x33bb2c it divides the frame's sideways
@@ -270,7 +270,7 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   every following VBlank due at once by cycles, and the EE is held at each until its real-time moment - the game
   crawls. Topping the clock up must therefore aim at the chain's real-time position, not at elapsed host time.
 - **60 fps, original timing** (`src/game/vcs_framerate.cpp`): the VBlank-counting callback adds 2 instead of 1, so the limiter lets a
-  frame through after one VBlank. Measured outside the barracks (2026-10-23, i7-7700K): 31-37 fps - a gameplay
+  frame through after one VBlank. Measured outside the barracks (2026-10-23): 31-37 fps - a gameplay
   frame costs ~27 ms on the game thread (game code 19-24 ms, render submission ~8 ms), more than 1/60 s; the
   emulated VBlank keeps real-time pace only while the game thread keeps up (events need both the EE cycle and the
   host deadline). A steady 60 needs ~40% less game-thread time per frame (milestone 7).
@@ -628,7 +628,7 @@ The **16:9 weapon-icon bug** (the icon at the right edge, away from its ammo cou
 treats far-plane 2D as HUD, and the icon is not at the far plane. Fixed at the source: from CHud::Draw to the frame's
 end, Im2D primitives drawn with the depth test off get the HUD's z (`VCS_HUD_RW=0` = off).
 
-**From Im2D to the screen (2026-10-23, F12 draw dumps at 16:9, `PS2X_HW_DUMP`; `VCS_TRACE_HUDKEY=<n>`).**
+**From Im2D to the screen (2026-10-23, draw dumps at 16:9, `PS2X_HW_DUMP`; `VCS_TRACE_HUDKEY=<n>`).**
 - The GS sees an Im2D vertex at (x - 0.5, y - 0.5) (the 2D code's pixel-centre bias) for most HUD draws, within 1/16 of
   (x, y) for others (the zone name, fades): a vertex's whole-pixel position finds it again with either rounding.
 - The game draws the frame into the buffer at FBP 140 and copies it into the displayed one (FBP 0, DISPFB DBY = 2)
@@ -687,7 +687,7 @@ the opening sequence (the reference scenes' "flyover"), where Start does nothing
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 
-From `PS2X_HW_DUMP` / F12 with `PS2X_HW_DUMP_BATCHES=4` at the hospital (-884, -470), noon and 20:00; the draw
+From `PS2X_HW_DUMP` with `PS2X_HW_DUMP_BATCHES=4` at the hospital (-884, -470), noon and 20:00; the draw
 log names the render target each copy reads (`src rt fbp=...`). The game draws a frame in one VBlank and nothing in
 the next (30 fps). In order:
 
@@ -723,7 +723,7 @@ UV mapping per primitive fitted from the vertices, u = du/dx * x + offset in tex
   every frame. After the bloom (which overwrites FBP 420) the sample is added again for the next frame.
 
 **Pixel centres** (found from the copies above, fixed 2026-10-23): the GS samples a pixel at its integer position,
-D3D at +0.5. Our renderer had drawn without the offset, so the copies (u = x + 0.5) read halfway between two texels:
+Vulkan at +0.5. Our renderer had drawn without the offset, so the copies (u = x + 0.5) read halfway between two texels:
 the shown picture and the motion-blur feedback were averaged with their neighbours every frame - visibly softer than
 the PS2 (barbed wire and fences smeared at 640x448). NATIVE_RENDERER.md "Post effects".
 
@@ -838,7 +838,7 @@ write it (the scan: `0x2F0360..0x2FB690`, `0x1CEF18`, `0x266868`, `0x2A92C0`, `0
   - `FUN_002FB9D0` -> `FUN_002FB690`: **Im2D** (the 2D primitives of 6f: CNT + DIRECT, vertices converted from the
     16-byte Im2D format; 515 calls a frame while driving).
 
-**Measured** (one bench run, i7-7700K, 60 fps cap; per frame):
+**Measured** (one bench run, 60 fps cap; per frame):
 
 | | standing in the city | driving (AI car) |
 |---|---|---|
@@ -853,8 +853,7 @@ model heap 55k, cell geometry 34k, CALLed model packets 31k, per-frame CNT data 
 `.text`) 8k. **About 10% of what VIF1 receives is built each frame; the rest is prebuilt** (cells, model heap,
 cached blocks).
 
-Game thread while driving (`VCS_PROFILE=5`, `VCS_PROFILE_GUEST_FILE`, the two drive windows: 70% guest code, no
-waiting): the RSL range `0x2F0000..0x2FD000` 12.5% of samples (the packet emitters 10.1%), the world sector walk 1.5%,
+Game thread while driving (sampled over the two drive windows: 70% guest code, no waiting): the RSL range `0x2F0000..0x2FD000` 12.5% of samples (the packet emitters 10.1%), the world sector walk 1.5%,
 plus `memmove` 3.8% (the runtime flattening the ~4.7 MB chain when it is kicked) - **about 17% of the game thread,
 ~3 ms of a ~19 ms frame**, goes into building and handing over packets. The rest is spread thin (no other function
 above 2.3%).
@@ -1066,7 +1065,7 @@ state ops since FULLY_NATIVE.md step 5a):
 Found from a user report (frame time spiking at 3x internal resolution while a helicopter flew low): a 4-star wanted
 level brings the police helicopter, and while it hovers near the ground the game draws its rotor dust as **one GS-path
 draw a frame of ~1,040 large triangles** (~3,100 vertices, quads as triangle pairs; texture 32x32, bilinear, REPEAT;
-blend `Cs*FIX + Cd` with FIX 128 - additive - colour 0x03-0x13; ZTST GEQUAL, no Z write). Measured from an F12 draw log
+blend `Cs*FIX + Cd` with FIX 128 - additive - colour 0x03-0x13; ZTST GEQUAL, no Z write). Measured from a draw log
 with every vertex (`PS2X_HW_DUMP_ALLVERTS=1`, triangles clipped to the screen): **60-66 full screens of overdraw**,
 ~18 Mpixels at 640x448 - on the PS2's GS (~1.2 Gpixel/s textured) about 15 ms, so the effect is heavy on the console
 too. A few smaller draws with other 32x32 textures (the same blend, up to ~6 screens) go with it. At 3x internal
@@ -1080,7 +1079,7 @@ of a presented frame on `gs draw fbp 140 tex blend`, and per texture key on this
 
 Seen on the way (not the helicopter's doing - the same before it arrives, every frame): the GPU targets of the effect
 buffers FBP 420 and 384 are re-created ~4 times a frame. A 16x16 CLUT upload at block 13588 (page 424, inside both
-buffers' pages) drops both targets every frame (`PS2X_HW_LOG_DROPS=1`); FBP 420 is then made at the window scale for
+buffers' pages) drops both targets every frame (`PS2X_HW_LOG_DROPS=1`); FBP 420 is then made at the native frame's scale for
 the reflection map's 128-wide draws (role windowScale, 4.0 x 3.0 at 3x 16:9), regrown at 3x for the bloom's write-back
 (fbw 4), and back again - each a new texture plus a rescaling blit (`PS2X_RHI_LOG_CREATES=1` lists them). The CLUT is only
 the first of many: with patching on (`PS2X_HW_PATCH_TARGETS=1`, every upload kept in the target) ~75 uploads a frame
@@ -1111,10 +1110,10 @@ planes leave in the sky (seen outside the Little Havana Empire site, 08:28, 16:9
 - **The bug was the recompiler's VCLIP**: it set bit 0 for x < -w and bit 1 for x > +w (swapped; the VU sets bit 0
   for x > +|w|, bit 1 for x < -|w|, then y, z) and compared with w, not |w|. A trail segment leaving the view on the
   right was cut at the left plane; the side planes meet at the eye, so the cut point landed next to the camera (w
-  0.11 - 0.12, Q ~8.9 in the F12 log) and its projection, far outside the GS's 16-bit coordinate range, wrapped to
+  0.11 - 0.12, Q ~8.9 in the draw log) and its projection, far outside the GS's 16-bit coordinate range, wrapped to
   anywhere on screen: a line from the trail across the picture. Fixed in `ps2xRecomp/src/lib/vu_translator.cpp`
   (the VU1 interpreter's CLIP, `ps2_vu1_upper.cpp`, was right); `VCS_SELFTEST=1` checks the flags.
-- How it was found: F12 with `PS2X_HW_DUMP_ALLVERTS=1` showed one line draw with one vertex at Q 8.9 and the same in
+- How it was found: a draw dump with `PS2X_HW_DUMP_ALLVERTS=1` showed one line draw with one vertex at Q 8.9 and the same in
   every path (compiled / interpreted VU1, `PS2X_HLE=0`, the GS front end), so the game itself sent it; a trace of the
   kicks showed PATH2 and no ADC; `VCS_TRACE_IMMEDIATE=1` (callers of the Im2D / Im3D entries, `vcs_overrides.cpp`)
   named `0x245904` in the trail renderer.
@@ -1330,7 +1329,7 @@ of every writer and caller.
 
 ## 10. Memory card and saves
 
-libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`); files live in `%LOCALAPPDATA%/VCSRecomp/mc0`
+libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`); files live in `userdata/mc0` in the app's folder
 (`src/main.cpp`), one host folder per card folder.
 
 ### 10a. Card manager
@@ -1539,7 +1538,7 @@ current weapon's clip). `SET_CHAR_COORDINATES` on the player while he drives mov
 GIVE_WEAPON_TO_CHAR takes weapon types 0..39; 40 and up hang the script.
 - **LOAD_ALL_MODELS_NOW (0x0228) can hang the game**: it loads the requested models inside the frame and does not
   return while the streaming memory cannot take them - after 28 different vehicle models were spawned in one street
-  the game thread spun in it (watchdog: PCs all over the game, no frame kicks). The trainer requests and polls instead.
+  the game thread spun in it (watchdog: program counters all over the game, no frame kicks). The trainer requests and polls instead.
 - **HAS_MODEL_LOADED** (0x0161, handler `FUN_0012be70`) -> `FUN_003c6738`: the model's streaming info is
   `*(*(0x489FF8) + 200) + model * 0x18`, its byte +0xC is the load state (1 = loaded). A condition's result lands in
   the script at **+0x209** (with +0x20C the NOT flag and +0x206 the AND / OR count).
@@ -1633,7 +1632,7 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   newest save being `LOU_A3` - the check fails, nothing fades in, and the game keeps running behind the faded screen
   (clock, scripts, the world: `storysc` back in its idle loop at 0x2FCD2). Each frame it draws only the copy of FBP
   140 into FBP 0, a black full-screen quad and the text **"Loading..."** (key `LOADIN2`, the frontend's string next to
-  `WRONGCD` / `NOCD` / `CDERROR`) at the top right - an F12 dump of the stuck frame; the LoadingScreen function
+  `WRONGCD` / `NOCD` / `CDERROR`) at the top right - a draw dump of the stuck frame; the LoadingScreen function
   (FUN_0021E170) and the menu draw are not called. So it is the game's own picture, which the original would show the
   same way. With the flags set (rig `poke` of the globals) the same run rolls the credits and ends at the building.
 - The fix is in the trainer (docs/TRAINER.md): a Last Stand it launched that passes (its script seen in 0x22F5E..
@@ -1643,7 +1642,7 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
 - How it was found: the mission's state from its slot (rig `peek`; the scripts list showed it waiting in 0x22F8E for
   the cutscene's 95 s), the frames still advancing and `CTimer`'s ms moving (not a hang), the active scripts after the
   end (no credits script), the main script's references to `START_CREDITS`, the raw label search, the LoadingScreen /
-  menu hooks traced (not called), and the F12 draw log.
+  menu hooks traced (not called), and the draw log.
 
 ## 12. Player, areas and the world
 
@@ -1750,22 +1749,21 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   `scePadSetActDirect(port, 0, 0x514950)` (0x284898) with byte 0 = 0 (the small motor is never used) and byte 1 =
   `pad + 0x99` (the large motor's level 0..255); when it reaches 0, once more with both 0 (0x284870). A second caller
   is FUN_00285258 (0x285294). A grenade's explosion 2 m from Vic gives level 128 (`tools/controls_check.py`).
-  The host maps the large motor to the gamepad's low-frequency rumble and the small one to the high-frequency one,
+  The host maps the large motor to the DualSense's low-frequency motor and the small one to the high-frequency one,
   scaled by Gamepad > Vibration.
 - **The pad's stick curve** (2026-10-29, FUN_002842e8, called for the four stick bytes in FUN_002843d8; decompiled):
   v = byte - 128; |v| <= 42 is 0, past that (|v| - 42) * 127 / 85 (integer, truncated), sign kept - **a third of the
   stick's travel is dead** on top of any gamepad deadzone. The results are CPad 0 (`0x5147A8`, 0xD4 bytes per pad,
   FUN_002852a8(n)) +2 / +4 left x / y, +6 / +8 right x / y (s16); **+0x96 = DisablePlayerControls** (the right-stick
   getters FUN_00286af0 / FUN_00286b20 return 0 while it is set; FUN_00286b20 negates y when the game's own invert flag
-  `0x487A58` is set). Found when mouse pitch below about half a tilt came out a third short.
-- **scePadRead runs three times per game frame** (366 reads in 122 frames, counted with the `reads=` of `padstate`).
-  vcs_input.cpp works the mouse out once per `m_FrameCounter` 0x4CD124 and repeats that report for the frame's other
-  reads, so whichever read the game keeps carries it (not measured which one that is).
+  `0x487A58` is set). Found when a small injected pitch below about half a tilt came out a third short.
+- **scePadRead runs three times per game frame** (366 reads in 122 frames, counted with the `reads=` of `padstate`);
+  `m_FrameCounter` is 0x4CD124. Which of the three reads the game keeps is not measured.
 - **Driving buttons**, measured with a car on a straight street (575, 175): Cross accelerates (forward speed 0.28 after
   2 s), R1 is the handbrake (0.12 to 0 in 0.7 s; coasting 0.28 to 0.20), Square brakes, then reverses. Vehicle +0x140
   is its velocity (units per 1/50 s), +0x10 its forward vector.
 
-### 12b. The camera and the mouse (2026-10-29)
+### 12b. The camera (2026-10-29)
 
 - **TheCamera `0x6F44D0` + 0x70 is the active CCam** (Cams[0]; Cams[1] / [2] at +0x2E0 / +0x550, 0x270 apart; still
   [0] after a lock-on and after getting out of a car). Fields (relative to the CCam): **+0 mode** (4 follow ped on
@@ -1787,13 +1785,10 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   top speeds: heading 0.05, pitch 0.03 radians a step (2.5 / 1.5 rad/s).
 - The follow camera ignores the stick while `0x488EB4` is set (FUN_002a2e30) and while CPad +0x96 is set; under a
   script camera TheCamera + 0x888 is 0 (section 12).
-- **Mouse look** (src/game/vcs_input.cpp, Keyboard > Mouse camera): on foot (mode 4, no script camera, controls on, not
-  paused: the pause menu leaves the mode at 4, `m_UserPause` 0x4CD2AC / `m_CodePause` 0x4CD11C are bytes) the
-  pad read adds the mouse's turn to beta and turns +0x220 / +0x230 about the player by the same angle (exact: 300
-  counts in 30 moves -> -0.750 rad, 400 counts a radian), and sends the pitch as the stick's pitch speed with the curve
-  above undone, carrying what is over the stick's top speed to the next frames (90 counts -> +0.225 rad). Other
-  cameras (vehicles, aiming, lock-on) get the mouse's speed as the right stick, past the dead third. Checked by
-  `tools/controls_check.py` (the `mouse dx dy` control command moves the mouse in hidden runs).
+- The pause menu leaves the mode at 4; `m_UserPause` 0x4CD2AC / `m_CodePause` 0x4CD11C are bytes. A heading written
+  into beta stays when +0x220 / +0x230 are turned about the player by the same angle (exact to 0.001 rad), and a pitch
+  sent as the stick's pitch speed with the curve above undone arrives exactly, carrying what is over the stick's top
+  speed to the next frames.
 - **The camera update** (2026-10-30, for the trainer's free camera; FUN_00378dd8 decompiled with `tools/eedecomp.py`):
   FUN_00378dd8 = CCamera::Process. At `0x378FC0` it calls **FUN_00294540 = CCam::Process** on the active CCam
   (`TheCamera + 0x70 + ActiveCam x 0x270`, ActiveCam = byte `TheCamera + 0x50`; the only caller), then

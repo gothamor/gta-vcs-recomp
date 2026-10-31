@@ -1,5 +1,5 @@
 """The PS5 build (docs/PS5.md): the game cross-compiled for a jailbroken PS5 and packaged as a homebrew app folder,
-on a Linux PC (WSL works). Standard library only.
+on the build machine (Ubuntu 24.04 or WSL 2). Standard library only.
 
     python3 tools/ps5.py setup                      ps5-plume-triangle fetched (pinned) and built once, next to this folder
     python3 tools/ps5.py check                      what is there, what is missing, and how to get it
@@ -8,12 +8,12 @@ on a Linux PC (WSL works). Standard library only.
     python3 tools/ps5.py ffmpeg                     FFmpeg for the PS5 (the movies) into build/ps5/ffmpeg; then build
     python3 tools/ps5.py deploy --host <PS5 IP>     the app folder to /data/homebrew/<title id> over FTP [--iso F]
     python3 tools/ps5.py compile-check --sdk DIR    the PS5 build compiled without a disc or console (CI)
-    python3 tools/ps5.py padtest [--tree DIR]       the DualSense path checked on Linux (ps5/tests/padtest.cpp)
+    python3 tools/ps5.py padtest [--tree DIR]       the DualSense path checked on the build machine (ps5/tests/padtest.cpp)
 
 What it needs (check says what is missing):
-- generated/: the game recompiled from your disc, once, on the PC: python3 tools/build.py --recompile <iso> (or
-  python3 tools/recompile.py <iso>). The PS5 build compiles the same generated code.
-- clang 19+ and lld (the PC's own: docs/LINUX.md), glslang, CMake 3.21+, Ninja.
+- generated/: the game recompiled from your disc, once: python3 tools/recompile.py <iso>. The PS5 build compiles
+  that generated code.
+- clang 19+ and lld (the build machine's: sudo apt install clang-20 lld-20), glslang, CMake 3.21+, Ninja.
 - ps5-plume-triangle (https://github.com/Nazky/ps5-plume-triangle), built once with `make` in it: the PS5 payload
   SDK fork (.deps/native/ps5-payload-sdk), RADV (PS5_Mesa's Vulkan driver, .deps/native/radv-release), the start-up
   code, the libc.prx and ps5-native-tool, which makes eboot.bin. The gta4-ps5 port builds the same way. --triangle
@@ -122,7 +122,7 @@ def cmd_setup(args):
     """ps5-plume-triangle at the pinned commit, next to this folder (or --triangle), and its `make` once: the PS5 payload
     SDK fork, RADV, the start-up code, libc.prx and ps5-native-tool (its tools/ scripts download and build them)."""
     if platform.system() != "Linux":
-        tc.fail("the PS5 build runs on Linux (or WSL 2)")
+        tc.fail("the PS5 build runs on Ubuntu 24.04 or WSL 2 (the payload SDK's tools run there)")
     missing = [(tool, pkg) for tool, pkg in TRIANGLE_NEEDS if not shutil.which(tool)]
     try:
         import mako, ply, yaml  # noqa: F401 (Mesa's code generators; the triangle installs them with pip when missing)
@@ -173,11 +173,11 @@ def check(args, quiet=False):
             print("[ps5] %-4s %-28s %s" % ("ok" if ok else "--", what, detail))
 
     if platform.system() != "Linux":
-        problems.append("the PS5 build runs on Linux (or WSL): the payload SDK and its tools are Linux programs")
+        problems.append("the PS5 build runs on Ubuntu 24.04 or WSL 2: the payload SDK's tools run there")
     clang, clangxx = ps5_clang(env)
-    line(bool(clang), "clang %d+" % tc.MIN_CLANG, clang or "not found: docs/LINUX.md (sudo apt install clang-20 lld-20)")
+    line(bool(clang), "clang %d+" % tc.MIN_CLANG, clang or "not found: sudo apt install clang-20 lld-20")
     if not clang:
-        problems.append("clang %d or newer (docs/LINUX.md)" % tc.MIN_CLANG)
+        problems.append("clang %d or newer (sudo apt install clang-20 lld-20)" % tc.MIN_CLANG)
     lld = shutil.which("ld.lld", path=env.get("PATH"))
     line(bool(lld), "ld.lld", lld or "not found: the LLVM linker (sudo apt install lld-20)")
     if not lld:
@@ -188,9 +188,9 @@ def check(args, quiet=False):
         problems.append("glslangValidator (glslang-tools)")
     have_generated = os.path.isfile(GENERATED)
     line(have_generated, "generated/ (your disc)", "ok" if have_generated else
-         "missing: python3 tools/build.py --recompile <your .iso> first (or tools/recompile.py)")
+         "missing: python3 tools/recompile.py <your .iso> first")
     if not have_generated:
-        problems.append("generated/: recompile the game from your disc first (python3 tools/build.py --recompile <iso>)")
+        problems.append("generated/: recompile the game from your disc first (python3 tools/recompile.py <iso>)")
 
     tri = find_triangle(getattr(args, "triangle", None))
     line(bool(tri), "ps5-plume-triangle", tri or "not found: git clone https://github.com/Nazky/ps5-plume-triangle, "
@@ -583,7 +583,7 @@ def cmd_compile_check(args):
     env = tc.build_env()
     clang, clangxx = ps5_clang(env)
     if not clang:
-        tc.fail("clang %d or newer not found (docs/LINUX.md)" % tc.MIN_CLANG)
+        tc.fail("clang %d or newer not found (sudo apt install clang-20 lld-20)" % tc.MIN_CLANG)
     tri = find_triangle(args.triangle)
     sdk = find_sdk(args.sdk, tri)
     if not sdk:
@@ -627,21 +627,22 @@ def cmd_compile_check(args):
     print("[ps5] ok: the PS5 build compiles%s (%d targets)" % (" and links" if linkable else "", len(targets)))
 
 
-# ---- the controller test (Linux) ----------------------------------------------------------------------------------
+# ---- the controller test (the build machine) ----------------------------------------------------------------------------------
 def cmd_padtest(args):
-    """ps5/tests/padtest.cpp: the real platform_ps5.cpp with the console's pad functions mocked, linked against a Linux
-    PC build's objects (the bindings, settings, the runtime's pad backend), run. The tree is build/release (the PC build,
-    python3 tools/build.py first) or --tree; its generated code may be real or compile-check's stand-in."""
+    """ps5/tests/padtest.cpp: the real platform_ps5.cpp with the console's pad functions mocked, linked against the
+    game's objects compiled for the build machine (the bindings, settings, the runtime's pad backend), run. The tree is
+    build/release (python3 tools/build.py first) or --tree; its generated code may be real or compile-check's stand-in."""
     import re
     if platform.system() != "Linux":
-        tc.fail("the controller test runs on Linux (it links against a Linux build's objects)")
+        tc.fail("the controller test runs on the build machine (Ubuntu 24.04 or WSL 2)")
     env = tc.build_env()
     tree = os.path.abspath(args.tree or tc.BUILD_DIR)
     ninja = tc.build_tools(env)["ninja"]
     if not os.path.isfile(os.path.join(tree, "build.ninja")):
-        tc.fail("no build tree at %s: build the game for Linux first (python3 tools/build.py)" % tc.show(tree))
+        tc.fail("no build tree at %s: build the game's objects for the build machine first (python3 tools/build.py)"
+                % tc.show(tree))
     if subprocess.run([ninja, "-C", tree, "ps2EntryRunner"], env=env).returncode != 0:
-        tc.fail("the Linux build failed")
+        tc.fail("the build machine's build of the game failed")
     commands = subprocess.run([ninja, "-C", tree, "-t", "commands", "ps2EntryRunner"], capture_output=True, text=True,
                               env=env).stdout.splitlines()
     link = commands[-1].split()
@@ -753,7 +754,7 @@ def main():
     p.add_argument("--triangle", help="a built ps5-plume-triangle: the link is checked too")
     p.add_argument("--sdk", help="the PS5 payload SDK (the upstream release compiles; the link needs the fork)")
     p = sub.add_parser("padtest")
-    p.add_argument("--tree", help="a Linux build tree with the game built (default build/release)")
+    p.add_argument("--tree", help="a build tree of the game for the build machine (default build/release)")
     p = sub.add_parser("deploy")
     p.add_argument("--host", required=True, help="the PS5's IP address")
     p.add_argument("--port", type=int, default=2121, help="its FTP payload's port (default 2121; etaHEN: 1337)")

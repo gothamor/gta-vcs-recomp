@@ -1,286 +1,158 @@
-# GTA: Vice City Stories — Native PC port (PS2 static recompilation)
+# GTA: Vice City Stories — native PS5 port (PS2 static recompilation)
 
-A native **Windows and Linux** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
-recompiling the game's PS2 executable into C++. Both are built from the same source and run natively: Direct3D 11 on
-Windows, Vulkan on Linux.
+A native **PS5** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by recompiling the game's
+PS2 executable into C++ and building it as a homebrew app for jailbroken PS5 consoles. No emulator: the game's own code
+runs natively on the console, drawn with Vulkan on the PS5's GPU, with the DualSense as the DualShock 2.
 
-**This repository contains no game code or game data.** You need your own copy of the game as an `.iso`.
-The build reads the executable from your disc, and the finished game reads everything else from it while it runs.
+**This repository contains no game code or game data.** You need your own copy of the game as an `.iso`. The build
+reads the executable from your disc, and the finished game reads everything else from it while it runs.
 
-Status: in development. See [docs/PROGRESS.md](docs/PROGRESS.md) for what works, and [docs/LINUX.md](docs/LINUX.md)
-for the Linux build in detail.
+Status: in development, not run on a console yet. [docs/PS5.md](docs/PS5.md) has what is tested, the first-run
+checklist and how it works; [docs/PROGRESS.md](docs/PROGRESS.md) the state of each area.
 
-**PS5 (jailbroken consoles, homebrew):** the same game builds as a native PS5 app too - the Vulkan renderer on the
-console's RADV driver, the DualSense as the DualShock 2, 4K output - on a Linux PC from your own disc, with the toolchain
-of the gta4-ps5 port (ps5-plume-triangle). See [PS5](#ps5-homebrew) below; not run on a console yet.
+## What you need
 
-## Install on Windows: the launcher (easiest)
+- A jailbroken PS5 that runs homebrew apps from `/data/homebrew/`, and a payload loader with an FTP server (etaHEN,
+  ftpsrv) or a USB drive to copy the app over.
+- Your own disc image of GTA: Vice City Stories, **USA release (SLUS-21590)**, as an `.iso`.
+- A build machine: Ubuntu 24.04 or WSL 2 (the PS5 SDK's tools run there), with Python 3, Git, clang 19+ and lld,
+  CMake 3.21+, Ninja and glslang (`sudo apt install python3 git clang-20 lld-20 cmake ninja-build glslang-tools`).
 
-1. Download the newest `VCS-Recomp-<version>-windows.zip` from the [Releases](../../releases) page and extract it
-   somewhere short and local, like `C:\Games\VCS` (not Program Files, not a OneDrive-synced folder such as Desktop or
-   Documents: the build writes thousands of files).
-2. Start **`VCSLauncher.exe`** in that folder. It goes through four steps and the big button always shows the next one:
-   - **Folders**: the game is built in `build\` next to the launcher, or in a folder you choose (another drive with
-     more room, say): *Choose another folder* on this step.
-   - **Disc**: it looks for your `.iso` in Downloads, Desktop, Documents and its own folder; otherwise choose it (or
-     drag it onto the window, or copy your disc from a DVD drive). It checks that it is the USA release.
-   - **Build tools**: the game is compiled on your PC with Microsoft's free C++ tools. If they are missing,
-     *Install build tools* runs Microsoft's installer with the right options (about 6 GB; Windows asks for permission).
-   - **Build**: recompiles the game from your disc and compiles it, with a progress bar - 20 to 60 minutes the first
-     time, a few minutes after an update. Nothing is downloaded during the build: the release brings Python and the
-     libraries.
-   - **Play**.
+## Build
 
-The launcher also backs up and restores your saves, makes a desktop shortcut, checks for a new release (only when you
-ask, or at start if you turn that on in *Settings*), and zips the logs into a report for bug reports. Windows may warn
-that the launcher is from an unknown publisher (it isn't signed): *More info > Run anyway*. How it works:
-[docs/LAUNCHER.md](docs/LAUNCHER.md). Everything it does is a script in `tools/` you can also run yourself (below).
+In the source folder (the release's `VCS-Recomp-<version>-ps5.zip`, or a git clone), with your disc image in it or
+its path given:
 
-## Install by hand (Windows and Linux)
-
-The release zip contains the full source: the steps below work in it too, and in a git clone.
-
-### 1. Install the tools (once)
-
-**Windows**
-- **Python 3**: [python.org](https://www.python.org/downloads/). During setup, tick *Add python.exe to PATH*.
-- **Git**: [git-scm.com](https://git-scm.com/download/win) (the default options are fine). The first build uses it
-  to download the libraries the game needs (SDL3, FFmpeg, ...), so it also needs an internet connection.
-- **Visual Studio 2022 or newer** (the free Community edition, or just the
-  [Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)). In the installer, pick the workload
-  **Desktop development with C++**, and under *Installation details* on the right also tick
-  **C++ Clang tools for Windows**.
-
-That's all: you don't need to open Visual Studio or a special command prompt. CMake and Ninja are found wherever
-they are (Visual Studio's own, the CMake installer, winget, scoop, Chocolatey, pip, CLion...); when none is new enough
-(CMake 3.21, Ninja 1.10), the build downloads them once (~55 MB, into `build\build-tools`).
-
-**Linux**
-- Python 3 and Git (most distributions have both), then let the build list the rest: in the source folder (step 2),
-  ```bash
-  python3 tools/build.py --check-deps
-  ```
-  prints what is missing and the command that installs it (`apt`, `dnf` or `pacman`): clang 19 or newer with lld,
-  glslang, and the FFmpeg and SDL3 development packages (CMake and Ninja too if you like; without them, or with ones
-  that are too old, the build downloads its own). On Ubuntu 24.04 / Linux Mint 22 that is
-  ```bash
-  sudo apt install clang-20 lld-20 llvm-20 cmake ninja-build pkg-config git glslang-tools \
-      libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
-      libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
-      libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev \
-      libpipewire-0.3-dev libpulse-dev libasound2-dev libudev-dev libdbus-1-dev
-  ```
-- A graphics driver with Vulkan 1.3: Mesa (AMD, Intel) or NVIDIA's own. `vulkaninfo --summary` shows it.
-
-### 2. Get the source and your disc
-
-1. Get the source, e.g. into `C:\Games\vcs-recomp` (Windows) or `~/games/vcs-recomp` (Linux):
+1. **The game's code from your disc** (the recompiler turns the executable into C++, about 200 MB):
    ```bash
-   git clone <this repository's URL> vcs-recomp
+   python3 tools/recompile.py "Grand Theft Auto - Vice City Stories (USA).iso"
    ```
-   (*Code > Download ZIP* on GitHub works too.)
-2. Copy your disc image into that folder. It must be the USA release, and its file name must contain
-   `Vice City Stories`, like the usual `Grand Theft Auto - Vice City Stories (USA).iso`.
-
-Optional check that the disc is the right one:
-```bash
-python tools/vcs_disc.py info "Grand Theft Auto - Vice City Stories (USA).iso"
-```
-
-### 3. Build
-
-Open a terminal in the folder (Windows Explorer: right-click the folder > *Open in Terminal*) and run:
-```bash
-python tools/build.py --recompile        # Windows
-python3 tools/build.py --recompile       # Linux
-```
-This recompiles the game from your disc and builds it, optimised. The first time takes a while: the game becomes
-about 200 MB of C++ to compile (about 15 minutes on a 4-core laptop). It ends with:
-```
-[build] ok: build\vcs.exe (optimised: ThinLTO)        (Linux: build/vcs)
-```
-If your `.iso` is somewhere else, give its path: `python tools/build.py --recompile "D:\path\to\your.iso"`.
-
-### 4. Play
-
-Start `build\vcs.exe` on Windows, `build/vcs` on Linux (a desktop shortcut works well). The build already told it
-where your disc is.
-
-- **F2** opens the settings: presets, resolution, widescreen, frame rate, vsync, sound, and every key, mouse and
-  gamepad binding. The defaults match the PS2 except the frame rate (60 fps, frame-rate independent); every other
-  improvement is an option you turn on (Display > Presets > Enhanced turns on the usual ones at once). Settings are
-  saved in `vcs.ini` next to the game.
-- **Alt+Enter** switches between full screen and the window.
-- **F5** opens the trainer ([docs/TRAINER.md](docs/TRAINER.md)).
-- Keyboard, mouse and gamepads (Xbox, PlayStation, Switch Pro, ...) all work: [docs/CONTROLS.md](docs/CONTROLS.md).
-- Saves (the memory card) live in `%LOCALAPPDATA%\VCSRecomp` on Windows and `~/.local/share/VCSRecomp` on Linux.
-
-## Features
-
-The defaults are the PS2 game as it was, except the frame rate: 60 fps with frame-rate independent timing. Every
-other improvement below is an option in the settings menu (F2), and *Authentic (PS2)* goes back to the PS2's 30 fps.
-*Display > Presets* turns on the usual ones at once: **Enhanced** for a modern graphics card, **Widescreen, light**
-for older PCs and integrated graphics, **Authentic (PS2)** to go back.
-
-**Runs natively, on Windows and Linux.** The game's own code, recompiled to C++ and running on the PC, not in an
-emulator. The 3D world, characters, vehicles, HUD and menus are drawn by a native renderer - Direct3D 11 on Windows,
-Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded with FFmpeg.
-
-**Frame rate**
-- Frame-rate independent timing: 60, 100, 120, 144, 165, 240 fps, your display's refresh rate or uncapped (up to
-  240), with game time following real time - 60 by default. Or the original timing at 30 fps, or 60.
-- Things the PS2 game counted per frame (vehicle physics, mission meters and timers) put back on real time, so they
-  keep their speed at high frame rates. Some behaviour at high frame rates is still being fixed
-  ([docs/PROGRESS.md](docs/PROGRESS.md)).
-- Fast: well past 100 fps nearly everywhere at the original resolution (over 200 in most of the city on an
-  i7-7700K + GTX 1080 Ti), and a locked 60 on a 2015 laptop with integrated graphics (Linux, Intel HD 520;
-  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
-- Low input delay with frame-rate independent timing: each frame starts on fresh input just in time to be shown.
-- Vertical sync on or off, and a tearing mode for G-Sync / FreeSync monitors.
-- Frame rate counter, and a performance overlay (F3) with CSV recording (F4).
-
-**Widescreen and ultrawide**
-- Hor+ widescreen: 16:10, 16:9, 21:9, 32:9, or *Match window* for any shape between 4:3 and 32:9 (3440x1440 and
-  other monitors that are not exactly 21:9). You see more to the sides; nothing is cropped or stretched.
-- The HUD kept at 4:3 in the middle, moved to the screen edges (keeping its shape), or stretched.
-
-**Image quality**
-- Internal resolution from 1x (640x448) up to 8x, or the window's own resolution, with the effects keeping their
-  original look.
-- Anti-aliasing (MSAA 2x / 4x / 8x) and anisotropic texture filtering (up to 16x).
-- Windowed or borderless full screen (Alt+Enter).
-
-**Controls**
-- Keyboard, mouse and gamepads (Xbox, DualShock / DualSense, Switch Pro and anything else SDL3 knows), mixed freely.
-- Mouse look on foot, as in a PC game (the mouse turns the camera itself), with sensitivity and inversion; right click
-  locks on.
-- Driving on W / S / Space (accelerate, brake / reverse, handbrake), keys that do something else on foot.
-- Every key, mouse button and gamepad button rebindable, with two keys per control and a *Walk* key for walking speed
-  on the keyboard.
-- Stick deadzones, camera speed, trigger press point, swapped sticks, inverted camera axes.
-- DualShock 2 rumble on your gamepad, from 0% to 200%.
-
-**Sound**
-- Master, music, sound effects and movie volume; stereo, mono or swapped speakers.
-- Keep running, mute or pause when the game is in the background.
-
-**Built-in trainer (F5)**, a list menu in the style of RDR2's Native Trainer ([docs/TRAINER.md](docs/TRAINER.md)):
-- Player: god mode, heal, never wanted, set the wanted level, money, infinite sprint, police / everyone ignore you.
-- Weapons: any weapon, loadouts, unlimited ammo, no reload, fast reload.
-- Vehicles: spawn any of the 110 vehicles (cars, bikes, boats, helicopters, planes), invincible, repair, flip,
-  boost, random paint.
-- Teleport to every district, save and return to a position.
-- Start any of the 59 story missions or a side job (Paramedic, Vigilante, Fire Truck, Air Rescue, Taxi).
-- World: time of day, freeze time, weather, game speed 25% to 200%.
-- Works through the game's own script commands, and nothing of it is ever saved: every start is the original game.
-
-**Also**
-- Skip the intro movies (off by default, as on the PS2).
-- Saves on a memory card (`%LOCALAPPDATA%\VCSRecomp` on Windows, `~/.local/share/VCSRecomp` on Linux), written and
-  read by the game's own save code.
-- Every setting kept in `vcs.ini` next to the game.
-
-## PS5 (homebrew)
-
-For jailbroken PS5 consoles that run homebrew from `/data/homebrew/`. As on a PC, the game is built from your own disc
-(no game code is ever downloaded or released), on a **Linux PC** (Ubuntu 24.04, or WSL 2 on Windows): the release's
-`VCS-Recomp-<version>-ps5.zip` or a git clone.
-
-1. The game's code from your disc (step 3 above, on Linux; `python3 tools/build.py --check-deps` lists the packages):
-   ```bash
-   python3 tools/build.py --recompile "Grand Theft Auto - Vice City Stories (USA).iso"
-   ```
-2. The PS5 toolchain, once - [ps5-plume-triangle](https://github.com/Nazky/ps5-plume-triangle): the PS5 payload SDK,
-   its Vulkan driver (RADV) and the tools that make `eboot.bin`. This fetches it next to the source folder and builds
-   it (it says which packages are missing first):
+2. **The PS5 toolchain**, once - [ps5-plume-triangle](https://github.com/Nazky/ps5-plume-triangle): the PS5 payload
+   SDK, the console's Vulkan driver (RADV) and the tools that make `eboot.bin`. This fetches it next to the source
+   folder at a pinned commit and builds it; it lists the packages it is missing first:
    ```bash
    python3 tools/ps5.py setup
    ```
-3. Check, then build the app:
+3. **Check, then build the app**:
    ```bash
    python3 tools/ps5.py check
    python3 tools/ps5.py build --zip        # -> build/ps5/app/PPSA94590/ and build/ps5/PPSA94590.zip
    ```
-4. Put it on the PS5 - over an FTP payload (`--port 1337` for etaHEN's), with your disc image:
+   The first build compiles the whole game (about as long as the recompile's output is big: 15-30 minutes).
+4. Optional, the movies: `python3 tools/ps5.py ffmpeg` builds FFmpeg's MPEG-2 decoder for the PS5, then build again.
+   Without it the intro movies are skipped.
+
+The app you build holds the game's code made from your disc: it is for your own console, never to share.
+
+## Install and play
+
+1. Put the app on the PS5 over its FTP payload (`--port 1337` for etaHEN's), with your disc image:
    ```bash
    python3 tools/ps5.py deploy --host <your PS5's IP> --iso "Grand Theft Auto - Vice City Stories (USA).iso"
    ```
-   or unzip `build/ps5/PPSA94590.zip` into `/data/homebrew/` with a USB drive, and put your `.iso` in
-   `/data/homebrew/PPSA94590/disc/` (or on a USB drive as `*Vice City Stories*.iso`).
-5. Start it from the home screen.
+   or unzip `build/ps5/PPSA94590.zip` into `/data/homebrew/` with a USB drive and put your `.iso` in
+   `/data/homebrew/PPSA94590/disc/` (or on a USB drive, top folder or `games/`, named `*Vice City Stories*.iso`).
+2. Start it from the PS5's home screen.
 
-The app you build holds the game's code made from your disc: it is for your console, never to share.
+| On the console | What |
+|---|---|
+| `/data/homebrew/PPSA94590/disc/` | your `.iso` |
+| `/data/homebrew/PPSA94590/vcs.ini` | the settings (the settings menu writes it) |
+| `/data/homebrew/PPSA94590/userdata/` | the memory card (your saves) |
+| `/data/homebrew/PPSA94590/logs/vcs.log` | the last run's log: send it with a bug report |
 
-**Controls** - the DualSense is the DualShock 2, button for button: Cross, Circle, Square, Triangle, L1 / R1, L2 / R2
-(the triggers), L3 / R3, both sticks and the d-pad as on the PS2; **Options is Start** and **the touchpad click is
-Select** (the Create button belongs to the system). Hold the touchpad and press **Options** for the settings menu,
-**R1** for the trainer, **L1** for the free camera (the game sees neither button). In the menus Cross selects and
-Circle backs out. Everything else - the TV output (4K / 1440p / 1080p), saves (`userdata/` in the app's folder), the log
-for bug reports (`logs/vcs.log`), what is tested - is in [docs/PS5.md](docs/PS5.md).
+To update, copy the new app folder over the old one: the disc, the saves and the settings stay.
 
-## Updating
+## Controls
 
-- **A release** (the launcher): *Check for updates*, then *Update now*: it puts the new release in place (keeping
-  your built game, settings and saves) and the next *Update the build* compiles only what changed. By hand:
-  `python tools/update.py check` / `python tools/update.py apply`.
-- **A git clone**: `git pull`, then build again: `python tools/build.py --recompile-if-needed` recompiles only when
-  the recompiler or its config changed.
+The DualSense is the DualShock 2, button for button:
+
+| DualSense | PS2 | |
+|---|---|---|
+| Cross, Circle, Square, Triangle | the same | sprint / accelerate, attack, jump / brake, enter a vehicle |
+| L1 / R1, L2 / R2 (the triggers), L3 / R3 | the same | R1: target, handbrake |
+| Left stick / right stick, d-pad | the same | move / camera |
+| Options | Start | the pause menu |
+| **Touchpad click** | **Select** | the Create button belongs to the system |
+
+Hold the touchpad and press **Options** for the settings menu, **R1** for the trainer, **L1** for the free camera (the
+game sees neither button). In the menus Cross selects, Circle backs out, L1 / R1 change pages. Every button can be
+rebound on the settings menu's Gamepad page. More in [docs/CONTROLS.md](docs/CONTROLS.md).
+
+## Features
+
+The defaults are the PS2 game as it was, except the frame rate: 60 fps with frame-rate independent timing. Every other
+improvement is an option in the settings menu, and *Display > Presets > Authentic (PS2)* goes back to the PS2's 30 fps;
+*Enhanced* turns on the usual improvements at once.
+
+- **Native**: the game's own code, recompiled to C++; the 3D world, characters, vehicles, HUD and menus drawn by a
+  native renderer (Vulkan on the console's GPU); sound through the console's audio output; the disc streamed from the
+  `.iso`; the movies decoded with FFmpeg.
+- **Picture**: output to the TV in 4K (or 1440p / 1080p: *Display > TV output*); Hor+ widescreen (16:9 shows more to
+  the sides; nothing cropped or stretched), the HUD at 4:3, at the screen edges or stretched; internal resolution from
+  1x (640x448) up to 8x or the TV's own, MSAA 2x / 4x / 8x, anisotropic filtering up to 16x.
+- **Frame rate**: frame-rate independent timing with game time following real time (60 by default), or the original
+  timing at 30 fps; things the PS2 game counted per frame (vehicle physics, mission meters and timers) put back on real
+  time; a frame-rate counter and a performance overlay.
+- **Controls**: the DualShock 2's layout on the DualSense, every button rebindable, stick deadzones, camera speed,
+  trigger press point, swapped sticks, inverted camera axes, the game's rumble on the DualSense from 0% to 200%.
+- **Sound**: master, music, sound effects and movie volume; stereo, mono or swapped.
+- **Built-in trainer** (touchpad + R1), a list menu in the style of RDR2's Native Trainer
+  ([docs/TRAINER.md](docs/TRAINER.md)): god mode, wanted level, money, any weapon, any of the 110 vehicles, teleports,
+  any of the 59 story missions or a side job, time, weather, game speed - through the game's own script commands, and
+  nothing of it is ever saved.
+- **Also**: skip the intro movies (off by default, as on the PS2); saves on a memory card written and read by the
+  game's own save code; every setting kept in `vcs.ini`.
 
 ## Problems
 
 | What you see | What to do |
 |---|---|
-| `vswhere.exe not found` | Visual Studio isn't installed: see step 1 (or `python tools/setup_vs.py install`). |
-| CMake configure fails, mentioning `clang-cl` | Open the Visual Studio Installer, *Modify*, and tick **C++ Clang tools for Windows**. |
-| `no disc image` | Put the `.iso` in the repository folder, or give its path after `--recompile`. |
-| `unsupported executable build` or `SLUS_215.90 not found on disc` | The disc isn't the USA release (SLUS-21590). Other regions aren't supported. |
-| CMake configure fails while downloading | Check the internet connection and that `git --version` works in a new terminal. |
-| `CMake 3.21 or newer not found, and downloading it failed` | Check the internet connection, or install CMake yourself ([cmake.org](https://cmake.org/download), or Visual Studio Installer, *Modify*, **C++ CMake tools for Windows**). `VCS_CMAKE` / `VCS_NINJA` set to a full path choose a particular one. |
-| `vcs.exe` does nothing when started | It can't find the disc: put `iso=C:\path\to\your.iso` in `vcs.ini` next to `vcs.exe`. |
-| Linux: `clang 19 or newer not found` / `missing build dependencies` | Install what `python3 tools/build.py --check-deps` lists. |
-| Linux: `cannot find -lstdc++` | Install `libstdc++-<N>-dev` for your newest GCC (`build.py` works around it when an older one has it). |
-| Linux: the game starts but no window / `no GPU with Vulkan 1.3` | Install your GPU's Vulkan driver (Mesa or NVIDIA); `vulkaninfo --summary` should list it. |
+| `python3 tools/ps5.py check` lists something missing | It names the command that fixes each line. |
+| `unsupported executable build` / `SLUS_215.90 not found` | The disc isn't the USA release (SLUS-21590). Other regions aren't supported. |
+| The app closes right away, with a notification | The notification says why (no disc image found, the wrong disc...). |
+| Anything else on the console | Send `/data/homebrew/PPSA94590/logs/vcs.log`; [docs/PS5.md](docs/PS5.md) has the first-run checklist. |
 
-The build's full output is in `build/build.log` (`build/configure.log` for the configure step).
-`python tools/doctor.py` checks everything at once (folder, compiler, disc, whether the game is current) and says what
-to do next; `python tools/report.py` zips the logs for a bug report (no game files, no saves).
+The build's output is in `build/ps5/build.log` (`build/ps5/configure.log` for the configure step).
 
 ## For developers
 
 | Command | What |
 |---|---|
-| `python tools/build.py` | rebuild after code changes |
-| `python tools/build.py --quick` | rebuild without link-time optimisation: much faster relinks, a somewhat slower game. It stays quick until `--opt lto` (switching recompiles everything, ~6-10 min) |
-| `python tools/build.py --opt lto` | back to the optimised build (the default) |
-| `python tools/build.py --opt pgo` | ThinLTO + profile-guided; trains a profile first (~30-50 min, from the rig's card copies in `build/rig/saves` or a new game) |
-| `python tools/recompile.py [ISO]` | disc → generated C++ only (`--check`: is generated/ current?) |
-| `python tools/build.py --recompile-if-needed [ISO]` | recompile only when the recompiler, its config or the function map changed, then build |
-| `python tools/build.py --launcher` | build the launcher (`VCSLauncher.exe` in the repository root; needs no disc) |
-| `python tools/doctor.py` | everything checked: folder, memory, compiler, disc, build state, the next step (`--json` for the launcher) |
-| `python tools/build_dir.py [set PATH \| reset]` | build in another folder (another drive...) instead of `build\`; every tool follows it |
-| `python tools/backup.py create\|list\|restore` | the memory card backed up / restored (order and times kept) |
-| `python tools/release.py [--worktree]` | the Windows release zip (source, launcher, embeddable Python, `deps/`), self-tested; refuses game files, and uncommitted changes without `--worktree` |
-| `python3 tools/release.py --ps5` | the PS5 build kit zip (source + `PS5-README.txt`), through the same game-file guard |
-| `python3 tools/ps5.py setup\|check\|build\|deploy` | the PS5 build (above; [docs/PS5.md](docs/PS5.md)) |
-| `python3 tools/ps5.py compile-check --sdk DIR` / `padtest` | the PS5 build compiled without a disc (CI); the DualSense path checked on Linux |
-| `python tools/deps.py fetch` | the libraries the build downloads, into `deps/` (offline builds) |
-| `python tools/run.py 0` | run the game with its output logged to `build/run/run.log` (`run.py 60 name`: stop after 60 s, log to `name.log`) |
-| `python tools/gamectl.py` | control a running game: screenshots, key presses, perf numbers, quit |
-| `python tools/ghidra_analyze.py` | redo the Ghidra analysis (Ghidra 12 + JDK 21) |
+| `python3 tools/recompile.py [ISO]` | disc → generated C++ (`--check`: is generated/ current?) |
+| `python3 tools/ps5.py setup` | ps5-plume-triangle fetched at its pinned commit and built |
+| `python3 tools/ps5.py check` | what the PS5 build needs, what is missing, and how to get it |
+| `python3 tools/ps5.py build [--zip] [--lto]` | build/ps5 (CMake + Ninja) → `build/ps5/app/<title id>/` |
+| `python3 tools/ps5.py package [--zip]` | the app folder again from `build/ps5/vcs.elf` |
+| `python3 tools/ps5.py deploy --host IP [--iso F]` | the app folder to `/data/homebrew/<title id>` over FTP |
+| `python3 tools/ps5.py ffmpeg` | FFmpeg for the PS5 (the movies) |
+| `python3 tools/ps5.py compile-check --sdk DIR` | the PS5 build compiled against stand-in code: no disc needed (CI) |
+| `python3 tools/ps5.py padtest` | the DualSense → DualShock 2 path checked with the console's pad functions mocked (62 checks) |
+| `python3 tools/release.py --ps5` | the release zip: the source and `PS5-README.txt`, through a guard that refuses game files |
+| `python3 tools/ghidra_analyze.py` | redo the Ghidra analysis (Ghidra 12 + JDK 21) |
 
-All tools are Python 3 scripts using only the standard library. [AGENTS.md](AGENTS.md) is the guide to working
-on the code; the documentation is in [docs/](docs).
+All tools are Python 3 scripts using only the standard library. [AGENTS.md](AGENTS.md) is the guide to working on the
+code; the documentation is in [docs/](docs).
 
 | Path | What |
 |---|---|
 | `third_party/PS2Recomp` | Vendored PS2 recompiler + runtime (GPL-3.0) |
 | `game/vcs` | Recompiler config and function map for SLUS_215.90 |
-| `src` | Game-specific code (overrides, renderer, settings, platform) |
-| `tools` | Disc reader, build pipeline, launcher back end, test and analysis scripts |
-| `launcher` | The Windows launcher (SDL3 + Dear ImGui; runs the tools) |
-| `docs` | How the game works, decisions, progress |
+| `src` | Game-specific code (overrides, renderer, settings, the PS5 platform layer) |
+| `ps5` | The PS5 build's toolchain file and link rule, start-up code, the controller test |
+| `tools` | Disc reader, recompile, the PS5 build and packaging, analysis scripts |
+| `docs` | How the game works, the PS5 build, decisions, progress |
+
+## Credits
+
+- [PS2Recomp](https://github.com/ran-j/PS2Recomp): the static recompiler and runtime this port is built on.
+- The PS5 toolchain: [ps5-plume-triangle](https://github.com/Nazky/ps5-plume-triangle) (Nazky),
+  [PS5_PayloadSDK](https://github.com/mihawk-99/PS5_PayloadSDK) and [PS5_Mesa](https://github.com/mihawk-99/PS5_Mesa)
+  (mihawk-99), the [ps5-payload-dev SDK](https://github.com/ps5-payload-dev/sdk) (John Törnblom), and the
+  [gta4-ps5](https://github.com/chonzytron/gta4-ps5) port, whose way to the console this one follows.
 
 ## License
 
 GPL-3.0 (inherited from PS2Recomp). Grand Theft Auto and all game content are property of Rockstar Games /
-Take-Two Interactive.
+Take-Two Interactive. An unofficial fan project, not affiliated with or endorsed by Rockstar Games, Take-Two
+Interactive or Sony.

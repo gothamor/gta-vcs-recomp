@@ -1,15 +1,17 @@
-# Performance: well past 100 fps everywhere
+# Performance
 
-The goal (the user, 2026-10-25): at the PS2's resolution the port runs well past 100 fps everywhere, without changing
-what the game does. This is the working list: what was measured, what was done (with numbers), what is next.
+The goal on the PS5: a steady 60 fps (and 120 at a 120 Hz TV later) at 4K output, without changing what the game
+does. The work below - the recompiler's output, the runtime, the render worker, the draw items, the frame pacing - is
+the game code the PS5 build compiles; its numbers were measured before the PS5 build existed, at the PS2's resolution
+with frame-rate independent timing and no frame cap, and stay as the record of what each step gained. The PS5's own
+numbers are the next step ("On the PS5" below).
 
-## Where it stands (2026-10-25)
+## Where it stood (2026-10-25)
 
-Display > Game timing "Frame-rate independent" with the frame rate cap at 240 or Unlimited (= up to 240; the game's
-time step stops getting shorter there). The PGO + ThinLTO build (`tools/build.py --opt pgo`), i7-7700K + GTX 1080 Ti,
-640x448 internal resolution:
+Frame-rate independent timing, the cap at 240 or Unlimited (= up to 240; the game's time step stops getting shorter
+there), ThinLTO + PGO, 640x448 internal resolution:
 
-| | before (uncapped, floor lowered) | now |
+| | before (uncapped, floor lowered) | after |
 |---|---|---|
 | Fort Baxter | 111 fps | 223 |
 | city 575,175 / -675,1425 / 1325,-325 / -1425,-575 | 166 / 118 / 130 / 125 | 240 (ceiling) / 201 / 226 / 220 |
@@ -19,28 +21,25 @@ time step stops getting shorter there). The PGO + ThinLTO build (`tools/build.py
 
 Before this work the game could not run above 100 fps in any setting (independent timing's ceiling) and the AI drive
 did not hold 60 in original timing. Original timing (30 / 60) is unchanged: reference scenes identical throughout.
-Where the slowest frames are now: heavy views (~1,950 draws: a rooftop facing the city) at ~120 fps, the game thread
+Where the slowest frames were: heavy views (~1,950 draws: a rooftop facing the city) at ~120 fps, the game thread
 (6.2 ms + 1.6 ms submitting the chain) and the render worker (6.2 ms) both near the limit. Memory: the RSL replay's
 recordings grow with the blocks seen (~1.3 GB private after 15 minutes of driving, then flat - keyed by address, so
-bounded by the world; predates this work).
+bounded by the world).
 
-## How it is measured
+## How it was measured
 
-- `python tools/bench.py OUT --fps 0 VCS_TIMING=1 VCS_MIN_STEP=0.05`: uncapped, frame-rate independent timing with the
-  step floor lowered (so the 100 fps cap of independent timing does not apply - see "The 100 fps cap" below). Five
-  standing spots (Fort Baxter, four city spots from the world tour) and the AI drive from the first city spot.
-  Columns: fps, game-thread ms, render-worker ms, GS-stage ms, frame ms. The build is `--opt none` unless noted (PGO
-  was ~20-30% faster on the game thread before this work, ~5-10% after it). Since section 5 the floor is 50/240 by
-  default: `VCS_TIMING=1 --fps 0` alone is the user-facing "Unlimited (up to 240)".
-- `VCS_TIMING=1 VCS_FPS=0 tools/tour.py OUT --every 3 --limit 40`: the world tour uncapped (perf per point).
-- At the default cap (`tools/bench.py` with no options: 60 fps, original timing) `game` is the game thread's work
-  per frame, the rest of the frame is waiting.
-- Game-thread / worker profiles: `VCS_PROFILE=5` (+ `VCS_PROFILE_THREAD=RenderWorker`, `VCS_PROFILE_CALLERS=name,...`
-  for call stacks).
-- Behaviour: `tools/scenes.py capture` + `compare` against `build/scenes/reference`, `tools/tour.py OUT --every 9
-  --limit 18` (15 ok, 2 relocated, 1 falling at (-925, 1175) - unchanged since before this work).
+- A benchmark run (`tools/bench.py`): five standing spots (Fort Baxter, four city spots from the world tour) and the AI
+  drive from the first city spot, uncapped with frame-rate independent timing and the step floor lowered (so the 100
+  fps cap of independent timing does not apply - see section 5). Columns: fps, game-thread ms, render-worker ms,
+  GS-stage ms, frame ms; an unoptimised (no LTO) build unless noted. At a 60 fps cap with original timing, `game` is
+  the game thread's work per frame and the rest of the frame is waiting.
+- The world tour uncapped (perf per point), sampling profiles of the game thread and the render worker, and reference
+  scenes compared picture by picture after each step.
 
-## Where it started (2026-10-25, `--opt none`)
+On the PS5: the performance overlay (Advanced > Performance overlay: game fps, frame-time percentiles, EE thread time
+per phase, GS and DMA counters, the GPU) and the log.
+
+## Where it started (2026-10-25, no LTO)
 
 At 60 fps (original timing): game thread Fort Baxter 10.9 ms, city 6.7 / 11.2 / 7.0 / 10.2, AI drive 17.1 ms (52 fps:
 the drive did not hold 60). Uncapped the game was held at ~100 fps by the EE clock (below).
@@ -109,7 +108,7 @@ Fort Baxter 5.3 -> 4.4 ms, city a few percent. `PS2X_RECOMP_NO_RESTRICT=1` (reco
 - The scheduler's event queue and due-deadline list are buffers kept between calls (a container was allocated and
   freed per call, ~2% of the game thread with the other allocations).
 
-Uncapped after 1-4 (`--opt none`): Fort Baxter 209 fps (game 4.2 ms), city 331 / 202 / 135 / 232, AI drive 126 fps
+Uncapped after 1-4 (no LTO): Fort Baxter 209 fps (game 4.2 ms), city 331 / 202 / 135 / 232, AI drive 126 fps
 (game 5.6 ms, worker 8.0 ms). The render worker is now the limit at the busy city spot (7.4 ms) and on the drive.
 
 ### 5. Past 100 fps: the ped-movement step bug (2026-10-25)
@@ -118,9 +117,7 @@ Frame-rate independent timing was capped at 100 fps because below CTimer's 0.5 s
 speed. Write watches on the player's move speed at 1/100 vs 1/110 s steps traced it to one branch in FUN_001f1d38
 that the PS2 never takes (game-internals.md 4); one instruction patch fixes it without changing steps >= 0.5. The audit
 matches 1/30 - 1/100 up to 1/240 s, so the ceiling is now 240 fps: caps 120 / 144 / 165 / 240 added, display refresh
-and unlimited go up to 240 (DECISIONS.md 2026-10-25). Also fixed on the way: `tools/gamectl.py` closes its sockets
-without TIME_WAIT (the audit at 200+ fps ran out of ports) and the rig kills the game with its launcher when it does
-not quit.
+and unlimited go up to 240 (DECISIONS.md 2026-10-25).
 
 ### 6. Render worker, first pass (2026-10-25)
 
@@ -131,7 +128,7 @@ worker 7.4 -> 6.7 ms, drive 8.0 -> 7.1 ms. What the worker spends its time on th
 from VU1 programs ~55% (of which the packed draws' recording ~25%), GIF data (texture / CLUT uploads: ~1,070 uploads
 and ~930 CLUT loads a frame, nearly all overwritten before use) ~30%, the chain / replay ~15%.
 
-Uncapped at the user-facing settings (independent timing, unlimited = up to 240, `--opt none`): Fort Baxter 170 fps,
+Uncapped at the user-facing settings (independent timing, unlimited = up to 240, no LTO): Fort Baxter 170 fps,
 city 149 / 192 / 205 / 239 (at the ceiling), AI drive 136 fps.
 
 Then: packed 3D draws recorded per packet (one state check, triangles appended at once - the same draws), and a memo of
@@ -146,7 +143,7 @@ would let more of them hit (not done).
 The world tour uncapped (40 points, `VCS_TIMING=1 VCS_FPS=0 tools/tour.py`) had a median of 200 fps and its slowest
 points at ~110 fps, all limited by the render worker (8.5-8.8 ms, ~1,900 draws). Its work splits cleanly: the VIF1 /
 VU1 / native-draw side ~45%, the GS front end and frame building ~55%. The GS side now runs on its own thread behind
-the worker (NATIVE_RENDERER.md "The GS stage", `PS2X_GS_THREAD=0` = off). Uncapped (`--opt none`, independent timing):
+the worker (NATIVE_RENDERER.md "The GS stage", `PS2X_GS_THREAD=0` = off). Uncapped (no LTO, independent timing):
 
 | spot | before | after (game / worker / GS stage ms) |
 |---|---|---|
@@ -161,7 +158,7 @@ the worker (NATIVE_RENDERER.md "The GS stage", `PS2X_GS_THREAD=0` = off). Uncapp
 
 ### 8. Guest functions without register saves (2026-10-25)
 
-Every generated function used the Win64 convention: its prologue saved 8 general and 6 vector registers and its
+Every generated function used the platform's default convention: its prologue saved 8 general and 6 vector registers and its
 epilogue restored them, on every guest call - though generated code keeps nothing in registers across a guest call (the
 guest's state lives in R5900Context). Guest functions now use clang's `preserve_none` (`ps2_guest_cc.h`,
 `PS2_GUEST_CC`): the recompiler emits it on every generated function and stub wrapper, `RecompiledFunction` carries it,
@@ -176,7 +173,7 @@ standing 4.18 -> 3.90 ms, driving 7.18 -> 6.97 ms (~3-7%). Scenes unchanged.
 - The FPU multiply took its out-of-line path for every zero result (`ps2_fnormal(0)` is false) - multiplying by 0 is
   common; an exact +-0 product is the PS2's result too, so it returns inline now (`ps2_fmul_slow` was 1.3% driving).
 - Chain buffers taken from the render worker's pool went back to PS2Memory's own 4-buffer pool for the transfers handled
-  on the game thread; it filled and the rest were freed every frame (VirtualFree, ~1.6% driving) while the worker's
+  on the game thread; it filled and the rest were freed every frame (~1.6% driving) while the worker's
   pool allocated new ones. They go back where they came from.
 - FUN_003F9E50 (identity matrix: 16 words zeroed in a loop, a checkpoint per iteration) runs natively
   (`VCS_NATIVE_IDENTITY=0` = the original).
@@ -185,13 +182,11 @@ Scenes unchanged.
 
 ### 10. PGO retrained; what did not help (2026-10-25)
 
-- PGO + ThinLTO retrained on the new code (`--opt pgo --train`): smaller gain than before (the codegen work removed much
+- PGO + ThinLTO retrained on the new code : smaller gain than before (the codegen work removed much
   of what it used to optimise). Uncapped, user-facing settings: Fort Baxter 213 fps, city 212 / 239 / 221 / 223, busy
   city 1325,-325 223, AI drive 144 (game thread 6.0 ms + 0.8 ms submission; worker 4.2, GS stage 3.8).
 - The write-watch fold (~0.155 ms per frame, ~430 pages written per fold) cannot be narrowed to a page range: the
   marked blocks span pages 376-8155 of 8192. Its cost follows the pages written, not the range. Not changed.
-- The sampling profiler counted a host sample as guest code when it fell within 1 MB after a generated function; it now
-  uses each generated function's own symbol size (ThinLTO / PGO builds interleave runtime and generated functions).
 
 ### 11. VU0 natives on the context's registers (2026-10-25)
 
@@ -211,7 +206,7 @@ profile, from every matrix set-up) is a bit test. `PS2X_HLE_VERIFY=1` at a city 
 clipper and env pass exact; the world fast path's 16 packets "within 1" (37 vertices, ST LSBs) are the same on the build
 before (14 / 34 there). Scenes: static pictures identical.
 
-What the first stage does now (`--opt none`, uncapped drive, worker 3.8-4.4 ms a frame against the game thread's
+What the first stage does now (no LTO, uncapped drive, worker 3.8-4.4 ms a frame against the game thread's
 6-8 ms): idle ~58% of the time; of the rest, about a third is copying - the RSL replay writing recorded unpacks into VU
 memory, `GS::submitNative` / `submitPackedKick` putting draws on the GS stage's ring, VIF DIRECT data to the GIF. Those
 copies are what step 4 of docs/FULLY_NATIVE.md removes (draws replayed without going through VU memory); smaller
@@ -234,19 +229,16 @@ Looked at and left (measured on the drive, uncapped):
 ### 13. Draw items (FULLY_NATIVE.md step 4c, 2026-10-25)
 
 World / model draw calls became items (one tag in the chain each). Measured even: A/B, three alternating rounds,
-`--opt none`, uncapped - driving 110.5 -> 111.3 fps, chain submission 1.12 -> 1.02 ms, worker 4.38 -> 4.29 ms; standing
+no LTO, uncapped - driving 110.5 -> 111.3 fps, chain submission 1.12 -> 1.02 ms, worker 4.38 -> 4.29 ms; standing
 within noise. The walker's share falls by about what making the items costs (`itemDraw` ~0.5% of the game thread):
 step 4b had already taken the copy savings. Where the render worker's time goes did not change: the replay's copies
 into VU memory are ~5% of its samples (~12% of its busy time while driving), `GS::submitNative`'s ring copy 3.4%.
 
 ### 14. Long-run frame-time spikes (2026-10-26)
 
-**How they were found.** A 24-minute uncapped soak (`tools/soak.py`: autodrive, a teleport to the next city spot every
-2 minutes) with the per-frame CSV (`PS2X_PERF_LOG`, `tools/perf_report.py`), then three new tools:
-- `VCS_PROFILE_SPIKES=<ms>` (with `VCS_PROFILE`): a frame longer than <ms> gets its own report - the samples taken during
-  it, by guest function / host symbol, with a timestamp; `VCS_PROFILE_THREAD` takes a list (`GameThread,RenderWorker,
-  GsStage`, threads found as they start) and `VCS_PROFILE_CALLERS` adds the call chains of matching host samples to
-  the spike lines (what a wait waits in).
+**How they were found.** A 24-minute uncapped soak (autodrive, a teleport to the next city spot every 2 minutes) with
+a per-frame CSV (`PS2X_PERF_LOG`), a sampling profiler reporting every frame longer than a threshold (the samples
+taken during it, by guest function / host symbol, with the call chains of what a wait waits in), and:
 - `PS2X_WAIT_LOG=<ms>`: the EE scheduler logs a wait longer than <ms> - pacing the EE clock to a deadline, or idle with
   every guest thread waiting - with each thread's state, wait reason and pc / ra.
 - `VCS_NATIVE_INFLATE_LOG=1`: inflate time per 10 s and the slowest call.
@@ -273,10 +265,10 @@ into VU memory are ~5% of its samples (~12% of its busy time while driving), `GS
   base, width and origin (every decode in the game so far) the texel at (x, y) is the upload's pixel at (x, y): taken
   directly. `PS2X_HW_DECODE_VERIFY=1`: 3,500 textures the same as the VRAM decode (`PS2X_HW_DECODE_FAST=0` = before).
 
-**Result**, the same 24-minute soak before / after (uncapped, `--opt none`): 133.3 -> 138.4 fps, p99 13.7 -> 11.9 ms;
+**Result**, the same 24-minute soak before / after (uncapped, no LTO): 133.3 -> 138.4 fps, p99 13.7 -> 11.9 ms;
 frames of 17-34 ms 291 -> 138, over 100 ms 40 -> 23; away from the teleports, frames over 25 ms with the game thread
 the cause 39 -> 15. An uncapped AI drive of 150 s after boot: 3 frames over 17 ms (worst 26.5 ms), p99 9.3 ms.
-`tools/bench.py --fps 0 VCS_TIMING=1 VCS_MIN_STEP=0.05`, two alternating rounds: Fort Baxter 203 / 206 -> 219 / 217 fps,
+The benchmark, two alternating rounds: Fort Baxter 203 / 206 -> 219 / 217 fps,
 city (1325, -325) 196 / 203 -> 216 / 222 (render worker 5.0 -> 3.3 ms), the other spots and the drive within noise.
 
 **What is left, and why it stays:**
@@ -298,8 +290,8 @@ hovering over the player (a script for it: 3x, 16:9, MSAA 2x, perf every 0.5 s).
 
 **The cause** (game-internals.md 6j): the rotor dust is one GS-path draw of ~1,040 large additive triangles, 60-66
 screens of overdraw - ~206 Mpixels a frame at 2560x1344 through the GS-emulating pixel shader. Every CPU thread was
-waiting (render worker, GS stage ~85%, main thread ~90% in `ZwWaitForSingleObject`): the GPU. The overlay's "GPU" is
-the main thread's submit time, so it showed 1.7 ms. New: `PS2X_GPU_TIMING=1` (D3D11 timestamp queries around a marker
+waiting (render worker, GS stage ~85%, main thread ~90% blocked): the GPU. The overlay's "GPU" is
+the main thread's submit time, so it showed 1.7 ms. New: `PS2X_GPU_TIMING=1` (GPU timestamp queries around a marker
 per draw, ms per frame by kind / target / texture every 5 s) - 46 of 61 ms of a presented frame on that draw kind, ~14 ms
 a game frame on the dust's one 32x32 texture. Ruled out on the way: MSAA resolves and the self-copy (the dust samples no
 render target), early Z (declaring conservative depth changed nothing), the shader's tail (a lean early-out path:
@@ -319,7 +311,7 @@ real part of the rest and stays.
   magenta pixels over the reference scenes and 12 shots of the helicopter scene at 3x (a positive control, comparing
   against the wrong texel, marks ~29% of the screen). Reference scenes four loads vs gather: static scenes 0.00.
 
-**Result** (3x 16:9, MSAA 2x, GTX 1080 Ti, `--opt none`; two alternating rounds each, from 35 s on, the dust on screen):
+**Result** (3x 16:9, MSAA 2x, no LTO; two alternating rounds each, from 35 s on, the dust on screen):
 
 | | game fps | dust GPU ms / game frame | presented / s |
 |---|---|---|---|
@@ -332,7 +324,7 @@ Away from the dust the GPU frame at 3x is unchanged (6-7 ms). What is left is th
 the exact Z; anisotropic filtering (the hardware's sampling, an option) or a lower internal resolution take it lower.
 
 **Seen on the way, fixed after** (below): the effect buffers FBP 420 / 384 were re-created ~4 times every frame, helicopter or
-not (game-internals.md 6j: a CLUT upload inside them drops both; FBP 420 then flips between the reflection map's window
+not (game-internals.md 6j: a CLUT upload inside them drops both; FBP 420 then flips between the reflection map's output
 scale and the bloom write-back's integer scale) - new textures of up to 1536x1536 at 3x, each with a rescaling blit.
 `PS2X_RHI_LOG_CREATES=1` shows them.
 
@@ -345,61 +337,20 @@ the drop stays, a re-made target starts cleared as before:
 
 Result (3x 16:9, MSAA 2x, the helicopter run, two alternating rounds): `gs target` textures created per run ~2,000 (the
 log's cap, reached within seconds) -> 7, all at start-up; the main thread's submit time ~1.1 -> ~1.05 ms before the
-helicopter, ~1.85 -> ~1.6 ms with it; 60 fps either way. A clean-up more than a speed-up on this machine: the
-allocations were cheap here, but they were ~200 a second of up to 9 MB each. Checked: the evening step of
+helicopter, ~1.85 -> ~1.6 ms with it; 60 fps either way. A clean-up more than a speed-up: the allocations were
+cheap there, but they were ~200 a second of up to 9 MB each. Checked: the evening step of
 `tools/regress.py` (12:00 / 20:00 / 21:00 at the hospital, at 3x: no black frames), reference scenes reuse off / on at
 1x and 3x 16:9 (below).
-
-### 16. Linux on the modest-hardware laptop (2026-10-30)
-
-First numbers of the Linux build (docs/LINUX.md): i5 Skylake (4 threads), Intel HD 520 on Mesa ANV / Vulkan, 1x
-internal resolution, a 960x672 window, the title flyover and intro cutscene from an empty card.
-
-| build | timing | game fps | host fps | game ms | main thread draw (`gl_ms`) |
-|---|---|---|---|---|---|
-| quick (`--opt none`) | original (30 cap) | 26.7-29.3 | 45-51 | 10-14 | 2.5-6 |
-| ThinLTO (`--opt lto`, 14 m 49 s, largest process 1.3 GB) | original (30 cap) | **30.0 locked** | 43-51 | 16-20 | - |
-| ThinLTO | frame-rate independent, uncapped | 28-51 | 12-17 | 12-13 | 20-47 |
-
-Locked 30 on this machine meets the roadmap's modest-hardware bar for 30 fps. Uncapped (first look), it is the GPU: the Linux
-profiler (`VCS_PROFILE_THREAD=MainThread`) puts the main thread 49% in `ioctl` (the i915 driver waiting for the GPU)
-and 30% in Mesa's Vulkan driver itself. Next for Vulkan, by that profile: push descriptors only for the bindings that
-changed (all 20 go with every changed draw now), barriers narrower than ALL_COMMANDS, and the textures gs_hw makes and
-drops each frame (`mmap` / `munmap` show up) kept for reuse. GPU timing per pass (`PS2X_GPU_TIMING`, D3D11 only so far)
-would say which passes the HD 520 spends its time on.
-
-**Vulkan work, measured** (same machine, the same 75 s flyover + intro, frame-rate independent timing, window visible,
-no control channel - `tools/run.py` with `PS2X_PERF_LOG`; averages of the [perf] windows from 20 to 70 s):
-- The first look above was skewed: the control channel turns on the brightness probe (`frameLuma`), a synchronous
-  readback - a full GPU wait - every frame. Players never run it; test runs always do. Without it, uncapped: game 84 fps,
-  host 29.5 fps, the main thread waiting 16 ms a frame on the GPU fence: **GPU bound**, 33.8 ms of GPU per shown frame,
-  which carries three game frames' rendering (~11 ms each; bloom and trails ~2.4 ms each of those).
-- **At a 60 fps cap the HD 520 holds 60**: game 59.7 fps, p95 17.0 ms, host 59.9 fps, GPU 12.8-13.0 ms a frame.
-- GPU timing for Vulkan (timestamps): `PS2X_GPU_TIMING=1` as on D3D11 (gs_hw then breaks the pass around every draw,
-  which on Vulkan costs a pass and two barriers per draw - use it for per-draw shares only), and `PS2X_RHI_GPU_TIME=1`:
-  the passes as they are and the whole frame. `PS2X_RHI_STATS` now gives the CPU's waits (fence, acquire, submit,
-  present) and the descriptor writes.
-- Barriers from the image layouts (stages and accesses of what used / will use it) instead of ALL_COMMANDS / MEMORY:
-  GPU 33.8 -> 33.2 ms uncapped - small; kept (`PS2X_RHI_FULL_BARRIERS=1` = before). Synchronization validation
-  (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` with `PS2X_RHI_DEBUG=1`) is clean; it caught the swapchain image's
-  transitions, which must chain to the acquire / present semaphores at COLOR_ATTACHMENT_OUTPUT.
-- Push descriptors: only the slots that changed since the command buffer's last push: 14,499 -> 1,683 descriptor writes
-  a frame at 60; main thread 6.1 -> 5.5 ms a frame (GPU unchanged).
-- `spirv-opt -O` over the SPIR-V (the GS pixel shader 46.6 -> 39.5 KB): GPU 12.44 / 13.11 ms against 12.77 / 12.97 - noise;
-  Mesa optimises the same. Not kept.
-- At 60 the main thread now sleeps 69% of the time (frame pacing), 11% in Mesa's driver. Large textures are made ~24 times
-  a minute (no churn). What is left is GPU time in the GS emulation's passes (bloom, trails, the world's draws through the
-  GS pixel shader) - the renderer's work, the same on D3D11, not the backend's.
 
 ### 17. Show every frame the GPU renders (frame-rate independent timing, 2026-10-30)
 
 The game thread may run up to three frames ahead of the main thread, and each host frame rendered every queued frame
-and showed the last (gs_hw.cpp). With the GPU behind, that settles at batches of three: the HD 520 rendered 84 frames a
-second and showed 30. Under frame-rate independent timing game time follows the clock, so a game thread that waits
+and showed the last (gs_hw.cpp). With the GPU behind, that settles at batches of three: a GPU-bound test machine rendered 84
+frames a second and showed 30. Under frame-rate independent timing game time follows the clock, so a game thread that waits
 loses nothing: `gsHwSetShowEveryFrame` (vcs_framerate.cpp turns it on with that timing) queues one frame and renders
 and shows one per host frame. Original timing keeps the old pacing (game time there is frames: waiting would slow the
 game, as the PS2 did, where dropping shown frames keeps its pace). `PS2X_HW_QUEUE=<n>` / `PS2X_HW_BATCH_MAX=<n>` (0: all)
-override either. Laptop, quick build, flyover + intro, window visible:
+override either. The GPU-bound machine, no LTO, flyover + intro:
 
 | | game fps | shown fps | p95 ms | GPU ms / shown frame |
 |---|---|---|---|---|
@@ -411,9 +362,9 @@ override either. Laptop, quick build, flyover + intro, window visible:
 | original timing (unchanged) | 29.9 | 60.2 | 33.4 | 6.5 |
 
 The ~10% fewer game frames were frames never shown. Queue 1 shows the newest frame (least input delay) at the same
-rate as queue 3. On Windows it matters wherever the GPU is the limit (3x / 4x internal resolution).
+rate as queue 3. It matters wherever the GPU is the limit (high internal resolutions).
 
-### 18. The GS pixel shader built per texture read (both renderers, 2026-10-30)
+### 18. The GS pixel shader built per texture read (2026-10-30)
 
 The GS draw pixel shader (gs_draw.hlsl) chose its texture read per draw from the constants: none, nearest, the GS's
 bilinear by four loads, the hardware sampler, Gather, a render target read 1:1 at full resolution. Every draw paid the
@@ -423,17 +374,16 @@ the dual-source output; 0 is the full shader) and gs_hw.cpp's `drawSampleMode` p
 shader branches on, in the same order - the same code per draw, so the same pixels. `PS2X_HW_SPECIALISE=0` = the full
 shader for all but Gather, as before. The variants are 5-22 KB of SPIR-V against the full shader's 47 KB.
 
-Laptop (HD 520, Vulkan), quick build, flyover + intro, frame-rate independent timing, pairs run alternately:
+The GPU-bound machine, no LTO, flyover + intro, frame-rate independent timing, pairs run alternately:
 
 | | GPU ms / frame, 60 cap | bloom ms | trails ms | uncapped shown fps | GPU ms / frame uncapped |
 |---|---|---|---|---|---|
 | full shader | 11.75 / 12.90 | 2.23 / 2.34 | 2.19 / 2.61 | 76.2 / 76.5 | 12.59 / 12.61 |
 | per read | 11.39 / 10.81 | 1.91 / 1.84 | 1.69 / 1.60 | **83.0 / 82.9** | **11.66 / 11.38** |
 
-Pictures: `scenes.py capture` with and without (original timing): the scenes that show the same frame in both runs -
+Pictures with and without (original timing): the scenes that show the same frame in both runs -
 loading, the flyover road (the world and the post effects), the pause map - are identical (mean difference 0.00); the
-moving ones differ less than two runs of the same build do. On Windows (D3D11, fxc) the same variants are built; there
-the gain wants measuring at 3x / 4x, where the GPU counts (and a picture check: `scenes.py compare`).
+moving ones differ less than two runs of the same build do.
 
 ### 19. Input delay (2026-10-30)
 
@@ -441,7 +391,7 @@ The user felt more input lag after section 17. Measured now, not guessed: `PS2X_
 done** per shown frame (Vulkan) - from the input snapshot the game read (`platform::inputSnapshotNs`, stamped on the
 pad read and on the frame) to the GPU's end of that frame on the CPU's clock (`VK_KHR_calibrated_timestamps`); the
 display adds up to a refresh. gs_hw splits the part before the GPU: input -> queued (game, render worker, GS stage) and
-queued -> taken (waiting for the main thread). Laptop (HD 520), quick build, flyover + intro, frame-rate independent:
+queued -> taken (waiting for the main thread). The same machine, no LTO, flyover + intro, frame-rate independent:
 
 | | old pacing | section 17 | now |
 |---|---|---|---|
@@ -468,29 +418,14 @@ What was wrong, in order:
   comes back).
 Switches: `PS2X_HOST_PACED=0` (the game's own deadline), `PS2X_FRAME_LEAD=0`, `PS2X_FRAME_LEAD_MARGIN_US=<us>`.
 Original timing is paced by the emulated VBlank and unchanged (49.8 ms at 30 fps). What is left at a cap: the frame's
-build (~10 ms) and the GPU (~11 ms + recording). On Windows (D3D11) the pacing is the same code; DXGI's default of
-three queued frames might add delay when GPU bound there - to measure (the delay report is Vulkan's only so far).
+build (~10 ms) and the GPU (~11 ms + recording).
 
-### 20. Linux: PGO, and the write watch (2026-10-30)
+## On the PS5
 
-- **PGO** (`build.py --opt pgo`): training no longer needs the rig's card copies - `bench.py` starts a new game from
-  an empty card when `build/rig/saves/fortbaxter` is missing (`rig.Game.new_game`: Cross until the player is outdoors),
-  so the profile covers the city spots and the AI drive as well as the reference scenes (a profile from the scenes alone
-  would have marked the driving code cold). Laptop, ThinLTO + PGO against ThinLTO of the same code (a second tree),
-  bench alternating twice: game thread over the six spots 9.7 / 10.0 ms against 9.95 / 9.8 ms, the worker and frame
-  times alike - no measurable gain here (as on Windows, section 10). ThinLTO stays the default for players.
-- **The write watch on Linux** (`ps2_write_watch.cpp`): userfaultfd's asynchronous write-protect over guest RAM
-  (`UFFD_USER_MODE_ONLY`, as unprivileged processes get it) and `PAGEMAP_SCAN`, which lists the written pages and
-  protects them again in one call (Linux 6.7+). A prototype checked first that a kernel write (`read()` from a file into
-  protected guest RAM, as the stream thread does) succeeds and counts. In the game: ~217 pages written per fold,
-  0.10-0.16 ms a fold; `VCS_RSL_SKIP_VERIFY=1` over the bench (2.21 M decisions) and the reference scenes (1.35 M):
-  **0 wrong**. A/B, same build, alternating twice: render worker 7.83 / 8.68 -> 7.53 / 8.20 ms, but the game thread
-  9.30 / 10.30 -> 9.95 / 10.68 ms and fps unchanged: the first write to a page after each fold is a page fault on Linux
-  (Windows reads dirty bits), ~220 a frame on the game thread. So it is **opt-in on Linux** (`PS2X_WRITE_WATCH=1`):
-  the game thread is the longest CPU stage and on the input-delay path. Soft-dirty bits would avoid per-page work only
-  by clearing the whole process's page tables at every fold.
-- What is left for the game thread is guest code (64-80% of it, flat): deeper code generation in the recompiler
-  (guest registers held in host registers across calls) - a project of its own.
+To measure first (docs/PS5.md's work list): the game thread without `preserve_none` (every guest call saves registers
+again: section 8's 3-7% back), the frame pacing on the TSC, `steady_clock` (a system call there) in hot paths, the
+render worker and GS stage on Zen 2 cores, the GPU at 4K output with the internal resolution at 1x / 3x / the TV's
+own, no write watch (FULLY_NATIVE.md 4a: the RSL replay's skips are off), and ThinLTO (off by default).
 
 ## Next
 

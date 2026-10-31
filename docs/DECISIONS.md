@@ -13,20 +13,19 @@ Newest at the bottom. Each entry: what, why, and what would change it.
 ## 2026-10-21 - Distribution: source only, bring your own disc
 - The repo never contains the ISO, the ELF, or C++ generated from the ELF
   (`.gitignore` blocks them). Users run the pipeline on their own disc.
-- The built exe reads game files straight from the user's ISO at runtime.
+- The built app reads game files straight from the user's ISO at runtime.
 - Only one executable build is supported (SHA-1 in `tools/vcs_disc.py`).
 
 ## 2026-10-21 - Performance is a hard requirement
-- Upstream runtime uses raylib + a CPU software GS renderer, which the upstream
+- Upstream runtime uses a CPU software GS renderer, which the upstream
   README calls "very bad" for speed. That's fine for bring-up only.
-- Target: runs full speed on old/modest hardware (dev box: i7-7700K + GTX 1080 Ti,
-  treat it as the *high* end). So:
-  - GS: hardware-accelerated renderer (Vulkan/D3D), not a CPU rasterizer and
+- Target: full speed with headroom, not just on fast hardware. So:
+  - GS: hardware-accelerated renderer (Vulkan), not a CPU rasterizer and
     preferably not a heavy compute rasterizer either. paraLLEl-GS is an option
     for reference accuracy, but the end state is a native renderer fed directly
     from the game's draw calls (HLE of VU1 programs).
   - VU1: translate the game's microprograms to C++ ahead of time, never interpret.
-  - Disc I/O: memory-map the ISO, no per-read file opens.
+  - Disc I/O: the ISO opened once, no per-read file opens (read with pread on the PS5: 2026-10-31).
   - Avoid per-instruction runtime dispatch in hot paths (e.g. indirect jumps
     through lookup tables) where we can resolve statically.
 
@@ -41,13 +40,10 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   addresses don't apply to SLUS-21590. Its function count (9,549) matches ours,
   which is a good sanity check that Ghidra's boundaries are complete.
 
-## 2026-10-21 - Compiler: clang-cl + MSVC 2019 STL
-- The machine's VS 2022/2026 installs have no C++ toolset; VS 2019 Build Tools
-  (MSVC 14.29) do. We build with LLVM clang-cl 23 against that STL and the
-  10.0.19041 Windows SDK. clang-cl also handles the huge generated files better
-  than cl.exe. `tools/toolchain.py` sets this up (vswhere + vcvars64).
-- Baseline CPU: AVX2 (upstream's `/arch:AVX2`). Revisit if we want pre-Haswell
-  CPUs; the generated code mostly needs SSE4.1.
+## 2026-10-21 - Compiler: clang
+- clang handles the huge generated files well, and one compiler for every build keeps the generated code and its
+  numerics the same (the PS5's build: the build machine's clang 19+, 2026-10-31).
+- Baseline CPU: AVX2 (x86-64-v3); the PS5's Zen 2 has more (`-march=znver2`).
 
 ## 2026-10-21 - Graphics plan
 1. Bring-up: upstream CPU GS backend (slow, but no extra work).
@@ -56,9 +52,9 @@ Newest at the bottom. Each entry: what, why, and what would change it.
 3. End state for performance and real hi-res/widescreen: native renderer fed by
    high-level hooks on the game's VU1 render paths (VCS has only ~4.8 KB of VU
    microcode + 4 small DVP overlays, so the set of programs is small).
-- 2026-10-22: step 3 is now planned in detail in NATIVE_RENDERER.md (SDL3 platform
-  layer, own RHI with a D3D11 backend, GS HW backend port, then packet-level HLE).
-  Its six decisions were approved by the user on 2026-10-22.
+- 2026-10-22: step 3 is now planned in detail in NATIVE_RENDERER.md (a platform
+  layer, own RHI, the GS HW backend on it, then packet-level HLE).
+  Its decisions were approved by the user on 2026-10-22.
 
 ## 2026-10-22 - Movies skipped during bring-up
 - `FUN_0021CA70` (from `main`) plays `STINGS.PSS` then `INTRO.PSS` via the movie
@@ -82,19 +78,15 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   returns. For "after" logic, hook the next function the caller invokes.
 
 ## 2026-10-22 - paraLLEl-GS: integrated, but off by default
-- Ported hctp-recomp's paraLLEl-GS backend (runtime/gs/gs_gpu*.{h,cpp}) and hooked
-  it into upstream's GS frontend (raw GIF per path, register writes, IMAGE uploads,
-  readbacks, present at VBlankStart, frames read back into the raylib window).
-- On the dev GPU (GTX 1080 Ti, Pascal) every run hung the GPU > 2 s and Windows
-  reset the display driver (TDR, event 4101); NVIDIA's OpenGL driver then
-  aborts the process (fail-fast code 7 in nvoglv64.dll). Independent of the
-  supersampling rate. Likely the compute rasterizer relies on behaviour Pascal
-  lacks (no independent thread scheduling) or on a content-specific hang.
-- Because the target is *modest* hardware, a compute-heavy rasterizer that
-  doesn't run on a 2017 high-end card is the wrong default. The CPU renderer
-  stays default; `PS2X_GS=gpu` opts in to paraLLEl-GS for newer GPUs.
-- Next: a conventional hardware-rasterized GS backend (GSdx-HW style) behind the
-  existing `GSRasterBackend` interface - broad GPU support, upscaling-friendly.
+- Ported hctp-recomp's paraLLEl-GS backend (runtime/gs/gs_gpu*.{h,cpp}) and hooked it into upstream's GS frontend (raw
+  GIF per path, register writes, IMAGE uploads, readbacks, present at VBlankStart, frames read back for presenting).
+- On the GPU it was first tried on (an older architecture without independent thread scheduling) every run hung the
+  GPU for more than 2 s and the driver reset it, independent of the supersampling rate. Likely the compute rasterizer
+  relies on behaviour that GPU lacks, or on a content-specific hang.
+- A compute-heavy rasterizer that doesn't run everywhere is the wrong default. The CPU renderer stayed the default;
+  `PS2X_GS=gpu` opts in to paraLLEl-GS.
+- Next: a conventional hardware-rasterized GS backend (GSdx-HW style) behind the existing `GSRasterBackend` interface -
+  broad GPU support, upscaling-friendly.
 
 ## 2026-10-23 - Post effects: exact GS emulation at 640x448 first, resolution-aware reads for higher resolutions
 
@@ -109,7 +101,7 @@ emulation at 640x448.
 
 Milestone 3 step 2 draws the HUD natively (docs/NATIVE_RENDERER.md "HUD layer"). Choices:
 - **The game's own Im2D calls still run** and build their GS packets; the renderer takes the HUD's primitives out of
-  the frame by matching them against the Im2D calls of the frame (vertex positions), then draws them at the window's
+  the frame by matching them against the Im2D calls of the frame (vertex positions), then draws them at the output's
   size. Replacing Im2D outright would also need RenderWare's texture cache (VRAM placement, CLUT uploads) and its
   render-state translation reproduced; going through the packets keeps those exact and leaves a switch back
   (`VCS_HUD_NATIVE=0`) at no cost.
@@ -130,7 +122,7 @@ VU clipper. It is reproduced bit-exactly in C++ (game-internals.md 6h); its GIF 
 kicks would, so the picture is the VU's and the cost is close to GPU clipping. GPU clipping stays behind
 `PS2X_HLE_CLIPPED=1`.
 
-## 2026-10-22 - Performance status (i7-7700K)
+## 2026-10-22 - Performance status
 - With GS work discarded (`PS2X_GS=null`) the game now runs at full speed
   (60 VBlanks/s, 15% idle) after two changes: hctp's VU1 throughput mode
   (13 -> 23 VBlanks/s) and batching IOP time (23 -> 60).
@@ -148,7 +140,7 @@ kicks would, so the picture is the VU's and the cost is close to GPU clipping. G
   all of its bytes. Result: 99.97% of VU1 pairs run compiled.
 - Verified with `PS2X_VU1_VERIFY=1`: registers, VU memory and XGKICK packets match
   the accurate interpreter; only cycle counts differ (throughput variant).
-- Frame rate in game (i7-7700K): 11 -> ~35-50 VBlanks/s over this pass
+- Frame rate in game: 11 -> ~35-50 VBlanks/s over this pass
   (compiled VU1, CLUT hash cache, content-keyed textures, upload fast path,
   batched timers). The EE thread is the single saturated thread. Next: VU0
   microprograms 0x0CF8 (sector box clip) and 0x0EB8 (~25% of the EE thread;
@@ -161,11 +153,11 @@ kicks would, so the picture is the VU's and the cost is close to GPU clipping. G
   transcribed pair by pair with the flag latency spelled out, using the same
   per-lane maths as the compiled VU1 code. Registered by code hash.
 - Verification (`PS2X_VU0_VERIFY=1`) first showed 1-ulp differences: the
-  *interpreter* was wrong - /arch:AVX2 let clang fuse `acc + a * b` into FMA
+  *interpreter* was wrong - AVX2 let clang fuse `acc + a * b` into FMA
   (one rounding). The PS2 rounds product and sum separately. The runtime and
   runner now build with -ffp-contract=off; after that, 4.2 million live calls
   matched exactly (VF, VI, ACC, VU0 memory), and compiled VU1 still matches.
-- In game (i7-7700K): ~46-67 VBlanks/s (was 35-50 before, 11 at the start of
+- In game: ~46-67 VBlanks/s (was 35-50 before, 11 at the start of
   the performance work). Remaining top costs: generated game code ~31%, T4
   texture swizzle (WriteP4) ~9%, DMA chain copy (memmove) ~7.5%, HW backend
   recording ~7%, scheduler checkpoints ~4%.
@@ -175,8 +167,8 @@ kicks would, so the picture is the VU's and the cost is close to GPU clipping. G
   and DMA channels 4/7, rather than as a high-level libsd replacement: VCS's
   CDSTREAM.IRX drives libsd directly, and its streaming depends on SPU2 IRQ
   addresses and DMA-complete callbacks, which an HLE layer would have to fake.
-- The mix (48 kHz stereo, one frame per 768 IOP cycles) goes to a raylib audio
-  stream through a ring buffer with an adaptive target fill (60 ms, +30 ms per
+- The mix (48 kHz stereo, one frame per 768 IOP cycles) goes to the host's audio
+  output through a ring buffer with an adaptive target fill (60 ms, +30 ms per
   underrun, max 250 ms). Drift is absorbed by resampling within +-0.5%. A first
   version resampled by up to +-8%: when the buffer ran low the music audibly
   slowed down, which the user heard as "audio slows down with the frame rate".
@@ -198,8 +190,8 @@ The user's choices on the roadmap's open questions:
 - 60 fps: a settings-menu option, off by default (30 fps stays the authentic default). (Superseded 2026-10-30: 60 fps
   with frame-rate independent timing is the default.)
 - IOP retirement (milestone 6): do it.
-- Windows only for now; milestone 9 (portability / distribution) is out of scope until further notice. (Superseded
-  2026-10-30: native Linux, see that entry.)
+- One platform at a time; milestone 9 (portability / distribution) out of scope until further notice. (Superseded
+  2026-10-31: the PS5, see that entry.)
 - Game knowledge goes into docs/game-internals.md (successor of ENGINE.md, each fact with how it was
   found); AGENTS.md is the working contract for agents.
 
@@ -217,12 +209,12 @@ The user's choices on the roadmap's open questions:
   generated code. `PS2X_RENDER_THREAD=0` is the switch back.
 
 ## 2026-10-23 - Profile-guided, ThinLTO build for play; plain build for development
-- `tools/build.py --opt pgo` (ThinLTO + PGO) is what to play and measure with: game code ~20-30% faster
-  (PROGRESS.md milestone 4). The profile comes from an instrumented build (build/pgo-gen) playing tools/bench.py and
-  the reference scenes; it lives in build/pgo (derived from the user's own game, never committed) and is retrained
-  with `--opt pgo --train` after large changes - a stale one still builds, changed functions just lose its benefit.
-- `--opt none` stays the development setting (no ThinLTO relink); the choice is kept in the CMake cache until changed.
-  (2026-10-27: a fresh build directory is now `lto`, with `--quick` for `none` - see that entry.)
+- ThinLTO + PGO (`PS2X_LTO`, `PS2X_PGO`) is what to measure with: game code ~20-30% faster (PROGRESS.md milestone 4).
+  The profile comes from an instrumented build playing the benchmark and the reference scenes; it is derived from the
+  user's own game (never committed) and is retrained after large changes - a stale one still builds, changed functions
+  just lose its benefit. On the PS5, ThinLTO is `tools/ps5.py build --lto` (not measured on a console yet); PGO is not
+  wired up there yet.
+- No LTO stays the development setting (no ThinLTO relink).
 - Calls between recompiled functions got an inline fast path in the runtime header rather than a recompiler change:
   same effect on every call site, no regenerated code, and `PS2X_FAST_DISPATCH=0` switches it off.
 
@@ -315,7 +307,8 @@ Draw-call replay stays the way to remove the remaining copy and flush together.
 Step 4 (FULLY_NATIVE.md) needs to know at the frame kick whether a world / model block still holds the bytes its
 recording was made from, without copying or hashing it (the distinct blocks are ~85% of the marked bytes: a per-frame
 check by content would cost as much as the copy). Chosen: the OS's write watch on guest RAM, folded into per-page
-generations once per kick. Not page protection: the stream thread reads the disc straight into guest RAM, and a kernel
+generations once per kick (the PS5 has no write watch: there guest RAM is not watched and blocks are copied as
+before, FULLY_NATIVE.md 4a). Not page protection: the stream thread reads the disc straight into guest RAM, and a kernel
 write into a protected page fails instead of faulting. Not hooks on the game's streaming / instancing functions: every
 path that writes packet memory would have to be found and kept up. Exact by construction (any write to any of a
 block's pages makes it dirty), checked with a decide-copy-compare mode (2.4M decisions, 0 wrong).
@@ -368,39 +361,20 @@ checkable call for call against the original (`VCS_NATIVE_INFLATE_VERIFY`) - wit
 done as `memcpy`. A faster decoder would stop at other points and leave zlib's state different between calls (the
 final output the same); the ~20 ms an area load costs now did not justify losing the per-call check.
 
-## 2026-10-27 - The optimised build is the default; `--quick` for development
-The user asked for installing to be as easy as possible. A fresh build directory now configures with ThinLTO
-(`PS2X_LTO=THIN`, `--opt lto`), so `python tools/build.py --recompile` from the README gives the game to play;
-`--quick` (= `--opt none`) is the fast-relink build for changing code. Not PGO as the default: training plays the
-rig's card copies (build/rig/saves), which a new checkout does not have, and takes ~30 min more. The choice stays in
-the CMake cache as before (one build directory: switching recompiles the game, and a non-sticky default would make
-every quick build followed by a plain one cost a full rebuild); the build's last line names it so nobody plays a quick
-build by accident. The build also writes `iso=` into the vcs.ini next to vcs.exe when there is none: the exe is a
-windows-subsystem program, so started by a double click without a disc it fails with no visible message.
+## 2026-10-27 - 4:3 screens sit inside the game's frame, not the whole screen
 
-## 2026-10-27 - Full screen is borderless only; test runs never write vcs.ini
-
-Full screen covers the monitor at the desktop's resolution with no display mode change. With a flip-model swapchain
-Windows 10+ presents a window covering the monitor directly, so exclusive mode buys little, while a mode change costs
-seconds per switch, breaks Alt+Tab and moves the other monitors' windows; the game's resolution is the Internal
-resolution setting, not the monitor's mode. Exclusive full screen can come later as a third choice if someone needs a
-lower monitor mode. Hidden test runs read vcs.ini but never rewrite it, so a scripted check (Alt+Enter, the settings
-menu) cannot change the player's settings.
-
-## 2026-10-27 - 4:3 screens sit inside the game's frame, not the window
-
-The user's choice: in a ratio wider than the monitor (32:9 on 16:9) the pause menu stays 4:3 but sits in the game's
-strip between the bars, at the strip's height, rather than over the whole window. Loading screens follow the same rule
-(they are the same kind of frame: no 3D). The intro movies keep the whole window: they play before there is a game
-frame to belong to. The menu switches to 4:3 as soon as it opens rather than after the 3D history runs out.
+The user's choice: in a ratio wider than the TV (32:9 on 16:9) the pause menu stays 4:3 but sits in the game's strip
+between the bars, at the strip's height, rather than over the whole screen. Loading screens follow the same rule (they
+are the same kind of frame: no 3D). The intro movies keep the whole screen: they play before there is a game frame to
+belong to. The menu switches to 4:3 as soon as it opens rather than after the 3D history runs out.
 
 ## 2026-10-27 - Ultrawide: fixed ratios plus Match window, Hor+ between 4:3 and 32:9
 
-The user asked for 21:9 and 32:9. "21:9" monitors are 2.37 (2560x1080) or 2.39 (3440x1440), not 21 / 9 = 2.33. Chosen:
-- The menu's 21:9 is exactly 21 / 9 (the label says what it is), and a Match window choice takes the window's own
-  shape, so every monitor gets a picture without bars; it follows the window each host frame (resizing, full screen).
+The user asked for 21:9 and 32:9. "21:9" displays are 2.37 (2560x1080) or 2.39 (3440x1440), not 21 / 9 = 2.33. Chosen:
+- The menu's 21:9 is exactly 21 / 9 (the label says what it is), and a Match window choice takes the output's own
+  shape (on the PS5 the TV's 16:9), so the picture has no bars.
 - Match window is clamped to 4:3 .. 32:9: narrower than 4:3 would cut the original horizontal view (we only do Hor+),
-  wider than 32:9 is untested (triple screens would need checking: the view passes 140 degrees).
+  wider than 32:9 is untested (the view passes 140 degrees).
 - No separate FOV setting: the game's horizontal FOV is kept for the middle 4:3 and the sides are added.
 
 ## 2026-10-26 - The trainer: the game's script commands, nothing saved, the game's input taken while open
@@ -422,8 +396,8 @@ The user asked for a trainer like RDR2's (docs/TRAINER.md). Chosen:
 The user asked for music, sound effects and voices volume, with the music / effects changes shown in the game's own
 menu. The game has exactly two levels (its pause menu's Music / SFX Volume), so those two settings *are* them rather
 than extra gains on top: one value, two menus. On the PS2 a save carries the levels and a load restores them; here the
-setting wins (every non-menu call of the game's setters gets the player's level), because a PC game keeps its settings
-across saves and the newest save loads at every boot - the save's levels would otherwise undo a change made without
+setting wins (every non-menu call of the game's setters gets the player's level), because the port keeps its settings
+(vcs.ini) across saves and the newest save loads at every boot - the save's levels would otherwise undo a change made without
 saving. The levels are percent of the game's 0..127 (linear, as the game's bars are); a pause-menu step is 16, so the
 setting shows the nearest percent and the game keeps its exact level.
 
@@ -432,23 +406,16 @@ speech) and **removed on the user's decision**: it felt inconsistent, since only
 followed it, while speech in cutscenes and on the radio is mixed into those streams. The code is gone (the driver is
 as before); game-internals.md 9c keeps what was learnt.
 
-## 2026-10-28 - Player settings: bindings in the game layer, the mouse as stick speed, defaults as before
+## 2026-10-28 - Player settings: bindings in the game layer, defaults as before
 
 The user asked for flexible settings players can change. Choices:
 - **Where the bindings live**: in the game layer (src/game/vcs_input.cpp), feeding the runtime's pad backend through a
   reader hook; the runtime keeps its fixed mapping as the reference (`VCS_INPUT_MAP=0`), as the rules want for any
-  replaced path. Injected (control-channel) keys go through the bindings too, so every scripted check exercises them.
-- **Two slots per action**, any key / mouse button / wheel notch, Shift / Ctrl / Alt without a side (one slot holds
-  "Shift" where the old mapping needed two). One key, one control: binding steals it from the other control, and the
-  menu keys can neither take nor lose theirs - a silent double binding was judged more confusing than the steal.
-- **Mouse camera**: the PS2 game has only a stick camera, so the mouse's speed becomes the right stick's tilt (not its
-  distance per frame), which keeps the turn per hand movement the same at any frame rate; the stick's top speed caps
-  flicks. True mouse look would mean writing the camera's angles in the game's memory - later, if the stick feel is
-  not good enough. Off by default (it holds the cursor in the window).
+  replaced path. Injected (control-channel) buttons go through the bindings too, so every scripted check exercises
+  them.
 - **Vibration**: the game's own motor levels (it already shook the pad; the stub dropped them), 100% = as on the PS2.
-- **Defaults**: exactly the old fixed mapping and behaviour (keep running in the background, vsync off as the flip
-  model presented before), so nothing changes for a player who opens no menu. The Authentic preset is the Display /
-  Graphics defaults; presets never touch controls or sound.
+- **Defaults**: exactly the old fixed mapping and behaviour, so nothing changes for a player who opens no menu. The
+  Authentic preset is the Display / Graphics defaults; presets never touch controls or sound.
 - **Volume** squared (the slider's middle is about -12 dB), master after the mix so the game's own levels and the
   SPU2 output stay bit-identical for the checks (`PS2X_AUDIO_DUMP` records before it).
 
@@ -486,53 +453,20 @@ body under a wheel (FUN_003F34F0) and ProcessWheel's rolling resistance act a fi
   then the same in cars / bikes in water and a boat's rudder. Each patch was measured before and after; one that
   changed nothing measurable (the buoyancy's lift cut-off, game-internals.md 4) was taken back out.
 
-## 2026-10-29 - vcs.exe at the top of build/, native by its own defaults (the user's request)
+## 2026-10-29 - Native by its own defaults
 
-- The user found the exe "buried": `build/release/third_party/PS2Recomp/ps2xRuntime/vcs.exe`. The main build tree
-  (build/release) now links it to `build/vcs.exe`, with its DLLs (staged next to the target, so they follow) and
-  `vcs.ini` (CMakeLists.txt, `RUNTIME_OUTPUT_DIRECTORY`). Only that tree: PGO training's build/pgo-gen keeps its exe
-  in its own folder, so the two never write the same file. build.py moves a player's vcs.ini from the old folder and
-  deletes the old exe / pdb, so no stale build is left to start; clean.py never deletes the game files in build/.
-- A double-clicked vcs.exe ran the software GS at ~5 fps: only run.py / scenes.py set `PS2X_GS=hw`, so every test
-  ran a configuration players never got. The launcher now defaults to hw, and the tools no longer set it - they run
-  vcs.exe with its own defaults, as a player does. Every other native path was already on by default (each switch is
-  `=0` to go back to the reference): with no PS2X_* / VCS_* set, gameplay shows gs_draws 0, vu1_programs 0, the
-  native sound driver, the emulated IOP off and the render worker on.
-- The runtime made empty mc0 / mc1 folders in the working directory before loadELF set the card path; the launcher
-  now sets the card folder before the runtime starts.
-
-## 2026-10-29 - Mouse look on foot, driving keys (the user's request)
-
-The user asked for the mouse to move the camera while walking, right click to lock on to peds, and W / S / Space as
-accelerate / brake / handbrake while driving.
-- **Mouse camera on by default** now: the user wants the mouse to steer the camera, and with it off a new player's
-  mouse did nothing but click. It is a control binding, not a change to the game's look or rules, so the
-  "authentic by default" rule does not hold it back; it stays a toggle (Keyboard > Mouse camera).
-- **True mouse look on foot** (the "later" of the 2026-10-28 entry above): the follow camera's heading is written in the
-  game at the pad read, and its source points turned with it - the camera otherwise pulls the heading back to where it
-  stands (game-internals.md 12b). The pitch cannot be written that way (the camera rebuilds it from where it stands), so
-  it goes through the stick's own pitch speed with the game's stick curve undone and the excess over its top speed
-  carried to the next frames: the angle is exact, only very fast vertical flicks arrive a little late. Writing the
-  pitch directly would mean moving the source points up / down and their collision with the world - not worth it for
-  the ~0.1 s it would save on the fastest flicks.
-- Every other camera (vehicles, sniper / first person, lock-on) keeps the stick path: each has its own code, and the
-  stick is what they were made for. The stick path now aims past the game's dead third of the stick (FUN_002842e8),
-  so slow mouse movements turn those cameras too - before, under a third of full speed did nothing.
-- Mouse forward now looks up. The old stick path sent it the other way (the game looks up for a stick pulled back) while
-  the menu said "forward looks up".
-- **Right click** was already R1 (target / lock-on); checked that it locks on with fists and a pistol and that the mouse
-  moving meanwhile does not break the lock. Nothing to change but the check.
-- **Driving keys** are a section of their own with their own key group: a key may be W on foot and Accelerate in a car,
-  which the one-key-one-control rule of the 2026-10-28 entry would have refused. While the player drives (ped +0x480
-  set and state 0x37) the driving bindings apply and the on-foot bindings of the same keys do not (W must not also tilt
-  the stick: on a bike that leans, in a helicopter it pitches). The menu keys stay exclusive across groups. Lean
-  forward / back (bikes, aircraft) moved to Keypad 8 / 5, since W / S no longer do it in a vehicle. The gamepad keeps
-  the game's own layout.
+- The game started without settings ran the software GS at ~5 fps: only the test tools set `PS2X_GS=hw`, so every
+  test ran a configuration players never got. The game now defaults to the HW renderer, and the tools no longer set
+  it - they run the game with its own defaults, as a player does. Every other native path was already on by default
+  (each switch is `=0` to go back to the reference): with no PS2X_* / VCS_* set, gameplay shows gs_draws 0,
+  vu1_programs 0, the native sound driver, the emulated IOP off and the render worker on.
+- The runtime made empty mc0 / mc1 folders in the working directory before loadELF set the card path; the card folder
+  is now set before the runtime starts.
 
 ## 2026-10-30 - The trainer's free camera (the user's request)
 
 The user asked for a free-cam mode in the trainer, and chose: the world keeps running while it flies (the player
-stands), Hide HUD as a switch of its own, on / off from a trainer row and a hotkey (F6, gamepad Back + LB).
+stands), Hide HUD as a switch of its own, on / off from a trainer row and a chord (touchpad + L1).
 - **The camera written after the game's update, not a script camera.** GTA trainers usually move a script camera
   (SET_FIXED_CAMERA_POSITION + POINT_CAMERA_AT_POINT) every frame. Here that would be a script per frame through the
   trainer's queue, a frame late, and only between frames. Instead the free camera writes the active CCam's source /
@@ -547,46 +481,32 @@ stands), Hide HUD as a switch of its own, on / off from a trainer row and a hotk
   was fine with that as the fix): one starts a mission to watch it.
 - **Real time**: the camera moves by the host clock, so its speed is the same at 30 / 60 / 144 fps and under the
   trainer's Game speed (slow-motion shots fly normally).
-- **Fixed keys** for flying (W / A / S / D, E / Q, mouse; the gamepad's sticks and triggers): the game gets none of the
-  input meanwhile, so they cannot clash with its bindings; only the on / off key is a setting. Rebindable flying keys
-  can come later if wanted.
+- **Fixed buttons** for flying (the sticks and triggers, Cross / Circle for speed): the game gets none of the input
+  meanwhile, so they cannot clash with its bindings. Rebindable flying buttons can come later if wanted.
 - **Hide HUD** skips CHud::Draw (the hook vcs_hud.cpp already had, now installed with `VCS_HUD_RW=0` too): radar, clock,
   money, weapon, stars. Text drawn after it (zone names, help, subtitles) stays - hiding that too would mean picking
   which text is the HUD's.
 
-## 2026-10-30 - Native Linux (the user's request); the Steam Deck postponed
+## 2026-10-30 - The Vulkan backend
 
-The user asked for Linux to be as native as Windows, first with Steam Deck support, then (the same day) without it:
-"just have strong support for linux for now". Their choices: a **plain host build** (the distro's own compiler and
-libraries through the same `tools/build.py`; no container, Flatpak or Steam Runtime), tested on their Linux laptop
-(i5 Skylake, HD 520, 7 GB) with the Windows PC kept as the reference. The working list is docs/LINUX.md.
-- **clang only** (19+, for `preserve_none` in PS2_GUEST_CC): the same compiler as clang-cl, so the same code and
-  numerics. GCC would need its own checks of every bit-exact path and lacks preserve_none.
-- **Flags as clang-cl's**, written out: `-march=x86-64-v3 -ffp-contract=off -fno-math-errno`, and `-fno-strict-aliasing`,
-  which clang-cl implies (MSVC compatibility) and plain clang does not - the runtime and generated code read guest memory
-  through casts. No stack protector / CET, as `/GS-`.
-- **Vulkan**, a new RHI backend (`src/rhi/vulkan`), rather than OpenGL or a translation layer: the RHI was shaped for it
-  (immutable pipelines, explicit passes), and it can be checked against D3D11 on the same Windows PC
-  (`-DVCS_RHI_VULKAN=ON`). D3D11 stays the Windows default and the reference. Vulkan 1.3 with dynamic rendering,
-  synchronization2 and push descriptors; volk, VMA and the headers from source (no SDK).
-- **Shaders stay one HLSL source**: glslang (a distro package) compiles them to SPIR-V through `tools/hlsl_spirv.py`.
-  DXC was the plan, but no distro ships it here and a downloaded binary is a tool the user didn't install; glslang
-  handles every shader, and the script fixes the one thing it gets wrong (dual-source output: Location 0 Index 1).
-- **Dear ImGui through the RHI** (`render/ui_renderer.cpp`) for Vulkan instead of `imgui_impl_vulkan`: one pipeline
-  works for every target format the backend draws to (the swapchain's BGRA and the RGBA captures), and it uses only
-  the RHI. D3D11 keeps `imgui_impl_dx11` (the reference stays as it was).
-- **Hidden test runs make no swapchain** on Vulkan: the back buffer is a texture. A FIFO present to a hidden Wayland
-  window can wait forever, and tests take screenshots off-screen anyway.
+- **clang only** (19+): one compiler, so the same code and numerics on every path checked bit-exact. Flags written out:
+  `-ffp-contract=off -fno-math-errno -fno-strict-aliasing` (the runtime and generated code read guest memory through
+  casts), no stack protector / CET.
+- **Vulkan**, a new RHI backend (`src/rhi/vulkan`), rather than a translation layer: the RHI was shaped for it
+  (immutable pipelines, explicit passes). Vulkan 1.3 with dynamic rendering, synchronization2 and push descriptors;
+  volk, VMA and the headers from source (no SDK). On the PS5 it runs on the console's RADV (2026-10-31).
+- **Shaders stay one HLSL source**: glslang compiles them to SPIR-V through `tools/hlsl_spirv.py`. glslang handles
+  every shader, and the script fixes the one thing it gets wrong (dual-source output: Location 0 Index 1).
+- **Dear ImGui through the RHI** (`render/ui_renderer.cpp`) instead of `imgui_impl_vulkan`: one pipeline works for
+  every target format the backend draws to (the swapchain's BGRA and the RGBA captures), and it uses only the RHI.
+- **No display, no swapchain**: the back buffer is a texture; test runs take screenshots off-screen anyway.
 - **A null backend** (`VCS_RHI=null`) to bring up and check the CPU side without the renderer.
-- The Windows-only debug tools got Linux versions where cheap (crash handler on signals, a SIGPROF sampling profiler);
-  `perf` / `gdb` cover the rest. The write watch has no Linux equivalent yet (correct without it, slower); whether it is
-  worth userfaultfd is to be measured first.
 
 ## 2026-10-30 - Frame-rate independent timing shows every frame it renders
 
-The user asked for more performance on both platforms and chose this first (with specialised GS pixel shaders next).
-With frame-rate independent timing the game thread now queues one frame and the window shows every frame rendered
-(PERFORMANCE.md 17: 30 -> 76 shown fps on the GPU-bound laptop). Original timing keeps the old pacing on purpose: there
+The user asked for more performance and chose this first (with specialised GS pixel shaders next).
+With frame-rate independent timing the game thread now queues one frame and every frame rendered is shown
+(PERFORMANCE.md 17: 30 -> 76 shown fps on a GPU-bound test machine). Original timing keeps the old pacing on purpose: there
 game time is counted in frames, and holding the game thread back would slow the game down when the GPU can't keep up,
 where showing fewer frames keeps it at speed.
 
@@ -599,27 +519,6 @@ enough (the frame lead) to be ready just in time on input read just before. 60 c
 limit the one frame waiting stays (dropping it cut 9 ms but cost 4% of the frames and visible judder): smoothness kept
 there.
 
-## 2026-10-30 - A launcher for releases (docs/LAUNCHER.md)
-
-The user asked for a launcher, as other recomps have, to be included in releases: locate the game, build, launch;
-Windows first; the Python scripts must stay usable on their own.
-- **Distribution stays source-only.** A release is the source plus `VCSLauncher.exe`, python.org's embeddable Python
-  and `deps/` (the open-source libraries CMake would download) - no game code: the game is still recompiled and built on
-  the player's PC. `tools/release.py` checks every file before zipping (no disc images, no MIPS ELF, nothing from
-  generated/ or build/) and refuses the release otherwise.
-- **The launcher is a front end over `tools/`**, never a second pipeline: it runs `doctor.py`, `build.py`,
-  `setup_vs.py`, `backup.py`, `report.py`, `update.py`, `rip_disc.py` and reads their `@vcs {json}` events. A player
-  with the launcher and a developer with a terminal run the same code.
-- **SDL3 + Dear ImGui** for its window (already dependencies, the look of the in-game menus, portable later), its own
-  CMake project so CI builds it without a disc; one static exe.
-- **Bundled Python and libraries**: Visual Studio's compiler is the only thing left to install, and the launcher runs
-  Microsoft's installer for it (checked for Microsoft's signature first; one UAC prompt). The release builds with no
-  git and no internet (`FETCHCONTENT_FULLY_DISCONNECTED`). Cost: an 82 MB zip instead of a few MB.
-  From that zip in an empty folder the game built in 8 min 42 s on the dev PC (the README said ~15 min on a laptop).
-- **Updates only when asked** (or at start when the player turns it on): the check is one request to GitHub's API.
-- The launcher's own settings live in `build/launcher.ini`; the game's stay in `vcs.ini` (F2 in the game).
-- Not done: code signing (SmartScreen warns about an unknown publisher; documented in the README).
-
 ## 2026-10-30 - 60 fps with frame-rate independent timing by default
 
 The user asked for frame-rate independent timing and 60 fps to be the default for every player from their first
@@ -630,34 +529,10 @@ default, the rest still opt-in.
   60 fps independent timing; the menu's help says so.
 - vcs.ini only keeps values that differ from the defaults, so players who never touched the frame rate get 60 fps on
   their next build too; anyone who chose a frame rate keeps it.
-- Test runs keep the old timing: hidden runs (toolchain.test_window) pin `VCS_TIMING=0` and `VCS_FPS=30` unless the
-  test sets them, so the regression baselines, the bench numbers and the checks mean what they did. controls_check
-  passes an empty `VCS_TIMING` (not pinned, ignored by the game) because it tests the presets. The PGO profile is still
-  trained at original timing (bench / scenes); retrain at the new default if the gap shows.
-- Checked 2026-10-30 in a hidden run: reset -> timing 1, 60; Authentic -> 0, 30; Widescreen, light -> 1, 60; a test
-  run -> 0, 30.
-
-## 2026-10-31 - CMake and Ninja from anywhere, else downloaded
-
-A player's build stopped at *Configuring the build* with a traceback: with Visual Studio Build Tools only, cmake is
-in Visual Studio's own folders, which the checks looked at and Windows didn't (it starts a child's program from the
-launcher's PATH, not the one given to it). The user asked for CMake to be found whatever the setup.
-- **Search, then download.** `toolchain.build_tools` takes the first CMake >= 3.21 and Ninja >= 1.10 that run (each
-  one is started: `cmake -E capabilities`, `ninja --version`): the build environment's PATH first (what the player
-  chose), then every Visual Studio install's bundled copy (vswhere -all and the default folders), Kitware's
-  installer's folder, winget, scoop, Chocolatey, pip (this Python and the user's), CLion, Qt, the Android SDK and
-  MSYS2's native environments (its POSIX ones refused: msys-2.0.dll / cygwin1.dll beside the program). With none,
-  Kitware's / Ninja's own builds are downloaded once into `build/build-tools` - pinned versions (CMake 4.4.5, Ninja
-  1.13.2: what the dev machine builds with) and SHA-256 hashes in toolchain.py, so a changed file is refused.
-- **Versions are checked, not just names**: VS 2019 bundles CMake 3.20, below the project's 3.21 - found on the dev
-  machine itself. A too-old one is skipped with a line saying why.
-- **Always by full path**: `resolve` gives cmake its path, `CMAKE_MAKE_PROGRAM` gives CMake Ninja's. The chosen folders
-  are not put on PATH, which would let a folder like Chocolatey's or pip's shadow clang-cl. A build tree whose CMake or
-  Ninja has gone (`stale_tools`) is set up again with today's.
-- `VCS_CMAKE` / `VCS_NINJA` (full paths) choose by hand, checked like the rest. doctor never reports CMake as missing
-  any more: it says the build will download it; only a failed download stops a build (`no_cmake`).
-- Not bundled into the release zip (55 MB more for the rare player with no CMake and no internet): Visual Studio's
-  installer, which the launcher runs, brings CMake anyway.
+- Test runs keep the old timing (`VCS_TIMING=0`, `VCS_FPS=30` unless the test sets them), so the regression baselines,
+  the bench numbers and the checks mean what they did. The PGO profile is still trained at original timing; retrain
+  at the new default if the gap shows.
+- Checked 2026-10-30: reset -> timing 1, 60; Authentic -> 0, 30; Widescreen, light -> 1, 60; a test run -> 0, 30.
 
 ## 2026-10-31 - Release zips dated a day before the commit; the build repairs future dates
 
@@ -667,39 +542,38 @@ every file came out up to 13.5 h in the future, newer than any build.ninja CMake
 - **release.py** dates every file the commit's time minus a day, as UTC (`zip_time`; `SOURCE_DATE_EPOCH` when set):
   in the past in every zone, and one date for the whole zip. Not each file's own time made safe: nothing in the
   build needs those times, and one date makes the zip depend only on its content.
-- **build.py / recompile.py** set files dated in the future to now before CMake runs, with a line saying so, rather
-  than stopping with a message: the player can't fix the zip, and touching a file's date loses nothing. doctor only
-  reports them (it changes nothing). A build tree that already looped recovers without being deleted (checked).
-- Ninja's "still dirty" still gets its own failure (`file_dates`) for what the repair can't reach - a clock that is
-  wrong, a read-only file.
+- **recompile.py** sets files dated in the future to now before CMake runs, with a line saying so, rather than
+  stopping with a message: the player can't fix the zip, and touching a file's date loses nothing. A build tree that
+  already looped recovers without being deleted (checked).
 
 ## 2026-10-31 - The PS5: a native homebrew app on the gta4-ps5 port's toolchain
 
-The user asked for the PC port to become a native PS5 game, with the gta4-ps5 port (GTA IV on jailbroken PS5s) as a
+The user asked for the port to become a native PS5 game, with the gta4-ps5 port (GTA IV on jailbroken PS5s) as a
 reference. docs/PS5.md has the whole of it.
-- **The same game, a third platform.** Not a fork: one source, `VCS_PS5` (set by `ps5/cmake/ps5-toolchain.cmake`) and
-  `__PROSPERO__` where the code differs. The Linux build's Vulkan renderer draws on the PS5 too; only the platform
-  layer (`platform_ps5.cpp`), the start-up pieces (`ps5/runtime`), the link and the packaging are the PS5's.
+- **One source**: `VCS_PS5` (set by `ps5/cmake/ps5-toolchain.cmake`) and `__PROSPERO__` where the code differs. The
+  Vulkan renderer draws on the PS5's RADV; the platform layer (`platform_ps5.cpp`), the start-up pieces
+  (`ps5/runtime`), the link and the packaging are the PS5's.
 - **The toolchain gta4-ps5 shipped with**, not a new one: ps5-plume-triangle's payload SDK fork, PS5_Mesa's RADV,
   start-up code, libc.prx and ps5-native-tool - the pieces proven on consoles. The player builds the triangle once;
   nothing of it is copied here except what had to change (the emutls fix and `stat` wrapper, from gta4-ps5, GPL-3.0).
   The recipe gta4-ps5 runs as a shell script is Python here (`tools/ps5_link.py`, `tools/ps5.py`: the repository's
-  rule), and the link is CMake's link rule, so a rebuild relinks as on a PC.
-- **The host's clang 19+**, the PC builds' compiler, not a bundled one: the same generated code and numerics.
-- **No SDL**: SDL3 has no backend for the PS5's display, pad and audio (gta4-ps5 builds SDL with dummy drivers and
-  writes its own anyway); platform.h was already free of SDL, so a second implementation is the smaller thing.
-- **The disc is read with pread**: a file mapping of a disc image froze the console in gta4-ps5. On a PC the mapping
-  stays (`VCS_ISO_PREAD=1` takes the pread path there, to check it).
-- **The touchpad click is Select**: the Create button is the system's. The PC's pad chords (Back + Start, Back + R1,
-  Back + L1) then open the menus with no new code.
+  rule), and the link is CMake's link rule, so a rebuild relinks only what changed.
+- **The build machine's clang 19+**, not a bundled one: the compiler the generated code and its numerics were checked
+  with.
+- **Its own platform layer**: no portable library has a backend for the PS5's display, pad and audio (gta4-ps5 writes
+  its own too); platform.h is the seam, so `platform_ps5.cpp` implements it on the console's libraries.
+- **The disc is read with pread**: a file mapping of a disc image froze the console in gta4-ps5.
+- **The touchpad click is Select**: the Create button is the system's. The pad chords (Select + Start / R1 / L1) then
+  open the menus with no new code: touchpad + Options / R1 / L1.
 - **The platform's calling convention for guest functions**: clang refuses `preserve_none` for the PS5 target. 3-7% of
-  game-thread time on the PC (PERFORMANCE.md 8); the PS5's Zen 2 has the headroom for 60 fps, to be measured.
+  game-thread time as measured before the PS5 build (PERFORMANCE.md 8); the PS5's Zen 2 has the headroom for 60 fps,
+  to be measured.
 - **Authentic defaults stay**: 4:3, the original resolution scaled to the TV, 60 fps. *TV output* (4K / 1440p / 1080p)
-  replaces *Window mode*; the presets work as on a PC.
+  is the display setting; the presets are unchanged.
 - **Checked without a console**: the whole game compiles and links for the PS5 (stand-in generated code, an empty RADV
-  archive), the packaging runs (a stand-in converter), the pread reads are byte-identical to the mapping, the Linux
-  build is unchanged. Running the triangle's setup scripts, RADV's build and ps5-native-tool was not possible where it
-  was written; the first console run is the next step (docs/PS5.md's checklist).
+  archive), the packaging runs (a stand-in converter), the pread reads are byte-identical to a mapping of the same
+  image. Running the triangle's setup scripts, RADV's build and ps5-native-tool was not possible where it was written;
+  the first console run is the next step (docs/PS5.md's checklist).
 - **A homebrew title id**, PPSA94590 (high in the PPSA range like gta4-ps5's PPSA94004; ...590 for SLUS-21590),
   `--title-id` for another. The home-screen icon is drawn by tools/ps5.py: no artwork of the game's.
 
@@ -714,8 +588,7 @@ ready-to-run build for a release.
 - **Found and changed on the way**: the pad is opened for the initial user, else the one in front, any logged-in user,
   last the system user (ps5-plume-triangle's fallback); a trigger whose button bit is set reads all the way (plume
   reads both); the trainer's and settings menu's hints name the DualSense's buttons on the PS5.
-- **The menu chords keep their buttons from the game**, on every platform: a chord starts with Back (Select; the PS5's
-  touchpad), and the game saw it - and the chord's Start / R1 / L1 - before the menu blocked the pad from the next host
+- **The menu chords keep their buttons from the game**: a chord starts with Select (the touchpad), and the game saw it - and the chord's Start / R1 / L1 - before the menu blocked the pad from the next host
   frame (the view changed, the game paused behind the settings). Back now reaches the game after 150 ms on its own or
   as a 100 ms press when let go sooner (one game frame at 30 fps sees it); while it is held Start / L1 / R1 do not.
   Select a little later is the cost; holding Select with those buttons is not something the game asks for.
