@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the PNG replacement loader and an installed PCSX2 pack (hidden, isolated card).
 
-    python tools/texture_check.py [OUT] [--pack SLUS-21590] [--loader-only]
+    python tools/texture_check.py [OUT] [--pack textures/SLUS-21590] [--loader-only]
 
 Loader checks need a C++20 compiler, no game/disc: legacy flags, palette identity, recursive indexing,
 non-power-of-two PNG decoding, unchanged alpha, asynchronous deduplication/reload, corrupt-file fallback,
@@ -227,7 +227,7 @@ def game_check(out, pack):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('out', nargs='?', default='build/texture_check/latest')
-    ap.add_argument('--pack', default='SLUS-21590')
+    ap.add_argument('--pack', default='textures/SLUS-21590')
     ap.add_argument('--loader-only', action='store_true')
     ap.add_argument('--validate-pack', action='store_true', help='decode every full-texture PNG in --pack without running the game')
     a = ap.parse_args()

@@ -6,8 +6,13 @@ The original disc textures remain the default and the fallback for every missing
 Put an unpacked pack in one of these locations:
 
 - `textures/SLUS-21590/replacements/` beside `vcs.exe`.
+- For the source checkout's default `build/vcs.exe`, `textures/SLUS-21590/replacements/` in the checkout root.
 - `SLUS-21590/replacements/` beside `vcs.exe`.
 - For the source checkout's default `build/vcs.exe`, `SLUS-21590/replacements/` in the checkout root also works.
+
+The `textures/` locations take priority over the older layout. An explicit pack path in the environment or
+`vcs.ini` takes priority over automatic discovery. `tools/texture_check.py` defaults to the checkout's
+`textures/SLUS-21590` folder.
 
 Subdirectories under `replacements/` are scanned too. Keep the PCSX2 filenames. The loader supports full-texture
 base-level PNG replacements, with or without a palette hash, including old filenames carrying the TCC flag.
