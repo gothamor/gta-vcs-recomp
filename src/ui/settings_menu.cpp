@@ -217,6 +217,12 @@ namespace ui
             ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight() + style.CellPadding.y * 2.0f);
             ImGui::TableNextColumn();
             const float top = ImGui::GetCursorScreenPos().y - style.CellPadding.y;
+            const bool nativeSelected = label && !locked &&
+                ((ImGui::IsWindowHovered() && ImGui::GetMousePos().y >= top &&
+                  ImGui::GetMousePos().y < top + ImGui::GetFrameHeight() + style.CellPadding.y * 2) ||
+                 g_navFocused == s.key);
+            if (nativeSelected)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
             ImGui::AlignTextToFramePadding();
             if (label)
                 label(s.label);
@@ -335,6 +341,8 @@ namespace ui
                 settings::set(s.key, v != 0 ? 0 : 1);
             if (g_helpKey == s.key)
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImGuiCol_Header, hovered ? 0.6f : 0.35f));
+            if (nativeSelected)
+                ImGui::PopStyleColor();
         }
     }
 
@@ -378,6 +386,7 @@ namespace ui
         ImGui::EndChild();
         if (!focused.empty())
             g_helpKey = focused;
+        g_navFocused = focused;
         if (!g_refusal.empty())
             ImGui::TextWrapped("%s", g_refusal.c_str());
         else if (const settings::Spec *s = findSpec(g_helpKey))

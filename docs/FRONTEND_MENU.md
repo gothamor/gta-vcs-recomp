@@ -33,10 +33,11 @@ The presentation is intentionally isolated in `src/ui/frontend_menu.cpp`. When t
 `db7fe6220bfa99e-400b40212c17643-00006213.png`, the menu uses its original purple palm artwork and black footer. When
 it also contains `3ece7b57667e958b-f663bcea3bca5023-00006213.png`, labels are drawn directly from the game's proportional
 font atlas, including its original outlines, rather than approximated with an OS font. Missing artwork or font files
-fall back independently to the dark-purple background or Dear ImGui font. The `Game` heading uses the original script
-atlas (`87ad416320b92240-59ab262d214c676c-00006214.png`) and the footer uses the actual thick block atlas
-(`64e22c1534c81341-d49e156c51372d1c-00006214.png`). Each face has its own measured glyph rectangles; the script and
-block masks expand PS2 alpha (0x80 opaque) to PNG/UI alpha (0xff opaque). The initial page omits **Back**, because it has no parent; it
+fall back independently to the dark-purple background or Dear ImGui font. Both `Game` and `Options` use the original
+script atlas (`87ad416320b92240-59ab262d214c676c-00006214.png`), at a larger size and on a shared baseline. The footer
+uses the proportional atlas's lowercase letters. Both loaded font masks expand PS2 alpha (0x80 opaque) to PNG/UI alpha
+(0xff opaque), including the main menu face. Hovered/focused actions and native setting rows use muted yellow
+(190,181,108), while titles remain pink and idle entries cyan. The initial page omits **Back**, because it has no parent; it
 appears in the Start Game submenu and pause actions. **Display > HUD** also governs this host menu: Keep 4:3 uses a
 centred 4:3 canvas, while Screen edges and Stretch use the full display. Styling remains separate from boot/save logic.
 
@@ -47,6 +48,6 @@ uses the same original-menu route checked by `tools/saves.py`; injected controll
 Load/Delete screen, where the player takes over.
 `frontend options [page]` opens the native category list or a registry page for isolated captures; `menu <page>` and F2
 still open the standalone view. A custom ImGui bitmap-font loader samples the game atlas for native widgets, dropdowns,
-numeric values, help and buttons as well as headings. Lowercase input renders with uppercase game glyphs; digits and
+numeric values, help and buttons as well as headings. Lowercase input uses the actual lowercase glyphs; digits and
 punctuation have their own atlas mappings. The standalone F2 font is unchanged. Native Back lives in the footer
 (clickable, or Escape/controller Triangle/B); no extra Back button occupies the category list or setting pages.

@@ -700,7 +700,7 @@ boundaries 0,16,31,45. The back marker `<` is x 69..82, y 24..46. These rectangl
 atlas at its original logical scale and comparing the glyph sequence to the game's pause screen.
 Two `00006214` replacements provide other menu faces: `87ad416320b92240` is the script atlas used for
 the `Game` heading (512-grid padded bounds G 232..259/69..117, a 1..23/205..220, m 274..305/205..220,
-e 93..111/205..220), and `64e22c1534c81341` is the heavier block atlas now used for the footer. Measured from the
+e 93..111/205..220), and `64e22c1534c81341` is the heavier block atlas previously used for the footer. Measured from the
 alpha masks, rather than the RGB padding: block a-g start at x 246,284,322,360,398,436,474 in y 94..142;
 h-t at 0,38,56,94,132,162,220,258,296,334,372,410,448 in y 174..222; u-z at 0,39,82,148,186,224 in
 y 254..302. These two masks use 0x80 for opaque, requiring alpha doubling when drawn directly by Dear ImGui.
@@ -709,8 +709,14 @@ Found by sampling each 4096x4096 replacement's alpha at 512-grid coordinates and
 The proportional `3ece7b57667e958b` atlas also holds 0-5 in logical y 0..23 (x boundaries
 164,178,190,204,218,232,246) and 6-9 in y 24..46 (14-unit cells from x 0). Punctuation precedes 0 on the first row
 and A on the second. Measured from white/alpha column runs at the original 256-unit scale. The host Options bitmap
-font uses those rectangles for setting values and help; lowercase text maps to uppercase glyphs without changing the
-underlying setting or key-binding strings.
+font uses those rectangles for setting values and help. Lowercase a-n occupy y 70..93, with x boundaries
+100,112,124,136,148,160,170,182,195,200,207,219,224,240,253; o-z occupy y 94..117 with boundaries
+0,12,24,36,46,58,70,83,95,112,124,136,147. The proportional atlas also has maximum alpha 0x80, confirmed by sampling
+its decoded PNG, so it needs the same alpha expansion as the script atlas. `Options` uses script O/p/t/i/o/n/s,
+measured in the 512-grid at 40..69/128..163, 352..384/204..238, 452..481/190..221, 187..203/195..220,
+332..348/205..220, 306..331/205..220, 432..451/205..220. G's descender extends below its baseline: aligning its
+bottom made the capital sit too high. The host now positions both script titles on baseline 36 and renders at 0.85
+times the 512-grid glyph size (previously 0.5). Verified with native Game and Audio/Options screenshots.
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 
