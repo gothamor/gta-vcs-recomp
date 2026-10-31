@@ -101,6 +101,7 @@ namespace present
         rhi::DeviceDesc desc;
         desc.backend = chooseBackend();
         desc.nativeWindow = platform::nativeWindow();
+        desc.vulkan.getInstanceProcAddr = platform::vulkanGetInstanceProcAddr;
         desc.vulkan.instanceExtensions = platform::vulkanInstanceExtensions;
         desc.vulkan.createSurface = platform::vulkanCreateSurface;
         desc.offscreen = platform::windowHidden();

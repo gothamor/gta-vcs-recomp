@@ -10,7 +10,11 @@
 #include "runtime/ps2_write_watch.h"
 
 #include <algorithm>
+#if defined(USE_SSE2NEON)
+#include "sse2neon.h"
+#else
 #include <immintrin.h>
+#endif
 #include <atomic>
 #include <chrono>
 #include <cstdio>

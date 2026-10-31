@@ -55,6 +55,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
 #endif
 
 #if defined(PS2X_PGO_GEN)
@@ -119,6 +121,17 @@ namespace
         const DWORD n = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
         if (n > 0 && n < MAX_PATH)
             return fs::path(buffer).parent_path();
+#elif defined(__APPLE__)
+        uint32_t size = 0;
+        _NSGetExecutablePath(nullptr, &size);
+        std::vector<char> buffer(size);
+        if (_NSGetExecutablePath(buffer.data(), &size) == 0)
+        {
+            std::error_code ec;
+            const fs::path self = fs::canonical(buffer.data(), ec);
+            if (!ec)
+                return self.parent_path();
+        }
 #elif defined(__linux__)
         std::error_code ec;
         const fs::path self = fs::read_symlink("/proc/self/exe", ec);
@@ -136,6 +149,9 @@ namespace
 #if defined(_WIN32)
         if (const char *local = std::getenv("LOCALAPPDATA"))
             return fs::path(local) / "VCSRecomp";
+#elif defined(__APPLE__)
+        if (const char *home = std::getenv("HOME"))
+            return fs::path(home) / "Library/Application Support/VCSRecomp";
 #endif
         if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg == '/') // absolute only (the XDG spec)
             return fs::path(xdg) / "VCSRecomp";
