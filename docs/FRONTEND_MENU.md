@@ -46,5 +46,7 @@ Hidden runs can select the startup path through `frontend new|load|delete` on th
 uses the same original-menu route checked by `tools/saves.py`; injected controller reports stop after reaching the
 Load/Delete screen, where the player takes over.
 `frontend options [page]` opens the native category list or a registry page for isolated captures; `menu <page>` and F2
-still open the standalone view. Setting value widgets and explanatory help retain the readable ImGui font; page headings
-and labels use the game's atlas.
+still open the standalone view. A custom ImGui bitmap-font loader samples the game atlas for native widgets, dropdowns,
+numeric values, help and buttons as well as headings. Lowercase input renders with uppercase game glyphs; digits and
+punctuation have their own atlas mappings. The standalone F2 font is unchanged. Native Back lives in the footer
+(clickable, or Escape/controller Triangle/B); no extra Back button occupies the category list or setting pages.

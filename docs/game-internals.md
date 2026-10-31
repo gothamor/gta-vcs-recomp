@@ -706,6 +706,11 @@ h-t at 0,38,56,94,132,162,220,258,296,334,372,410,448 in y 174..222; u-z at 0,39
 y 254..302. These two masks use 0x80 for opaque, requiring alpha doubling when drawn directly by Dear ImGui.
 The heading positions the lowercase letters on the capital's baseline instead of aligning their cropped tops.
 Found by sampling each 4096x4096 replacement's alpha at 512-grid coordinates and verified in an isolated menu capture.
+The proportional `3ece7b57667e958b` atlas also holds 0-5 in logical y 0..23 (x boundaries
+164,178,190,204,218,232,246) and 6-9 in y 24..46 (14-unit cells from x 0). Punctuation precedes 0 on the first row
+and A on the second. Measured from white/alpha column runs at the original 256-unit scale. The host Options bitmap
+font uses those rectangles for setting values and help; lowercase text maps to uppercase glyphs without changing the
+underlying setting or key-binding strings.
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 

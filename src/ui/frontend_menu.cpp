@@ -6,6 +6,7 @@
 #include "ui/settings_menu.h"
 
 #include "imgui.h"
+#include "imgui_internal.h"
 
 // ImGui 1.92 implements this user-texture path (used by both the D3D11 and RHI backends) but still leaves its
 // experimental declaration out of imgui.h.
@@ -22,6 +23,7 @@ namespace ImGui
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -49,6 +51,7 @@ namespace ui::frontend
         bool g_quitConfirm = false;
         std::atomic<bool> g_pauseDismissed{false};
         ImTextureData *g_background = nullptr, *g_font = nullptr, *g_scriptFont = nullptr, *g_promptFont = nullptr;
+        ImFont *g_optionsFont = nullptr;
         bool g_backgroundTried = false;
         bool g_sawBootLoading = false;
 
@@ -133,6 +136,46 @@ namespace ui::frontend
 
         bool glyph(unsigned char c, Glyph &out)
         {
+            if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+            static constexpr float digits[] = {164, 178, 190, 204, 218, 232, 246};
+            if (c >= '0' && c <= '5')
+            {
+                const unsigned i = c - '0';
+                out = {digits[i], 0, digits[i + 1], 23};
+                return true;
+            }
+            if (c >= '6' && c <= '9')
+            {
+                const unsigned i = c - '6';
+                out = {i * 14.0f, 24, (i + 1) * 14.0f, 46};
+                return true;
+            }
+            switch (c)
+            {
+            case '!': out = {7, 0, 12, 23}; return true;
+            case '"': out = {13, 0, 21, 23}; return true;
+            case '#': out = {22, 0, 35, 23}; return true;
+            case '$': out = {35, 0, 49, 23}; return true;
+            case '%': out = {51, 0, 67, 23}; return true;
+            case '&': out = {70, 0, 86, 23}; return true;
+            case '\'': out = {87, 0, 91, 23}; return true;
+            case '(': out = {92, 0, 99, 23}; return true;
+            case ')': out = {99, 0, 107, 23}; return true;
+            case '*': out = {108, 0, 118, 23}; return true;
+            case '+': out = {120, 0, 131, 23}; return true;
+            case ',': out = {133, 0, 139, 23}; return true;
+            case '-': case '_': out = {141, 0, 148, 23}; return true;
+            case '.': out = {148, 0, 154, 23}; return true;
+            case '/': case '\\': out = {155, 0, 164, 23}; return true;
+            case ':': out = {56, 24, 62, 46}; return true;
+            case ';': out = {62, 24, 69, 46}; return true;
+            case '=': out = {84, 24, 97, 46}; return true;
+            case '>': out = {99, 24, 112, 46}; return true;
+            case '?': out = {112, 24, 125, 46}; return true;
+            case '@': out = {124, 24, 143, 46}; return true;
+            case '[': out = {92, 0, 99, 23}; return true;
+            case ']': out = {99, 0, 107, 23}; return true;
+            }
             static constexpr float ag[] = {144, 158, 173, 188, 203, 217, 230, 246};
             static constexpr float hw[] = {0, 15, 22, 34, 49, 61, 82, 98, 114, 128, 144, 159, 173, 188, 204, 220, 242};
             static constexpr float xz[] = {0, 16, 31, 45};
@@ -160,6 +203,66 @@ namespace ui::frontend
                 return true;
             }
             return false;
+        }
+
+        ImFont *optionsFont()
+        {
+            if (g_optionsFont || !g_font)
+                return g_optionsFont;
+            // Supply bitmap glyphs to ImGui itself so widgets, popups, wrapped help and numeric editing all use
+            // the game's texture. F2 continues to use ImGui's default font.
+            static ImFontLoader loader;
+            loader.Name = "VCS texture atlas";
+            loader.FontSrcInit = [](ImFontAtlas *, ImFontConfig *) { return true; };
+            loader.FontSrcContainsGlyph = [](ImFontAtlas *, ImFontConfig *, ImWchar c) {
+                Glyph g;
+                return c == ' ' || (c < 128 && glyph(static_cast<unsigned char>(c), g));
+            };
+            loader.FontBakedInit = [](ImFontAtlas *, ImFontConfig *, ImFontBaked *b, void *) {
+                b->Ascent = b->Size;
+                b->Descent = 0;
+                return true;
+            };
+            loader.FontBakedLoadGlyph = [](ImFontAtlas *atlas, ImFontConfig *src, ImFontBaked *b, void *,
+                                           ImWchar c, ImFontGlyph *out, float *advance) {
+                Glyph g{};
+                if (c != ' ' && (c >= 128 || !glyph(static_cast<unsigned char>(c), g))) return false;
+                const float scale = b->Size / 23.0f;
+                const float width = c == ' ' ? 7.0f : g.x1 - g.x0 + 1.0f;
+                if (advance) { *advance = width * scale; return true; }
+                out->Codepoint = c;
+                out->AdvanceX = width * scale;
+                out->Visible = c != ' ';
+                if (c == ' ') return true;
+                const float density = b->RasterizerDensity * src->RasterizerDensity;
+                const int w = std::max(1, static_cast<int>(std::ceil((g.x1 - g.x0) * scale * density)));
+                const int h = std::max(1, static_cast<int>(std::ceil((g.y1 - g.y0) * scale * density)));
+                const ImFontAtlasRectId id = ImFontAtlasPackAddRect(atlas, w, h);
+                if (id == ImFontAtlasRectId_Invalid) return false;
+                ImTextureRect *rect = ImFontAtlasPackGetRect(atlas, id);
+                std::vector<unsigned char> pixels(static_cast<size_t>(w) * h * 4);
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                    {
+                        const int sx = std::clamp(static_cast<int>((g.x0 + (x + 0.5f) / w * (g.x1 - g.x0)) * g_font->Width / 256), 0, g_font->Width - 1);
+                        const int sy = std::clamp(static_cast<int>((g.y0 + (y + 0.5f) / h * (g.y1 - g.y0)) * g_font->Height / 256), 0, g_font->Height - 1);
+                        std::memcpy(pixels.data() + (static_cast<size_t>(y) * w + x) * 4,
+                                    g_font->Pixels + (static_cast<size_t>(sy) * g_font->Width + sx) * 4, 4);
+                    }
+                out->X0 = out->Y0 = 0;
+                out->X1 = w / density;
+                out->Y1 = h / density;
+                out->Colored = false;
+                out->PackId = id;
+                ImFontAtlasBakedSetFontGlyphBitmap(atlas, b, src, out, rect, pixels.data(), ImTextureFormat_RGBA32, w * 4);
+                return true;
+            };
+            ImFontConfig config;
+            config.FontLoader = &loader;
+            config.SizePixels = 20;
+            ImStrncpy(config.Name, "VCS menu texture", IM_ARRAYSIZE(config.Name));
+            g_optionsFont = ImGui::GetIO().Fonts->AddFont(&config);
+            return g_optionsFont;
         }
 
         float glyphAdvance(unsigned char c, float scale)
@@ -299,7 +402,7 @@ namespace ui::frontend
             }
         }
 
-        void footer(const MenuCanvas &canvas, bool showBack)
+        bool footer(const MenuCanvas &canvas, bool showBack)
         {
             ImDrawList *draw = ImGui::GetWindowDrawList();
             const float scale = canvas.scale * 0.7f;
@@ -318,6 +421,12 @@ namespace ui::frontend
             const float width = promptWidth(move, scale, canvas.xScale);
             drawPrompt(draw, ImVec2(canvas.pos.x + canvas.size.x - width - 26.0f * canvas.scale,
                                     y + 25.0f * canvas.scale), move, kWhite, scale, canvas.xScale);
+            if (showBack)
+            {
+                ImGui::SetCursorScreenPos(ImVec2(left, y));
+                return ImGui::InvisibleButton("footer back", ImVec2(100 * canvas.scale, 23 * canvas.scale));
+            }
+            return false;
         }
 
         void drawBackground(ImDrawList *draw, const ImGuiViewport &vp, const MenuCanvas &canvas)
@@ -378,6 +487,9 @@ namespace ui::frontend
             drawText(ImGui::GetWindowDrawList(), ImVec2(canvas.pos.x + 28 * scale, canvas.pos.y + 24 * scale),
                      "OPTIONS", kPink, scale, nullptr, canvas.xScale);
             const auto pages = settings::pages();
+            ImFont *font = optionsFont();
+            if (font)
+                ImGui::PushFont(font, std::max(12.0f, 15.0f * scale));
             ImGui::SetCursorPos(ImVec2(canvas.pos.x - vp.WorkPos.x + 28 * scale,
                                        canvas.pos.y - vp.WorkPos.y + 75 * scale));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.07f, 0.83f, 0.84f, 1));
@@ -421,32 +533,30 @@ namespace ui::frontend
                         if (menuItem(upper.c_str(), area.x * 0.8f, scale * 0.85f, canvas.xScale))
                             g_optionsPage = static_cast<int>(i);
                     }
-                    if (menuItem("BACK", area.x * 0.8f, scale * 0.85f, canvas.xScale) ||
-                        ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+                    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+                        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false))
                         g_optionsOpen = false;
                 }
                 else if (g_optionsPage < static_cast<int>(pages.size()))
                 {
-                    if (ImGui::Button("< Back to options"))
+                    label(pages[g_optionsPage]);
+                    if (drawEmbeddedSettings(pages[g_optionsPage], label))
                     {
                         resetEmbeddedSettings();
                         g_optionsPage = -1;
-                    }
-                    else
-                    {
-                        ImGui::SameLine();
-                        label(pages[g_optionsPage]);
-                        if (drawEmbeddedSettings(pages[g_optionsPage], label))
-                        {
-                            resetEmbeddedSettings();
-                            g_optionsPage = -1;
-                        }
                     }
                 }
             }
             ImGui::EndChild();
             ImGui::PopStyleColor(6);
-            footer(canvas, true);
+            if (font)
+                ImGui::PopFont();
+            if (footer(canvas, true))
+            {
+                resetEmbeddedSettings();
+                if (g_optionsPage >= 0) g_optionsPage = -1;
+                else g_optionsOpen = false;
+            }
         }
     }
 

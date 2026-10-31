@@ -353,7 +353,8 @@ namespace ui
     {
         const bool popup = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         const bool back = g_capturing.empty() && !popup && !g_popupWasOpen &&
-            (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false));
+            (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false));
         std::string focused;
         if (ImGui::BeginChild("embedded rows", ImVec2(0, -95), ImGuiChildFlags_NavFlattened))
             for (const std::string &section : sections(page))
