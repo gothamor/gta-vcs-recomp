@@ -11,9 +11,8 @@ Status: in development. See [docs/PROGRESS.md](docs/PROGRESS.md) for what works,
 for the Linux build in detail.
 
 **PS5 (jailbroken consoles, homebrew):** the same game builds as a native PS5 app too - the Vulkan renderer on the
-console's RADV driver, the DualSense, 4K output - on a Linux PC with the toolchain of the gta4-ps5 port
-(ps5-plume-triangle). Not run on a console yet: [docs/PS5.md](docs/PS5.md) has the build, the install and the
-first-run checklist (`python3 tools/ps5.py check`, then `build`).
+console's RADV driver, the DualSense as the DualShock 2, 4K output - on a Linux PC from your own disc, with the toolchain
+of the gta4-ps5 port (ps5-plume-triangle). See [PS5](#ps5-homebrew) below; not run on a console yet.
 
 ## Install on Windows: the launcher (easiest)
 
@@ -181,6 +180,44 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
   read by the game's own save code.
 - Every setting kept in `vcs.ini` next to the game.
 
+## PS5 (homebrew)
+
+For jailbroken PS5 consoles that run homebrew from `/data/homebrew/`. As on a PC, the game is built from your own disc
+(no game code is ever downloaded or released), on a **Linux PC** (Ubuntu 24.04, or WSL 2 on Windows): the release's
+`VCS-Recomp-<version>-ps5.zip` or a git clone.
+
+1. The game's code from your disc (step 3 above, on Linux; `python3 tools/build.py --check-deps` lists the packages):
+   ```bash
+   python3 tools/build.py --recompile "Grand Theft Auto - Vice City Stories (USA).iso"
+   ```
+2. The PS5 toolchain, once - [ps5-plume-triangle](https://github.com/Nazky/ps5-plume-triangle): the PS5 payload SDK,
+   its Vulkan driver (RADV) and the tools that make `eboot.bin`. This fetches it next to the source folder and builds
+   it (it says which packages are missing first):
+   ```bash
+   python3 tools/ps5.py setup
+   ```
+3. Check, then build the app:
+   ```bash
+   python3 tools/ps5.py check
+   python3 tools/ps5.py build --zip        # -> build/ps5/app/PPSA94590/ and build/ps5/PPSA94590.zip
+   ```
+4. Put it on the PS5 - over an FTP payload (`--port 1337` for etaHEN's), with your disc image:
+   ```bash
+   python3 tools/ps5.py deploy --host <your PS5's IP> --iso "Grand Theft Auto - Vice City Stories (USA).iso"
+   ```
+   or unzip `build/ps5/PPSA94590.zip` into `/data/homebrew/` with a USB drive, and put your `.iso` in
+   `/data/homebrew/PPSA94590/disc/` (or on a USB drive as `*Vice City Stories*.iso`).
+5. Start it from the home screen.
+
+The app you build holds the game's code made from your disc: it is for your console, never to share.
+
+**Controls** - the DualSense is the DualShock 2, button for button: Cross, Circle, Square, Triangle, L1 / R1, L2 / R2
+(the triggers), L3 / R3, both sticks and the d-pad as on the PS2; **Options is Start** and **the touchpad click is
+Select** (the Create button belongs to the system). Hold the touchpad and press **Options** for the settings menu,
+**R1** for the trainer, **L1** for the free camera (the game sees neither button). In the menus Cross selects and
+Circle backs out. Everything else - the TV output (4K / 1440p / 1080p), saves (`userdata/` in the app's folder), the log
+for bug reports (`logs/vcs.log`), what is tested - is in [docs/PS5.md](docs/PS5.md).
+
 ## Updating
 
 - **A release** (the launcher): *Check for updates*, then *Update now*: it puts the new release in place (keeping
@@ -223,6 +260,9 @@ to do next; `python tools/report.py` zips the logs for a bug report (no game fil
 | `python tools/build_dir.py [set PATH \| reset]` | build in another folder (another drive...) instead of `build\`; every tool follows it |
 | `python tools/backup.py create\|list\|restore` | the memory card backed up / restored (order and times kept) |
 | `python tools/release.py [--worktree]` | the Windows release zip (source, launcher, embeddable Python, `deps/`), self-tested; refuses game files, and uncommitted changes without `--worktree` |
+| `python3 tools/release.py --ps5` | the PS5 build kit zip (source + `PS5-README.txt`), through the same game-file guard |
+| `python3 tools/ps5.py setup\|check\|build\|deploy` | the PS5 build (above; [docs/PS5.md](docs/PS5.md)) |
+| `python3 tools/ps5.py compile-check --sdk DIR` / `padtest` | the PS5 build compiled without a disc (CI); the DualSense path checked on Linux |
 | `python tools/deps.py fetch` | the libraries the build downloads, into `deps/` (offline builds) |
 | `python tools/run.py 0` | run the game with its output logged to `build/run/run.log` (`run.py 60 name`: stop after 60 s, log to `name.log`) |
 | `python tools/gamectl.py` | control a running game: screenshots, key presses, perf numbers, quit |

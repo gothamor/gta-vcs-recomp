@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Make the Windows release zip: the source, the launcher, Python and the libraries - everything but the game.
+And with --ps5 the PS5 build kit: the source with the PS5 quick start (docs/PS5.md) - the game itself is built from the
+player's own disc on a Linux PC, as on Windows.
 
     python tools/release.py [--ref TAG | --worktree] [--version X] [--launcher EXE] [--out DIR]
+    python tools/release.py --ps5 [--ref TAG | --worktree] [--version X] [--out DIR]
 
     --ref TAG       the source at a tag or commit (git archive; default HEAD)
     --worktree      the working tree as it is, uncommitted files included (tracked + untracked, not ignored) - tests
@@ -9,7 +12,8 @@
     --launcher EXE  a VCSLauncher.exe built elsewhere (CI); default: python tools/build.py --launcher
     --python X.Y.Z  the embeddable Python to bundle (default: the version running this)
 
-Writes build/dist/VCS-Recomp-<version>-windows.zip and its .sha256. Inside, one folder:
+Writes build/dist/VCS-Recomp-<version>-windows.zip (--ps5: -ps5.zip, the source and PS5-README.txt) and its .sha256.
+Inside the Windows zip, one folder:
     VCSLauncher.exe, VERSION, RELEASE.json (version, repository, file list for tools/update.py),
     python/ (python.org's embeddable CPython), deps/ (tools/deps.py fetch), THIRD_PARTY_LICENSES.txt, the source.
 Never game code or data (DECISIONS.md, source-only): before zipping, every file is checked - no disc images, no
@@ -168,6 +172,36 @@ def self_test(stage):
     shutil.rmtree(os.path.join(stage, "build"), ignore_errors=True)
 
 
+PS5_README = """{title}
+{underline}
+
+For jailbroken PS5 consoles that run homebrew from /data/homebrew/. This zip is the port's source: no game code or
+data is in it, and none ever is. You build the game from your own disc (USA, SLUS-21590) on a Linux PC (Ubuntu 24.04
+or WSL 2), and the result - an app folder - goes to your PS5.
+
+1. The game's code from your disc (packages: python3 tools/build.py --check-deps):
+       python3 tools/build.py --recompile "Grand Theft Auto - Vice City Stories (USA).iso"
+2. The PS5 toolchain, once (ps5-plume-triangle: the PS5 payload SDK, its Vulkan driver RADV, the eboot tools):
+       python3 tools/ps5.py setup
+3. Check, then build:
+       python3 tools/ps5.py check
+       python3 tools/ps5.py build --zip          -> build/ps5/app/PPSA94590/ and build/ps5/PPSA94590.zip
+4. To the console, over an FTP payload (etaHEN: --port 1337):
+       python3 tools/ps5.py deploy --host <PS5 IP> --iso "<your>.iso"
+   or unzip build/ps5/PPSA94590.zip into /data/homebrew/ (USB), with your .iso in PPSA94590/disc/ or on a USB drive.
+5. Start it from the PS5's home screen.
+
+Controls (the DualSense is the DualShock 2, button for button):
+   Cross / Circle / Square / Triangle, L1 / R1, L2 / R2 (the triggers), L3 / R3, both sticks, the d-pad: as on the PS2
+   Options = Start          touchpad click = Select (the Create button belongs to the system)
+   touchpad + Options = the settings menu      touchpad + R1 = the trainer      touchpad + L1 = the free camera
+   In the menus: Cross selects, Circle backs out, L1 / R1 change pages.
+
+The app folder you build holds the game's code made from your disc: copy it to your own console, never publish it.
+Everything else - what is tested, the first-run checklist, how it works - is in docs/PS5.md.
+"""
+
+
 def zip_time(ref, worktree):
     """The one date every file in the zip carries. Zip dates are a wall-clock time with no time zone: the extractor's
     zone reads them, so a file packed at 23:44 in Adelaide came out 13.5 h in the future in Brazil, and Ninja re-ran
@@ -198,6 +232,7 @@ def main():
     ap.add_argument("--python", default="%d.%d.%d" % sys.version_info[:3])
     ap.add_argument("--allow-dirty", action="store_true", help="package --ref even with uncommitted changes")
     ap.add_argument("--out", default=DIST)
+    ap.add_argument("--ps5", action="store_true", help="the PS5 build kit: the source and PS5-README.txt")
     a = ap.parse_args()
 
     ref = a.ref or "HEAD"
@@ -227,7 +262,7 @@ def main():
         tc.fail("the tag says %s, VERSION says %s: bump VERSION (and commit) before tagging" % (tag_version, repo_version),
                 "release_version")
     version = a.version or tag_version or repo_version or "0.0.0-dev"
-    name = "VCS-Recomp-%s-windows" % version
+    name = "VCS-Recomp-%s-%s" % (version, "ps5" if a.ps5 else "windows")
     stage = os.path.join(DIST, name)
     if os.path.isdir(stage):
         shutil.rmtree(stage, onerror=lambda f, p, _: (os.chmod(p, 0o666), f(p)))
@@ -237,13 +272,20 @@ def main():
     copy_source(stage, ref, a.worktree)
     with open(os.path.join(stage, "VERSION"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
-    launcher = a.launcher or build_launcher()
-    shutil.copy2(launcher, os.path.join(stage, "VCSLauncher.exe"))
-    print("[release] python %s (embeddable)" % a.python)
-    bundle_python(stage, a.python)
-    print("[release] libraries (deps/)")
-    bundle_deps(stage)
-    licenses(stage)
+    if a.ps5:
+        # the PS5 builder works on Linux with its own Python, and needs the internet anyway (ps5-plume-triangle's
+        # setup downloads the SDK and Mesa): no launcher, no bundled Python or libraries
+        with open(os.path.join(stage, "PS5-README.txt"), "w", encoding="utf-8") as f:
+            title = "GTA: Vice City Stories - native PS5 port, build kit %s" % version
+            f.write(PS5_README.format(title=title, underline="=" * len(title)))
+    else:
+        launcher = a.launcher or build_launcher()
+        shutil.copy2(launcher, os.path.join(stage, "VCSLauncher.exe"))
+        print("[release] python %s (embeddable)" % a.python)
+        bundle_python(stage, a.python)
+        print("[release] libraries (deps/)")
+        bundle_deps(stage)
+        licenses(stage)
 
     files = sorted(os.path.relpath(os.path.join(d, f), stage).replace(os.sep, "/")
                    for d, _, fs in os.walk(stage) for f in fs)
@@ -252,7 +294,13 @@ def main():
         json.dump({"version": version, "repository": repository(), "commit": commit, "files": files + ["RELEASE.json"]},
                   f, indent=0)
     guard(stage)
-    self_test(stage)
+    if a.ps5:
+        # its tools answer from the kit itself (Python 3, standard library only)
+        for tool in ("ps5.py", "build.py", "recompile.py"):
+            if subprocess.run([sys.executable, os.path.join(stage, "tools", tool), "--help"], capture_output=True).returncode:
+                tc.fail("the kit's tools/%s does not start: nothing was written" % tool, "release_selftest")
+    else:
+        self_test(stage)
 
     os.makedirs(a.out, exist_ok=True)
     out = os.path.join(a.out, name + ".zip")

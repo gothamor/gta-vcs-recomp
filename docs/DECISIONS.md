@@ -702,3 +702,26 @@ reference. docs/PS5.md has the whole of it.
   was written; the first console run is the next step (docs/PS5.md's checklist).
 - **A homebrew title id**, PPSA94590 (high in the PPSA range like gta4-ps5's PPSA94004; ...590 for SLUS-21590),
   `--title-id` for another. The home-screen icon is drawn by tools/ps5.py: no artwork of the game's.
+
+## 2026-10-31 - The DualSense audited; menu chords keep their buttons from the game; the PS5 release is a build kit
+
+The user asked to make sure the PS5 controller works and is mapped as on the PS2, then for a compiled, zipped,
+ready-to-run build for a release.
+- **The mapping is the DualShock 2's, button for button** (the binding table in `vcs_input.cpp` was already positional;
+  the game reads analog mode only - buttons and sticks, no pressure bytes). Options is Start, the touchpad is Select.
+  `tools/ps5.py padtest` (`ps5/tests/padtest.cpp`) now checks the whole path with the real platform layer and
+  bindings and the console's functions mocked: 62 checks.
+- **Found and changed on the way**: the pad is opened for the initial user, else the one in front, any logged-in user,
+  last the system user (ps5-plume-triangle's fallback); a trigger whose button bit is set reads all the way (plume
+  reads both); the trainer's and settings menu's hints name the DualSense's buttons on the PS5.
+- **The menu chords keep their buttons from the game**, on every platform: a chord starts with Back (Select; the PS5's
+  touchpad), and the game saw it - and the chord's Start / R1 / L1 - before the menu blocked the pad from the next host
+  frame (the view changed, the game paused behind the settings). Back now reaches the game after 150 ms on its own or
+  as a 100 ms press when let go sooner (one game frame at 30 fps sees it); while it is held Start / L1 / R1 do not.
+  Select a little later is the cost; holding Select with those buttons is not something the game asks for.
+- **No ready-to-run PS5 zip for a release**: the eboot is the game recompiled - its code made from the disc - which the
+  project never distributes (2026-10-21: source only), and there was no disc here to build it from anyway. The PS5
+  release asset is the build kit (`release.py --ps5`: the source with PS5-README.txt, through the same game-file
+  guard); `tools/ps5.py setup` fetches and builds the toolchain, and `build --zip` gives the player the app folder
+  zipped for their own console, with a line saying it is not to be published.
+- VERSION 0.0.3 for that release.

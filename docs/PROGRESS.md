@@ -698,6 +698,11 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
 - [x] Checked here: every library and object compiles for the PS5 and the game links (stand-in generated code, an
       empty RADV archive); the packaging (a stand-in converter, padding path included); pread reads byte-identical to
       the mapping (ASan / UBSan); the Linux build and its start-up messages unchanged.
+- [x] The DualSense audited (2026-10-31): the DualShock 2's mapping button for button, `tools/ps5.py padtest` (62
+      checks through the real platform layer and bindings); pad open fallbacks, trigger bits, the menu chords kept from
+      the game (all platforms), DualSense names in the menus' hints.
+- [x] `tools/ps5.py setup` (ps5-plume-triangle pinned and built), `build --zip`, `release.py --ps5` (the build kit -
+      no game code: DECISIONS.md 2026-10-31); VERSION 0.0.3.
 - [ ] The first run on a console (docs/PS5.md's checklist); FFmpeg for the PS5 built and the movies checked; frame
       rate there; ThinLTO; 120 Hz / VRR; DualSense extras; the control channel on the LAN.
 

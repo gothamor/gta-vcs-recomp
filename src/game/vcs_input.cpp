@@ -220,10 +220,52 @@ namespace vcs::input
             }
         }
 
-        bool padSource(int source, float trigger)
+        // ---- The menu chords (ui/: Back + Start the settings, Back + R1 the trainer, Back + L1 the free camera) --------
+        // Back is the PS2's Select (on the PS5 the touchpad), and a chord starts with it: neither it nor the chord's
+        // second button may reach the game on the way (Select would change the view, Start pause behind the menu - the
+        // menu blocks the pad only from the host frame that opens it). So Back reaches the game once it has been held
+        // kChordGrace on its own, or as a short press when it is let go sooner; while it is held, Start / L1 / R1 do
+        // not, and a hold that saw one of them is a chord to the end. The game reads the pad on its own thread only.
+        using Clock = std::chrono::steady_clock;
+        constexpr auto kChordGrace = std::chrono::milliseconds(150);
+        constexpr auto kSelectTap = std::chrono::milliseconds(100); // > 2 game frames at 30 fps: one read sees it
+        struct ChordGuard
+        {
+            Clock::time_point backSince{}; // Back went down (epoch: it is up)
+            bool chord = false;            // Start, L1 or R1 went down during this hold
+            Clock::time_point tapUntil{};  // a quick Back press played out as Select until then
+        } g_chord;
+
+        std::array<bool, GAMEPAD_BUTTON_COUNT> gameButtons(Clock::time_point now)
+        {
+            std::array<bool, GAMEPAD_BUTTON_COUNT> b{};
+            for (int i = 0; i < GAMEPAD_BUTTON_COUNT; ++i)
+                b[i] = gamepadButton(static_cast<GamepadButton>(i));
+            if (b[GAMEPAD_BACK])
+            {
+                if (g_chord.backSince == Clock::time_point{})
+                {
+                    g_chord.backSince = now;
+                    g_chord.chord = false;
+                }
+                g_chord.chord = g_chord.chord || b[GAMEPAD_START] || b[GAMEPAD_LEFT_SHOULDER] || b[GAMEPAD_RIGHT_SHOULDER];
+                b[GAMEPAD_BACK] = !g_chord.chord && now - g_chord.backSince >= kChordGrace;
+                b[GAMEPAD_START] = b[GAMEPAD_LEFT_SHOULDER] = b[GAMEPAD_RIGHT_SHOULDER] = false;
+            }
+            else
+            {
+                if (g_chord.backSince != Clock::time_point{} && !g_chord.chord && now - g_chord.backSince < kChordGrace)
+                    g_chord.tapUntil = now + kSelectTap;
+                g_chord.backSince = {};
+                b[GAMEPAD_BACK] = now < g_chord.tapUntil;
+            }
+            return b;
+        }
+
+        bool padSource(int source, float trigger, const std::array<bool, GAMEPAD_BUTTON_COUNT> &buttons)
         {
             if (source >= 0 && source < GAMEPAD_BUTTON_COUNT)
-                return gamepadButton(static_cast<GamepadButton>(source));
+                return buttons[source];
             if (source == kPadLT)
                 return gamepadAxis(AXIS_LEFT_TRIGGER) > trigger;
             if (source == kPadRT)
@@ -301,11 +343,13 @@ namespace vcs::input
             const bool physical = ps2control::physicalInputOn();
             // the free camera has the controls (and the mouse, takeFreeCameraInput): the game gets a pad left alone
             const bool freeCamera = freecam::flying();
+            const auto now = Clock::now();
 
             if (physical && gamepadConnected() && !freeCamera)
             {
+                const auto pad = gameButtons(now);
                 for (size_t i = 0; i < kControlCount; ++i)
-                    if (kControls[i].target == Target::Button && padSource(m.pad[i], m.trigger))
+                    if (kControls[i].target == Target::Button && padSource(m.pad[i], m.trigger, pad))
                         buttons |= kControls[i].mask;
                 lx = gamepadAxis(AXIS_LEFT_X);
                 ly = gamepadAxis(AXIS_LEFT_Y);
@@ -367,7 +411,6 @@ namespace vcs::input
 
             // the mouse camera, on top of the right stick: worked out once per game frame (the game reads the pad three
             // times a frame; the frame's other reads repeat the deflection)
-            const auto now = std::chrono::steady_clock::now();
             const float dt = g_mouse.last.time_since_epoch().count() ? std::chrono::duration<float>(now - g_mouse.last).count() : 0.0f;
             const uint32_t frame = g_rdram ? rd32(kFrameCounter) : 0;
             if (freeCamera)

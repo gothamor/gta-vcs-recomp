@@ -39,6 +39,11 @@ folders (`generated/`, `build/`, the Ghidra project, memory cards), content (a M
 at sector 16, anything over 200 MB) - and stops without writing the zip if one matches. Checked with planted files of
 each kind.
 
+**The PS5 build kit** (`release.py --ps5`, docs/PS5.md): `VCS-Recomp-<version>-ps5.zip`, the same source with
+`PS5-README.txt` - no launcher, Python or `deps/` (the PS5 build runs on Linux and downloads its toolchain anyway) -
+through the same guard; instead of the launcher's self-test, the kit's `tools/ps5.py`, `build.py` and `recompile.py`
+must start. There is no ready-to-run PS5 app to release: its eboot is the game recompiled from the player's disc.
+
 **The launcher and the scripts must match.** The launcher is built from the working tree; `--ref` (default HEAD)
 packages a commit. With uncommitted changes the two differ - a release made that way (2026-10-30) had the new launcher
 next to the last commit's `tools/`, without `doctor.py`, and the launcher showed "build tools missing" because its check

@@ -40,6 +40,11 @@ extern "C"
     int sceUserServiceInitialize(void *params);
     int sceUserServiceGetInitialUser(int32_t *userId);
     int sceUserServiceGetForegroundUser(int32_t *userId);
+    struct SceUserServiceLoginUserIdList
+    {
+        int32_t userId[4];
+    };
+    int sceUserServiceGetLoginUserIdList(SceUserServiceLoginUserIdList *list);
 
     int scePadInit(void);
     int scePadOpen(int32_t userId, int32_t type, int32_t index, const void *param);
@@ -145,9 +150,12 @@ namespace platform
             uint8_t l2, r2;                       // 0..255
             uint8_t rest[246];
         };
+        // the button bits as ps5-plume-triangle verified them on a console (its README's ScePadData table)
         constexpr uint32_t kPadL3 = 0x2, kPadR3 = 0x4, kPadOptions = 0x8, kPadUp = 0x10, kPadRight = 0x20, kPadDown = 0x40,
-                           kPadLeft = 0x80, kPadL1 = 0x400, kPadR1 = 0x800, kPadTriangle = 0x1000, kPadCircle = 0x2000,
-                           kPadCross = 0x4000, kPadSquare = 0x8000, kPadTouchpad = 0x100000;
+                           kPadLeft = 0x80, kPadL2 = 0x100, kPadR2 = 0x200, kPadL1 = 0x400, kPadR1 = 0x800,
+                           kPadTriangle = 0x1000, kPadCircle = 0x2000, kPadCross = 0x4000, kPadSquare = 0x8000,
+                           kPadTouchpad = 0x100000;
+        constexpr int32_t kSystemUser = 0xFF;
 
         // sound
         std::atomic<bool> g_audioRunning{false};
@@ -156,6 +164,16 @@ namespace platform
         AudioFill g_audioFill = nullptr;
         constexpr uint32_t kAudioRate = 48000, kAudioFrames = 256;
 
+        // The handle for `user`'s controller: scePadOpen, or the one opened before (0x80920004: already opened).
+        int32_t padFor(int32_t user, int32_t type)
+        {
+            const int32_t handle = scePadOpen(user, type, 0, nullptr);
+            return handle >= 0 ? handle : scePadGetHandle(user, type, 0);
+        }
+
+        // The controller of the user who started the game, else the one in front, else any logged-in user's; last the
+        // system user's (ps5-plume-triangle's fallback when no user's pad opens). Tried again once a second: a
+        // controller can be switched on later.
         void openPad()
         {
             if (g_pad >= 0)
@@ -163,24 +181,32 @@ namespace platform
             const uint64_t now = nowNs();
             if (now < g_padRetryNs)
                 return;
-            g_padRetryNs = now + 1000000000ull; // a controller can be switched on later: try once a second
-            if (g_user == kNoUser)
-            {
-                int32_t user = kNoUser;
-                if (sceUserServiceGetInitialUser(&user) != 0 || user < 0)
-                    if (sceUserServiceGetForegroundUser(&user) != 0)
-                        user = kNoUser;
-                g_user = user;
-            }
-            if (g_user == kNoUser)
-                return;
-            int32_t handle = scePadOpen(g_user, 0, 0, nullptr);
-            if (handle < 0)
-                handle = scePadGetHandle(g_user, 0, 0); // opened before (0x80920004: already opened)
+            g_padRetryNs = now + 1000000000ull;
+            std::vector<int32_t> users;
+            int32_t user = kNoUser;
+            if (sceUserServiceGetInitialUser(&user) == 0 && user >= 0)
+                users.push_back(user);
+            if (sceUserServiceGetForegroundUser(&user) == 0 && user >= 0)
+                users.push_back(user);
+            SceUserServiceLoginUserIdList list{{kNoUser, kNoUser, kNoUser, kNoUser}};
+            if (sceUserServiceGetLoginUserIdList(&list) == 0)
+                for (int32_t u : list.userId)
+                    if (u >= 0 && u != kSystemUser)
+                        users.push_back(u);
+            int32_t handle = -1;
+            for (int32_t u : users)
+                if ((handle = padFor(u, 0)) >= 0)
+                {
+                    g_user = u;
+                    break;
+                }
+            if (handle < 0 && (handle = padFor(kSystemUser, 0x10)) >= 0)
+                g_user = kSystemUser;
             if (handle < 0)
             {
                 if (!g_padLogged)
-                    std::fprintf(stderr, "[platform] no controller yet (scePadOpen 0x%08x)\n", static_cast<uint32_t>(handle));
+                    std::fprintf(stderr, "[platform] no controller yet (%zu users, scePadOpen 0x%08x)\n", users.size(),
+                                 static_cast<uint32_t>(handle));
                 g_padLogged = true;
                 return;
             }
@@ -232,8 +258,9 @@ namespace platform
             g_padAxes[AXIS_LEFT_Y].store(ok ? stick(d.leftY) : 0.0f, std::memory_order_relaxed);
             g_padAxes[AXIS_RIGHT_X].store(ok ? stick(d.rightX) : 0.0f, std::memory_order_relaxed);
             g_padAxes[AXIS_RIGHT_Y].store(ok ? stick(d.rightY) : 0.0f, std::memory_order_relaxed);
-            g_padAxes[AXIS_LEFT_TRIGGER].store(ok ? d.l2 / 255.0f : 0.0f, std::memory_order_relaxed);
-            g_padAxes[AXIS_RIGHT_TRIGGER].store(ok ? d.r2 / 255.0f : 0.0f, std::memory_order_relaxed);
+            // the triggers' travel, or all the way when their button bit says pressed (plume reads both)
+            g_padAxes[AXIS_LEFT_TRIGGER].store(ok ? ((b & kPadL2) ? 1.0f : d.l2 / 255.0f) : 0.0f, std::memory_order_relaxed);
+            g_padAxes[AXIS_RIGHT_TRIGGER].store(ok ? ((b & kPadR2) ? 1.0f : d.r2 / 255.0f) : 0.0f, std::memory_order_relaxed);
 
             // vibration: sent on a change, and renewed while it lasts
             const uint32_t rumble = g_rumbleWanted.load(std::memory_order_relaxed);
@@ -659,7 +686,7 @@ namespace platform
             return false;
         }
         sceAudioOutInit(); // (already initialized: fine)
-        constexpr int32_t kSystemUser = 0xFF, kMainPort = 0;
+        constexpr int32_t kMainPort = 0;
         constexpr uint32_t kS16Stereo = 1;
         g_audioPort = sceAudioOutOpen(kSystemUser, kMainPort, 0, kAudioFrames, kAudioRate, kS16Stereo);
         if (g_audioPort < 0)

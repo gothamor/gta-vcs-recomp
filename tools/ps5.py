@@ -1,12 +1,14 @@
 """The PS5 build (docs/PS5.md): the game cross-compiled for a jailbroken PS5 and packaged as a homebrew app folder,
 on a Linux PC (WSL works). Standard library only.
 
+    python3 tools/ps5.py setup                      ps5-plume-triangle fetched (pinned) and built once, next to this folder
     python3 tools/ps5.py check                      what is there, what is missing, and how to get it
     python3 tools/ps5.py build [--triangle DIR]     build/ps5 (CMake, Ninja) -> build/ps5/app/<title id>/
-    python3 tools/ps5.py package                    the app folder again from build/ps5/vcs.elf
+    python3 tools/ps5.py package [--zip]            the app folder again from build/ps5/vcs.elf (--zip: also zipped)
     python3 tools/ps5.py ffmpeg                     FFmpeg for the PS5 (the movies) into build/ps5/ffmpeg; then build
     python3 tools/ps5.py deploy --host <PS5 IP>     the app folder to /data/homebrew/<title id> over FTP [--iso F]
     python3 tools/ps5.py compile-check --sdk DIR    the PS5 build compiled without a disc or console (CI)
+    python3 tools/ps5.py padtest [--tree DIR]       the DualSense path checked on Linux (ps5/tests/padtest.cpp)
 
 What it needs (check says what is missing):
 - generated/: the game recompiled from your disc, once, on the PC: python3 tools/build.py --recompile <iso> (or
@@ -35,6 +37,7 @@ import sys
 import tarfile
 import time
 import urllib.request
+import zipfile
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -46,6 +49,14 @@ ELF = os.path.join(PS5_BUILD, "vcs.elf")
 FFMPEG_PREFIX = os.path.join(PS5_BUILD, "ffmpeg")
 TOOLCHAIN_FILE = os.path.join(tc.ROOT, "ps5", "cmake", "ps5-toolchain.cmake")
 GENERATED = os.path.join(tc.ROOT, "generated", "ee", "register_functions.cpp")
+
+# ps5-plume-triangle, pinned (tools/ps5.py setup): the commit this port was written and link-checked against
+TRIANGLE_REPO = "https://github.com/Nazky/ps5-plume-triangle"
+TRIANGLE_COMMIT = "d54d9adb084bc038023ec4d8bbd8a4ba23f5880d"
+# what its `make` needs (its README; the Debian / Ubuntu package for each)
+TRIANGLE_NEEDS = [("git", "git"), ("make", "make"), ("wget", "wget"), ("unzip", "unzip"), ("xz", "xz-utils"),
+                  ("rsync", "rsync"), ("meson", "meson"), ("ninja", "ninja-build"), ("glslangValidator", "glslang-tools"),
+                  ("bison", "bison"), ("flex", "flex"), ("gcc", "gcc"), ("g++", "g++"), ("curl", "curl")]
 
 DEFAULT_TITLE_ID = "PPSA94590"  # a homebrew id (high PPSA range, ...590 for SLUS-21590): --title-id for another
 TITLE_NAME = "GTA: Vice City Stories"
@@ -104,6 +115,51 @@ def ps5_clang(env):
     if clang and clangxx and tc.clang_version(clang) >= tc.MIN_CLANG:
         return clang, clangxx
     return None, None
+
+
+# ---- setup -----------------------------------------------------------------------------------------------------
+def cmd_setup(args):
+    """ps5-plume-triangle at the pinned commit, next to this folder (or --triangle), and its `make` once: the PS5 payload
+    SDK fork, RADV, the start-up code, libc.prx and ps5-native-tool (its tools/ scripts download and build them)."""
+    if platform.system() != "Linux":
+        tc.fail("the PS5 build runs on Linux (or WSL 2)")
+    missing = [(tool, pkg) for tool, pkg in TRIANGLE_NEEDS if not shutil.which(tool)]
+    try:
+        import mako, ply, yaml  # noqa: F401 (Mesa's code generators; the triangle installs them with pip when missing)
+    except ImportError:
+        missing.append(("python3 mako / ply / yaml", "python3-mako python3-ply python3-yaml"))
+    if missing:
+        print("[ps5] missing: " + ", ".join(t for t, _ in missing))
+        print("[ps5] on Debian / Ubuntu: sudo apt install " + " ".join(sorted({p for _, p in missing})))
+        tc.fail("install the packages above, then run setup again", "ps5_setup_packages")
+    dest = os.path.abspath(args.triangle or os.path.join(os.path.dirname(tc.ROOT), "ps5-plume-triangle"))
+    if not os.path.isdir(os.path.join(dest, ".git")):
+        print("[ps5] cloning %s into %s" % (TRIANGLE_REPO, dest))
+        if subprocess.run(["git", "clone", TRIANGLE_REPO, dest]).returncode != 0:
+            tc.fail("git clone failed")
+    head = subprocess.run(["git", "-C", dest, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    if head != TRIANGLE_COMMIT and not args.keep_commit:
+        print("[ps5] ps5-plume-triangle at %s (pinned)" % TRIANGLE_COMMIT[:12])
+        subprocess.run(["git", "-C", dest, "fetch", "origin", TRIANGLE_COMMIT])
+        if subprocess.run(["git", "-C", dest, "checkout", "--detach", TRIANGLE_COMMIT]).returncode != 0:
+            tc.fail("could not check out %s in %s (local changes? --keep-commit keeps its own)" % (TRIANGLE_COMMIT, dest))
+    state = load_state()
+    state["triangle"] = dest
+    save_state(state)
+    if args.clone_only:
+        print("[ps5] ok: %s (not built: --clone-only)" % dest)
+        return
+    env = dict(os.environ)
+    clang = shutil.which("clang", path=tc.build_env().get("PATH"))
+    if clang:
+        env.setdefault("PS5_CLANG", clang)  # (its scripts take clang from PATH otherwise)
+    print("[ps5] building ps5-plume-triangle (make: the SDK, RADV, the start-up code; the first time takes a while)")
+    log = os.path.join(PS5_BUILD, "triangle.log")
+    os.makedirs(PS5_BUILD, exist_ok=True)
+    if tc.run_with_progress(["make"], log, "[ps5] triangle make", cwd=dest, env=env) != 0:
+        print(tc.tail(log, 30))
+        tc.fail("ps5-plume-triangle's make failed (%s)" % tc.show(log), "ps5_setup_failed", log)
+    print("[ps5] ok: %s - now python3 tools/ps5.py check" % dest)
 
 
 # ---- check ------------------------------------------------------------------------------------------------------
@@ -301,6 +357,15 @@ def package(args, paths=None):
                 "Or put it on a USB drive (exFAT), top folder or games/, named *Vice City Stories*.iso.\n")
     with open(os.path.join(app, "README.txt"), "w", encoding="utf-8") as f:
         f.write(APP_README.format(title_id=title_id))
+    if getattr(args, "zip", False):
+        archive = os.path.join(PS5_BUILD, "%s.zip" % title_id)
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+            for base, _, names in os.walk(app):
+                for n in sorted(names):
+                    path = os.path.join(base, n)
+                    z.write(path, os.path.join(title_id, os.path.relpath(path, app)))
+        print("[ps5] zipped: %s - unzip it into /data/homebrew/ on your PS5 (USB / FTP). It holds the game's code built "
+              "from your disc: for your console only, never to publish" % tc.show(archive))
     size = os.path.getsize(os.path.join(app, "eboot.bin"))
     print("[ps5] ok: %s (eboot.bin %.1f MB) - copy it to /data/homebrew/%s on the PS5 (python3 tools/ps5.py deploy "
           "--host <PS5 IP>)" % (tc.show(app), size / 1e6, title_id))
@@ -562,6 +627,68 @@ def cmd_compile_check(args):
     print("[ps5] ok: the PS5 build compiles%s (%d targets)" % (" and links" if linkable else "", len(targets)))
 
 
+# ---- the controller test (Linux) ----------------------------------------------------------------------------------
+def cmd_padtest(args):
+    """ps5/tests/padtest.cpp: the real platform_ps5.cpp with the console's pad functions mocked, linked against a Linux
+    PC build's objects (the bindings, settings, the runtime's pad backend), run. The tree is build/release (the PC build,
+    python3 tools/build.py first) or --tree; its generated code may be real or compile-check's stand-in."""
+    import re
+    if platform.system() != "Linux":
+        tc.fail("the controller test runs on Linux (it links against a Linux build's objects)")
+    env = tc.build_env()
+    tree = os.path.abspath(args.tree or tc.BUILD_DIR)
+    ninja = tc.build_tools(env)["ninja"]
+    if not os.path.isfile(os.path.join(tree, "build.ninja")):
+        tc.fail("no build tree at %s: build the game for Linux first (python3 tools/build.py)" % tc.show(tree))
+    if subprocess.run([ninja, "-C", tree, "ps2EntryRunner"], env=env).returncode != 0:
+        tc.fail("the Linux build failed")
+    commands = subprocess.run([ninja, "-C", tree, "-t", "commands", "ps2EntryRunner"], capture_output=True, text=True,
+                              env=env).stdout.splitlines()
+    link = commands[-1].split()
+    compile_input = next((c for c in commands if "src/game/vcs_input.cpp" in c and " -c " in c), None)
+    if not compile_input:
+        tc.fail("the tree's commands have no vcs_input.cpp compile")
+
+    def absolute(path):
+        return path if os.path.isabs(path) else os.path.join(tree, path)
+
+    words = compile_input.split()
+    flags = []
+    for i, w in enumerate(words):
+        if w == "-isystem" and i + 1 < len(words):
+            flags += [w, words[i + 1]]
+        elif re.match(r"-(I|D|std=|march=|isystem.)", w):
+            flags.append(w)
+    flags += ["-I" + os.path.join(tree, "_deps", "vulkanheaders-src", "include"), "-fno-strict-aliasing", "-g", "-O1"]
+    objects = [absolute(w) for w in link if w.endswith(".o") and not w.endswith("/src/main.cpp.o")]
+    libraries = [absolute(w) for w in link if w.endswith(".a") and "libvcs_platform.a" not in w and "SDL3" not in w]
+    system = [w for w in link if w.startswith("-l") or w.endswith(".so")]
+    out = os.path.join(tree, "ps5-padtest")
+    os.makedirs(out, exist_ok=True)
+    clangxx = shutil.which("clang++", path=env.get("PATH")) or "clang++"
+    units = [(os.path.join(tc.ROOT, "src", "platform", "platform_ps5.cpp"), ["-DVK_NO_PROTOTYPES",
+              "-I" + os.path.join(tc.ROOT, "ps5", "tests", "shim")]),
+             (os.path.join(tc.ROOT, "src", "platform", "platform_common.cpp"), []),
+             (os.path.join(tc.ROOT, "ps5", "tests", "padtest.cpp"), [])]
+    built = []
+    for src, extra in units:
+        obj = os.path.join(out, os.path.basename(src) + ".o")
+        cmd = [clangxx, "-c", src, "-o", obj] + flags + extra
+        if subprocess.run(cmd, env=env, cwd=tree).returncode != 0:
+            tc.fail("compiling %s failed" % tc.show(src))
+        built.append(obj)
+    exe = os.path.join(out, "padtest")
+    cmd = [clangxx, "-fuse-ld=lld", "-o", exe] + built + objects + ["-Wl,--start-group"] + libraries + ["-Wl,--end-group"]
+    cmd += system + ["-ldl", "-lm", "-lpthread"]
+    if subprocess.run(cmd, env=env, cwd=tree).returncode != 0:
+        tc.fail("linking the controller test failed")
+    result = subprocess.run([exe], env=env, cwd=out, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    print(result.stdout.rstrip())
+    if result.returncode != 0:
+        tc.fail("the controller test failed")
+    print("[ps5] ok: the DualSense path (%s)" % tc.show(exe))
+
+
 # ---- deploy -----------------------------------------------------------------------------------------------------
 def cmd_deploy(args):
     """The app folder to /data/homebrew/<title id>/ over FTP (an FTP payload on the console: etaHEN's on 1337, ftpsrv
@@ -607,11 +734,17 @@ def cmd_deploy(args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("setup")
+    p.add_argument("--triangle", help="where ps5-plume-triangle goes (default: next to this folder)")
+    p.add_argument("--keep-commit", action="store_true", help="leave an existing checkout at its own commit")
+    p.add_argument("--clone-only", action="store_true", help="fetch it, don't build it")
     for name in ("check", "build", "package", "ffmpeg"):
         p = sub.add_parser(name)
         p.add_argument("--triangle", help="ps5-plume-triangle checkout, built once (remembered)")
         p.add_argument("--sdk", help="the PS5 payload SDK fork (default: the triangle's .deps/native/ps5-payload-sdk)")
         p.add_argument("--title-id", default=DEFAULT_TITLE_ID, help="the app's title id (default %s)" % DEFAULT_TITLE_ID)
+        if name in ("build", "package"):
+            p.add_argument("--zip", action="store_true", help="also build/ps5/<title id>.zip, to copy to your console")
         if name == "build":
             p.add_argument("--lto", action="store_true", help="ThinLTO (slower links; not yet measured on a console)")
             p.add_argument("--reconfigure", action="store_true", help="run CMake configure again")
@@ -619,6 +752,8 @@ def main():
     p = sub.add_parser("compile-check")
     p.add_argument("--triangle", help="a built ps5-plume-triangle: the link is checked too")
     p.add_argument("--sdk", help="the PS5 payload SDK (the upstream release compiles; the link needs the fork)")
+    p = sub.add_parser("padtest")
+    p.add_argument("--tree", help="a Linux build tree with the game built (default build/release)")
     p = sub.add_parser("deploy")
     p.add_argument("--host", required=True, help="the PS5's IP address")
     p.add_argument("--port", type=int, default=2121, help="its FTP payload's port (default 2121; etaHEN: 1337)")
@@ -627,6 +762,9 @@ def main():
     p.add_argument("--title-id", default=DEFAULT_TITLE_ID)
     p.add_argument("--iso", help="also upload this disc image into the app's disc/ folder")
     args = ap.parse_args()
+    if args.command == "setup":
+        cmd_setup(args)
+        return 0
     if args.command == "check":
         problems, _, _ = check(args)
         return 1 if problems else 0
@@ -640,6 +778,8 @@ def main():
         cmd_deploy(args)
     elif args.command == "compile-check":
         cmd_compile_check(args)
+    elif args.command == "padtest":
+        cmd_padtest(args)
     return 0
 
 

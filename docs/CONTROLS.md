@@ -82,8 +82,13 @@ trainer: Up / Down or numpad 8 / 2 or the D-pad select, Left / Right or numpad 4
 5 / A applies, Backspace / numpad 0 / Escape / B goes back (and closes it on the first page). The game gets no input
 while a menu is open.
 
+The chords keep their buttons from the game: Back (Select) reaches the game once it has been held 150 ms on its own, or
+as a short press when let go sooner, and while it is held Start / LB / RB do not - so opening a menu neither changes
+the view nor pauses the game behind it (`src/game/vcs_input.cpp`, checked by `tools/ps5.py padtest`).
+
 On the PS5 (docs/PS5.md) the touchpad click is Back / Select (the Create button is the system's): touchpad + Options
-opens the settings, touchpad + R1 the trainer, touchpad + L1 the free camera. There is no keyboard or mouse there.
+opens the settings, touchpad + R1 the trainer, touchpad + L1 the free camera. There is no keyboard or mouse there; the
+menus' hints name the DualSense's buttons (Cross selects / applies, Circle backs out).
 
 ## Window
 

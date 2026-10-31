@@ -72,8 +72,8 @@ python tools/build.py --recompile-if-needed  # recompile only when generated/ is
 python tools/doctor.py [--json]              # folder, compiler, disc, build state, the next step (the launcher reads --json)
 python tools/build_dir.py [check|set P|reset] # the build folder elsewhere (.vcs-build-dir, VCS_BUILD_DIR): tc.BUILD follows;
                                              # the test tools keep writing to build\ in the source folder
-python tools/release.py [--ref vX | --worktree]   # the Windows release zip (build/dist); refuses game files. The number is
-                                             # VERSION (root; 0.0.2): bump it before tagging - the tag must match
+python tools/release.py [--ref vX | --worktree]   # the Windows release zip (build/dist); --ps5 the PS5 build kit; refuses game files. The number is
+                                             # VERSION (root; 0.0.3): bump it before tagging - the tag must match
 python tools/deps.py list|fetch|check        # the libraries CMake downloads; deps/ makes the build offline
 python tools/backup.py create|list|restore   # memory card backups (VCS_DATA_DIR honoured: test on copies)
 python tools/setup_vs.py status|install [--dry-run]   # Visual Studio Build Tools (+ clang) from Microsoft, elevated
@@ -95,8 +95,9 @@ python tools/soundcheck.py all OUT [--mission N]             # native sound vs t
 python tools/trainer_check.py [OUT] [--vehicles all]          # every trainer feature, checked in the game's memory
 python tools/finale_check.py [OUT] [--story] [--full]         # Last Stand's end from the trainer: final cutscene, credits
 python tools/controls_check.py [OUT]                          # bindings, presets, reset, vibration, volume levels; menu screenshots
-python3 tools/ps5.py check|build|package|ffmpeg|deploy        # the PS5 build (docs/PS5.md): build/ps5/app/<title id>
+python3 tools/ps5.py setup|check|build|package|ffmpeg|deploy  # the PS5 build (docs/PS5.md): build/ps5/app/<title id> (--zip)
 python3 tools/ps5.py compile-check --sdk DIR                  # the PS5 build compiled against stand-in code (no disc; CI)
+python3 tools/ps5.py padtest                                  # the DualSense -> DualShock 2 path checked on Linux (62 checks)
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```

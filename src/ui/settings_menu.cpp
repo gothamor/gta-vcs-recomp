@@ -532,7 +532,11 @@ namespace ui
                     if (s.page == page && s.type != settings::Type::Action)
                         settings::set(s.key, s.defaultValue);
             char hint[96];
+#if defined(__PROSPERO__) // the DualSense only (platform_ps5.cpp: the touchpad is Back)
+            std::snprintf(hint, sizeof(hint), "Circle or touchpad+Options: close  L1/R1: page");
+#else
             std::snprintf(hint, sizeof(hint), "%s / Back+Start: close  Q/E, LB/RB: page", keyName(settings::value("controls.menu_key")));
+#endif
             ImGui::SameLine();
             if (const float room = ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(hint).x; room > 0.0f)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + room); // right-aligned

@@ -155,6 +155,25 @@ namespace ui
         }
 
         // ---- Pages ------------------------------------------------------------------------------------------------
+#if defined(__PROSPERO__)
+        // The PS5 has only the DualSense: the hints name its buttons (Cross applies, Circle goes back, the touchpad is
+        // Back / Select). The free camera's help is its own there.
+        std::string forPad(const std::string &help)
+        {
+            if (help.rfind("Fly: ", 0) == 0)
+                return "Fly: the left stick moves, the right stick looks, R2 up, L2 down, Cross faster, Circle slower, "
+                       "D-pad up / down zoom. The player waits. Hotkey: touchpad + L1.";
+            std::string text = help;
+            for (size_t at; (at = text.find("Enter:")) != std::string::npos;)
+                text.replace(at, 6, "Cross:");
+            return text;
+        }
+        constexpr const char *kKeysHint = "D-pad: select   Left/Right: change   Cross: apply   Circle: back";
+#else
+        const std::string &forPad(const std::string &help) { return help; }
+        constexpr const char *kKeysHint = "Up/Down: select   Left/Right: change   Enter: apply   Backspace: back";
+#endif
+
         Row pageRow(const char *label, Page page, const char *help)
         {
             Row r{label, Value::Page, {}, help};
@@ -449,7 +468,7 @@ namespace ui
             // the rows: as many as fit above the help and the keys (12 at most)
             const float rowH = 32.0f * s, padX = 14.0f * s;
             const float hs = 15.0f * s, wrapW = w - 2.0f * padX, ks = 13.0f * s;
-            const std::string &help = rows.empty() ? std::string() : rows[level.selected].help;
+            const std::string help = rows.empty() ? std::string() : forPad(rows[level.selected].help);
             const float helpH = help.empty() ? 0.0f : textSize(hs, help.c_str(), wrapW).y + 20.0f * s;
             const float below = 20.0f * s + helpH + ks + 10.0f * s + 12.0f * s; // arrows, help, keys, margin
             const int visible = std::clamp(static_cast<int>((vp->Pos.y + vp->Size.y - y - below) / rowH), 4, 12);
@@ -504,7 +523,7 @@ namespace ui
                 dl->AddText(ImGui::GetFont(), hs, ImVec2(x + padX, y + 8.0f * s), rgba(225, 225, 225), help.c_str(), nullptr, wrapW);
                 y += h;
             }
-            const std::string keys = "Up/Down: select   Left/Right: change   Enter: apply   Backspace: back";
+            const std::string keys = kKeysHint;
             dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + ks + 10.0f * s), rgba(0, 0, 0, 0.7f));
             text(dl, ks, ImVec2(x + padX, y + 5.0f * s), rgba(170, 170, 180), keys);
         }
