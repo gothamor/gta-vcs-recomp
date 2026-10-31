@@ -304,7 +304,7 @@ namespace vcs::aim
             g_dummy = target;
             g_state = State::Active;
             g_active = true;
-            std::fprintf(stderr, "[aim] free aim on (dummy 0x%x)\n", target);
+            std::fprintf(stderr, "[aim] free aim on (dummy 0x%x, %d frame(s) after R1 + L3)\n", target, g_wait + 1);
             break;
         }
         case State::Active:
