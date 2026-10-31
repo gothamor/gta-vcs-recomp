@@ -16,6 +16,7 @@
 #include "runtime/ps2_disc_image.h"
 #include "runtime/ps2_pad.h"
 #include "runtime/ps2_present.h"
+#include "ui/frontend_menu.h"
 
 #include <algorithm>
 #include <atomic>
@@ -371,6 +372,10 @@ namespace vcs
             (void)runtime;
 #endif
             SET_GPR_U64(ctx, 2, 0);
+            // The original has no title screen. Hold it here, after its second boot movie, while the host front end
+            // draws and accepts input. This exact path is not shared by the game's later LoadingScreen calls.
+            if (path.find("INTRO.PSS") != std::string::npos)
+                ui::frontend::waitAtStartup(runtime);
             ctx->pc = GPR_U32(ctx, 31);
         }
     }

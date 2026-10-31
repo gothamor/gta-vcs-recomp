@@ -171,6 +171,8 @@ namespace vcs::input
         std::atomic<bool> g_backgroundPause{false}; // game.background = Pause and the window is behind others
         std::atomic<uint64_t> g_lastReport{0};       // buttons | rx << 16 | ry << 24 | lx << 32 | ly << 40 ("padstate")
         std::atomic<uint32_t> g_reads{0};            // pad reads so far ("padstate")
+        std::atomic<uint16_t> g_injectedButtons{0};
+        std::atomic<uint32_t> g_injectedButtonReads{0};
 
         std::string keyId(const Control &c, int slot) { return std::string("keys.") + c.id + (slot ? "2" : ""); }
         std::string padId(const Control &c) { return std::string("pad.") + c.id; }
@@ -301,6 +303,13 @@ namespace vcs::input
             const bool physical = ps2control::physicalInputOn();
             // the free camera has the controls (and the mouse, takeFreeCameraInput): the game gets a pad left alone
             const bool freeCamera = freecam::flying();
+
+            uint32_t injected = g_injectedButtonReads.load(std::memory_order_relaxed);
+            if (injected)
+            {
+                buttons |= g_injectedButtons.load(std::memory_order_relaxed);
+                g_injectedButtonReads.fetch_sub(1, std::memory_order_relaxed);
+            }
 
             if (physical && gamepadConnected() && !freeCamera)
             {
@@ -781,6 +790,12 @@ namespace vcs::input
     }
 
     void stopVibration() { gamepadRumble(0.0f, 0.0f); }
+
+    void injectButton(unsigned short mask, unsigned reads)
+    {
+        g_injectedButtons.store(mask, std::memory_order_relaxed);
+        g_injectedButtonReads.store(reads, std::memory_order_release);
+    }
 
     FreeCamInput takeFreeCameraInput()
     {

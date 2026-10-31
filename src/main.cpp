@@ -31,6 +31,7 @@
 #include "rhi/rhi.h"
 #include "settings/settings.h"
 #include "ui/settings_menu.h"
+#include "ui/frontend_menu.h"
 #include "ui/trainer_menu.h"
 #include "runtime/ps2_audio_out.h"
 #include "runtime/ps2_control.h"
@@ -832,13 +833,16 @@ int main(int argc, char *argv[])
         PS2Runtime runtime;
         // the settings menu draws in the runtime's UI hook (registered before initialize(), which runs the init hook)
         runtime.setDebugUiCallbacks([](PS2Runtime &, void *) {},
-                                    [](PS2Runtime &, void *) {
+                                    [](PS2Runtime &runtime, void *) {
                                         altEnter();
                                         followWindowAspect();
+                                        ui::frontend::draw(runtime);
                                         ui::drawSettingsMenu();
                                         ui::drawTrainerMenu();
-                                        ps2control::setGameInputBlocked(ui::settingsMenuBlocksInput() || ui::trainerMenuBlocksInput());
-                                        vcs::input::onHostFrame(ui::settingsMenuOpen() || ui::trainerMenuBlocksInput());
+                                        ps2control::setGameInputBlocked(ui::frontend::blocksInput() || ui::settingsMenuBlocksInput() ||
+                                                                        ui::trainerMenuBlocksInput());
+                                        vcs::input::onHostFrame(ui::frontend::blocksInput() || ui::settingsMenuOpen() ||
+                                                                ui::trainerMenuBlocksInput());
                                         vcs::volume::onHostFrame();
                                         drawFrameRateCounter();
                                     },
@@ -890,6 +894,16 @@ int main(int argc, char *argv[])
             else
                 ui::openSettingsMenu(args);
             reply("ok");
+        });
+        // frontend new|load|delete -> ok: deterministic startup-menu checks in hidden runs.
+        ps2control::addCommand("frontend", [](const std::string &args, ps2control::Reply reply) {
+            using ui::frontend::StartupAction;
+            const StartupAction action = args == "load" ? StartupAction::LoadGame
+                                         : args == "delete" ? StartupAction::DeleteGame
+                                                            : StartupAction::NewGame;
+            if (args != "new" && args != "load" && args != "delete")
+                return reply("error usage: frontend new|load|delete");
+            reply(ui::frontend::selectStartup(action) ? "ok" : "error startup menu is not open");
         });
         vcs::configureWatch(runtime.memory().getRDRAM());
         vcs::runSelfTest(runtime);

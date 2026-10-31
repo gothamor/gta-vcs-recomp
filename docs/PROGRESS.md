@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-10-31 - Native startup and pause actions
+
+- A host title menu appears after the intro movies, before the game starts: New Game, Load Game, Delete Game, Options
+  (the F2 pages), and confirmed Quit. The original game owns save enumeration, loading and deletion.
+- The user pause menu has a Port Menu panel for Options and confirmed Quit; it can be dismissed back to every original
+  VCS tab. See `docs/FRONTEND_MENU.md`.
+
 ## 2026-10-31 - Optional PCSX2 PNG texture packs
 
 - F2 > Graphics > Texture replacements (restart; off by default), existing `SLUS-21590/replacements` found beside

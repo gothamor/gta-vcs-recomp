@@ -684,6 +684,11 @@ routine `FUN_003DFF20` (raster from `FUN_0021DBF0`), the loading texts (`*0x486E
 frame). It is called from many load paths (`0x346BAC`, `0x3C817C`, `0x45F3E4`, `0x46FE98`, `FUN_0021E950` when a game
 is being loaded). **There is no title menu**: with an empty card the game goes from the loading screens straight into
 the opening sequence (the reference scenes' "flyover"), where Start does nothing; the frontend menu is the pause menu.
+The native port waits at the return from the `INTRO.PSS` call in `CMoviePlayer::Play` and draws its host startup menu
+there (`src/ui/frontend_menu.cpp`). This is deliberately not a `FUN_0021E170` hook because that LoadingScreen is reused
+by later loads. New Game releases the wait; Load/Delete wait for `CWorld::Players[0].m_pPed` (`0x4E4910`) and inject the
+checked pause-menu route to the original save state machine. Found from the boot movie calls at `0x40D8B8`, the
+loading-screen caller survey, and the save sequences in `tools/saves.py`.
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 

@@ -25,6 +25,9 @@ namespace vcs::input
     // Stops any vibration now (the game paused in the background).
     void stopVibration();
 
+    // Host front-end navigation: add one PS2 button to the next `reads` controller reports (active-high mask).
+    void injectButton(unsigned short mask, unsigned reads);
+
     // The free camera's controls (game/vcs_freecam.h; fixed keys, docs/CONTROLS.md), taken once per camera update on
     // the game thread. While the free camera flies the game's pad reads give it nothing, and the mouse is left for this.
     struct FreeCamInput
