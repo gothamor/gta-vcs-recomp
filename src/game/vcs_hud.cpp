@@ -364,6 +364,8 @@ namespace vcs
 
     uint32_t hudDrawCount() { return g_hudDraws.load(std::memory_order_relaxed); }
 
+    bool loadingScreenFrame() { return g_inLoading; }
+
     void setHudAnchoring(bool on)
     {
         g_edges.store(on, std::memory_order_relaxed);

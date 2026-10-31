@@ -14,8 +14,8 @@ namespace ui::frontend
         DeleteGame,
     };
 
-    // Game thread: waits after INTRO.PSS while the host thread keeps drawing the startup menu.
-    void waitAtStartup(PS2Runtime *runtime);
+    // Game thread: armed after INTRO.PSS; the frame hook opens it only after the following boot loading screens.
+    void armStartup();
     bool selectStartup(StartupAction action); // control-channel checks; false when the startup menu is not open
 
     // Main thread, inside the runtime's Dear ImGui frame.
@@ -24,5 +24,5 @@ namespace ui::frontend
 
     // Game thread, at the normal frame boundary. Tracks the original pause menu and drives the verified route to its
     // Load / Delete screens after a startup choice.
-    void onGameFrame(uint8_t *rdram);
+    void onGameFrame(uint8_t *rdram, bool loadingScreen, PS2Runtime *runtime);
 }

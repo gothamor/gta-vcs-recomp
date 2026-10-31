@@ -38,15 +38,18 @@ namespace ui::frontend
         constexpr uint16_t kStart = 0x0008u, kRight = 0x0020u, kDown = 0x0040u, kCross = 0x4000u;
 
         std::atomic<bool> g_startupOpen{false};
+        std::atomic<bool> g_startupArmed{false};
         std::atomic<bool> g_pauseOpen{false};
         std::atomic<int> g_pendingAction{-1};
         bool g_startSubmenu = false;
         bool g_quitConfirm = false;
         std::atomic<bool> g_pauseDismissed{false};
-        ImTextureData *g_background = nullptr;
+        ImTextureData *g_background = nullptr, *g_font = nullptr;
         bool g_backgroundTried = false;
+        bool g_sawBootLoading = false;
 
         constexpr const char *kPalmBackground = "db7fe6220bfa99e-400b40212c17643-00006213.png";
+        constexpr const char *kMenuFont = "3ece7b57667e958b-f663bcea3bca5023-00006213.png";
         constexpr ImU32 kCyan = IM_COL32(18, 211, 215, 255);
         constexpr ImU32 kPink = IM_COL32(194, 91, 142, 255);
         constexpr ImU32 kWhite = IM_COL32(225, 225, 225, 255);
@@ -70,18 +73,11 @@ namespace ui::frontend
             g_startSubmenu = false;
         }
 
-        void loadBackground()
+        ImTextureData *loadTexture(const std::filesystem::path &path, bool opaque)
         {
-            if (g_backgroundTried)
-                return;
-            g_backgroundTried = true;
-            const char *pack = std::getenv("VCS_TEXTURE_PACK");
-            if (!pack || !*pack)
-                return;
-            const std::filesystem::path path = std::filesystem::u8path(pack) / "replacements" / kPalmBackground;
             std::ifstream file(path, std::ios::binary);
             if (!file)
-                return;
+                return nullptr;
             std::vector<unsigned char> encoded((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             int width = 0, height = 0, channels = 0;
             unsigned char *pixels = stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()), &width, &height, &channels, 4);
@@ -89,40 +85,138 @@ namespace ui::frontend
             {
                 std::fprintf(stderr, "[frontend] could not decode %s\n", path.string().c_str());
                 stbi_image_free(pixels);
-                return;
+                return nullptr;
             }
-            g_background = new ImTextureData();
-            g_background->Create(ImTextureFormat_RGBA32, width, height);
-            std::memcpy(g_background->Pixels, pixels, static_cast<size_t>(width) * height * 4u);
-            g_background->UseColors = true;
+            ImTextureData *texture = new ImTextureData();
+            texture->Create(ImTextureFormat_RGBA32, width, height);
+            std::memcpy(texture->Pixels, pixels, static_cast<size_t>(width) * height * 4u);
+            if (opaque)
+                for (size_t i = 3, n = static_cast<size_t>(width) * height * 4u; i < n; i += 4)
+                    texture->Pixels[i] = 255;
+            texture->UseColors = true;
             stbi_image_free(pixels);
-            ImGui::RegisterUserTexture(g_background);
+            ImGui::RegisterUserTexture(texture);
             std::fprintf(stderr, "[frontend] menu artwork %s (%dx%d)\n", path.string().c_str(), width, height);
+            return texture;
         }
 
-        bool menuItem(const char *label, float width, float height = 34.0f)
+        void loadArtwork()
+        {
+            if (g_backgroundTried)
+                return;
+            g_backgroundTried = true;
+            const char *pack = std::getenv("VCS_TEXTURE_PACK");
+            if (!pack || !*pack)
+                return;
+            const std::filesystem::path replacements = std::filesystem::u8path(pack) / "replacements";
+            g_background = loadTexture(replacements / kPalmBackground, true);
+            g_font = loadTexture(replacements / kMenuFont, false);
+        }
+
+        struct Glyph
+        {
+            float x0, y0, x1, y1;
+        };
+
+        bool glyph(unsigned char c, Glyph &out)
+        {
+            static constexpr float ag[] = {144, 158, 173, 188, 203, 217, 230, 246};
+            static constexpr float hw[] = {0, 15, 22, 34, 49, 61, 82, 98, 114, 128, 144, 159, 173, 188, 204, 220, 242};
+            static constexpr float xz[] = {0, 16, 31, 45};
+            if (c >= 'A' && c <= 'G')
+            {
+                const unsigned i = c - 'A';
+                out = {ag[i], 24, ag[i + 1], 46};
+                return true;
+            }
+            if (c >= 'H' && c <= 'W')
+            {
+                const unsigned i = c - 'H';
+                out = {hw[i], 47, hw[i + 1], 69};
+                return true;
+            }
+            if (c >= 'X' && c <= 'Z')
+            {
+                const unsigned i = c - 'X';
+                out = {xz[i], 70, xz[i + 1], 93};
+                return true;
+            }
+            if (c == '<')
+            {
+                out = {69, 24, 82, 46};
+                return true;
+            }
+            return false;
+        }
+
+        float glyphAdvance(unsigned char c, float scale)
+        {
+            if (c == ' ')
+                return 7.0f * scale;
+            Glyph g;
+            return glyph(c, g) ? ((g.x1 - g.x0) + 1.0f) * scale : 8.0f * scale;
+        }
+
+        ImVec2 textSize(const char *text, float scale)
+        {
+            if (!g_font)
+                return ImGui::CalcTextSize(text);
+            float width = 0.0f;
+            for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text); *p; ++p)
+                width += glyphAdvance(*p, scale);
+            return ImVec2(width, 22.0f * scale);
+        }
+
+        void drawText(ImDrawList *draw, ImVec2 pos, const char *text, ImU32 color, float scale)
+        {
+            if (!g_font)
+            {
+                draw->AddText(pos, color, text);
+                return;
+            }
+            for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text); *p; ++p)
+            {
+                if (*p == ' ')
+                {
+                    pos.x += glyphAdvance(*p, scale);
+                    continue;
+                }
+                Glyph g;
+                if (!glyph(*p, g))
+                {
+                    pos.x += glyphAdvance(*p, scale);
+                    continue;
+                }
+                const float width = (g.x1 - g.x0) * scale, height = (g.y1 - g.y0) * scale;
+                draw->AddImage(g_font->GetTexRef(), pos, ImVec2(pos.x + width, pos.y + height),
+                               ImVec2(g.x0 / 256.0f, g.y0 / 256.0f), ImVec2(g.x1 / 256.0f, g.y1 / 256.0f), color);
+                pos.x += glyphAdvance(*p, scale);
+            }
+        }
+
+        bool menuItem(const char *label, float width, float textScale, float height = 34.0f)
         {
             ImGui::SetCursorPosX((ImGui::GetWindowSize().x - width) * 0.5f);
             const ImVec2 p = ImGui::GetCursorScreenPos();
             ImGui::InvisibleButton(label, ImVec2(width, height));
             const bool selected = ImGui::IsItemHovered() || ImGui::IsItemFocused();
-            const ImVec2 text = ImGui::CalcTextSize(label);
-            ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + (width - text.x) * 0.5f, p.y + (height - text.y) * 0.5f),
-                                                selected ? kPink : kCyan, label);
+            const ImVec2 text = textSize(label, textScale);
+            drawText(ImGui::GetWindowDrawList(), ImVec2(p.x + (width - text.x) * 0.5f, p.y + (height - text.y) * 0.5f),
+                     label, selected ? kPink : kCyan, textScale);
             return ImGui::IsItemActivated();
         }
 
-        void footer(const ImGuiViewport &vp)
+        void footer(const ImGuiViewport &vp, float scale)
         {
             ImDrawList *draw = ImGui::GetWindowDrawList();
             const float y = vp.WorkPos.y + vp.WorkSize.y - 53.0f;
-            draw->AddText(ImVec2(vp.WorkPos.x + 30.0f, y), kCyan, "<");
-            draw->AddText(ImVec2(vp.WorkPos.x + 52.0f, y), kWhite, "BACK");
-            draw->AddText(ImVec2(vp.WorkPos.x + 30.0f, y + 25.0f), kPink, "X");
-            draw->AddText(ImVec2(vp.WorkPos.x + 52.0f, y + 25.0f), kWhite, "SELECT");
-            const char *move = "ARROWS / STICK  MOVE";
-            const ImVec2 size = ImGui::CalcTextSize(move);
-            draw->AddText(ImVec2(vp.WorkPos.x + vp.WorkSize.x - size.x - 26.0f, y + 25.0f), kWhite, move);
+            drawText(draw, ImVec2(vp.WorkPos.x + 30.0f, y), "<", kCyan, scale);
+            drawText(draw, ImVec2(vp.WorkPos.x + 52.0f, y), "BACK", kWhite, scale);
+            drawText(draw, ImVec2(vp.WorkPos.x + 30.0f, y + 25.0f), "X", kPink, scale);
+            drawText(draw, ImVec2(vp.WorkPos.x + 52.0f, y + 25.0f), "SELECT", kWhite, scale);
+            const char *move = "ARROWS  STICK  MOVE";
+            const ImVec2 size = textSize(move, scale);
+            drawText(draw, ImVec2(vp.WorkPos.x + vp.WorkSize.x - size.x - 26.0f, y + 25.0f), move, kWhite, scale);
         }
 
         void requestQuit(PS2Runtime &runtime)
@@ -136,12 +230,7 @@ namespace ui::frontend
         }
     }
 
-    void waitAtStartup(PS2Runtime *runtime)
-    {
-        g_startupOpen.store(true, std::memory_order_release);
-        while (g_startupOpen.load(std::memory_order_acquire) && !runtime->isStopRequested())
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
+    void armStartup() { g_startupArmed.store(true, std::memory_order_release); }
 
     bool selectStartup(StartupAction action)
     {
@@ -166,7 +255,7 @@ namespace ui::frontend
 
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
         const ImGuiViewport *vp = ImGui::GetMainViewport();
-        loadBackground();
+        loadArtwork();
         ImGui::SetNextWindowPos(vp->WorkPos, ImGuiCond_Always);
         ImGui::SetNextWindowSize(vp->WorkSize, ImGuiCond_Always);
         ImGui::SetNextWindowFocus();
@@ -192,35 +281,45 @@ namespace ui::frontend
             {
                 if (!g_startSubmenu)
                 {
-                    if (menuItem("START GAME", contentWidth)) { g_startSubmenu = true; g_quitConfirm = false; }
-                    if (menuItem("OPTIONS", contentWidth)) { openSettingsMenu(""); g_quitConfirm = false; }
-                    if (menuItem(g_quitConfirm ? "QUIT GAME - ARE YOU SURE?" : "QUIT GAME", contentWidth)) requestQuit(runtime);
+                    if (menuItem("START GAME", contentWidth, scale)) { g_startSubmenu = true; g_quitConfirm = false; }
+                    if (menuItem("OPTIONS", contentWidth, scale)) { openSettingsMenu(""); g_quitConfirm = false; }
+                    if (menuItem(g_quitConfirm ? "ARE YOU SURE" : "QUIT GAME", contentWidth, scale)) requestQuit(runtime);
                 }
                 else
                 {
-                    if (menuItem("LOAD GAME", contentWidth)) begin(StartupAction::LoadGame);
-                    if (menuItem("NEW GAME", contentWidth)) begin(StartupAction::NewGame);
-                    if (menuItem("DELETE GAME", contentWidth)) begin(StartupAction::DeleteGame);
-                    if (menuItem("BACK", contentWidth)) g_startSubmenu = false;
+                    if (menuItem("LOAD GAME", contentWidth, scale)) begin(StartupAction::LoadGame);
+                    if (menuItem("NEW GAME", contentWidth, scale)) begin(StartupAction::NewGame);
+                    if (menuItem("DELETE GAME", contentWidth, scale)) begin(StartupAction::DeleteGame);
+                    if (menuItem("BACK", contentWidth, scale)) g_startSubmenu = false;
                 }
             }
             else
             {
-                if (menuItem("OPTIONS", contentWidth)) { openSettingsMenu(""); g_quitConfirm = false; }
-                if (menuItem(g_quitConfirm ? "QUIT - ARE YOU SURE?" : "QUIT GAME", contentWidth)) requestQuit(runtime);
-                if (menuItem("BACK TO PAUSE MENU", contentWidth)) { g_pauseDismissed = true; g_quitConfirm = false; }
+                if (menuItem("OPTIONS", contentWidth, scale)) { openSettingsMenu(""); g_quitConfirm = false; }
+                if (menuItem(g_quitConfirm ? "ARE YOU SURE" : "QUIT GAME", contentWidth, scale)) requestQuit(runtime);
+                if (menuItem("BACK TO PAUSE MENU", contentWidth, scale)) { g_pauseDismissed = true; g_quitConfirm = false; }
             }
             ImGui::SetWindowFontScale(1.0f);
-            draw->AddText(ImVec2(vp->WorkPos.x + 28.0f, vp->WorkPos.y + 24.0f), kPink,
-                          startup ? "Game" : "Options");
-            footer(*vp);
+            drawText(draw, ImVec2(vp->WorkPos.x + 28.0f, vp->WorkPos.y + 24.0f), startup ? "GAME" : "OPTIONS", kPink, scale);
+            footer(*vp, scale * 0.7f);
         }
         ImGui::End();
         ImGui::PopStyleVar();
     }
 
-    void onGameFrame(uint8_t *rdram)
+    void onGameFrame(uint8_t *rdram, bool loadingScreen, PS2Runtime *runtime)
     {
+        if (g_startupArmed.load(std::memory_order_acquire))
+        {
+            g_sawBootLoading |= loadingScreen;
+            if (g_sawBootLoading && !loadingScreen)
+            {
+                g_startupArmed.store(false, std::memory_order_release);
+                g_startupOpen.store(true, std::memory_order_release);
+                while (g_startupOpen.load(std::memory_order_acquire) && !runtime->isStopRequested())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }
         const bool paused = rdram[kUserPause] != 0; // only the player's pause menu, never a loading/code pause
         g_pauseOpen.store(paused, std::memory_order_release);
         if (!paused)

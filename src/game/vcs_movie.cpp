@@ -373,9 +373,9 @@ namespace vcs
 #endif
             SET_GPR_U64(ctx, 2, 0);
             // The original has no title screen. Hold it here, after its second boot movie, while the host front end
-            // draws and accepts input. This exact path is not shared by the game's later LoadingScreen calls.
+            // prepares to open after the following boot LoadingScreen sequence.
             if (path.find("INTRO.PSS") != std::string::npos)
-                ui::frontend::waitAtStartup(runtime);
+                ui::frontend::armStartup();
             ctx->pc = GPR_U32(ctx, 31);
         }
     }

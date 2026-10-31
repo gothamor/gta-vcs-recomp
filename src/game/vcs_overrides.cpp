@@ -816,7 +816,7 @@ namespace
         vcs::input::holdInBackground(runtime);      // paused while the window is in the background (game/vcs_input.h)
         vcs::trainer::onGameFrame(rdram);           // the trainer's actions and held toggles (game/vcs_trainer.h)
         vcs::volume::onGameFrame(rdram);            // the music / effects levels and the pause menu's (game/vcs_volume.h)
-        ui::frontend::onGameFrame(rdram);            // startup Load/Delete route; host actions beside the pause menu
+        ui::frontend::onGameFrame(rdram, vcs::loadingScreenFrame(), runtime); // post-load front end; pause actions
         vcs::onFrameKick();                         // the HUD context ends (game/vcs_hud.h)
         vcs::rsltrace::onFrameKick(rdram);          // VCS_TRACE_RSL (debug/rsl_trace.h)
         vcs::rslshadow::onFrameKick(rdram);         // VCS_RSL_SHADOW (debug/rsl_shadow.h)

@@ -7,6 +7,7 @@ class PS2Runtime;
 
 namespace vcs
 {
+    bool loadingScreenFrame(); // true from LoadingScreen entry until that frame's kick (game thread)
     void installHudHooks(PS2Runtime &runtime);
     void onFrameKick(); // the frame's display list goes out: the HUD context ends
     // Widescreen, HUD "Screen edges": each HUD element squeezed towards the screen edge it sits near (any thread)

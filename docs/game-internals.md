@@ -684,13 +684,20 @@ routine `FUN_003DFF20` (raster from `FUN_0021DBF0`), the loading texts (`*0x486E
 frame). It is called from many load paths (`0x346BAC`, `0x3C817C`, `0x45F3E4`, `0x46FE98`, `FUN_0021E950` when a game
 is being loaded). **There is no title menu**: with an empty card the game goes from the loading screens straight into
 the opening sequence (the reference scenes' "flyover"), where Start does nothing; the frontend menu is the pause menu.
-The native port waits at the return from the `INTRO.PSS` call in `CMoviePlayer::Play` and draws its host startup menu
-there (`src/ui/frontend_menu.cpp`). This is deliberately not a `FUN_0021E170` hook because that LoadingScreen is reused
-by later loads. New Game releases the wait; Load/Delete wait for `CWorld::Players[0].m_pPed` (`0x4E4910`) and inject the
-checked pause-menu route to the original save state machine. Found from the boot movie calls at `0x40D8B8`, the
-loading-screen caller survey, and the save sequences in `tools/saves.py`.
+The native port arms its host startup menu at the return from the `INTRO.PSS` call in `CMoviePlayer::Play`, observes at
+least one subsequent `FUN_0021E170` boot-loading frame, then opens and waits on the first normal frame
+(`src/ui/frontend_menu.cpp`). This puts the last splash before the interactive menu. It does not replace or stop in
+`LoadingScreen`, which is reused by later loads. New Game releases the wait; Load/Delete wait for
+`CWorld::Players[0].m_pPed` (`0x4E4910`) and inject the checked pause-menu route to the original save state machine.
+Found from the boot movie calls at `0x40D8B8`, the loading-screen caller survey, frame-state observation through
+`vcs_hud.cpp`, and the save sequences in `tools/saves.py`.
 The PCSX2 replacement whose pixel hash is `db7fe6220bfa99e` is the pause front end's 2048x2048 purple palm backdrop
 (including its black footer band); identified by a thumbnail survey of the pack and comparison with the pause screen.
+The replacement whose pixel hash is `3ece7b57667e958b` is the 4096x4096 upscale of the game's proportional 256x256
+font atlas. Uppercase A-G occupy logical y 24..46 with x boundaries 144,158,173,188,203,217,230,246; H-W occupy
+y 47..69 with boundaries 0,15,22,34,49,61,82,98,114,128,144,159,173,188,204,220,242; X-Z occupy y 70..93 with
+boundaries 0,16,31,45. The back marker `<` is x 69..82, y 24..46. These rectangles were found by inspecting the
+atlas at its original logical scale and comparing the glyph sequence to the game's pause screen.
 
 ### 6g. How a frame is put together (draw-list dumps, 2026-10-23)
 
