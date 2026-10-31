@@ -9,7 +9,10 @@ Keypad Enter, the mouse buttons) gives its PS2 button or stick direction, Alt+En
 Vic and the old one no longer does; the walk key holds the stick at walking speed; the mouse turns the on-foot camera
 by the amount asked (heading and pitch, inverted, off), right click locks on to a ped, the Driving keys (W / S / Space
 accelerate, brake, handbrake in a car, and nothing else there), the mouse on the vehicle camera, on foot again after
-leaving the car; a mouse wheel binding; a menu key
+leaving the car; free aim (src/game/vcs_aim.cpp: the right button enters the game's free aim, the mouse turns it, a shot
+hits a man on the aim line and not one beside it, Vic strafes while aiming, the camera stays where the aim looked, fists
+and free aim off still lock on, the gamepad's RB and right stick, the sniper scope turned 1:1 and zoomed by the wheel,
+the wheel changing weapons); a mouse wheel binding; a menu key
 refuses a key a control has; the presets and Reset all settings; screenshots of the settings menu's pages; Audio >
 Music / Sound effects are the game's own levels (set here, shown in its pause menu, changed there, kept by a save
 load) (src/game/vcs_volume.cpp). Results: OUT/summary.txt; screenshots OUT/*.png. Default
@@ -246,6 +249,188 @@ class Check:
         self.ok("on foot again", self.cam()[0] == 4 and abs(turn + 0.75) < 0.03 and p["ly"] == 0 and p["buttons"] == 0,
                 "mode %d heading %+.3f, W %s" % (self.cam()[0], turn, p))
 
+    # ---- free aim (src/game/vcs_aim.cpp, game-internals.md 12c) ----
+    PED_POOL, PED_SIZE = 0x487A94, 0xD20
+    PED_TARGET, PED_HEALTH, PED_SLOT = 0x820, 0x4E4, 0x789
+
+    def give(self, weapon, ammo=200):
+        """The weapon to Vic, in his hand (GIVE_WEAPON_TO_CHAR selects it)."""
+        self.g.scm(rig.Scm.op(rig.Scm.GIVE_WEAPON_TO_CHAR, rig.Scm.PLAYER, rig.Scm.i(weapon), rig.Scm.i(ammo)))
+        time.sleep(1.0)
+
+    def ped_at(self, x, y):
+        """A civilian standing at (x, y) on the ground: its address."""
+        S = rig.Scm
+        ints, _ = self.g.scm_outputs(S.op(S.REQUEST_MODEL, S.i(55)) + S.op(S.LOAD_ALL_MODELS_NOW) +
+                                     S.op(S.CREATE_CHAR, S.i(4), S.i(55), S.f(x), S.f(y), S.f(-100.0), S.LOCAL0), 1)
+        return self.g.u32(self.g.u32(self.PED_POOL)) + (ints[0] >> 8) * self.PED_SIZE
+
+    def ped_ahead(self, ahead, side=0.0):
+        """A civilian `ahead` metres in front of Vic and `side` to his right."""
+        ped = self.g.player()[0]
+        (px, py), (fx, fy) = self.g.peekf(ped + 0x30, 2), self.g.peekf(ped + 0x10, 2)
+        n = math.hypot(fx, fy) or 1.0
+        fx, fy = fx / n, fy / n
+        return self.ped_at(px + fx * ahead + fy * side, py + fy * ahead - fx * side)
+
+    def aim(self):
+        """(active, shots) from aimstate; the dummy's heading from Vic (radians)."""
+        d = dict(re.findall(r"(\w+)=(\d+)", self.g.cmd("aimstate")))
+        return int(d.get("active", 0)), int(d.get("shots", 0))
+
+    def aim_heading(self):
+        ped = self.g.player()[0]
+        target = self.g.u32(ped + self.PED_TARGET)
+        if not target:
+            return None
+        (tx, ty), (px, py) = self.g.peekf(target + 0x30, 2), self.g.peekf(ped + 0x30, 2)
+        return math.atan2(ty - py, tx - px)
+
+    def free_aim(self):
+        """Free aim with the mouse and the gamepad (the game's own free aim, driven by the host), the scopes turned by
+        the mouse, the wheel's weapons and zoom."""
+        g = self.g
+        g.teleport(575.0, 175.0, -100.0, 0.0)
+        time.sleep(3.0)
+
+        # fists keep the lock-on with free aim on, and with it off the pistol locks on as on the PS2 (a man 2.5 m ahead)
+        for weapon, free in ((0, 1), (19, 0)):
+            self.setting("mouse.free_aim", free)
+            if weapon:
+                self.give(weapon)
+            else:
+                for _ in range(10):  # R2 (3) until the fists are in his hand
+                    if g.peek(g.player()[0] + self.PED_SLOT, 1)[0] == 0:
+                        break
+                    g.cmd("press 3 120")
+                    time.sleep(0.6)
+            self.ped_ahead(2.5)
+            time.sleep(1.5)
+            g.cmd("key mouseright down")
+            time.sleep(1.0)
+            target = g.u32(g.player()[0] + self.PED_TARGET)
+            kind = g.u32(target + 0x48) & 0xE if target else 0
+            self.ok("%s, free aim %s: lock-on" % ("fists" if not weapon else "pistol", "on" if free else "off"),
+                    self.cam()[0] == 11 and kind == 6 and self.aim()[0] == 0, "mode %d target kind %d" % (self.cam()[0], kind))
+            g.cmd("key mouseright up")
+            time.sleep(1.5)
+
+        self.setting("mouse.free_aim", 1)
+        self.give(19)  # a pistol
+
+        # right button: the game's free aim (camera 11 on the dummy object), R1 held and no L3 once in
+        g.cmd("key mouseright down")
+        time.sleep(1.0)
+        active, shots0 = self.aim()
+        target = g.u32(g.player()[0] + self.PED_TARGET)
+        kind = g.u32(target + 0x48) & 0xE if target else 0
+        p = self.pad()
+        self.ok("free aim on the right button", active == 1 and self.cam()[0] == 11 and kind == 8 and p["buttons"] == R1,
+                "active %d mode %d target kind %d buttons %04x" % (active, self.cam()[0], kind, p["buttons"]))
+
+        # the mouse turns it: 400 counts a radian, the camera with it
+        h0, c0 = self.aim_heading(), self.cam()[2]
+        for _ in range(20):
+            g.cmd("mouse 20 0")
+        g.wait_frames(15)
+        turn = (self.aim_heading() - h0 + math.pi) % (2 * math.pi) - math.pi
+        cturn = (self.cam()[2] - c0 + math.pi) % (2 * math.pi) - math.pi
+        self.ok("the mouse turns the aim", abs(turn + 1.0) < 0.03 and abs(cturn + 1.0) < 0.15,
+                "aim %+.3f camera %+.3f" % (turn, cturn))
+
+        # shots go through the circle: a man on the aim line is hit, one 2 m beside it is not (the aim levelled first: it
+        # starts where the camera looked, low here)
+        ped = g.player()[0]
+        (px, py, pz), (tx, ty, tz) = g.peekf(ped + 0x30, 3), g.peekf(g.u32(ped + self.PED_TARGET) + 0x30, 3)
+        g.cmd("mouse 0 %d" % round(math.atan2(tz - (pz + 0.6), math.hypot(tx - px, ty - py)) * 400))
+        g.wait_frames(10)
+        (px, py), (tx, ty) = g.peekf(ped + 0x30, 2), g.peekf(g.u32(ped + self.PED_TARGET) + 0x30, 2)
+        ux, uy = tx - px, ty - py
+        n = math.hypot(ux, uy)
+        ux, uy = ux / n, uy / n
+        on = self.ped_at(px + ux * 9, py + uy * 9)
+        off = self.ped_at(px + ux * 9 - uy * 2, py + uy * 9 + ux * 2)
+        time.sleep(0.3)
+        g.cmd("press mouseleft 120")
+        time.sleep(0.8)
+        hit, missed = g.peekf(on + self.PED_HEALTH, 1)[0], g.peekf(off + self.PED_HEALTH, 1)[0]
+        shots = self.aim()[1] - shots0
+        self.ok("the shot goes through the circle", hit < 100 and missed == 100 and shots >= 1,
+                "on the line %.0f, beside it %.0f, %d shot(s) down the camera line" % (hit, missed, shots))
+
+        # moving while aiming, as locked on with this gun (the pistol walks): the aim keeps its heading
+        h0 = self.aim_heading()
+        far = self.moved("d", 1.0)
+        dh = (self.aim_heading() - h0 + math.pi) % (2 * math.pi) - math.pi
+        self.ok("moving while aiming", far > 1.0 and abs(dh) < 0.05 and self.aim()[0] == 1, "%.2f m, aim %+.3f" % (far, dh))
+
+        # let go: the follow camera keeps looking where the aim did
+        beta = self.cam()[2]
+        g.cmd("key mouseright up")
+        time.sleep(1.5)
+        mode, _, after = self.cam()
+        dh = (after - beta + math.pi) % (2 * math.pi) - math.pi
+        self.ok("released: the camera stays", mode == 4 and abs(dh) < 0.05 and self.aim()[0] == 0,
+                "mode %d heading %+.3f" % (mode, dh))
+
+        self.setting("mouse.free_aim", 0)
+
+        # the gamepad: Gamepad > Free aim, RB (R1) aims, the right stick turns it (2 radians a second at full tilt), the
+        # left stick still moves Vic
+        self.setting("pad.free_aim", 1)
+        g.cmd("gamepad on")
+        g.cmd("gamepad rb 1")
+        time.sleep(1.0)
+        on_pad = self.aim()[0]
+        h0 = self.aim_heading()
+        g.cmd("gamepad rx 1")
+        time.sleep(0.5)
+        g.cmd("gamepad rx 0")
+        time.sleep(0.3)
+        turn = (self.aim_heading() - h0 + math.pi) % (2 * math.pi) - math.pi
+        before = g.player()[1]
+        g.cmd("gamepad lx 1")
+        time.sleep(1.0)
+        g.cmd("gamepad lx 0")
+        after = g.player()[1]
+        g.cmd("gamepad rb 0")
+        time.sleep(1.0)
+        g.cmd("gamepad off")
+        self.setting("pad.free_aim", 0)
+        far = math.hypot(after[0] - before[0], after[1] - before[1])
+        self.ok("gamepad free aim", on_pad == 1 and -1.4 < turn < -0.6 and far > 1.0, "aim %+.3f, moved %.2f m" % (turn, far))
+
+        # the sniper rifle's scope: the mouse turns it directly (no stick speed), the wheel zooms
+        self.give(30, 20)
+        g.cmd("key mouseright down")
+        time.sleep(1.2)
+        mode, _, b0 = self.cam()
+        for _ in range(20):
+            g.cmd("mouse 20 0")
+        g.wait_frames(10)
+        dh = (self.cam()[2] - b0 + math.pi) % (2 * math.pi) - math.pi
+        fov0 = g.peekf(self.CAM + 0x134, 1)[0]
+        g.cmd("press wheelup 50")
+        time.sleep(0.2)
+        g.cmd("press wheelup 50")
+        time.sleep(1.5)
+        fov1 = g.peekf(self.CAM + 0x134, 1)[0]
+        self.shot("scope_zoomed")
+        g.cmd("key mouseright up")
+        time.sleep(1.0)
+        self.ok("the mouse turns the scope, the wheel zooms", mode == 7 and abs(dh + 1.0) < 0.01 and fov1 < fov0 * 0.7,
+                "mode %d heading %+.3f, FOV %.1f -> %.1f" % (mode, dh, fov0, fov1))
+
+        # the wheel on foot: down the next weapon, up the previous one (one each notch)
+        self.give(24, 500)  # an SMG next to the pistol and the rifle
+        slots = [g.peek(g.player()[0] + self.PED_SLOT, 1)[0]]
+        for k in ("wheeldown", "wheelup", "wheelup"):
+            g.cmd("press %s 50" % k)
+            time.sleep(0.6)
+            slots.append(g.peek(g.player()[0] + self.PED_SLOT, 1)[0])
+        self.ok("the wheel changes weapon", slots[1] != slots[0] and slots[2] == slots[0] and slots[3] not in (slots[0], slots[1]),
+                "slots %s" % slots)
+
     def run(self):
         g = self.g = rig.Game.start(save=os.path.join(ROOT, "build", "rig", "saves", "fortbaxter"), name="controls_check",
                                     port=self.port, data_dir=os.path.join(ROOT, "build", "controls", "data"),
@@ -298,6 +483,7 @@ class Check:
             self.ok("walk unbound", walk == "0", walk)
 
             self.mouse_and_driving()
+            self.free_aim()
 
             # a wheel notch as L1 (second slot); the menu key keeps F2 (the menu refuses keys a control has)
             self.setting("keys.l12", KEY_WHEEL_UP)

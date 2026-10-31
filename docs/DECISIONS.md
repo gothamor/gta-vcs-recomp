@@ -693,3 +693,32 @@ every file came out up to 13.5 h in the future, newer than any build.ninja CMake
   Checked by recompiler output and scene captures (PROGRESS.md, 2026-10-31).
 - A tool that fails now ends its log with how it ended (`toolchain.describe_exit`: the NTSTATUS name, or the signal),
   and the launcher gets `illegal_instruction` / `missing_dll` instead of a bare `recompiler_failed`.
+
+## 2026-10-31 - Free aim: the game's own, driven by the host (the user's request)
+The user asked for free aim with a reticle, selectable in the settings, that feels as if the game had supported the
+mouse all along; their choices: aim while the right button is held, no lock-on with the mouse when it is on, free aim on
+the gamepad too (no aim assist), the mouse 1:1 in scopes and the wheel for weapons / zoom; no mouse steering. One rule
+from them: Vic moves while free aiming exactly when he can move locked on with that weapon - nothing new is added.
+- **The game's free aim, not a new one.** VCS has free aim (R1, then L3; game-internals.md 12c): a lock-on to an
+  invisible dummy object with its own circle reticle, aim pose, camera and no random spread. Building on it keeps all of
+  that (the reticle is the game's, scaled with the HUD; peds react as to any aim) and replaces only what feels bad: the
+  pad read enters it in one report (R1 + L3), the mouse / right stick turn the dummy about Vic (writing it every frame,
+  turning the lock-on camera by the same amount first so it does not lag), and the world update runs with the free-aim
+  bit cleared, so the game treats it as a lock-on to an object: Vic moves as he does locked on with that gun (the game's
+  free aim makes him stand still and puts the left stick on the aim). The camera and the HUD run with the bit set again
+  (the centred free-aim camera and the circle, not the lock-on view and triangles). The dummy stays 12 m from Vic: the
+  lock drops past ~30.
+- **Shots through the circle**: the gun's line to the dummy and the camera's line through it cross only at the dummy,
+  so near targets would be missed by the gun's line. The player's free-aim shot tests the camera's line instead (the
+  line test's start redirected to a point of it level with the gun; GTA VC's PC version does the same with its
+  third-person mouse aim), and the shot's end is put on it so the tracer agrees. The gun's own start stays for the
+  muzzle effects.
+- **Not an ImGui reticle** (the plan's first idea): the game draws its own circle exactly where the shots go, in the
+  HUD's style and scale; a second one would only disagree with it.
+- **Melee, thrown and scoped weapons keep R1** (lock-on is how fists fight; scopes are already free aim). Off by default
+  for both devices: it changes how the game plays (easier than lock-on at range), so "authentic by default" holds it
+  back, unlike the mouse camera. Mouse wheel is on by default: a binding, nothing in the game changes.
+- Hip fire (the left button with a gun) also aims for the shot, held 0.6 s after it, so every shot goes through the
+  circle as in a PC shooter.
+- `VCS_FREEAIM=0` installs none of the hooks (the reference). The guest scratch for the shot's start sits at 0x60000 in
+  the EE kernel's area, which nothing in the recompiled game uses.

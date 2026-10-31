@@ -597,6 +597,21 @@ dropped on uploads (lazy render-target patching).
   follow camera FUN_0029dab0), DECISIONS.md. `tools/controls_check.py`: 36 checks, 0 failed (11 new: mouse heading /
   pitch / invert / off, the pause menu, lock-on, driving keys, lean rebind, W drives and Space stops the car, the mouse
   on the vehicle camera, mouse look after leaving the car).
+- **Free aim with the mouse and the gamepad** (2026-10-31, asked for by the user): Keyboard > Free aim / Gamepad > Free
+  aim (off by default): with a gun, holding R1's button aims where the mouse / right stick points with the game's own
+  circle, shots go through it, Vic moves as he does locked on with that gun; fists / melee / thrown / scoped weapons keep
+  the lock-on. It is the game's own free aim (a lock-on to a dummy object), entered in one pad report, the dummy turned by
+  the host, the world run with the free-aim bit cleared and the camera / HUD with it set, the player's shot line taken
+  from the camera (src/game/vcs_aim.cpp; game-internals.md 12c, DECISIONS.md). Also: the scopes and first-person weapon
+  views turn 1:1 with the mouse; Keyboard > Mouse wheel (on): next / previous weapon on foot, zoom in the sniper scope,
+  camera, binoculars; the camera keeps the aim's heading when the aim ends. Test commands `gamepad ...` (an injected
+  gamepad) and `aimstate`. `tools/controls_check.py`: the free-aim checks (right button enters it, the mouse turns it
+  1.000 rad per 400 counts, a man on the aim line hit and one 2 m beside it not, 3.6 m strafed while aiming with the aim
+  unchanged, the camera kept on release, fists / free aim off still lock on, the gamepad's RB and right stick, the sniper
+  scope 1:1 and zoomed 70 -> 45 by two notches, the wheel's weapon steps); 46 checks, 0 failed. SMG, assault rifle and
+  M249 shots checked down the camera line too. Not done: aim assist on the gamepad; the shotguns fire through another
+  path (not FireInstantHit's line test), so their pellets still fly from the gun to the aim point - right at range, a
+  little off up close; the flame-thrower not checked.
 - **Music / sound effects volume** (2026-10-28, asked for by the user): Audio > Music and Sound effects are the game's
   own levels, in step with its pause menu both ways and kept across save loads (game-internals.md 9c). controls_check
   checks that the levels reach the game and its prefs, a save load keeps them, and the pause menu's slider changes the
@@ -731,6 +746,7 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `VCS_MIN_STEP=x` | independent timing's step floor (default 50/240: the 240 fps ceiling; lower makes an unlimited cap unlimited) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
 | `VCS_GAME_VOLUME=0` | Audio > Music / Sound effects leave the game's own levels alone (no setter hooks, no sync; the reference) |
+| `VCS_FREEAIM=0` | free aim's hooks not installed (CGame::Process, CCamera::Process, the weapons' line test): the game's aiming untouched, the setting does nothing |
 | `VCS_INPUT_MAP=0` | the runtime's fixed built-in key / gamepad mapping instead of the player's bindings (`ps2_pad.cpp`; the reference) |
 | `VCS_VSYNC=0\|1\|2` | Vertical sync for one run: off, on, off with tearing allowed |
 | `VCS_SCRIPT_TIMESTEP=0` | mission meters that count per frame stay on the frame rate (game-internals.md 11f; the reference) |

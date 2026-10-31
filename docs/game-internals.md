@@ -1863,6 +1863,58 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
 - Teleported to (575, 175) the camera ends up at its lowest pitch (-1.483, straight down) - the game's own doing (the
   same with `VCS_INPUT_MAP=0`).
 
+### 12c. Aiming: lock-on, the game's free aim, shots, scopes (2026-10-31)
+
+Found for free aim with the mouse (src/game/vcs_aim.cpp), by decompiling (`tools/eedecomp.py`; the files in
+`build/analysis/decomp/aim_cams.c`, `weapon_fire2.c`) and by watching the player ped while holding R1 / tapping L3 in a
+hidden run (rig `peek` / `poke`, snapshots diffed).
+
+- **The game has a free aim** (its help text `H_GUN03`; `C?FREE1` = L3, `C?FREE2` = the left stick): R1 held, then L3
+  (R1 and L3 in the same pad report work too, from nothing). It is **a lock-on to an invisible dummy object**: the
+  player's **+0x820 (the lock-on target)** becomes an entry of the object pool (`*(0x487AA4)`, model 671, `+0x48 & 0xE`
+  = 8: an object; a ped is 6), first placed 30 m ahead of Vic, and **+0xC90** holds the same point. The left stick moves
+  the dummy (Vic stands still), the right stick and the mouse do nothing, and the camera is the lock-on camera (mode 11,
+  FUN_0029c280) centred on it. **The white circle with a dot** drawn on the dummy is the game's free-aim reticle.
+- **Free-aim flag: bit 51 of the player's 64-bit flags at +0xCC8** (bit 19 of the word at +0xCCC; found by diffing the
+  ped locked on a ped against in free aim: the only flag that differs). Bit 48 (+0xCCC bit 16) is set by any lock-on.
+  Who reads bit 51: the lock-on camera (with it set there is no pitch limit and no crosshair offset: the target is
+  centred), FireInstantHit (no random spread with it set, below), the HUD (circle with it, the lock-on triangles
+  without), and the ped's control code (the left stick moves the dummy with it, Vic without it).
+- **Cleared, the dummy stays the target** - the game then treats it as a lock-on to an object: Vic walks / strafes as he
+  does locked on with that weapon (a pistol strafes: 3.3 m in a second with D), facing it, and moving the object moves
+  the aim (the camera follows). **The lock drops when the dummy is over ~30 m from Vic** (25 m held, 40 m dropped:
+  the weapons' lock-on range); behind a wall or behind Vic it holds.
+- Lock-on camera (FUN_0029c280, modes 11 and 28): with a target it turns alpha (+0x78) / beta (+0x7C) toward the
+  target's direction from Vic at most `0.1 x time step` a frame (1000 on its first frame, CCam +0xAC set); with no
+  target (+0x820 = 0) the right stick turns it like the follow camera. Alpha (pitch) follows the target's elevation
+  from about Vic's head. Front = (-cos beta cos alpha, -sin beta cos alpha, sin alpha): beta is the follow camera's
+  convention (12b). `TheCamera + 0x950 / 0x954` = 0.53 / 0.47: the third-person crosshair's place on screen (VC's
+  m_f3rdPersonCHairMultX / Y), used to offset the lock-on view for guns.
+- Leaving any aim back to the follow camera (mode 4) keeps beta but the follow camera eases toward its source points
+  (+0x220 / +0x230, 12b), which still hold the view from before the aim: a ~1.6 rad swing back. vcs_aim.cpp turns them to
+  the aim's heading on the first frame back.
+- **Shots** (a write watch on the shot ped's health with `VCS_WATCH_STACK=1`): FUN_002C3E48 = **CWeapon::FireInstantHit**
+  (weapon, shooter, source, ...) -> FUN_002C6460 (the bullet's impact: damage through FUN_001D7940, effects) and
+  FUN_002C5320 (tracers / shells). For a shooter with a target (+0x820) and ped +0x35C bit 0 (set while aiming) the end
+  is the source plus the direction to the target (an object's +0x30, a ped's bone) times the weapon's range
+  (`FUN_00407120(type) + 8`); for the player without bit 51 a random spread scaled by accuracy (+0x78E) and recoil
+  (+0xC70) is added. Then **the line test FUN_002D0870(from a0, to a1, colpoint a2, entity a3, ..., shooter t1)** (a
+  wrapper of CWorld::ProcessLineOfSight FUN_001908C0) - this call at 0x2C479C, return address **0x2C47A4**; FireInstantHit
+  keeps its own copy of the source (s6) for what follows. The other calls of the wrapper in FireInstantHit: 0x2C41A4
+  (vehicle targets), 0x2C490C, 0x2C4C98 (vehicle guns), 0x2C4F10 (no target). FUN_002CB7C0 is the drive-by shot,
+  FUN_002CDA88 / FUN_002CD288 the NPCs' / doom aim corrections, FUN_002CEA70 = IsTypeMelee (weapon info +4 == 0).
+- **Weapon changes on foot**: R2 the next weapon, L2 the previous (one step a press); locked on they change the target.
+  The current slot is the s8 at ped **+0x789**; slot n's weapon at +0x578 + n x 0x1C (type first).
+- **Scopes and first-person weapon cameras** (FUN_00297CB8: modes 7 sniper, 8 rocket launcher, 34 M16, 45, 46 camera, 47
+  binoculars): the stick's speed is added to alpha / beta (+0x78 / +0x7C) and alpha clamped to the limits of
+  FUN_00297BC8, so writing them before the update turns the scope directly (vcs_input.cpp: exact, 400 counts a radian at
+  70 deg). Modes 7, 46, 47 zoom: Square / Cross change the FOV (+0x134) and **0x487E2C** (the zoom it eases back
+  toward, FUN_00371938) between 70 and 15 (4.8 for the camera, mode 46).
+- **HUD** FUN_00323018 (called from CHud::Draw) draws the scope overlays for modes 7, 8, 34, 40-47 and the binoculars /
+  camera / laser-sniper extras; the free-aim circle and the lock-on triangles are drawn elsewhere (not traced).
+- Guest RAM below the game (the EE kernel's 0x00000-0x7FFFF) is all zero in play except a few words at 0x10000,
+  0x74000 and 0x7C000; vcs_aim.cpp keeps the shot's start point at **0x60000**.
+
 ## 13. Open questions / next research targets
 
 - Main loop, frame limiter, CTimer (section 4) - milestone 4 (60 fps).
