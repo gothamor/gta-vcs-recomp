@@ -156,6 +156,7 @@ namespace platform
     bool windowHidden(); // made with WindowDesc::hidden
 
     // For the Vulkan renderer (rhi::VulkanWindow), on a window made with WindowDesc::vulkan. Main thread.
+    void (*vulkanGetInstanceProcAddr())(); // SDL's Vulkan loader entry point
     const char *const *vulkanInstanceExtensions(uint32_t *count); // the instance extensions the surface needs
     bool vulkanCreateSurface(void *instance, uint64_t *surface);  // VkInstance -> VkSurfaceKHR
 

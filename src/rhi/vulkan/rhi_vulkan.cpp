@@ -379,7 +379,10 @@ namespace rhi
 
             bool create(const DeviceDesc &desc, std::string &error)
             {
-                if (volkInitialize() != VK_SUCCESS)
+                const auto getProc = desc.vulkan.getInstanceProcAddr ? desc.vulkan.getInstanceProcAddr() : nullptr;
+                if (getProc)
+                    volkInitializeCustom(reinterpret_cast<PFN_vkGetInstanceProcAddr>(getProc));
+                else if (volkInitialize() != VK_SUCCESS)
                 {
                     error = "no Vulkan loader (libvulkan.so.1 / vulkan-1.dll): install the GPU's Vulkan driver";
                     return false;
@@ -1029,6 +1032,16 @@ namespace rhi
                 for (const VkExtensionProperties &e : available)
                     if (std::strcmp(e.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0)
                         m_debugUtils = true;
+#if defined(__APPLE__)
+                // Portability devices such as MoltenVK are hidden unless explicitly requested, including for off-screen runs.
+                const bool portability = std::any_of(available.begin(), available.end(), [](const VkExtensionProperties &e) {
+                    return std::strcmp(e.extensionName, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0;
+                });
+                if (portability && std::none_of(extensions.begin(), extensions.end(), [](const char *name) {
+                        return std::strcmp(name, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0;
+                    }))
+                    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
                 if (m_debugUtils)
                     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
                 std::vector<const char *> layers;
@@ -1048,6 +1061,10 @@ namespace rhi
                 app.pEngineName = "vcs-recomp";
                 app.apiVersion = VK_API_VERSION_1_3;
                 VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+#if defined(__APPLE__)
+                if (portability)
+                    ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
                 ci.pApplicationInfo = &app;
                 ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
                 ci.ppEnabledExtensionNames = extensions.data();
@@ -1220,6 +1237,11 @@ namespace rhi
                 f2.features.shaderClipDistance = VK_TRUE;
                 f2.features.samplerAnisotropy = supported.samplerAnisotropy;
                 std::vector<const char *> extensions{VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
+#if defined(__APPLE__)
+                // Vulkan requires enabling this extension when the selected device advertises it.
+                if (deviceHas("VK_KHR_portability_subset"))
+                    extensions.push_back("VK_KHR_portability_subset");
+#endif
                 if (!m_offscreen)
                     extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
                 // GPU time on the CPU's clock (the input delay, PS2X_RHI_STATS): CLOCK_MONOTONIC is steady_clock on Linux

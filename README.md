@@ -1,6 +1,6 @@
 # GTA: Vice City Stories — Native PC port (PS2 static recompilation)
 
-A native **Windows and Linux** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
+A native **Windows and Linux** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), with experimental Apple Silicon macOS support, made by
 recompiling the game's PS2 executable into C++. Both are built from the same source and run natively: Direct3D 11 on
 Windows, Vulkan on Linux.
 
@@ -8,7 +8,7 @@ Windows, Vulkan on Linux.
 The build reads the executable from your disc, and the finished game reads everything else from it while it runs.
 
 Status: in development. See [docs/PROGRESS.md](docs/PROGRESS.md) for what works, and [docs/LINUX.md](docs/LINUX.md)
-for the Linux build in detail.
+for the Linux build in detail. The experimental macOS build is described in [docs/MACOS.md](docs/MACOS.md).
 
 ## Install on Windows: the launcher (easiest)
 

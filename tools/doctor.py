@@ -174,7 +174,7 @@ def check_compiler():
     """Windows: the Visual Studio the build would use and what it lacks. code: ok, no_vs, no_cpp_tools, no_clang,
     old_clang (CMake / Ninja: found or downloaded by the build). Linux: build.py --check-deps."""
     if not tc.IS_WINDOWS:
-        ok = tc.check_linux_deps(tc.build_env())
+        ok = (tc.check_mac_deps if tc.IS_MACOS else tc.check_linux_deps)(tc.build_env())
         return {"ok": ok, "code": "ok" if ok else "missing_packages",
                 "message": "build dependencies found" if ok else "packages missing: python3 tools/build.py --check-deps"}
     installs = vs_installs()

@@ -345,6 +345,16 @@ namespace platform
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
             std::fprintf(stderr, "[platform] no audio: %s\n", SDL_GetError());
 
+#if defined(__APPLE__)
+        // SDL's default loader search does not include Homebrew's Apple Silicon prefix.
+        if (desc.vulkan && !SDL_GetHint(SDL_HINT_VULKAN_LIBRARY) && !SDL_Vulkan_LoadLibrary(nullptr))
+        {
+            const char *paths[] = {"/opt/homebrew/lib/libvulkan.1.dylib", "/usr/local/lib/libvulkan.1.dylib"};
+            for (const char *path : paths)
+                if (SDL_Vulkan_LoadLibrary(path))
+                    break;
+        }
+#endif
         // created hidden, placed, then shown: no flash at the default place
         g_window = SDL_CreateWindow(desc.title, desc.width, desc.height,
                                     SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | (desc.vulkan ? SDL_WINDOW_VULKAN : 0));
@@ -423,6 +433,11 @@ namespace platform
     }
 
     bool windowHidden() { return g_hiddenWindow; }
+
+    void (*vulkanGetInstanceProcAddr())()
+    {
+        return SDL_Vulkan_GetVkGetInstanceProcAddr();
+    }
 
     const char *const *vulkanInstanceExtensions(uint32_t *count)
     {

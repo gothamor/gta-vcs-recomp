@@ -237,6 +237,7 @@ namespace rhi
     // What the Vulkan backend needs from the window (the platform layer's SDL): opaque to the RHI.
     struct VulkanWindow
     {
+        void (*(*getInstanceProcAddr)())() = nullptr; // loader selected by the platform
         const char *const *(*instanceExtensions)(uint32_t *count) = nullptr; // for the surface
         bool (*createSurface)(void *instance, uint64_t *surface) = nullptr;  // VkInstance -> VkSurfaceKHR
     };

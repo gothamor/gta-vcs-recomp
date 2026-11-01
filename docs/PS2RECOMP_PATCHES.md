@@ -7,6 +7,7 @@ source with a `[gta-recomp]` comment and listed here.
 | File | Change | Why |
 |---|---|---|
 | `CMakeLists.txt`, `ps2x*/CMakeLists.txt` | `PS2X_ROOT_DIR` instead of `CMAKE_SOURCE_DIR` | Lets our repo `add_subdirectory()` the tree |
+| `ps2xRuntime/cmake/ReleaseMode.cmake`, `src/lib/ps2_render_worker.cpp` | macOS ARM64 compiler flags and sse2neon for the render worker | Allow native ARM64 compilation without x86-only flags and headers; numerical equivalence still needs runtime verification |
 | `ps2xRuntime/cmake/ReleaseMode.cmake` | clang-cl branch: drop `/Qspectre-`, `/GL`, `/LTCG`, `/fp:fast`; LTO only with lld-link | clang-cl rejects `/Qspectre-`; `/GL` needs MSVC's linker. `/fp:fast` dropped for clang because it lets the compiler assume no NaN/Inf and reorder, which fights the runtime's PS2 float emulation |
 | `ps2xRuntime/CMakeLists.txt` | `PS2X_RUNNER_SOURCE_DIR`, `PS2X_RUNNER_EXTRA_SOURCES`, `PS2X_RUNNER_MAIN` cache vars; adds `ps2_disc_image.cpp` | Parent project supplies generated code + its own `main()` |
 | `ps2xRuntime/include/runtime/ps2_disc_image.h`, `src/lib/ps2_disc_image.cpp` (new) | `IPS2DiscImage` + global setter | One disc source for every CD path |

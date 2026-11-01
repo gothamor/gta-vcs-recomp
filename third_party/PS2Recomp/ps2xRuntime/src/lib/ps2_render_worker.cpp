@@ -10,12 +10,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#if defined(USE_SSE2NEON)
+#include "sse2neon.h" // [gta-recomp] preserve the guest rounding mode on ARM64
+#else
 #include <immintrin.h>
+#endif
 #include <new>
 #include <exception>
 #include <mutex>
 #include <thread>
-#include <xmmintrin.h>
 #include <cstring>  // [gta-recomp] libstdc++ (Linux) does not bring it in
 
 namespace ps2_render_worker
