@@ -649,7 +649,10 @@ namespace vcs
                     uintptr_t start = 0;
                     uint64_t size = 0;
                     const bool known = hostSymbol(host, &name, &start, &size);
-                    info.generated = !known || name.find("FUN_") != std::string::npos;
+                    // generated functions are exported (-rdynamic): one dladdr cannot name is a hook (an anonymous
+                    // namespace's replaceFunction target) - counting it as generated with a 1 MB window charged the host
+                    // code after it to the hooked guest function (FUN_003298D8's 5%, PERFORMANCE.md 28)
+                    info.generated = known && name.find("FUN_") != std::string::npos;
                     if (known && size && start == host)
                         info.size = size;
                     found = generatedCache.emplace(host, info).first;
@@ -780,6 +783,25 @@ namespace vcs
                 std::sort(rest.begin(), rest.end(), [](auto &a, auto &b) { return a.second > b.second; });
                 for (size_t i = 0; i < rest.size() && i < 30; ++i)
                     std::fprintf(stderr, "[profile]   %5.1f%%  host %s\n", 100.0 * rest[i].second / total, rest[i].first.c_str());
+                // VCS_PROFILE_RAW=<file>: the samples dladdr could not name, as "module offset count" lines appended per
+                // report - for `llvm-symbolizer --obj=<module>` (functions in anonymous namespaces, static libraries)
+                static const char *rawPath = std::getenv("VCS_PROFILE_RAW");
+                if (rawPath && *rawPath)
+                    if (FILE *f = std::fopen(rawPath, "a"))
+                    {
+                        for (const auto &[rip, count] : other)
+                        {
+                            std::string name;
+                            if (hostSymbol(rip, &name, nullptr, nullptr))
+                                continue;
+                            Dl_info info{};
+                            if (dladdr(reinterpret_cast<void *>(rip), &info) && info.dli_fname && info.dli_fbase)
+                                std::fprintf(f, "%s 0x%llx %llu\n", info.dli_fname,
+                                             static_cast<unsigned long long>(rip - reinterpret_cast<uintptr_t>(info.dli_fbase)),
+                                             static_cast<unsigned long long>(count));
+                        }
+                        std::fclose(f);
+                    }
                 std::fflush(stderr);
                 hits.clear();
                 other.clear();

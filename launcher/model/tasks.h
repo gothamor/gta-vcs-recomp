@@ -51,6 +51,8 @@ namespace launcher
         std::string afterLaunch = "minimize"; // minimize, close, stay
         std::string opt;                      // "" (keep the build's), lto, none, pgo
         bool checkUpdates = false;            // ask GitHub for a newer release when the launcher starts
+        bool reduceMotion = false;            // the launcher's animations off; this alone decides (off until set)
+        std::string theme = "system";         // system (Windows' app mode), light, dark
     };
 
     class App
@@ -61,13 +63,22 @@ namespace launcher
 
         // the repository (where tools/build.py is) and its build folder
         std::filesystem::path root, build;
-        std::vector<std::wstring> python; // the interpreter (+ args): a release's python\, else py -3 / python
+        // Linux AppImage (tools/release.py): the release's files inside the read-only image; root is then the install
+        // folder they are copied to ($XDG_DATA_HOME/VCSRecomp/install, VCS_INSTALL_DIR) - empty otherwise
+        std::filesystem::path payload;
+        bool installing() const { return task && task->kind == "install" && !task->finished; }
+        // a release that updates itself: Windows (a release folder or not: update.py says), a Linux AppImage
+        bool canUpdate() const;
+        std::vector<std::string> python; // the interpreter (+ args): a release's python\, else py -3 / python (Linux: python3)
         std::string pythonText;
         std::string sourceVersion;        // VERSION, or the clone's commit
 
         // tools/doctor.py --json
         Json doctor;
         bool doctorRunning = false, doctorDone = false;
+        // shown from build/launcher_state.json (the last answer) until this run's check answers: the first frame
+        // already has the right layout; nothing in it may act on what the cache says (the UI shows it as checking)
+        bool doctorCached = false;
         std::string doctorError;
         std::string toolsProblem; // the scripts the launcher runs aren't all in tools/ (set by init)
         // the check ran and gave no answer: the steps it decides are unknown, never "missing"
@@ -127,10 +138,11 @@ namespace launcher
         std::unique_ptr<Process> m_doctor;
         std::vector<std::string> m_doctorOut;
         double m_now = 0;
-        void runTool(const std::string &kind, const std::string &title, const std::vector<std::wstring> &args);
+        void runTool(const std::string &kind, const std::string &title, const std::vector<std::string> &args);
         void handleLine(Task &t, const std::string &line);
         void finishTask(Task &t);
         void loadSettings();
+        void loadFolder(); // root's scripts, version, settings, disc, the doctor - once root holds the files
         bool writeIsoToIni(const std::filesystem::path &path);
     };
 }

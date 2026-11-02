@@ -242,6 +242,44 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
     (at 30 fps and 16 m/s a frame moves the car 0.55 m into it). The per-frame part is what made them grow.
   - **Still per frame** (read in ProcessWheel, not measured or fixed): a burst tyre's wobble - a random sideways amount
     added every frame when the wheel status (last argument) is 1.
+- **Moving platforms: `1 / max(step, 1.0)`** (found 2026-10-31 from GitHub issue 10: Vic fell out of the ferris wheel
+  at 60 fps, not at 30). Objects that the game places itself each frame get the move speed `(new position - old) * 1 /
+  max(ms_fTimeStep, 1.0)`, so that a ped standing on them moves with them. On the PS2 the step is 1.67 and the 1.0 never
+  matters; above 50 fps (step < 1) the speed came out step times too small. Patched (game/vcs/overrides.toml: the max.s
+  becomes max(step, 0.001) through the two nops behind it, as the 1.0 register is also the division's numerator; steps
+  >= 1 unchanged):
+  - **FUN_00175620, the ferris wheel** (Funland; no reVC counterpart). Globals: 0x486020 the hub object (its matrix
+    turns), 0x486024 the angular speed (0.05; * step * 0.02 a frame = 0.05 rad/s, ~1.15 m/s at the carriages), 0x486028
+    the angle, 0x48602C the angle left to a stop, 0x486030 the state (0 starting: speed += step * 0.0002 up to 0.05; 1
+    running; 2 stopping, when 0x486031 is set; 3 stopped), 0x48603C the radius (23.0), 0x486040 / 0x486044 the swing's
+    spring and damping (0.1 / 0.95), 0x486034 / 0x486038 the swing's push while starting / stopping (0.001). The 12
+    carriages (model 7069, created within 275 m of the camera by FUN_001763E0, removed past 300 m by FUN_00176680) are
+    at 0x72D258; each is put at angle + i * 30 degrees in the plane x = 342.19 around (y -243.2, z 37.1), its move speed
+    set (FUN_003562C0 at 0x1760A8) and its matrix tilted by its own swing (angle 0x72D228, speed 0x72D1F8: `w = (w + push
+    - angle * 0.1) * 0.95; angle += w * step` - per frame, but the wheel runs steadily, the angles read 0 and the push
+    only settles them at 0.01 rad; left as it is). Measured (rig, a ped dropped into the lowest carriage): at 1/30 he
+    keeps his place in it (offset within 0.01 m for 15 s) and his move speed equals the carriage's (0.023 units = 1.15
+    m/s); at 1/144 the carriage's speed read 0.0079 (0.40 m/s), he took that, slid 0.75 m/s towards its edge and fell
+    out after 1.8 s. Found with the object pool (below), a write watch on a carriage's move speed +0x140 (writer FUN_003562C0,
+    ra 0x1760B0) and the function's decompile.
+  - **FUN_002469A0, the escalators** (CEscalator::Update as in reVC: N step objects moved along three segments on a
+    16.384 s cycle of the game clock, `m_snTimeInMilliseconds & 0x3FFF`; created within 25 m of the camera). Same
+    division at 0x246EB4 - riders slid against the steps the same way. Found by scanning the generated code for a
+    max.s of the step against 1.0 followed by a div.s (`framerate_audit.py` covers the wheel only: `ferris`). The list:
+    count 0x4CD2E8, records from `*(0x4CD2EC)`, 0x150 bytes each: path points +0x00 / +0x10 / +0x20 / +0x30, a matrix
+    +0x40, active +0x90, reversed +0x94, step count +0x98 (31), segment ends +0x9C / +0xA0 (0.113 / 0.85), centre +0xB0,
+    radius +0xC0, step objects from +0xC4. All 8 are in the mall interior around (406-422, 1052-1200, -198). After the
+    patch a step's move speed at 1/144 is 1/30's (0, 0.0147, -0.0095 against 0, 0.0148, -0.0095).
+  - **The follow cameras** (patched 2026-10-31, the same way; 12b): FUN_0029DAB0 (mode 4, on foot) and FUN_0029FAF0
+    (mode 18 behind a vehicle, 22 behind a boat; CCam::Process's cases 3 / 0x11 / 0x15) turn beta toward where they
+    want it by a per-frame amount (a share `min(speed x rate x step, 1)` of the gap, capped at rate x step), make that a
+    speed with `/ max(step, 1.0)` (0x29EA50 / 0x2A0790), ease the heading speed +0x140 toward it (pow(k, step)) and add
+    speed x step to beta. Above 50 fps the automatic turn ran step times too slow; the stick's term is added after the
+    division and was right. Measured (`framerate_audit.py` carcam: the car's lag behind it after a left turn halving;
+    footcam: the camera's turn rate while the player runs to its right): before 0.47 / 0.58 / 1.86 s and 96 / 82 / 35
+    degrees a second at 1/30 / 60 / 144, after 0.50 / 0.48 / 0.48 s and 97 / 99 / 100. $f3 (the 1.0) is read again by
+    the `min.s` two instructions on, so the 0.001 goes to $f5. On foot the controls follow the camera: after a turn the
+    player lines up with it, so its own turn shows mainly while he runs sideways.
 - **Physics read for the audit**: ped -> its vehicle at ped+0x450 (also +0x480 / +0x484; found by scanning the ped for
   the address of the car it was warped into); **CPhysical move speed (x, y, z) at +0x140** (units per 1/50 s, x 50 =
   m/s; z found at +0x148 mid-fall, y at +0x144 in a car driving north); written through a vector setter
@@ -661,7 +699,35 @@ primitives each frame, groups them into elements (boxes closer than 12 px across
 radar and its blips, the clock / weapon / money cluster) and gives each an anchor from where it sits on the 4:3
 screen: left edge when its middle is left of 280 and it starts before 160, right edge when its middle is right of 360
 and it ends after 480, the middle otherwise; full-width draws (fades, letterbox bars) stretch. At the frame kick the
-whole-pixel positions of its vertices go to the renderer, which finds each GS primitive's element by them.
+whole-pixel positions of its vertices go to the renderer, which finds each GS primitive's element by them. The radar
+and centred text are not grouped by position but known by who draws them (below).
+
+**Radar and text** (2026-11-01, user report: with the HUD at the screen edges, subtitles / stunt texts at the bottom
+jumped between left, middle and right, and the radar sometimes left its corner; `VCS_TRACE_IM2D_STACK=1` and
+`tools/eedecomp.py`):
+- **The radar** is `FUN_00321500` (called from CHud::Draw): the map through `FUN_00110eb0` (tiles from `FUN_001178f8`,
+  Im2D returns 0x117620 / 0x1178a8), then the ring and blips (0x3e0018, 0x3e0094, 0x3dff64, 0x3e0ba0). The map tiles
+  are **huge quads** scissored to the radar (x -210..410, y 141..716 at 4:3 for a radar at 37..122 x 336..415). That was
+  the bug: text near the bottom left merged with the radar's element, and the pair's box - changing as the map turns
+  and scrolls and with the text's length - flipped between "left edge" and "middle". CHud::Draw's next call after the
+  radar is `FUN_00113d50`, `FUN_00321758` or `FUN_002dfe10` (whichever path it takes), so "the radar is drawing" =
+  from `FUN_00321500`'s entry to one of theirs.
+- **Text**: the font setters (`FUN_003f4000` style = 0x48a1dc, `FUN_003f4020` colour = 0x711f30, `FUN_003f4050`
+  rect = 0x711f38, `FUN_003f41e0` justify = 0x48a1ec, `FUN_003f3c30` reset) and `FUN_003f3d10` print(string, x, y) ->
+  `FUN_003f3d88`, which copies the state into the style's font object (`*(0x48a1d8 + style * 4)`) and calls
+  **`FUN_00261be8` = render(font, string, x, y, colour, rect, ?, shadow)** twice (drop shadow with a copy of the rect,
+  then the text with the global one). The glyphs go out synchronously, one Im2D batch per line from `FUN_003dfdd8`
+  (return address **0x3dfe24**, nothing else draws through it). **Justify** = font + 0x28: bit 1 left, 2 centred, 4
+  right in the rect, 8 / 0x10 / 0x20 top / middle / bottom; none = at (x, y). The **rect** is (left, bottom, right,
+  top) floats in the PSP's 480-wide units (x 640 / 480 on screen) and the glyphs are scissored to it. Seen: subtitles
+  and mission text 0xa in 24..456; the stunt results ("Distance: ... Height: ...", "INSANE STUNT BONUS") 0xa in
+  **116..456** - centred right of the middle (x 381 of 640), clear of the 4:3 radar; help text 0x9 in 28..248; zone /
+  vehicle names 0x14 in 0..456; the ammo count 0x14 / 0x12 / 0x11 in 414..438 / 438..444 / 444..462.
+- So `vcs_hud.cpp` tags the radar's primitives (left edge, never grouped) and lines centred in a rect at least 240
+  units wide (the middle, never grouped). At the screen edges a centred line's rect is moved to the middle before the
+  game lays it out (the stunt results: the radar they avoided is at the edge now), the rect rather than the glyphs
+  because of the scissor. `VCS_TRACE_HUDANCHOR=<frames>` logs the elements and the text lines; `tools/hud_check.py`
+  checks it.
 
 **What reaches the GS as PATH2** (2026-10-24, `PS2X_TRACE_PATH2_TAGS=1`, decompiled with `tools/eedecomp.py`):
 - **Im2D's packet** (`FUN_002FB690`, called through `FUN_002FB9D0`): `CNT` (3n + 1 qwords) with `DIRECT 3n + 1`, one
@@ -954,6 +1020,15 @@ reference ops since FULLY_NATIVE.md step 5b):
   BITBLTBUF (0x50), TRXPOS (0x51), TRXREG (0x52) from the sizes, TRXDIR (0x53) and the IMAGE GIFtag
   (`bytes >> 4 | 1 << 59`). A missing node is made from the pool at `*0x488760` (used / max `0x4CD58C` / `0x4CD588`);
   with the pool full both REFs are written empty (qwc 0).
+  On the found path (2026-11-02, from the recompiled code's disassembly) it writes exactly: +0 the header REF
+  (`0x30000006`, node), +8 `0x10000000` (FLUSHE), +0xC `0x51000006`, +0x10 the pixel REF (`bytes >> 4 | 0x30000000`,
+  source), +0x1C `bytes >> 4 | 0x51000000`; +0x18 is left alone. Besides the slot only its own stack frame (the key at
+  sp - 0x20, the search direction at sp - 0x18, `$s0` saved at sp - 0x10); no calls; it leaves `$v0` = the pixel REF
+  dword, `$v1` = `0x51000000`. The recompiled tree search can leave for the EE scheduler at its loop's back edge and be
+  resumed later (a check right after the call saw a few hundred of 3.2 M calls unfinished). While driving it runs
+  40-70k times a second, nearly all of them while a material cache is filled (the RSL item path's "a cache being
+  filled", so the step 5b hook calls the original). Doing those natively was byte-exact (3.2 M calls compared) but made
+  the cruise hitch more (PERFORMANCE.md 28) - not kept.
 - `FUN_002F62B8` (the bind into a VRAM slot) reserves 32 bytes per mip level and calls it for each (128 bytes and
   `FUN_00266608` instead when `*0x488318 == 0` - not seen), then writes a CNT 5 with DIRECTHL 5 (A+D: TEXFLUSH, MIPTBP1,
   MIPTBP2 for the slot, register 0x42, TEXFLUSH) at the cursor, and queues TEX0 into `0x4882E0 + slot * 8` with the
@@ -1283,6 +1358,18 @@ below are module offsets (CDSTREAM loads at IOP 0x1D600 on the emulated IOP); "d
 - **Timing the game relies on**: after opening a radio station the EE sends the station's volume 3 samples later;
   on the IOP the preload's four 8 KB DMAs take ~22 samples, so the volume is in before key-on. A preload done
   instantly started the radio at the old volume (0) for one refill period (found by the replay comparison).
+- **The level swap waits for the music to stop** (found 2026-11-02 with `tools/cruise.py`: the longest hitches of a
+  drive across the bay, 150-410 ms, all game-thread idle; `PS2X_WAIT_LOG`, then `VCS_TRACE_DELAY=1`, which also logs
+  the music manager's mode changes now). **FUN_003C6D08** swaps the level when the one wanted (`*0x488C60`) differs from
+  the current (`0x4CD118`, CGame::currLevel: Beach / Mainland): FUN_002FA908(0x520D60, 2) - the music manager
+  FUN_001891A0(0x4E41E0, mode); mode 2 stops the stream (0x80700) and then loops `while (state poll 0x80E00 != 0)
+  DelayThread(1000)` (return address 0x1892B0) -, the level's sound banks, **FUN_0023BAF0** (the level loader, .LVZ),
+  then mode 1 (music back on). The IRX's stop handler (0x200C) only sets the request flag; the music thread sees it at
+  its next step, which for a playing stream is the next refill IRQ - up to 448 ms. So the whole game stood until then,
+  on the IOP as well (and each `DelayThread(1000)` took 3-6 ms of host time here, so ~100 calls per stop). The native
+  driver now runs that step at once for a stop while playing (`VCS_MUSIC_STOP_WAIT=1` = at the IRQ; the sound replay
+  comparison keeps the IRQ timing): the swap went from 150-410 ms to the load's own ~40 ms game frame. Other
+  FUN_002FA908 callers: cutscenes and menus (modes 1 / 3; mode 2 at 0x3C6DA8 is the level swap).
 - **libsd** (LIBSD.IRX, `src/sound/libsd.cpp`): entries are `core | voice << 1 | param << 8` (+0x80 for per-core
   volumes, core stride 0x28 instead of 0x400); the register table is data 0x4CA0. `sceSdSetCoreAttr` 2 / 4 / 6 =
   ATTR bit 7 / 6 / 14, 8 = noise clock, 10 = SPDIF. VoiceTrans mode 0 = TSA, ATTR DMA-write mode (0x20), DMA; the
@@ -1406,6 +1493,46 @@ keeps its order in a hidden `.ps2x-order` file (PS2RECOMP_PATCHES.md).
   menus show only the newer one.
 - At boot the newest slot (by the header date) is loaded automatically; with slots 1 and 2 present it took slot 2.
 
+### 10f. Save names, a failed save, and saves lost on the host (2026-11-01)
+
+Players' reports after 0.1.0: "it crashed and destroyed my savegame", "the game closes and deletes the save file when I
+save at Phil's safehouse". Found by reading the mission names out of `TEXT\AMERICAN.GXT` and saving under each odd one
+with the rig (`REGISTER_MISSION_PASSED` 0x01EB with a text-label argument: type byte 0x0A, the key, a NUL - e.g.
+`EB 01 0A "REN_C05" 00`, then `ACTIVATE_SAVE_MENU`).
+
+- **The slot file's name is `"<slot> <name of the last mission passed>"`**, the GXT text of the key the last
+  `REGISTER_MISSION_PASSED` gave (the game's text table, 12-byte entries, MAIN's `TKEY` / `TDAT`). The Load / Save /
+  Delete lists show that name back from the file name. Mission names with characters a Windows file name cannot hold:
+  `REN_C05` "Kill Phil: Part 2" (a colon), `MAR_A05` "Got Protection?", `MAR_A04` "O, Brothel, Where Art Thou?";
+  `LOU_A03` "D.I.V.O.R.C.E." ends in a dot (Windows drops trailing dots). The game itself drops the `?`
+  ("1 Got Protection" on the card); the colon and the dot it keeps.
+- **"Kill Phil: Part 2" on NTFS**: the card layer's `fopen("...\1 Kill Phil: Part 2")` made an empty file `1 Kill Phil`
+  with the 98,304 bytes in an alternate data stream ` Part 2`. The game wrote, closed and said "Save Successful" - but
+  it had already deleted the old slot file (10b), and the listing now showed `1 Kill Phil`, 0 bytes, which the slot scan
+  skips (10c): the save was gone. Fixed in the card layer: card names are stored with such characters as `%XX`
+  (`1 Kill Phil%3A Part 2`) and listed back decoded; files lost to a stream this way are recovered at the next listing
+  (PS2RECOMP_PATCHES.md, DECISIONS.md 2026-11-01). Checked: the save is whole, listed and loaded at boot ("2 Kill Phil:
+  Part 2" in the Load list); a card made by the old code is put right at boot and that save loaded.
+- **The slot comes from the file name alone**: `1 Soldier` renamed `4 Soldier` is listed as slot 4 and loads from it.
+  With two files for one slot the menus show only the newer (by the header date). A player who lost a save and then
+  saved again in that slot (a new game, say) would get the recovered save back hidden behind the new one, so recovery
+  moves it to the first free slot ("slot 1 holds a newer save: the recovered one goes to slot 2" in the log); both
+  listed, the newer loaded at boot, the recovered one from its slot. With all 8 slots used it stays in its own slot,
+  on disk and in the backups.
+- **A failed save deletes the whole save folder.** With the slot file's open failing (reproduced: a read-only file in
+  the way; anything that fails the open or a write does it), the game shows "Save failed! Check the memory card (8MB)
+  (for PlayStation 2) in MEMORY CARD slot 1 and please try again." - and before that deletes every file in
+  `BASLUS-21590GTA40001` (every slot, the data file, `icon.sys`, the icon; `sceMcDelete` x6) and tries to remove the
+  folder. On a PS2 that clears a half-written save; here a host error took every save with it. Together with the delete
+  before the write, any crash or error in a save loses saves, so the card layer now zips both cards into
+  `<data>/backups/auto-<date>.zip` before the first delete / overwrite / rename / format of a burst (tools/backup.py's
+  format: the launcher's Saves sheet lists and restores them; newest 10 kept). Checked: the folder wiped by a failed
+  save, then `backup.py restore auto-...` put every file back byte for byte.
+- Not found: a crash in the save itself. Neither the stream case nor the failed open crashed the game (both hidden and
+  quit cleanly); the one crash log from a player (issue #34) is a lost D3D11 device on Intel graphics. A crash at any
+  point in a save is still covered by the backups.
+- Check: `tools/saves.py` (recover, save as "Kill Phil: Part 2", load, delete, backup).
+
 ## 11. Scripts: MAIN.SCM and the script VM
 
 Found 2026-10-22 for the automation rig (`src/debug/rig.cpp`, `tools/rig.py`) from a RAM dump at the Fort Baxter
@@ -1453,8 +1580,10 @@ below (e.g. 0x0023 terminates, 0x0289 loads a mission, 0x0238 names a script).
 
 `CRunningScript` (0x218 bytes, pool around `0x738948`): +0 next, +4 prev, +8 id, +0x10 IP, +0x14 16-word stack
 (gosub), +0x54 0x6A-word local variables (timers at locals 0x68 / 0x69), +0x1FC local frame base, +0x200 wake
-time, +0x208 active, +0x20A mission script, +0x20C NOT flag of the current condition, +0x20D, +0x20F name (8
-chars; `Init` writes `"id%02i"`), +0x217 "is the mission" (cleared by terminate). **The stack** (read from a running
+time, +0x208 active, +0x20A "mission script" (but set on ambient scripts too: `ambtaxi`, `rampage`, `usj`, `carpark` ... in
+free roam with no mission running; seen 2026-10-31 in the F3 game-state panel), +0x20C NOT flag of the current condition, +0x20D, +0x20F name (8
+chars; `Init` writes `"id%02i"`), +0x217 "is the mission" (cleared by terminate; with Shakedown launched only its
+cutscene script `ch_jerr` has it - the F3 panel's `mission` line uses it). **The stack** (read from a running
 mission's slot, 2026-10-29): a GOSUB pushes its return IP as it is, a CALL a packed word (not a plain IP: the caller's
 frame goes with it, e.g. 0x0884077D); **+0x204 (u16) is the depth**, and a CALL adds its frame offset to +0x1FC.
 Setting IP, depth 1, frame 0 and local 0 between frames (rig `pause on`, `poke`) puts a mission back at its state
@@ -1485,6 +1614,10 @@ vehicle-mission monitors (`paramon`, `vigmon`, `firemon`, `taximon`...), `ga_*` 
   9 float32, 10 NUL-terminated string. A byte >= 0x0B is a variable (`FUN_00254ff8`): 0x0B / 0x0C the two timers,
   0x0D-0x6C local variable (byte - 0x0D + frame base), 0x6D-0xCC local arrays, 0xCD-0xE5 global
   ((byte - 0xCD) << 8 | next byte; address ScriptSpace + 4 * index), >= 0xE6 global arrays.
+- **CollectParameters runs natively** (2026-11-02, `collectParamsNative` in src/game/vcs_overrides.cpp, PERFORMANCE.md
+  23): these rules, the same `*ip` and return value (a type-0 byte returns the count left - 1); `VCS_NATIVE_PARAMS=0`.
+  Its callers often write a command's results back into the parameter block (word 0, sometimes more) before the next
+  call - which is why the verifier compares words 1.. only.
 - **Arrays** (read from FUN_00254ff8, 2026-10-27): a global array is 4 bytes - (byte - 0xE6) << 8 | next byte = the
   base global, then the number of the *local* holding the index, then the array's size; address ScriptSpace + 4 *
   (base + index). A local array is 3 bytes - byte - 0x6D = the base local, the index local, the size; address script +
@@ -1690,7 +1823,10 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
 - **Pools** (`CPool`: +0 entries, +4 flag bytes (bit 0x80 = free, low 7 bits = the handle's generation), +8 size;
   lookup `FUN_00471788(pool, handle)`: slot = handle >> 8, the low byte must equal the flag byte): peds `*(0x487A94)`
   (70 entries of 0xD20 bytes from 0x1D3FF80 in a game started from the Fort Baxter card), vehicles `*(0x487A98)`
-  (entries 0x8C0). A script char handle 0x1006 = ped slot 0x10, generation 6.
+  (entries 0x8C0). A script char handle 0x1006 = ped slot 0x10, generation 6. **Objects** `*(0x487AA4)`: 475 entries of
+  0x220 bytes (found 2026-10-31: object positions near the ferris wheel 0x220 apart, then the pool header with 475);
+  the matrix at +0, model at +0x56, move speed at +0x140 as other CPhysicals. The pointers around it: 0x487A8C (40000
+  entries), 0x487A90 (5200), 0x487A9C (6858), 0x487AA8 (20), 0x487AAC (3407), 0x487AB0 (192) - not identified.
 - **Ped fields for the trainer** (found 2026-10-26 by setting each value with a script command and searching the ped
   for it): +0x4E4 health (float), +0x4E8 armour (float), +0x480 the vehicle it is in (0 on foot; +0x450 / +0x484 hold
   it too), **+0x8C4 state** (1 on foot, 0x37 driving; +0x8A4 read 0 in these runs), +0x578 weapon slots: 10 x 0x1C
@@ -1771,7 +1907,9 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   [0] after a lock-on and after getting out of a car). Fields (relative to the CCam): **+0 mode** (4 follow ped on
   foot, 11 locked on with R1 - with fists too -, 18 behind a vehicle; VC's numbering), +0x10 front, **+0x78 alpha
   (pitch; negative looks down, about -1.48 .. 0.79)**, **+0x7C beta (heading, 0..2 pi; the stick to the right makes it
-  fall)**, +0x130 / +0x140 pitch / heading speeds, +0x134 FOV (70), +0x1A0 the target point, **+0x220 / +0x230 the
+  fall; it is the angle from +x of the target-to-camera direction: 270 deg behind a car heading north, where GTA's
+  heading - 0 = +y, counter-clockwise - reads 0; the F3 panel shows the heading from Front instead)**, +0x130 / +0x140
+  pitch / heading speeds, +0x134 FOV (70), +0x1A0 the target point, **+0x220 / +0x230 the
   source points** (where the camera stands). Found by diffing TheCamera while the right stick turned it, poking each
   candidate, then a write watch on alpha / beta (`watch`): the writer is **FUN_0029dab0 = the follow-ped camera**
   (decompiled with `tools/eedecomp.py`).
@@ -1784,16 +1922,30 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   eases toward the pitch the camera stands at (limits from the table: 0.785 up, 1.4835 down). So a heading written
   alone is pulled back (by ~0.1 a frame for many frames) unless the source points turn with it, and an alpha written
   alone is undone in a few frames; the stick's pitch speed integrates exactly (the smoothing sums to 1). The stick's
-  top speeds: heading 0.05, pitch 0.03 radians a step (2.5 / 1.5 rad/s).
+  top speeds: heading 0.05, pitch 0.03 radians a step (2.5 / 1.5 rad/s). The pull and the swing are a per-frame turn
+  divided by `max(step, 1.0)`, too slow above 50 fps until patched (2026-10-31, section 4: the follow cameras).
 - The follow camera ignores the stick while `0x488EB4` is set (FUN_002a2e30) and while CPad +0x96 is set; under a
   script camera TheCamera + 0x888 is 0 (section 12).
 - **Mouse look** (src/game/vcs_input.cpp, Keyboard > Mouse camera): on foot (mode 4, no script camera, controls on, not
   paused: the pause menu leaves the mode at 4, `m_UserPause` 0x4CD2AC / `m_CodePause` 0x4CD11C are bytes) the
   pad read adds the mouse's turn to beta and turns +0x220 / +0x230 about the player by the same angle (exact: 300
-  counts in 30 moves -> -0.750 rad, 400 counts a radian), and sends the pitch as the stick's pitch speed with the curve
-  above undone, carrying what is over the stick's top speed to the next frames (90 counts -> +0.225 rad). Other
-  cameras (vehicles, aiming, lock-on) get the mouse's speed as the right stick, past the dead third. Checked by
-  `tools/controls_check.py` (the `mouse dx dy` control command moves the mouse in hidden runs).
+  counts in 30 moves -> -0.750 rad, 400 counts a radian), and does the same for the pitch: alpha += the tilt, and
+  +0x220 / +0x230 turned up / down by it about the target point +0x1A0 (90 counts -> +0.225 rad; 120 counts -> +0.3
+  two frames later, and it stays). Other cameras (vehicles, aiming, lock-on) get the mouse's speed as the right stick,
+  past the dead third. Checked by `tools/controls_check.py` (the `mouse dx dy` control command moves the mouse in
+  hidden runs).
+- **Why up / down was slower than left / right** (2026-10-31, FUN_0029dab0 decompiled again; until then the mouse's
+  pitch went through the stick): the stick's pitch speed (+0x130 = 0.8^step x the stick's term + the rest x the last
+  one: hardly smoothed) does not move alpha. It moves the pitch the source points are placed at (the camera's stand
+  pitch = asin(Front.z) from +0x220 minus 0.15, table +8, plus the zoom's offset), and alpha eases toward that stand
+  pitch, clamped to the limits: `alpha += clamp((1 - 0.8^step) x (stand - alpha), +-0.1 x step)` (table +0x14 / +0x18;
+  indoors 0.9: twice as slow). The heading's speed (+0x140) is smoothed instead (0.8^step x the last), then added to
+  beta directly. So on the pad the pitch is 0.6 x the heading's top speed (0.000536 / 0.000893: the game's own design,
+  kept) with one ~90 ms lag on each axis; the mouse's pitch through the stick was capped at 1.5 rad/s and eased (the
+  heading had neither). The follow camera's table at `0x487B30` (outdoors; +0x3C indoors, picked by `0x489F7C` being
+  neither 0 nor 4), read from the ELF: +0 0.6 (target height), +4 2, +8 0.15 (pitch offset), +0xC 2, +0x10 4, +0x14 0.8
+  (alpha ease), +0x18 0.1 (its cap a step), +0x1C 0.5, +0x20 0.8 (the speeds' smoothing), +0x24 0.1 (the speeds' cap),
+  +0x28 0.1, +0x2C 0.02, +0x30 1, **+0x34 0.7854 up / +0x38 1.4835 down** (indoors 0.7854 both).
 - **The camera update** (2026-10-30, for the trainer's free camera; FUN_00378dd8 decompiled with `tools/eedecomp.py`):
   FUN_00378dd8 = CCamera::Process. At `0x378FC0` it calls **FUN_00294540 = CCam::Process** on the active CCam
   (`TheCamera + 0x70 + ActiveCam x 0x270`, ActiveCam = byte `TheCamera + 0x50`; the only caller), then
@@ -1816,6 +1968,122 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   Found by comparing the two runs' active scripts and camera mode every 5 s.
 - Teleported to (575, 175) the camera ends up at its lowest pitch (-1.483, straight down) - the game's own doing (the
   same with `VCS_INPUT_MAP=0`).
+
+### 12c. Aiming: lock-on, the game's free aim, shots, scopes (2026-10-31)
+
+Found for free aim with the mouse (src/game/vcs_aim.cpp), by decompiling (`tools/eedecomp.py`; the files in
+`build/analysis/decomp/aim_cams.c`, `weapon_fire2.c`) and by watching the player ped while holding R1 / tapping L3 in a
+hidden run (rig `peek` / `poke`, snapshots diffed).
+
+- **The game has a free aim** (its help text `H_GUN03`; `C?FREE1` = L3, `C?FREE2` = the left stick): R1 held, then L3
+  (R1 and L3 in the same pad report work too, from nothing). It is **a lock-on to an invisible dummy object**: the
+  player's **+0x820 (the lock-on target)** becomes an entry of the object pool (`*(0x487AA4)`, model 671, `+0x48 & 0xE`
+  = 8: an object; a ped is 6), first placed 30 m ahead of Vic, and **+0xC90** holds the same point. The left stick moves
+  the dummy (Vic stands still), the right stick and the mouse do nothing, and the camera is the lock-on camera (mode 11,
+  FUN_0029c280) centred on it. **The white circle with a dot** drawn on the dummy is the game's free-aim reticle.
+- **Free-aim flag: bit 51 of the player's 64-bit flags at +0xCC8** (bit 19 of the word at +0xCCC; found by diffing the
+  ped locked on a ped against in free aim: the only flag that differs). Bit 48 (+0xCCC bit 16) is set by any lock-on.
+  Who reads bit 51: the lock-on camera (with it set there is no pitch limit and no crosshair offset: the target is
+  centred), FireInstantHit (no random spread with it set, below), the HUD (circle with it, the lock-on triangles
+  without), and the ped's control code (the left stick moves the dummy with it, Vic without it).
+- **Cleared, the dummy stays the target** - the game then treats it as a lock-on to an object: Vic walks / strafes as he
+  does locked on with that weapon (a pistol strafes: 3.3 m in a second with D), facing it, and moving the object moves
+  the aim (the camera follows). **The lock drops when the dummy is over ~30 m from Vic** (25 m held, 40 m dropped:
+  the weapons' lock-on range); behind a wall or behind Vic it holds.
+- Lock-on camera (FUN_0029c280, modes 11 and 28): with a target it turns alpha (+0x78) / beta (+0x7C) toward the
+  target's direction from Vic at most `0.1 x time step` a frame (1000 on its first frame, CCam +0xAC set); with no
+  target (+0x820 = 0) the right stick turns it like the follow camera. Alpha (pitch) follows the target's elevation
+  from about Vic's head. Front = (-cos beta cos alpha, -sin beta cos alpha, sin alpha): beta is the follow camera's
+  convention (12b). `TheCamera + 0x950 / 0x954` = 0.53 / 0.47: the third-person crosshair's place on screen (VC's
+  m_f3rdPersonCHairMultX / Y), used to offset the lock-on view for guns.
+- **Blend or cut**: CCamera::CamControl (FUN_00372450) decides each mode change. **FUN_001F1698(ped) = the ped's weapon
+  lets him move while aiming** (`FUN_00407120(type)` byte 0, bit 7): going from the lock-on camera (11, or 28) back to
+  the follow camera (4) it is asked (call at 0x375B3C, return 0x375B44); 0 - a gun that stands Vic still (types 20 Equalizer,
+  21-23 the shotguns, 25 Scorpion, 27 SMG, 28 / 29 the rifles, 33-35 flame-thrower, M249, minigun; 19 pistol, 24 Micro
+  SMG and 26 Mac 10 walk - checked locked on in free aim, one hidden run per gun) - takes the jump cut: no blend (+0x8D0 left 0), +0x8AC set, the new CCam's heading at +0x190 set from its
+  +0x80 / +0x84 plus pi. Otherwise CCamera::StartTransition (**FUN_0037C9C8**, the only writer of the durations: 1350,
+  then the pair's own) blends. Found by a write watch on +0x8DC (pc 0x37CFEC / 0x37D1E8 inside FUN_0037C9C8) for a
+  pistol and an AK release, then its callers (three, all in CamControl) and the decompile. vcs_aim.cpp answers 1 to that
+  call in the frames after free aim ends, so every gun's aim ends in the same blend.
+- **The blend between cameras**: when the active camera's mode changes, CCamera::Process blends the old view into the
+  new one; **TheCamera + 0x8D0** (byte) is set while it runs, **+0x8D8** its start (CTimer ms, 0x4CD104), **+0x8DC** and
+  **+0x8E0** its durations in ms - 400 / 350 into the lock-on (free-aim) camera, 350 / 350 out of it; the camera eases
+  (0.5, 1.0, 0.5 m a frame cut to 100 ms). Found with the rig's `trace` of TheCamera + 0x800..0x9FF per frame through
+  an aim. Lowering both durations after the blend has started shortens it smoothly (vcs_aim.cpp: 100 ms in, 200 ms
+  out).
+- Leaving any aim back to the follow camera (mode 4): **the follow camera's first update starts it afresh** - beta and
+  the source points (+0x220 / +0x230, 12b) set to one heading of its own (156 deg in two releases whose aims were 100
+  and 188 deg; the rig's `trace` of the CCam per frame), and that frame's view is built from it: a one-frame snap to
+  another angle (the user saw it), then the follow camera eases toward its source points - a swing back to the view
+  from before the aim when they are left. vcs_aim.cpp, in the hook after CCam::Process (FUN_002A2ED0, shared with the
+  free camera), turns that first frame's whole view about Vic to the aim's heading - beta, source points, Source,
+  Front, Up, the target point - before the frame's camera is built.
+- **Shots** (a write watch on the shot ped's health with `VCS_WATCH_STACK=1`): FUN_002C3E48 = **CWeapon::FireInstantHit**
+  (weapon, shooter, source, ...) -> FUN_002C6460 (the bullet's impact: damage through FUN_001D7940, effects) and
+  FUN_002C5320 (tracers / shells). For a shooter with a target (+0x820) and ped +0x35C bit 0 (set while aiming) the end
+  is the source plus the direction to the target (an object's +0x30, a ped's bone) times the weapon's range
+  (`FUN_00407120(type) + 8`); for the player without bit 51 a random spread scaled by accuracy (+0x78E) and recoil
+  (+0xC70) is added. Then **the line test FUN_002D0870(from a0, to a1, colpoint a2, entity a3, ..., shooter t1)** (a
+  wrapper of CWorld::ProcessLineOfSight FUN_001908C0) - this call at 0x2C479C, return address **0x2C47A4**; FireInstantHit
+  keeps its own copy of the source (s6) for what follows. The other calls of the wrapper in FireInstantHit: 0x2C41A4
+  (vehicle targets), 0x2C490C, 0x2C4C98 (vehicle guns), 0x2C4F10 (no target). FUN_002CB7C0 is the drive-by shot,
+  FUN_002CDA88 / FUN_002CD288 the NPCs' / doom aim corrections, FUN_002CEA70 = IsTypeMelee (weapon info +4 == 0).
+- **A gun running dry** (clip and total at the slot's +8 / +0xC poked to 5, fired in free aim): about 100 frames in
+  (60 fps) the game drops the lock and puts the fists in his hand (slot 0) - even with an SMG in another slot. R1 still
+  held with the fists is the PS2's lock-on, on a ped near Vic (free aim used to pass it on; not observed directly - the
+  user's report and the fists' lock-on checked elsewhere).
+- **Weapon changes on foot**: R2 the next weapon, L2 the previous (one step a press); locked on they change the target.
+  The current slot is the s8 at ped **+0x789**; slot n's weapon at +0x578 + n x 0x1C (type first).
+- **Scopes and first-person weapon cameras** (FUN_00297CB8: modes 7 sniper, 8 rocket launcher, 34 M16, 45, 46 camera, 47
+  binoculars): the stick's speed is added to alpha / beta (+0x78 / +0x7C) and alpha clamped to the limits of
+  FUN_00297BC8, so writing them before the update turns the scope directly (vcs_input.cpp: exact, 400 counts a radian at
+  70 deg). Modes 7, 46, 47 zoom: Square / Cross change the FOV (+0x134) and **0x487E2C** (the zoom it eases back
+  toward, FUN_00371938) between 70 and 15 (4.8 for the camera, mode 46).
+- **HUD** FUN_00323018 (called from CHud::Draw) draws the scope overlays for modes 7, 8, 34, 40-47 and the binoculars /
+  camera / laser-sniper extras; the free-aim circle and the lock-on triangles are drawn elsewhere (not traced).
+- Guest RAM below the game (the EE kernel's 0x00000-0x7FFFF) is all zero in play except a few words at 0x10000,
+  0x74000 and 0x7C000; vcs_aim.cpp keeps the shot's start point at **0x60000**.
+- **Free aim in a car: the drive-by mode** (2026-11-01; Jive Drive, mission 61 `LAN_B1`). The mission puts Vic in
+  Lance's Stinger with `WARP_CHAR_INTO_CAR_AS_PASSENGER`, `SET_CHAR_DRIVEBY_MODE(0442) $G2A5 1` and
+  **`SET_PLAYER_DRIVEBY_MODE(0481) $G2A5 1`** (0x100377..0x100384, again at 0x101BD8 after its cutscene) - the only
+  mission that uses 0481 (a search of every mission's disassembly for 0481 / 04D6 SET_PLAYER_FORCE_FREE_AIMING; 04D6
+  appears in JER_A1 (only ever 0) and SRANGE, the shooting range, on foot: below). From then on the game is in its own free aim: ped
+  state 0x32, bit 51 set, the dummy object (+0x820 = +0xCF8) the target, the lock-on camera (mode 11) and the circle,
+  no button held. Switching 0481 / 0442 off again does not end it; leaving the car does (checked with VCS_FREEAIM=0).
+- **FUN_002343E0(ped, pad) is the free-aim dummy's update** (found by a write watch on the dummy's +0x30 in the car: pc
+  0x47268C, a vector set, called from 0x234634 with s1 = the player; its only caller is FUN_00230640 at 0x23152C, the
+  player's control for states 0x10 / 0x16 / 0x24 / 0x32 / 0x33 with bit 51 set). FUN_00219CC0(ped) = "in a vehicle"
+  by state (0x32, 0x33, 0x37, 0x39, ...). In a vehicle it first moves the dummy by the car's movement since the last frame
+  (+0xD00 keeps the car's position), then the left stick (FUN_00286928 / FUN_00286A20: x 1.5 times faster than on foot)
+  turns it about the camera and puts it at **the weapon's range** (weapon info `*(*(0x712770) + 4) + type * 0x70`, +8:
+  pistol 30, SMG / Mac 45, M249 / minigun 75, rifles 90; byte 0 bit 7 = moves while aiming) - in the car with no
+  side-to-side limit (on foot +-110 deg from Vic's heading) and up / down only between 70 and 95 deg from Vic's up (20
+  above level, 5 below). Then a line test from the camera to the dummy (FUN_001908C0) pulls it onto what it hits. The
+  car's turning does not turn it: the aim keeps its world direction.
+- The passenger's shots go through FireInstantHit's line test at 0x2C47A4 like the on-foot ones (vcs_aim.cpp's shot
+  line counted them: 62 shots in 3 s of fire in Jive Drive). vcs_aim.cpp takes the car's free aim over when free aim
+  is on (either device): the dummy written at the pad read at the gun's range along the mouse / right stick's aim
+  (kept in the game's height limits), the lock-on camera turned by the same amount, the left stick centred; the game's
+  update then adds the car's movement and the line test, as for its own stick.
+- **The forced free aim on foot: Phil's shooting range** (2026-11-01; mission 13 `SRANGE`). **04D6
+  SET_PLAYER_FORCE_FREE_AIMING** (handler FUN_002D5C20: the script handler table at 0x4BEAF0 is per opcode, 8 bytes
+  each, the function at +4) sets **bit 53 of the ped's flags at +0xCC8** (word +0xCCC, mask 0x200000) and, unless he
+  is already free aiming (FUN_00235C70), starts the free aim (FUN_002394D8) and the lock-on camera (FUN_0037C488(0x6F44D0,
+  11)); 0 clears the bit and ends it (FUN_0023ADC0). Seen as a memory diff of the command on and off: +0xCCC 0x0040d400
+  -> 0x0069d400 (bits 48, 51, 53), +0x820 the dummy, state 1 -> 0x11 (0x10 in the range), +0xD6C bit 0x400. The range
+  sets it after each round's start (0x054EA8) and clears it between rounds and at the end. On foot FUN_002343E0 limits
+  the stick's dummy to 50..110 deg from Vic's up (40 above level, 20 below) and 110 deg either side of his forward
+  (+0x10) - only in the frames the stick moves it (with the sticks centred only the line test touches it). Bit 53 with
+  an entity at +0x858 takes the car-like path (the dummy moved with that entity; not seen in a mission). The right
+  button (R1) does nothing in the forced aim, but our own free aim's R1 + L3 and then R1 let go ended it for the round:
+  vcs_aim.cpp now takes a script's free aim over (bit 51 + the dummy, in a vehicle or with bit 53) before its own entry.
+  The range itself: an interior (area 2) behind Phil's door at (-710, -1541.8, 12.4) (the main script warps Vic to
+  (-685.31, -1550.65, 30) and back), the marker at (-695.95, -1549.34, 30) launches mission 13
+  (LOAD_AND_LAUNCH_MISSION_INTERNAL at 0x24957). Launched from elsewhere (the trainer) Vic falls through the booth's
+  floor to the ground at z 12: the interior was never loaded. Targets: objects (models -18 / -42) in `$G1543[11]`,
+  scored by HAS_OBJECT_BEEN_DAMAGED (+100; -200 when `$G1590[i]` is set - presumably the board not to shoot, not
+  checked), the score `$G15A6`, the round's target `$G15A7`; their
+  origin is at the board's foot (aim ~0.6 m above it).
 
 ## 13. Open questions / next research targets
 

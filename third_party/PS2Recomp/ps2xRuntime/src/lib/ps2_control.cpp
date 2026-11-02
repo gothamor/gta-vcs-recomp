@@ -169,6 +169,13 @@ namespace ps2control
             }
         }
 
+        struct ScreenshotRequest
+        {
+            std::string path;
+            Done done;
+        };
+        std::vector<ScreenshotRequest> g_screenshots; // main thread: requestScreenshot
+
         void execute(const std::shared_ptr<Command> &command, const std::function<std::string(const std::string &)> &capture,
                      const std::function<void()> &quit)
         {
@@ -245,6 +252,11 @@ namespace ps2control
 
     void addCommand(const std::string &verb, CommandHandler handler) { g_extraCommands[verb] = std::move(handler); }
 
+    void requestScreenshot(const std::string &path, Done done)
+    {
+        g_screenshots.push_back({path, std::move(done)});
+    }
+
     bool hiddenMode()
     {
         static const bool hidden = envOn("PS2X_HIDDEN");
@@ -318,8 +330,14 @@ namespace ps2control
         std::fprintf(stderr, "[control] listening on 127.0.0.1:%d%s\n", port, hiddenMode() ? " (window hidden, physical input off)" : "");
     }
 
-    void pump(const std::function<std::string(const std::string &path)> &capture, const std::function<void()> &quit)
+    void pump(const std::function<std::string(const std::string &path)> &capture,
+              const std::function<void(const std::string &path, Done done)> &shoot, const std::function<void()> &quit)
     {
+        // the player's screenshots first: this frame's picture, before any command changes what is shown
+        std::vector<ScreenshotRequest> shots;
+        shots.swap(g_screenshots);
+        for (ScreenshotRequest &shot : shots)
+            shoot(shot.path, std::move(shot.done));
         g_injectedEdge.fill(false);
         const auto now = std::chrono::steady_clock::now();
         for (size_t i = 0; i < g_releases.size();)

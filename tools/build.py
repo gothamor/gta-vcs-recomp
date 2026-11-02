@@ -5,7 +5,8 @@
     python tools/build.py --recompile [ISO]     recompile from your disc first, then build - the whole pipeline
     python tools/build.py --recompile-if-needed [ISO]   the same, recompiling only when generated/ is not current
                                                 (generated/recompile_stamp.json; what the launcher runs)
-    python tools/build.py --launcher            build the launcher (VCSLauncher.exe in the repository root; no disc)
+    python tools/build.py --launcher            build the launcher (VCSLauncher(.exe) in the repository root; no disc)
+    python tools/build.py --install-deps        Linux: install the missing packages (the desktop's password prompt)
     python tools/build.py --progress json       also print `@vcs {...}` events for the launcher (toolchain.py)
     python tools/build.py --quick               no link-time optimisation: fast rebuilds while changing code
     python tools/build.py --iop-tests           build and run the IOP / SPU2 unit tests (build/iop_tests, no disc)
@@ -20,6 +21,8 @@ recompiles the whole game (~6-10 min). The last line of each build says which on
 
 Progress: every build step shows `[build] <target> done/total %, elapsed, ~time left` (Ninja's step count; redrawn in
 place on a terminal, a line per 5% / minute otherwise); CMake configure and the recompiler show their elapsed time.
+With link-time optimisation the game's link is a step of its own (minutes: the whole game is optimised there), timed
+against the last one (link_times.json in the build folder; docs/LAUNCHER.md).
 
 PGO training: an instrumented build in build/pgo-gen plays tools/bench.py (city spots, an AI drive: from the rig's Fort
 Baxter card copy, or a new game when there is none) and the reference scenes' boot / flyover / cutscene
@@ -62,6 +65,8 @@ def main():
     ap.add_argument("--quick", action="store_true", help="same as --opt none: fast rebuilds, slower game")
     ap.add_argument("--train", action="store_true", help="with --opt pgo: train a new profile first")
     ap.add_argument("--check-deps", action="store_true", help="Linux: check the build dependencies and stop")
+    ap.add_argument("--install-deps", action="store_true",
+                    help="Linux: install the missing packages (pkexec: the desktop's password prompt) and stop")
     ap.add_argument("--recompile-if-needed", nargs="?", const="", metavar="ISO",
                     help="recompile first only when the generated code is not current")
     ap.add_argument("--launcher", action="store_true", help="build the launcher (VCSLauncher.exe) instead of the game")
@@ -78,14 +83,20 @@ def main():
 
     env = tc.build_env()
     if a.check_deps:
-        sys.exit(0 if tc.IS_WINDOWS or tc.check_linux_deps(env) else 1)
+        if tc.IS_WINDOWS:
+            sys.exit(0)
+        game = tc.check_linux_deps(env)
+        launcher = tc.check_linux_deps(env, tc.LAUNCHER_LINUX_DEPS)
+        sys.exit(0 if game and launcher else 1)
+    if a.install_deps:
+        sys.exit(install_deps(env))
     tc.fix_future_files()  # else Ninja re-runs CMake until it gives up (a release zip from another time zone)
+    if a.launcher:  # its own packages, checked in build_launcher - not the game's (CI builds it on a bare system)
+        sys.exit(0 if build_launcher(env, a.verbose) else 1)
     if not tc.IS_WINDOWS and not os.path.isfile(os.path.join(tc.BUILD_DIR, "build.ninja")) and not tc.check_linux_deps(env):
         tc.fail("missing build dependencies (above)")
     if a.iop_tests:
         sys.exit(iop_tests(env))
-    if a.launcher:
-        sys.exit(0 if build_launcher(env, a.verbose) else 1)
     import recompile
     iso_arg = a.recompile if a.recompile is not None else a.recompile_if_needed
     if a.recompile_if_needed is not None:
@@ -113,7 +124,7 @@ def main():
     tc.configure(env, force=a.reconfigure or configured_without_game(), defines=defines)
     print(f"[build] building {a.target}")
     tc.stage("compile", "Compiling the game" if a.target == "ps2EntryRunner" else "Building " + a.target)
-    if not tc.cmake_build(env, a.target, "build.log", a.verbose):
+    if not tc.cmake_build(env, a.target, "build.log", a.verbose, link=game_link_stage() if a.target == "ps2EntryRunner" else None):
         sys.exit(1)
     if a.target == "ps2EntryRunner":
         if not os.path.isfile(tc.VCS_EXE):
@@ -134,7 +145,7 @@ def write_build_info(iso):
     import recompile
     stamp = recompile.read_stamp() or {}
     info = {"source": tc.source_version(), "generated_inputs": stamp.get("inputs", ""), "opt": built_opt(),
-            "iso": iso or "", "time": int(time.time())}
+            "cpu": tc.cached_value(tc.BUILD_DIR, "PS2X_CPU") or "AVX2", "iso": iso or "", "time": int(time.time())}
     with open(BUILD_INFO, "w", encoding="utf-8") as f:
         json.dump(info, f, indent=1)
 
@@ -146,10 +157,14 @@ def build_launcher(env, verbose):
     """launcher/ is a CMake project of its own (no generated code, no disc): build/launcher, the exe in the
     repository root."""
     tc.stage("launcher", "Building the launcher")
+    if not tc.IS_WINDOWS and not tc.check_linux_deps(env, tc.LAUNCHER_LINUX_DEPS):
+        tc.fail("missing packages for the launcher (above)", "missing_packages")
     if tc.drop_foreign_cache(LAUNCHER_BUILD, os.path.join(tc.ROOT, "launcher")) or tc.stale_tools(LAUNCHER_BUILD) or \
             not os.path.isfile(os.path.join(LAUNCHER_BUILD, "build.ninja")):
         cmd = ["cmake", "-S", os.path.join(tc.ROOT, "launcher"), "-B", LAUNCHER_BUILD, "-G", "Ninja",
-               "-DCMAKE_BUILD_TYPE=Release"] + tc.compiler_defines(env) + tc.deps_defines()
+               "-DCMAKE_BUILD_TYPE=Release"] + tc.launcher_compiler_defines(env) + tc.deps_defines()
+        if os.environ.get("VCS_WAYLAND_PROTOCOLS_DIR"):  # a release built on an older distribution (CI)
+            cmd.append("-DVCS_WAYLAND_PROTOCOLS_DIR=" + os.environ["VCS_WAYLAND_PROTOCOLS_DIR"])
         log = os.path.join(tc.BUILD, "configure_launcher.log")
         if tc.run_with_progress(cmd, log, "[build] configure launcher", env=env) != 0:
             print(tc.tail(log, 30))
@@ -159,6 +174,44 @@ def build_launcher(env, verbose):
     print("[build] ok: " + tc.exe("VCSLauncher"))
     tc.event(result="ok", exe=tc.exe("VCSLauncher"))
     return True
+
+
+def install_deps(env):
+    """Linux: the packages the game's build (and the launcher's) lacks, installed through pkexec - the desktop's own
+    password prompt, so the launcher can do it without a terminal. Without a polkit agent (or pkexec) it fails with
+    no_polkit and the command to run in a terminal; a refused prompt is elevation_denied."""
+    if tc.IS_WINDOWS:
+        tc.fail("--install-deps is for Linux (Windows: tools/setup_vs.py install)", "unsupported")
+    tc.stage("packages", "Installing the packages the build needs")
+    missing = tc.linux_missing(env, quiet=True) + tc.linux_missing(env, tc.LAUNCHER_LINUX_DEPS)
+    if not missing:
+        print("[deps] nothing to install: every build dependency is there")
+        tc.event(result="ok", installed=[])
+        return 0
+    packages = [p for _, p in missing]
+    for label, pkgs in missing:
+        print("[deps] missing: %s (%s)" % (label, pkgs))
+    terminal = " ".join(tc.linux_packages_command(missing))
+    if not shutil.which("pkexec"):
+        tc.fail("pkexec isn't installed: run this in a terminal, then check again:\n    " + terminal, "no_polkit")
+    cmd = tc.linux_packages_command(missing, elevate="pkexec")
+    if "--llvm-repo" in cmd:
+        print("[deps] this release's clang is too old for the game: LLVM's repository (apt.llvm.org) is added first")
+    print("[deps] " + " ".join(cmd))
+    code = subprocess.call(cmd)
+    if code == 126:  # the prompt was dismissed
+        tc.fail("the password prompt was cancelled; nothing was installed", "elevation_denied")
+    if code == 127:  # no authentication agent, or not authorised
+        tc.fail("no password prompt could be shown (no polkit agent): run this in a terminal, then check again:\n    " +
+                terminal, "no_polkit")
+    if code != 0:
+        tc.fail("the package manager stopped with exit code %d (above)" % code, "install_failed")
+    still = tc.linux_missing(env, quiet=True) + tc.linux_missing(env, tc.LAUNCHER_LINUX_DEPS)
+    if still:
+        tc.fail("still missing after the install: " + ", ".join(label for label, _ in still), "install_failed")
+    print("[deps] installed: " + " ".join(packages))
+    tc.event(result="ok", installed=packages)
+    return 0
 
 
 def configured_without_game():
@@ -217,6 +270,18 @@ def remember_iso(given):
     return iso
 
 
+def game_link_stage():
+    """(kind, title) of the game's link when it is a step of its own (toolchain.cmake_build): with link-time
+    optimisation it is the longest step of a build. A quick build's link takes seconds: no stage."""
+    lto = tc.cached_value(tc.BUILD_DIR, "PS2X_LTO") or "OFF"
+    if lto.upper() not in ("THIN", "FULL"):
+        return None
+    pgo = tc.cached_value(tc.BUILD_DIR, "PS2X_PGO") or ""
+    if pgo and pgo != "GEN":
+        return "pgo", "Linking and optimising the game (ThinLTO + profile)"
+    return lto.lower(), "Linking and optimising the game (%s)" % ("ThinLTO" if lto.upper() == "THIN" else "LTO")
+
+
 def built_opt():
     """The optimisation the CMake cache of build/release holds, for the last line of a build."""
     cache = {}
@@ -228,13 +293,15 @@ def built_opt():
                     cache[key.split(":")[0]] = value.strip()
     except OSError:
         return "optimisation unknown"
+    cpu = tc.cached_value(tc.BUILD_DIR, "PS2X_CPU") or "AVX2"
+    cpu = "" if cpu == "AVX2" else ", for %s CPUs" % cpu
     if cache.get("PS2X_PGO") and cache["PS2X_PGO"] != "GEN":
-        return "optimised: ThinLTO + profile-guided"
+        return "optimised: ThinLTO + profile-guided" + cpu
     if cache.get("PS2X_LTO") == "THIN":
-        return "optimised: ThinLTO"
+        return "optimised: ThinLTO" + cpu
     if cache.get("PS2X_LTO") == "FULL":
-        return "optimised: full LTO"
-    return "quick build, not optimised - python tools/build.py --opt lto for the game to play"
+        return "optimised: full LTO" + cpu
+    return "quick build, not optimised - python tools/build.py --opt lto for the game to play" + cpu
 
 
 PGO_DIR = os.path.join(tc.BUILD, "pgo")
@@ -277,7 +344,8 @@ def iop_tests(env):
     if not os.path.isfile(os.path.join(out, "build.ninja")) or tc.stale_tools(out):
         subprocess.check_call(tc.resolve(["cmake", "-S", os.path.join(tc.ROOT, "third_party", "PS2Recomp", "ps2xIOP"),
                                           "-B", out, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-                                          "-DPS2X_IOP_BUILD_TESTS=ON"] + tc.compiler_defines(env), env), env=env)
+                                          "-DPS2X_IOP_BUILD_TESTS=ON", "-DPS2X_CPU=" + tc.check_cpu()] +
+                                         tc.compiler_defines(env), env), env=env)
     if not tc.cmake_build(env, "ps2_iop_spu2_tests", "build_iop_tests.log", build_dir=out):
         return 1
     return subprocess.call([tc.exe(os.path.join(out, "ps2_iop_spu2_tests"))])

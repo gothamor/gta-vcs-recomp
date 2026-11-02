@@ -24,6 +24,9 @@ Scenarios (each from a fresh teleport, so earlier ones don't leak into later one
           acceleration
   carwater the car dropped into the sea at 15 m/s: its speed 1 s after it reaches the water (the water's drag)
   bikewater the PCJ-600 dropped into the sea: how deep it settles
+  ferris  the player in a ferris wheel carriage for 10 s: how long he stays where he stood in it, how far he drifts
+  carcam  the car camera after a left turn: how long its lag behind the car takes to halve once the car runs straight
+  footcam the on-foot camera while the player runs to its right: how fast it turns after him
   clock   game clock ms per frame vs the step; frames per simulated second
   heat    PHI_A2's heat bar: its floor and the heat at +1 a frame, per simulated second (starts the mission: last)
 
@@ -235,11 +238,12 @@ def leave_vehicle(s):
                 return
 
 
-def vehicle_run(s, name, model, act, body_at=None):
+def vehicle_run(s, name, model, act, body_at=None, extra=""):
     """A vehicle scenario from CAR_SPOT, the player in a new `model`; body_at: a dead ped (fwd, right) metres from the
     vehicle. act(s) drives it while the rig's `trace` records it every frame. Returns the trace rows (sim time s, then
-    the vehicle's matrix (16 floats), turn speed +0x70, move speed +0x140, bike lean +0x680 / +0x684). The vehicle and
-    the ped are deleted afterwards, so the next scenario starts on clear ground."""
+    the vehicle's matrix (16 floats), turn speed +0x70, move speed +0x140, bike lean +0x680 / +0x684, then the `extra`
+    trace spans' floats - "0x<addr> <count> ..."). The vehicle and the ped are deleted afterwards, so the next scenario
+    starts on clear ground."""
     g, S = s.g, rig.Scm
     x, y, h = CAR_SPOT
     leave_vehicle(s)  # (scenario_car leaves him in its car: a teleport would bring the car along)
@@ -272,7 +276,8 @@ def vehicle_run(s, name, model, act, body_at=None):
         ped = ints[0]
         s.wait_sim(2.5)  # dies and lies down
     path = os.path.join(ROOT, "build", "audit", "trace_%d_%s.txt" % (s.step, name))
-    g.cmd("trace %s 0x%x 16 0x%x 3 0x%x 3 0x%x 2" % (path, vehicle, vehicle + 0x70, vehicle + 0x140, vehicle + 0x680))
+    g.cmd("trace %s 0x%x 16 0x%x 3 0x%x 3 0x%x 2 %s" % (path, vehicle, vehicle + 0x70, vehicle + 0x140, vehicle + 0x680,
+                                                        extra))
     try:
         act(s)
     finally:
@@ -396,6 +401,124 @@ def scenario_bikewater(s):
     return {"depth_m": water - sum(zs) / len(zs)}
 
 
+OBJECT_POOL = 0x487AA4  # CPool of objects: 475 entries of 0x220 bytes (game-internals.md 12)
+FERRIS_CARRIAGE = 7069  # the model of the ferris wheel's 12 carriages, which turn in the plane x = 342.19
+FERRIS_SPOT = (342.0, -250.0)  # on the ground beside the wheel
+
+
+def pool_objects(g, model):
+    """The addresses of the objects of one model in the object pool."""
+    import struct
+    pool = g.u32(OBJECT_POOL)
+    ent, flags, n = g.u32(pool), g.u32(pool + 4), g.u32(pool + 8)
+    used = g.peek(flags, n)
+    raw = b"".join(g.peek(ent + o, min(4096, n * 0x220 - o)) for o in range(0, n * 0x220, 4096))
+    return [ent + i * 0x220 for i in range(n)
+            if not used[i] & 0x80 and struct.unpack_from("<h", raw, i * 0x220 + 0x56)[0] == model]
+
+
+def scenario_ferris(s):
+    """The player put in the lowest ferris wheel carriage, then 10 s of the ride: how long he stays where he stood in it
+    (within 1 m) and how far he drifts. The wheel (FUN_00175620) gave its carriages a move speed of (new position - old)
+    / max(step, 1.0): above 50 fps too small, and at 144 fps he slid out of the carriage within 2 s (issue 10)."""
+    g, S = s.g, rig.Scm
+    leave_vehicle(s)
+    x, y = FERRIS_SPOT
+    s.place(x, y)
+    carriages = pool_objects(g, FERRIS_CARRIAGE)
+    if not carriages:
+        raise RuntimeError("no ferris wheel carriages")
+    carriage = min(carriages, key=lambda a: g.peekf(a + 0x38, 1)[0])
+    cx, cy, cz = g.peekf(carriage + 0x30, 3)
+    g.scm(S.op(S.SET_CHAR_COORDINATES, S.PLAYER, S.f(cx), S.f(cy), S.f(cz + 0.5)))
+    s.wait_sim(0.5)  # lands on its floor
+    ped = g.player()[0]
+    path = os.path.join(ROOT, "build", "audit", "trace_%d_ferris.txt" % s.step)
+    g.cmd("trace %s 0x%x 3 0x%x 3" % (path, ped + 0x30, carriage + 0x30))
+    try:
+        s.wait_sim(10.0)
+    finally:
+        g.cmd("trace off")
+    rows = [[float(v) for v in line.split()] for line in open(path)]
+    t0 = rows[0][1]
+    offsets = [((r[1] - t0) / 1000.0, [r[3 + k] - r[6 + k] for k in range(3)]) for r in rows]
+    start = offsets[0][1]
+    drift = [(t, math.dist(o, start)) for t, o in offsets]
+    riding = next((t for t, d in drift if d > 1.0), drift[-1][0])
+    leave = S.op(S.SET_CHAR_COORDINATES, S.PLAYER, S.f(x), S.f(y), S.f(-100.0))  # off the wheel for what follows
+    g.scm(leave)
+    return {"riding_s": riding, "drift": "%.2f m" % max(d for _, d in drift)}
+
+
+CAM_BETA = 0x6F44D0 + 0x70 + 0x7C  # TheCamera's active CCam: beta, the heading from the target to the camera (12b)
+
+
+def wrapped(a):
+    """An angle in -pi .. pi."""
+    return (a + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def camera_catch_up(samples, released):
+    """How fast a follow camera gets back behind its target after a turn. samples: (sim time, forward x, forward y,
+    camera beta); released: when the turn key was let go. From the moment the target holds its heading (within 0.5
+    degrees over the next 0.2 s), the camera's lag behind it (beta against the backwards heading) and the time it takes
+    to halve. None when the target's heading changes by 3 degrees before that (it hit something)."""
+    rows = [(t, math.atan2(-fy, -fx), wrapped(beta - math.atan2(-fy, -fx))) for t, fx, fy, beta in samples]
+
+    def at(t):
+        return min(rows, key=lambda r: abs(r[0] - t))
+    start = next((r for r in rows if r[0] >= released and abs(wrapped(at(r[0] + 0.2)[1] - r[1])) < math.radians(0.5)),
+                 None)
+    if start is None:
+        return None, None
+    half = next((r for r in rows if r[0] > start[0] and abs(r[2]) <= abs(start[2]) / 2.0), None)
+    if half is None or any(abs(wrapped(r[1] - start[1])) > math.radians(3.0) for r in rows if start[0] <= r[0] <= half[0]):
+        return None, math.degrees(abs(start[2]))
+    return half[0] - start[0], math.degrees(abs(start[2]))
+
+
+def scenario_carcam(s):
+    """The car camera (FUN_0029faf0) catching up behind the car after a turn: 1.2 s of full throttle, a left turn for
+    0.5 s, then coasting. How long the camera's lag behind the car takes to halve once the car runs straight (and the
+    lag then). The camera's automatic turn was a speed of (heading change) / max(step, 1.0): above 50 fps step times too
+    slow, ~0.35 s at 1/30 against ~1 s at 1/144."""
+    def act(s):
+        s.key("Shift", True)
+        s.wait_sim(1.2)
+        s.key("A", True)
+        s.wait_sim(0.5)
+        s.key("A", False)
+        s.key("Shift", False)
+        s.wait_sim(3.0)
+    rows = vehicle_run(s, "carcam", 211, act, extra="0x%x 1" % CAM_BETA)
+    half, lag = camera_catch_up([(r[0], r[1 + 4], r[1 + 5], r[1 + 24]) for r in rows], 1.7)
+    return {"half_s": half, "lag": "%.0f deg" % lag if lag is not None else "-"}
+
+
+def scenario_footcam(s):
+    """The on-foot camera (FUN_0029dab0) swinging after the player while he runs to its right (D, 2.5 s): its turn rate
+    over the last 2 s, degrees a second. (The controls follow the camera, so after a turn the player lines up with the
+    camera rather than the camera with him; running sideways is where its own turn shows.) Same max(step, 1.0) as the
+    car camera's."""
+    x, y, h = FOOT_SPOT
+    leave_vehicle(s)
+    s.place(x, y, heading=h)
+    s.wait_sim(1.5)  # the camera settles behind him
+    path = os.path.join(ROOT, "build", "audit", "trace_%d_footcam.txt" % s.step)
+    s.g.cmd("trace %s 0x%x 1" % (path, CAM_BETA))
+    s.key("D", True)
+    try:
+        s.wait_sim(2.5)
+    finally:
+        s.key("D", False)
+        s.g.cmd("trace off")
+    rows = [[float(v) for v in line.split()] for line in open(path)]
+    t0 = rows[0][1]
+    rows = [((r[1] - t0) / 1000.0, r[3]) for r in rows if r[1] - t0 >= 500]
+    turn = sum(wrapped(b[1] - a[1]) for a, b in zip(rows, rows[1:]))
+    return {"turn_deg_s": abs(math.degrees(turn)) / max(rows[-1][0] - rows[0][0], 1e-6)}
+
+
 def scenario_heat(s):
     """PHI_A2 "Boomshine Blowout": the heat's floor (+0.015 a frame in the script) and the heat at a rate of +1 a frame,
     per simulated second (0.45 / 30 at the PS2's 30 fps). The mission is walked to its forklift state: into Phil's
@@ -471,6 +594,9 @@ SCENARIOS = {
     "bikelean": scenario_bikelean,
     "carwater": scenario_carwater,
     "bikewater": scenario_bikewater,
+    "ferris": scenario_ferris,
+    "carcam": scenario_carcam,
+    "footcam": scenario_footcam,
     "heat": scenario_heat,  # starts a mission: last
 }
 

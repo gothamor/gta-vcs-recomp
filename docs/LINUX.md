@@ -24,6 +24,7 @@ Needed (the `--check-deps` list, Debian / Ubuntu names):
 | Movies | `libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev` |
 | SDL3, built from source: window (X11, Wayland), audio, gamepads | `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev libpipewire-0.3-dev libpulse-dev libasound2-dev libudev-dev libdbus-1-dev` |
 | Optional: Vulkan validation (`PS2X_RHI_DEBUG=1`) | `vulkan-validationlayers` |
+| The launcher (`build.py --launcher`), on top of the above | `libvulkan-dev libfreetype-dev libfontconfig-dev` (X11, Wayland, xkbcommon, D-Bus: already listed) |
 
 Fedora / Arch get the right package names from `--check-deps`. A Vulkan 1.3 driver is needed to play (Mesa's RADV /
 ANV, NVIDIA's driver): `vulkaninfo --summary` shows it. The Vulkan headers, volk (the loader) and VMA come with the
@@ -32,7 +33,8 @@ build (FetchContent), so no Vulkan SDK is needed.
 - **The compiler is clang only** (`tools/toolchain.py` takes the newest LLVM 19+ from `/usr/lib/llvm-<N>/bin` or
   PATH). It is the same compiler as clang-cl on Windows, so the generated code and its numerics are the same; and
   `PS2_GUEST_CC` needs its `preserve_none`. GCC is not supported.
-- **The flags match clang-cl's** (`ps2xRuntime/cmake/ReleaseMode.cmake`): `-march=x86-64-v3` (= `/arch:AVX2`),
+- **The flags match clang-cl's** (`ps2xRuntime/cmake/ReleaseMode.cmake`): `-march=x86-64-v3` (= `/arch:AVX2`; for an
+  older CPU `-march=sandybridge` = `/arch:AVX`, or x86-64-v2 - `PS2X_CPU`, picked from `/proc/cpuinfo`),
   `-ffp-contract=off` (the PS2 rounds a multiply-add twice: DECISIONS.md 2026-10-22), `-fno-math-errno`,
   **`-fno-strict-aliasing`** (clang-cl's default; the runtime and generated code read guest memory through casts), no
   stack protector or CET (Ubuntu turns them on).
@@ -41,6 +43,19 @@ build (FetchContent), so no Vulkan SDK is needed.
   cache override this.
 - The game is `build/vcs` and its settings are `build/vcs.ini`. Saves and caches go to `$XDG_DATA_HOME/VCSRecomp`
   (`~/.local/share/VCSRecomp`); `VCS_DATA_DIR` works as on Windows.
+
+## The launcher
+
+Players get it as an AppImage with every release (`VCS-Recomp-<v>-x86_64.AppImage`, glibc 2.35+: Ubuntu 22.04,
+Debian 12 and newer; docs/LAUNCHER.md "The Linux release"); it puts the release's files in
+`~/.local/share/VCSRecomp/install` and builds the game there. On Debian / Ubuntu releases whose clang is older than 19
+the package step adds LLVM's repository (apt.llvm.org) first (`tools/linux_packages.py`).
+
+`python3 tools/build.py --launcher` builds `VCSLauncher` (repository root): the same launcher as on Windows - setup,
+build, play - native on X11 and Wayland, drawing with Vulkan and FreeType (docs/LAUNCHER.md "Linux"). Its build tools
+step installs missing packages through `pkexec` (`python3 tools/build.py --install-deps`, the desktop's password
+prompt) or opens a terminal with the command. `VCS_LAUNCHER_VIDEO=x11|wayland`, `VCS_LAUNCHER_VK_DEBUG=1` and
+`VCS_LAUNCHER_VK_DEVICE=<name>` are its switches.
 
 ## Running
 
@@ -104,4 +119,7 @@ build (FetchContent), so no Vulkan SDK is needed.
 | GPU timing (`PS2X_GPU_TIMING`) for Vulkan: timestamp queries | done (and `PS2X_RHI_GPU_TIME`) |
 | Vulkan optimisation pass: layout-based barriers, incremental push descriptors; spirv-opt measured (no gain) | done: 60 fps locked at a 60 cap on the HD 520 (PERFORMANCE.md 16) |
 | The rig on Linux: regress, tour, saves, trainer, controls, shakedown, finale, soundcheck, soak, framerate audit | to do |
+| The launcher: X11 + Wayland, Vulkan, FreeType, portal dialogs, `--install-deps`; CI job on Ubuntu 24.04 (lavapipe) | done (2026-11-01): checked in nested Xephyr / weston (docs/LAUNCHER.md "Checked (Linux)"); GNOME / KDE by hand to do; a Linux release to do |
+| The Windows stutter work (PERFORMANCE.md 21-24) on Linux | done (2026-11-02, PERFORMANCE.md 25): portable, in; Vulkan's free-threaded texture creation added, off by default (no gain on the laptop; `PS2X_HW_EARLY_TEXTURES=1`); `cruise.py` from a copy of the player's card |
+| Hitches driving in the city on the laptop (PERFORMANCE.md 26) | measured: the main thread's driver CPU per draw and the GPU, both at the 60 Hz budget in dense views. Done: no shader depth on Vulkan (early Z), constants written only when they change, redundant Vulkan state not recorded (GPU -10%, main thread -10-15%); then (PERFORMANCE.md 27) depth as dynamic state (pipeline binds -60 to -70%) and vertex uploads of the written bytes only: main thread -12 to -16%, its frames over 20 ms 61 -> 24 |
 | Performance on this laptop (i5 Skylake, HD 520: the "modest hardware" target) in PERFORMANCE.md | 30 locked (original timing), 60 locked at a 60 cap, ~83 shown fps uncapped (frame-rate independent; PERFORMANCE.md 16-18) |

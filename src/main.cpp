@@ -13,6 +13,7 @@
 #include "runtime/ps2_perf.h"
 
 #include "debug/crash.h"
+#include "debug/game_info.h"
 #include "debug/profiler.h"
 #include "debug/rig.h"
 #include "game/vcs_trainer.h"
@@ -44,6 +45,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -238,6 +240,46 @@ namespace
         if (!settings::set("display.window", next))
             platform::setFullscreen(next != 0);
         std::fprintf(stderr, "[settings] Alt+Enter: %s\n", next ? "full screen" : "windowed");
+    }
+
+    // Each host frame, before the menus draw: the screenshot key (Keyboard > Menus, F8) saves this frame's picture as
+    // shown - menus and overlays included, at the window's size - as screenshots/vcs_<date>_<time>.png next to vcs.exe
+    // (VCS_SCREENSHOT_DIR: another folder). The notices of earlier shots are left out of it; nothing while the settings
+    // menu waits for a key to bind.
+    void screenshotKey()
+    {
+        const int key = settings::value("controls.screenshot_key");
+        if (ui::settingsMenuWaitingForKey() || !(platform::keyPressed(key) || ps2control::keyPressed(key)))
+            return;
+        ui::hideScreenshotNotices();
+        const char *env = std::getenv("VCS_SCREENSHOT_DIR");
+        const fs::path dir = env && *env ? fs::path(env) : exeDirectory() / "screenshots";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        const std::time_t t = std::time(nullptr);
+        std::tm local{};
+#if defined(_WIN32)
+        localtime_s(&local, &t);
+#else
+        localtime_r(&t, &local);
+#endif
+        char stamp[32];
+        std::strftime(stamp, sizeof(stamp), "vcs_%Y-%m-%d_%H-%M-%S", &local);
+        fs::path path = dir / (std::string(stamp) + ".png");
+        for (int n = 2; fs::exists(path, ec); ++n) // several in one second
+            path = dir / (std::string(stamp) + "_" + std::to_string(n) + ".png");
+        const auto asked = std::chrono::steady_clock::now();
+        ps2control::requestScreenshot(path.string(), [path, asked](const std::string &size) {
+            if (size.empty())
+            {
+                std::fprintf(stderr, "[screenshot] could not write %s\n", path.string().c_str());
+                vcs::trainer::notifyScreenshot("Screenshot failed: cannot write " + path.parent_path().string());
+                return;
+            }
+            std::fprintf(stderr, "[screenshot] %s (%s, %.0f ms)\n", path.string().c_str(), size.c_str(),
+                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - asked).count());
+            vcs::trainer::notifyScreenshot("Screenshot saved: " + path.filename().string());
+        });
     }
 
     // Each host frame: "Match window" follows the window as it is resized, moved to another monitor or made full screen.
@@ -799,6 +841,7 @@ int main(int argc, char *argv[])
         runtime.setDebugUiCallbacks([](PS2Runtime &, void *) {},
                                     [](PS2Runtime &, void *) {
                                         altEnter();
+                                        screenshotKey();
                                         followWindowAspect();
                                         ui::drawSettingsMenu();
                                         ui::drawTrainerMenu();
@@ -830,6 +873,7 @@ int main(int argc, char *argv[])
         vcs::trainer::install(runtime); // the trainer's control-channel command (game/vcs_trainer.h)
         vcs::input::install(runtime);   // the player's bindings feed the pad (game/vcs_input.h)
         vcs::volume::install(runtime);  // the game's music / effects levels follow the settings (game/vcs_volume.h)
+        vcs::gameinfo::install(runtime); // the F3 overlay's game-state panel, the `gameinfo` command (debug/game_info.h)
         // setting <key> [value] -> ok <value>: a setting read or changed (a hidden run never writes vcs.ini)
         ps2control::addCommand("setting", [](const std::string &args, ps2control::Reply reply) {
             const size_t space = args.find(' ');

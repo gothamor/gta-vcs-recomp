@@ -6,7 +6,7 @@
     python tools/doctor.py --iso PATH   check that disc instead of the one the build would find
 
 Checks: the folder (where the game is built: write access, synced / network folders, path length, free space), the
-memory, the compiler (Windows: Visual Studio with the C++ tools and its clang-cl; Linux: build.py --check-deps), git
+memory, the processor (which build it gets: AVX2, AVX or SSE4 - toolchain.cpu_level), the compiler (Windows: Visual Studio with the C++ tools and its clang-cl; Linux: build.py --check-deps), git
 when the dependencies aren't bundled (deps/), the disc (tools/vcs_disc.py check), and the state of the build:
 whether generated/ is current (recompile.py's stamp) and whether build/vcs.exe matches the source (build/build_info.json,
 file times). "next" says what to do: disc, tools, build or play. Nothing here changes anything.
@@ -126,6 +126,21 @@ def total_ram():
         return 0
 
 
+def check_cpu():
+    """The processor and the build it gets (toolchain.cpu_level: the game is compiled for the PC that builds it). Not
+    ok only for a CPU without SSE4.2 (code cpu_unsupported); an older one is ok, its build just runs slower."""
+    level = tc.cpu_level()
+    name = tc.cpu_name()
+    if level is None:
+        return {"name": name, "level": "", "ok": False, "code": "cpu_unsupported",
+                "message": "%s has no SSE4.2: the game needs a processor from 2008 or later" % (name or "this processor")}
+    forced = bool(os.environ.get("VCS_CPU"))
+    message = "%s: built for %s" % (name or "processor", tc.CPU_TEXT[level]) + (" (VCS_CPU)" if forced else "")
+    if level == "SSE4" and not forced:  # the four-lane VU helpers need AVX (ps2_vu1_compiled.h): per lane here
+        message += "; the game runs slower than on a processor with AVX"
+    return {"name": name, "level": level, "ok": True, "code": "ok", "message": message}
+
+
 def vswhere():
     return os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Microsoft Visual Studio",
                         "Installer", "vswhere.exe")
@@ -159,9 +174,15 @@ def check_compiler():
     """Windows: the Visual Studio the build would use and what it lacks. code: ok, no_vs, no_cpp_tools, no_clang,
     old_clang (CMake / Ninja: found or downloaded by the build). Linux: build.py --check-deps."""
     if not tc.IS_WINDOWS:
-        ok = tc.check_linux_deps(tc.build_env())
-        return {"ok": ok, "code": "ok" if ok else "missing_packages",
-                "message": "build dependencies found" if ok else "packages missing: python3 tools/build.py --check-deps"}
+        missing = tc.linux_missing(tc.build_env(), quiet=True)
+        if not missing:
+            return {"ok": True, "code": "ok", "message": "clang and every package the build needs"}
+        packages = [p for _, p in missing]
+        return {"ok": False, "code": "missing_packages", "missing": [label for label, _ in missing],
+                "packages": packages, "command": " ".join(tc.linux_packages_command(missing)),
+                "llvm_repo": tc.apt_llvm_repo(missing) or "",
+                "message": "%d package%s missing: %s" % (len(missing), "" if len(missing) == 1 else "s",
+                                                          ", ".join(label for label, _ in missing))}
     installs = vs_installs()
     result = {"installs": installs, "installer": os.path.join(os.path.dirname(vswhere()), "setup.exe")}
     with_cpp = [i for i in installs if i["components"]["cpp"]]
@@ -246,7 +267,7 @@ def newest_input():
     return newest, which
 
 
-def check_build():
+def check_build(cpu_level=None):
     import recompile
     source = tc.source_version()
     why_recompile = recompile.why_recompile()
@@ -271,6 +292,11 @@ def check_build():
             stamp = recompile.read_stamp() or {}
             if info.get("generated_inputs") != stamp.get("inputs", ""):
                 reasons.append("the generated code changed since the last build")
+        # built before build_info said (AVX2 then), or on / for another PC: a game for a newer CPU stops at once
+        built_for = (info or {}).get("cpu") or "AVX2"
+        if cpu_level and built_for != cpu_level:
+            reasons.append("the game was built for %s processors; this PC's is %s" % (
+                tc.CPU_TEXT.get(built_for, built_for), tc.CPU_TEXT.get(cpu_level, cpu_level)))
         newest, which = newest_input()
         if newest > os.path.getmtime(exe) + 2:
             reasons.append("newer source files than the game (%s)" % tc.show(which))
@@ -287,11 +313,14 @@ def run(given_iso):
     report["memory"] = {"bytes": ram, "ok": ram == 0 or ram >= NEED_RAM - GB // 2,
                         "message": "%.0f GB" % (ram / GB) if ram >= NEED_RAM - GB // 2 else
                         "%.0f GB of memory: the build may run out; close other programs while it runs" % (ram / GB)}
+    report["cpu"] = check_cpu()
     report["compiler"] = check_compiler()
     report["downloads"] = check_downloads()
     report["disc"] = check_disc(given_iso)
-    report["build"] = check_build()
-    if not report["disc"]["ok"]:
+    report["build"] = check_build(report["cpu"]["level"] or None)
+    if not report["cpu"]["ok"]:
+        nxt = "cpu"
+    elif not report["disc"]["ok"]:
         nxt = "disc"
     elif not report["build"]["current"] and (not report["compiler"]["ok"] or not report["downloads"]["ok"]):
         nxt = "tools"
@@ -313,6 +342,7 @@ def show(report):
     for w in folder["warnings"]:
         print("               - " + w["message"])
     line(report["memory"]["ok"], "memory", report["memory"]["message"])
+    line(report["cpu"]["ok"], "processor", report["cpu"]["message"])
     line(report["compiler"]["ok"], "compiler", report["compiler"]["message"])
     line(report["downloads"]["ok"], "downloads", report["downloads"]["message"])
     disc = report["disc"]
@@ -320,7 +350,8 @@ def show(report):
     build = report["build"]
     line(build["current"], "game", "built and current (%s)" % (build["info"] or {}).get("opt", "?") if build["current"]
          else "; ".join(build["reasons"]))
-    advice = {"disc": "choose your disc: python tools/build.py --recompile \"path\\to\\your.iso\" (or the launcher)",
+    advice = {"cpu": "this processor can't run the game",
+              "disc": "choose your disc: python tools/build.py --recompile \"path\\to\\your.iso\" (or the launcher)",
               "tools": "install what's missing above (the launcher can install Visual Studio's Build Tools: "
                        "python tools/setup_vs.py)",
               "build": "python tools/build.py --recompile-if-needed",

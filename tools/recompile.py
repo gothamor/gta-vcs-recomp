@@ -96,7 +96,8 @@ def run_logged(cmd, log, what):
     code = tc.run_with_progress(cmd, log, "[recompile] " + what)
     if code != 0:
         print(tc.tail(log))
-        tc.fail(f"{what} failed (full log: {tc.show(log)})", "recompiler_failed", log)
+        tc.fail(f"{what} failed, {tc.describe_exit(code)} (full log: {tc.show(log)})",
+                tc.exit_failure(code) or "recompiler_failed", log)
 
 
 def recompile(iso, env=None, verbose=False):

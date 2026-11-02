@@ -61,6 +61,19 @@ def exe(path):
     return path + ".exe" if IS_WINDOWS else path
 
 
+GHIDRA_VERSION = "12.1.4"  # the analysed EE project and the ghidra-emotionengine-reloaded extension are for this one
+
+
+def ghidra_home(env_var="GHIDRA_HOME"):
+    """The Ghidra install the analysis tools use: `env_var`, else scoop's GHIDRA_VERSION, else scoop's current. Scoop
+    moves `current` to newer releases (12.2 wants JDK 25, so the headless tools stopped starting, 2026-10-31)."""
+    if os.environ.get(env_var):
+        return os.environ[env_var]
+    apps = os.path.join(os.path.expanduser("~"), "scoop", "apps", "ghidra")
+    pinned = sorted(d for d in (os.listdir(apps) if os.path.isdir(apps) else []) if d.startswith(GHIDRA_VERSION))
+    return os.path.join(apps, pinned[-1] if pinned else "current")
+
+
 def game_exe(build_dir):
     """vcs.exe of a build tree: the main one (build/release) puts it at the top of build/ (CMakeLists.txt), others
     (build/pgo-gen) in their own runtime folder."""
@@ -293,6 +306,9 @@ class Progress:
         self.last_pct = -5
         self.stop = threading.Event()
         self.timer = threading.Thread(target=self._tick, daemon=True)
+        self.poll = None  # called every second from the timer (cmake_build: has the game's link started?)
+        self.step_eta = True  # False: the note says what is left (a link); Ninja's count says nothing about it
+        self.events = True  # False: someone else sends the launcher's progress events (the link's own)
 
     def __enter__(self):
         self.timer.start()
@@ -308,7 +324,7 @@ class Progress:
         elapsed = time.time() - self.start
         if self.total:
             text = "%s %d/%d %d%%  %s" % (self.label, self.done, self.total, 100 * self.done // self.total, _duration(elapsed))
-            if 0 < self.done < self.total and elapsed > 10:
+            if 0 < self.done < self.total and elapsed > 10 and self.step_eta:
                 text += ", ~%s left" % _duration(elapsed * (self.total - self.done) / self.done)
         else:
             text = "%s %s" % (self.label, _duration(elapsed))
@@ -339,6 +355,8 @@ class Progress:
 
     def _tick(self):
         while not self.stop.wait(1.0):
+            if self.poll:
+                self.poll()
             with self.lock:
                 self._draw()
 
@@ -356,7 +374,7 @@ class Progress:
     def _event(self):
         """A progress event for the launcher, at most 4 a second (Ninja steps come by the hundred)."""
         now = time.time()
-        if not json_progress() or (now - getattr(self, "_last_event", 0) < 0.25 and self.done < self.total):
+        if not json_progress() or not self.events or (now - getattr(self, "_last_event", 0) < 0.25 and self.done < self.total):
             return
         self._last_event = now
         elapsed = now - self.start
@@ -375,15 +393,171 @@ class Progress:
 
 
 def run_with_progress(cmd, log, label, cwd=ROOT, env=None):
-    """Runs `cmd` with its output to `log` under an elapsed-time line; returns the exit code."""
+    """Runs `cmd` with its output to `log` under an elapsed-time line; returns the exit code. A failure ends the log
+    with how the program ended (describe_exit): a crash leaves nothing else there."""
     cmd = resolve(cmd, env)
+    os.makedirs(os.path.dirname(os.path.abspath(log)), exist_ok=True)  # a fresh checkout has no build/ yet
     with open(log, "w", encoding="utf-8") as f, Progress(label) as progress:
         try:
             code = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
         except OSError as e:
             fail("could not start %s: %s" % (cmd[0], e), "no_cmake" if _is_cmake(cmd) else "error")
+        if code != 0:
+            f.write("\n[%s] %s ended after %s: %s\n" % (os.path.basename(sys.argv[0]) or "tools",
+                                                       os.path.basename(cmd[0]), _duration(time.time() - progress.start),
+                                                       describe_exit(code)))
     print(progress.summary())
     return code
+
+
+# ---- the CPU ----------------------------------------------------------------------------------------------------
+# The game and the recompiler are built for the CPU of the PC that builds them (PS2X_CPU, ReleaseMode.cmake): AVX2 by
+# default (Haswell / Zen and newer: AVX2, FMA, BMI), AVX before that (Sandy / Ivy Bridge, AMD's Bulldozer family),
+# SSE4 (SSE4.2 and POPCNT: x86-64-v2) for CPUs without AVX - first-generation Core i, and the Pentium / Celeron / Atom
+# chips that lacked AVX until 2020. A binary built for a newer CPU dies on its first unknown instruction before it
+# prints anything (a report from a Xeon E5-2687W, 2026-10-30: "recompiling fails in 1 second", empty log).
+CPU_LEVELS = ("AVX2", "AVX", "SSE4")
+CPU_TEXT = {"AVX2": "AVX2 (Haswell / Zen and newer)", "AVX": "AVX (Sandy Bridge class, no AVX2)",
+            "SSE4": "SSE4.2 (no AVX)"}
+
+
+def cpu_features():
+    """What this CPU and OS run: a set of "sse4.2", "avx", "avx2" (AVX2 also means FMA and BMI2 here), or None when
+    it can't be told (not x86-64, or a Windows that doesn't know the feature flags)."""
+    machine = platform.machine().lower()
+    if machine not in ("amd64", "x86_64", "x64"):
+        return None
+    if IS_WINDOWS:
+        import ctypes
+        present = ctypes.windll.kernel32.IsProcessorFeaturePresent
+        # PF_SSSE3 36, PF_SSE4_1 37, PF_SSE4_2 38, PF_AVX 39, PF_AVX2 40 (they also say whether the OS saves the
+        # AVX registers); a Windows from before they were added says no to all of them
+        flags = {36: "ssse3", 37: "sse4.1", 38: "sse4.2", 39: "avx", 40: "avx2"}
+        found = {name for pf, name in flags.items() if present(pf)}
+        return found or None
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("flags"):
+                    flags = set(line.partition(":")[2].split())
+                    found = {n for n in ("sse4_2", "avx") if n in flags}
+                    found = {n.replace("_", ".") for n in found}
+                    if {"avx2", "fma", "bmi1", "bmi2"} <= flags:
+                        found.add("avx2")
+                    return found
+    except OSError:
+        pass
+    return None
+
+
+def cpu_level():
+    """The PS2X_CPU this PC builds for: "AVX2", "AVX" or "SSE4"; None for a CPU without SSE4.2 (not supported).
+    VCS_CPU=AVX2|AVX|SSE4 chooses (e.g. to build and test an older CPU's build on a newer one). When the features can't
+    be read the default stays (AVX2)."""
+    forced = os.environ.get("VCS_CPU", "").strip().upper()
+    if forced:
+        if forced not in CPU_LEVELS:
+            fail("VCS_CPU=%s: one of %s" % (forced, ", ".join(CPU_LEVELS)))
+        return forced
+    found = cpu_features()
+    if found is None:
+        return "AVX2"
+    if "avx2" in found:
+        return "AVX2"
+    if "avx" in found:
+        return "AVX"
+    if "sse4.2" in found:
+        return "SSE4"
+    return None
+
+
+def cpu_name():
+    """The CPU's name for messages ("" when unknown)."""
+    if IS_WINDOWS:
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
+                return " ".join(str(winreg.QueryValueEx(key, "ProcessorNameString")[0]).split())
+        except OSError:
+            return ""
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    return " ".join(line.partition(":")[2].split())
+    except OSError:
+        pass
+    return ""
+
+
+def check_cpu():
+    """The CPU level, or stop: a CPU without SSE4.2 can't run the game (code cpu_unsupported)."""
+    level = cpu_level()
+    if level is None:
+        fail("this PC's processor (%s) has no SSE4.2: the game needs a CPU from 2008 or later (Intel Core i / AMD "
+             "Bulldozer or newer)" % (cpu_name() or "unknown"), "cpu_unsupported")
+    return level
+
+
+def cached_value(build_dir, key):
+    """A value from build_dir's CMakeCache.txt (None when absent)."""
+    try:
+        with open(os.path.join(build_dir, "CMakeCache.txt"), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                k, sep, value = line.partition("=")
+                if sep and k.split(":")[0] == key:
+                    return value.strip()
+    except OSError:
+        pass
+    return None
+
+
+# ---- how a program ended ----------------------------------------------------------------------------------------
+# Windows exit codes of a crash (NTSTATUS): the program had no chance to print anything, so the log is empty and the
+# code is all there is.
+CRASH_CODES = {
+    0xC000001D: ("illegal instruction", "the program uses an instruction this CPU doesn't have: built for a newer CPU?"),
+    0xC0000005: ("access violation", "the program crashed"),
+    0xC0000135: ("a DLL was not found", "a library the program needs is missing (Visual C++ runtime?)"),
+    0xC0000139: ("an entry point was not found", "a library the program needs is too old (update the Visual C++ runtime)"),
+    0xC000007B: ("bad image", "a library the program loads is damaged or for another architecture"),
+    0xC00000FD: ("stack overflow", "the program crashed"),
+    0xC0000409: ("stack buffer overrun / fast fail", "the program stopped itself (abort or a failed check)"),
+    0xC0000142: ("DLL initialisation failed", "a library could not start (often an antivirus or a missing runtime)"),
+    0xC0000017: ("out of memory", "not enough memory"),
+}
+
+
+def describe_exit(code):
+    """A line saying how a program ended: "exit code 1", or "exit code 0xC000001D (illegal instruction: ...)"."""
+    if code is None:
+        return "no exit code"
+    if code < 0:  # POSIX: killed by a signal
+        import signal
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = "signal %d" % -code
+        hint = {"SIGILL": "an instruction this CPU doesn't have: built for a newer CPU?", "SIGSEGV": "the program crashed",
+                "SIGKILL": "killed (out of memory?)", "SIGABRT": "the program stopped itself"}.get(name, "")
+        return "killed by %s%s" % (name, " (%s)" % hint if hint else "")
+    status = code & 0xFFFFFFFF
+    if status in CRASH_CODES:
+        what, hint = CRASH_CODES[status]
+        return "exit code 0x%08X (%s: %s)" % (status, what, hint)
+    if status >= 0xC0000000:
+        return "exit code 0x%08X (a crash)" % status
+    return "exit code %d" % code
+
+
+def exit_failure(code):
+    """The launcher's name for a program's crash, or None for an ordinary failure."""
+    status = (code or 0) & 0xFFFFFFFF
+    if status == 0xC000001D or code == -4:  # STATUS_ILLEGAL_INSTRUCTION / SIGILL
+        return "illegal_instruction"
+    if status in (0xC0000135, 0xC0000139):
+        return "missing_dll"
+    return None
 
 
 # ---- compiler environment ---------------------------------------------------------------------------------------
@@ -880,9 +1054,19 @@ def _ahead(seconds):
 
 # ---- CMake ------------------------------------------------------------------------------------------------------
 def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
-    """CMake configure of `build_dir` (first time, when forced, or with `defines`: {"PS2X_LTO": "THIN", ...})."""
+    """CMake configure of `build_dir` (first time, when forced, or with `defines`: {"PS2X_LTO": "THIN", ...}). The
+    CPU baseline follows this PC (cpu_level): a tree set up for another CPU - or from before PS2X_CPU, i.e. AVX2 - is
+    configured again for this one, which rebuilds everything."""
     force = drop_foreign_cache(build_dir, ROOT) or stale_tools(build_dir) or force
-    if os.path.isfile(os.path.join(build_dir, "build.ninja")) and not force and not defines:
+    level = check_cpu()
+    configured = os.path.isfile(os.path.join(build_dir, "build.ninja"))
+    cached = cached_value(build_dir, "PS2X_CPU") or "AVX2"  # CMakeLists.txt's default
+    if not configured or cached != level:
+        if configured:
+            print("[build] %s was built for %s CPUs; this PC's is %s: building it again for this one"
+                  % (show(build_dir), CPU_TEXT.get(cached, cached), CPU_TEXT[level]))
+        defines = dict(defines or {}, PS2X_CPU=level)
+    if configured and not force and not defines:
         return
     cmd = ["cmake", "-S", ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
     cmd += ["-D%s=%s" % (k, v) for k, v in (defines or {}).items()]
@@ -1031,17 +1215,33 @@ def _linux_family():
     return 0
 
 
-def check_linux_deps(env):
-    """Missing build dependencies on Linux, with the install command for this distro; True when nothing is missing."""
+# what the launcher needs on top (launcher/CMakeLists.txt): its Vulkan headers (the game fetches its own) and fonts;
+# X11, Wayland, xkbcommon and D-Bus come with the game's list
+LAUNCHER_LINUX_DEPS = [
+    ("Vulkan headers (launcher)", "pc:vulkan", ("libvulkan-dev", "vulkan-headers vulkan-loader-devel",
+                                                "vulkan-headers vulkan-icd-loader")),
+    ("fonts (launcher)", "pc:freetype2 fontconfig", ("libfreetype-dev libfontconfig-dev", "freetype-devel fontconfig-devel",
+                                                     "freetype2 fontconfig")),
+]
+
+PACKAGE_MANAGERS = ("apt", "dnf", "pacman")  # by _linux_family()
+
+
+def linux_missing(env, deps=None, quiet=False):
+    """The missing Linux build dependencies: a list of (label, packages for this distro). deps: LINUX_DEPS (the game,
+    the default) or LAUNCHER_LINUX_DEPS. CMake / Ninja / LLVM are checked with the game's list only."""
+    family = _linux_family()
     missing = []
-    for label, check, packages in LINUX_DEPS:
+    for label, check, packages in (LINUX_DEPS if deps is None else deps):
         if check.startswith("pc:"):
             mods = check[3:].split()
             ok = bool(_which("pkg-config", env)) and subprocess.run(["pkg-config", "--exists"] + mods, env=env).returncode == 0
         else:
             ok = bool(_which(check, env))
         if not ok:
-            missing.append((label, packages))
+            missing.append((label, packages[family]))
+    if deps is not None:
+        return missing
     tools = build_tools(env, download=False)
     for tool, title, minimum, packages, downloads in (
             ("cmake", "CMake", MIN_CMAKE, ("cmake", "cmake", "cmake"), CMAKE_DOWNLOADS),
@@ -1049,24 +1249,102 @@ def check_linux_deps(env):
         if tools[tool]:
             continue
         if download_platform() in downloads:
-            print("[deps] no %s %s or newer found: the build downloads one (%s)" % (
-                title, _version_text(minimum), downloads[download_platform()][0].rsplit("/", 1)[1]))
+            if not quiet:
+                print("[deps] no %s %s or newer found: the build downloads one (%s)" % (
+                    title, _version_text(minimum), downloads[download_platform()][0].rsplit("/", 1)[1]))
         else:
-            missing.append(("%s %s+" % (title, _version_text(minimum)), packages))
-    family = _linux_family()
+            missing.append(("%s %s+" % (title, _version_text(minimum)), packages[family]))
     llvm = _linux_llvm_bin(env)
     if not llvm:
-        missing.append(("clang %d+ / lld / llvm" % MIN_CLANG, ("clang-20 lld-20 llvm-20", "clang lld llvm", "clang lld llvm")))
+        missing.append(("clang %d+ / lld / llvm" % MIN_CLANG, ("clang-20 lld-20 llvm-20", "clang lld llvm", "clang lld llvm")[family]))
     elif not os.path.isfile(os.path.join(llvm, "ld.lld")) and not _which("ld.lld", env):
-        missing.append(("lld", ("lld-%d" % clang_version(os.path.join(llvm, "clang")), "lld", "lld")))
+        missing.append(("lld", ("lld-%d" % clang_version(os.path.join(llvm, "clang")), "lld", "lld")[family]))
+    return missing
+
+
+LLVM_PACKAGE_VERSION = 20  # the LLVM the install offers (clang-20 lld-20 llvm-20)
+
+
+def _os_release():
+    try:
+        with open("/etc/os-release", encoding="utf-8") as f:
+            return dict(re.findall(r'^(\w+)="?([^"\n]*)"?', f.read(), re.M))
+    except OSError:
+        return {}
+
+
+def apt_llvm_repo(missing):
+    """"CODENAME:VERSION" when the missing packages want an LLVM that this Debian / Ubuntu doesn't ship (Ubuntu 22.04,
+    Debian 12: their clang is older than the game needs) - tools/linux_packages.py adds apt.llvm.org then; else None."""
+    if _linux_family() != 0 or not any(p.startswith("clang-%d" % LLVM_PACKAGE_VERSION) for _, p in missing):
+        return None
+    try:
+        out = subprocess.run(["apt-cache", "policy", "clang-%d" % LLVM_PACKAGE_VERSION], capture_output=True,
+                             text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"Candidate:\s*(\S+)", out)
+    if m and m.group(1) != "(none)":
+        return None  # the distribution (or an apt.llvm.org added earlier) has it
+    info = _os_release()
+    codename = info.get("UBUNTU_CODENAME") or info.get("VERSION_CODENAME")  # Mint and other derivatives: Ubuntu's
+    return "%s:%d" % (codename, LLVM_PACKAGE_VERSION) if codename else None
+
+
+def linux_packages_command(missing, elevate="sudo"):
+    """tools/linux_packages.py install for the missing packages (with LLVM's repository when this release needs it),
+    through sudo (a terminal) or pkexec (the desktop's password prompt). A list."""
+    python = _which("python3", os.environ) or "/usr/bin/python3"
+    cmd = [elevate, python, "-I", os.path.join(ROOT, "tools", "linux_packages.py"), "install"]
+    repo = apt_llvm_repo(missing)
+    if repo:
+        cmd += ["--llvm-repo", repo]
+    return cmd + " ".join(p for _, p in missing).split()
+
+
+def launcher_compiler_defines(env):
+    """The launcher's compiler: clang when there is one (any version: the launcher needs C++20, not the game's clang
+    19), else the system's default (GCC); Windows: clang-cl as the game. A release's launcher is built on an old
+    distribution on purpose (glibc), where only an older clang or GCC exists."""
+    if IS_WINDOWS:
+        return compiler_defines(env)
+    defines = ["-DCMAKE_MAKE_PROGRAM=" + build_tools(env)["ninja"].replace(os.sep, "/")]
+    clang, clangxx = _which("clang", env), _which("clang++", env)
+    if clang and clangxx:
+        defines += ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx]
+        gcc = _gcc_with_libstdcxx(clangxx)
+        if gcc:
+            defines += ["-DCMAKE_C_FLAGS=--gcc-install-dir=" + gcc, "-DCMAKE_CXX_FLAGS=--gcc-install-dir=" + gcc]
+    return defines
+
+
+def linux_install_command(packages, sudo="sudo"):
+    """The command that installs these packages on this distro (a list; `sudo` may be "pkexec" or "")."""
+    family = _linux_family()
+    cmd = [sudo] if sudo else []
+    if family == 0:
+        cmd += ["apt", "install"] if sudo == "sudo" else ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y"]
+    elif family == 1:
+        cmd += ["dnf", "install"] + ([] if sudo == "sudo" else ["-y"])
+    else:
+        cmd += ["pacman", "-S", "--needed"] + ([] if sudo == "sudo" else ["--noconfirm"])
+    return cmd + " ".join(packages).split()
+
+
+def check_linux_deps(env, deps=None):
+    """Missing build dependencies on Linux, with the install command for this distro; True when nothing is missing."""
+    missing = linux_missing(env, deps)
     if not missing:
+        llvm = _linux_llvm_bin(env) if deps is None else None
         print("[deps] all build dependencies found" + (" (LLVM: %s)" % llvm if llvm else ""))
         return True
     for label, _ in missing:
         print("[deps] missing: " + label)
-    pkgs = " ".join(p[family] for _, p in missing)
-    cmd = ("sudo apt install " if family == 0 else "sudo dnf install " if family == 1 else "sudo pacman -S --needed ") + pkgs
-    print("[deps] install them with:\n    " + cmd)
+    if apt_llvm_repo(missing):
+        print("[deps] this release's clang is too old for the game: LLVM's repository (apt.llvm.org) comes first")
+        print("[deps] install them with:\n    " + " ".join(linux_packages_command(missing)))
+    else:
+        print("[deps] install them with:\n    " + " ".join(linux_install_command([p for _, p in missing])))
     return False
 
 
@@ -1076,13 +1354,71 @@ _INTERESTING = re.compile(r"error|FAILED|Linking|warning: unused")
 _NINJA_STEP = re.compile(r"^\[(\d+)/(\d+)\] (\S+)")
 
 
-def cmake_build(env, target, log_name, verbose=False, build_dir=BUILD_DIR):
+class _GameLink:
+    """The game's link as a step of its own: with ThinLTO it takes minutes after the last compile, while Ninja's count
+    stands at its last step or two. Ninja prints a step when it ends, so the start comes from a file the link touches
+    first (PRE_LINK in ps2xRuntime/CMakeLists.txt); the time it takes is guessed from the last link of the same kind
+    (link_times.json in the build folder; ThinLTO's cache makes a relink after a small change shorter than that)."""
+
+    def __init__(self, progress, build_dir, kind, title):
+        self.progress, self.kind, self.title = progress, kind, title
+        self.marker = os.path.join(build_dir, "game_link.started")
+        self.times_path = os.path.join(build_dir, "link_times.json")
+        self.start = None
+        try:
+            os.remove(self.marker)
+        except OSError:
+            pass
+        try:
+            with open(self.times_path, encoding="utf-8") as f:
+                self.times = json.load(f)
+        except (OSError, ValueError):
+            self.times = {}
+        last = self.times.get(kind) if isinstance(self.times, dict) else None
+        self.expected = last if isinstance(last, (int, float)) and last > 0 else None
+
+    def poll(self):
+        if self.start is None:
+            try:
+                self.start = min(os.path.getmtime(self.marker), time.time())  # the poll sees it up to a second late
+            except OSError:
+                return
+            stage("link", self.title)
+            self.progress.events = False
+            self.progress.step_eta = False
+            self.progress.message("[build] %s%s" % (self.title[0].lower() + self.title[1:], ", %s the last time" %
+                                                    _duration(self.expected) if self.expected else ""))
+        elapsed = time.time() - self.start
+        left = self.expected - elapsed if self.expected else 0
+        self.progress.update(note="linking" + (", ~%s left" % _duration(left) if left >= 1 else ""))
+        with self.progress.lock:
+            if self.expected:  # the time as the step's progress, held short of the end until the link is done
+                event(progress=int(min(elapsed, self.expected * 0.99)), total=max(1, int(self.expected)),
+                      eta=int(left) if left >= 1 else None, note="linking")
+            else:
+                event(progress=0, total=0, eta=None, note="linking")
+
+    def finish(self):
+        if self.start is None:
+            return
+        self.times[self.kind] = round(time.time() - self.start)
+        try:
+            with open(self.times_path, "w", encoding="utf-8") as f:
+                json.dump(self.times, f)
+        except OSError:
+            pass
+
+
+def cmake_build(env, target, log_name, verbose=False, build_dir=BUILD_DIR, link=None):
     """Builds `target` under a progress line (Ninja's [done/total]); prints errors and link steps (everything with
-    verbose). False on failure."""
+    verbose). link=(kind, title): the game's link becomes a stage of its own (_GameLink). False on failure."""
     log = os.path.join(BUILD, log_name)
     os.makedirs(BUILD, exist_ok=True)
     cmd = resolve(["cmake", "--build", build_dir, "--target", target], env)
     with open(log, "w", encoding="utf-8") as f, Progress("[build] " + target) as progress:
+        game_link = _GameLink(progress, build_dir, *link) if link else None
+        if game_link:
+            progress.poll = game_link.poll
         proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         for line in proc.stdout:
             f.write(line)
@@ -1094,6 +1430,9 @@ def cmake_build(env, target, log_name, verbose=False, build_dir=BUILD_DIR):
             if verbose or (_INTERESTING.search(line) and "Wdeprecated" not in line):
                 progress.message(line)
         ok = proc.wait() == 0
+        progress.poll = None
+    if ok and game_link:
+        game_link.finish()
     if ok:
         print(progress.summary() if progress.total else "[build] %s up to date" % target)
     else:

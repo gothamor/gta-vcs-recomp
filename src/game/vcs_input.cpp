@@ -6,6 +6,7 @@
 // (the mouse turns the on-foot camera itself).
 #include "game/vcs_input.h"
 
+#include "game/vcs_aim.h"
 #include "game/vcs_freecam.h"
 #include "platform/platform.h"
 #include "ps2_runtime.h"
@@ -106,10 +107,16 @@ namespace vcs::input
         constexpr uint32_t kCam = kTheCamera + 0x70u;  // the active CCam: +0 mode, +0x78 alpha (pitch), +0x7C beta (heading),
                                                        // +0x134 FOV
         constexpr uint32_t kCamModeFollowPed = 4;      // on foot (11 locked on, 18 in a vehicle)
+        // the first-person weapon cameras (FUN_00297cb8, game-internals.md 12c): sniper 7, rocket launcher 8, M16 34,
+        // camera 46, binoculars 47, 45; they turn by +0x78 / +0x7C as the follow camera, and 7 / 46 / 47 zoom (+0x134)
+        bool scopeMode(uint32_t mode) { return mode == 7 || mode == 8 || mode == 34 || (mode >= 45 && mode <= 47); }
+        bool zoomMode(uint32_t mode) { return mode == 7 || mode == 46 || mode == 47; }
+        constexpr uint32_t kScopeZoom = 0x00487E2Cu; // the FOV a zooming scope eases toward
         constexpr uint32_t kPad0 = 0x005147A8u;        // CPad 0: +0x96 DisablePlayerControls (s16)
         constexpr uint32_t kCamStickLocked = 0x00488EB4u; // the follow camera ignores the stick's turn while set
-        constexpr uint32_t kInvertLook = 0x00487A58u;  // the game's own: the right stick's y negated
-        constexpr uint32_t kTimeStep = 0x004CD110u;    // CTimer::ms_fTimeStep (1.0 = 1/50 s)
+        constexpr uint32_t kCamTable = 0x00487B30u;    // the follow camera's tuning, outdoors (+0x3C indoors): +0x34 / +0x38
+                                                       // the pitch limits up / down
+        constexpr uint32_t kCamIndoors = 0x00489F7Cu;  // the table indoors when neither 0 nor 4 (FUN_0029dab0)
         constexpr uint32_t kFrameCounter = 0x004CD124u; // CTimer::m_FrameCounter
         constexpr uint32_t kUserPause = 0x004CD2ACu;   // CTimer::m_UserPause (the pause menu), m_CodePause: bytes
         constexpr uint32_t kCodePause = 0x004CD11Cu;
@@ -159,6 +166,8 @@ namespace vcs::input
             float mouseScale = 1.0f; // stick deflection per mouse count per second (the cameras the stick turns)
             float mouseLook = 0.0025f; // radians per mouse count (the on-foot camera, turned directly)
             bool mouseInvertY = false;
+            bool freeAimMouse = false, freeAimPad = false; // free aim (game/vcs_aim.h) on the keyboard / mouse, the gamepad
+            bool mouseWheel = true;                        // the wheel changes weapons on foot and zooms scopes
             bool swapSticks = false, invertX = false, invertY = false;
             float deadzoneLeft = 0.12f, deadzoneRight = 0.12f, cameraScale = 1.0f, trigger = 0.3f;
             float vibration = 1.0f;
@@ -190,6 +199,9 @@ namespace vcs::input
             m.mouseScale = settings::value("mouse.sensitivity") / 100.0f / 1500.0f;
             m.mouseLook = settings::value("mouse.sensitivity") / 100.0f * 0.0025f;
             m.mouseInvertY = settings::value("mouse.invert_y") != 0;
+            m.freeAimMouse = settings::value("mouse.free_aim") != 0;
+            m.freeAimPad = settings::value("pad.free_aim") != 0;
+            m.mouseWheel = settings::value("mouse.wheel") != 0;
             m.swapSticks = settings::value("pad.swap_sticks") != 0;
             m.invertX = settings::value("pad.invert_x") != 0;
             m.invertY = settings::value("pad.invert_y") != 0;
@@ -220,14 +232,42 @@ namespace vcs::input
             }
         }
 
+        // "gamepad ..." (tests): a gamepad of buttons and axes set over the control channel, in place of the real one
+        // while on, physical input or not
+        struct InjectedPad
+        {
+            bool on = false;
+            std::array<bool, GAMEPAD_BUTTON_COUNT> buttons{};
+            std::array<float, AXIS_COUNT> axes{};
+        };
+        std::mutex g_injectedPadMutex;
+        InjectedPad g_injectedPad;
+
+        InjectedPad injectedPad()
+        {
+            std::lock_guard<std::mutex> lock(g_injectedPadMutex);
+            return g_injectedPad;
+        }
+        bool padConnected(bool physical) { return injectedPad().on || (physical && gamepadConnected()); }
+        bool padButton(GamepadButton b)
+        {
+            const InjectedPad p = injectedPad();
+            return p.on ? p.buttons[b] : gamepadButton(b);
+        }
+        float padAxis(GamepadAxis a)
+        {
+            const InjectedPad p = injectedPad();
+            return p.on ? p.axes[a] : gamepadAxis(a);
+        }
+
         bool padSource(int source, float trigger)
         {
             if (source >= 0 && source < GAMEPAD_BUTTON_COUNT)
-                return gamepadButton(static_cast<GamepadButton>(source));
+                return padButton(static_cast<GamepadButton>(source));
             if (source == kPadLT)
-                return gamepadAxis(AXIS_LEFT_TRIGGER) > trigger;
+                return padAxis(AXIS_LEFT_TRIGGER) > trigger;
             if (source == kPadRT)
-                return gamepadAxis(AXIS_RIGHT_TRIGGER) > trigger;
+                return padAxis(AXIS_RIGHT_TRIGGER) > trigger;
             return false;
         }
 
@@ -251,31 +291,30 @@ namespace vcs::input
             return static_cast<uint8_t>(v < 0.0f ? 128.0f + v * 128.0f : 128.0f + v * 127.0f);
         }
 
-        // The mouse camera. On foot the mouse turns the follow camera itself: its heading is written in the game, its
-        // pitch (which the camera rebuilds from where it stands every frame) goes through the stick's pitch speed, with
-        // the game's squared stick curve undone. Every other camera (vehicles, aiming) gets the mouse's speed (counts
-        // per second) as the right stick, so it turns as far for the same hand movement at any frame rate.
+        // The mouse camera. On foot the mouse turns the follow camera itself: its heading and pitch are written in the
+        // game, with the points the camera stands at turned to match. Every other camera (vehicles, aiming) gets the
+        // mouse's speed (counts per second) as the right stick, so it turns as far for the same hand movement at any
+        // frame rate.
         struct MouseCamera
         {
             std::chrono::steady_clock::time_point last{};
             uint32_t frame = 0;        // the game frame (m_FrameCounter) it was worked out for
             float x = 0.0f, y = 0.0f;  // the right stick's deflection from the mouse
-            float pitch = 0.0f;        // on foot: radians still to turn up (+) or down
+            aim::Output aim;           // free aim's say over R1 / L3 / the right stick, for the frame's reads
+            std::chrono::steady_clock::time_point hipUntil{}; // free aim held this long after the last shot from the hip
+            bool aimHeld = false;      // the target button was held at the last game frame
+            bool wheelWas[2] = {};     // a wheel notch (up, down) was down at the last game frame
+            int wheelSteps = 0;        // weapon changes still to press (+ next / R2, - previous / L2), one a frame
+            uint16_t wheelButton = 0;  // the button the wheel presses for this frame
         } g_mouse;
 
         std::mutex g_injectedMutex;
         float g_injectedX = 0.0f, g_injectedY = 0.0f; // "mouse <dx> <dy>" (tests): counts, as from the mouse
 
         // The game's stick curve (FUN_002842e8, game-internals.md 12a): v = byte - 128; |v| <= 42 is 0, past that
-        // (|v| - 42) 127 / 85, truncated - the first third of the travel does nothing.
-        int gameStick(int v)
-        {
-            const int a = std::abs(v);
-            const int g = a <= 42 ? 0 : (a - 42) * 127 / 85;
-            return v < 0 ? -g : g;
-        }
-        // The smallest deflection (byte - 128) the game reads as `g` (-127..127) or a little more, and that deflection
-        // as the float toByte turns back into exactly that byte.
+        // (|v| - 42) 127 / 85, truncated - the first third of the travel does nothing. The smallest deflection the game
+        // reads as `g` (-127..127) or a little more, and that deflection as the float toByte turns back into exactly
+        // that byte.
         int rawFor(int g)
         {
             if (g == 0)
@@ -284,10 +323,6 @@ namespace vcs::input
             return g < 0 ? -a : a;
         }
         float stickFloat(int raw) { return raw == 0 ? 0.0f : (raw + 0.5f) / (raw > 0 ? 127.0f : 128.0f); }
-
-        // The follow camera's pitch speed for the game's stick value y (-127..127) is |y| y 4.9e-5 0.000536 FOV per
-        // time step (FUN_0029dab0, game-internals.md 12b).
-        float pitchSpeed(int y, float fov) { return std::abs(y) * y * 4.9e-5f * 0.0005357144f * fov; }
 
         bool readPad(uint8_t *data)
         {
@@ -302,15 +337,20 @@ namespace vcs::input
             // the free camera has the controls (and the mouse, takeFreeCameraInput): the game gets a pad left alone
             const bool freeCamera = freecam::flying();
 
-            if (physical && gamepadConnected() && !freeCamera)
+            bool padR1 = false, keyR1 = false, keyCircle = false; // the target / fire buttons, by device (free aim)
+            float padRx = 0.0f, padRy = 0.0f;
+            if (padConnected(physical) && !freeCamera)
             {
                 for (size_t i = 0; i < kControlCount; ++i)
                     if (kControls[i].target == Target::Button && padSource(m.pad[i], m.trigger))
+                    {
                         buttons |= kControls[i].mask;
-                lx = gamepadAxis(AXIS_LEFT_X);
-                ly = gamepadAxis(AXIS_LEFT_Y);
-                rx = gamepadAxis(AXIS_RIGHT_X);
-                ry = gamepadAxis(AXIS_RIGHT_Y);
+                        padR1 = padR1 || kControls[i].mask == kR1;
+                    }
+                lx = padAxis(AXIS_LEFT_X);
+                ly = padAxis(AXIS_LEFT_Y);
+                rx = padAxis(AXIS_RIGHT_X);
+                ry = padAxis(AXIS_RIGHT_Y);
                 if (m.swapSticks)
                 {
                     std::swap(lx, rx);
@@ -320,6 +360,8 @@ namespace vcs::input
                 deadzone(rx, ry, m.deadzoneRight);
                 rx *= (m.invertX ? -1.0f : 1.0f) * m.cameraScale;
                 ry *= (m.invertY ? -1.0f : 1.0f) * m.cameraScale;
+                padRx = rx;
+                padRy = ry;
             }
 
             // keyboard and mouse buttons (blocked while a menu has the input, injected keys included). While the player
@@ -345,7 +387,11 @@ namespace vcs::input
                 if (!active(m.keys[i][0]) && !active(m.keys[i][1]))
                     continue;
                 if (c.target == Target::Button)
+                {
                     buttons |= c.mask;
+                    keyR1 = keyR1 || (c.mask == kR1 && !c.driving);
+                    keyCircle = keyCircle || c.mask == kCircle;
+                }
                 else if (c.target == Target::Stick)
                     (c.sign < 0 ? neg : pos)[c.axis] = 1;
                 else
@@ -391,7 +437,57 @@ namespace vcs::input
                 // back (y > 0)
                 const float up = -dy * (m.mouseInvertY ? -1.0f : 1.0f);
                 g_mouse.x = g_mouse.y = 0.0f;
-                if (on && game.footCamera)
+                const uint32_t cam = kTheCamera + 0x70u + g_rdram[kTheCamera + 0x50u] * 0x270u; // the active CCam
+                const uint32_t mode = rd32(cam) & 0xFFFFu;
+                float fov = rdf(cam + 0x134);
+                fov = fov >= 1.0f && fov <= 130.0f ? fov : 70.0f;
+
+                // free aim (game/vcs_aim.h): the target button with a gun - R1 (its keys or mouse button) when Keyboard >
+                // Free aim is on, the gamepad's R1 when Gamepad > Free aim is; with the keyboard / mouse also a shot
+                // from the hip (Circle), held a moment after it so a burst stays one aim
+                g_mouse.aim = {};
+                if (m.freeAimMouse || m.freeAimPad || aim::aiming())
+                {
+                    // the hold is for shots from the hip only: letting go of the target button ends the aim at once
+                    if (keyR1 || g_mouse.aimHeld)
+                        g_mouse.hipUntil = {};
+                    else if (m.freeAimMouse && keyCircle && aim::gunInHand())
+                        g_mouse.hipUntil = now + std::chrono::milliseconds(600);
+                    g_mouse.aimHeld = keyR1;
+                    const bool mouseWant = m.freeAimMouse && (keyR1 || now < g_mouse.hipUntil);
+                    const bool padWant = m.freeAimPad && padR1;
+                    aim::Input in;
+                    in.want = !blocked && (mouseWant || padWant);
+                    in.on = m.freeAimMouse || m.freeAimPad;
+                    if (!blocked)
+                    {
+                        // zoomed views turn slower for the same hand movement
+                        const float look = m.mouseLook * fov / 70.0f;
+                        in.turn = -dx * look;
+                        in.tilt = up * look;
+                        // the stick on a curve (fine aim near the centre), left / up +
+                        in.turnRate = -padRx * std::fabs(padRx);
+                        in.tiltRate = -padRy * std::fabs(padRy);
+                    }
+                    g_mouse.aim = aim::update(in);
+                }
+
+                if (g_mouse.aim.camera)
+                {
+                    // free aim turns the camera itself (aim::update)
+                }
+                else if (on && scopeMode(mode) && !game.driving)
+                {
+                    // the scopes and first-person weapon views turn by the mouse itself, as the follow camera's heading:
+                    // their update adds the stick's speed to +0x78 / +0x7C and keeps them in its limits
+                    // (FUN_00297cb8); zoomed in they turn slower
+                    const float look = m.mouseLook * fov / 70.0f;
+                    const float turn = -dx * look;
+                    float beta = std::fmod(rdf(cam + 0x7C) + turn, 6.2831855f);
+                    wrf(cam + 0x7C, beta < 0.0f ? beta + 6.2831855f : beta);
+                    wrf(cam + 0x78, rdf(cam + 0x78) + up * look);
+                }
+                else if (on && game.footCamera)
                 {
                     // heading: right turns clockwise (the angle falls), kept in 0..2 pi as the game keeps it. The camera
                     // eases its heading back toward where it stands (its source points, +0x220 / +0x230, placed around
@@ -410,21 +506,35 @@ namespace vcs::input
                             wrf(at + 4, py + ox * s + oy * c);
                         }
                     }
-                    // pitch: as the stick's speed (the game's curve undone), at most its top speed a step; the rest the
-                    // next frames
-                    g_mouse.pitch = std::clamp(g_mouse.pitch + up * m.mouseLook, -0.6f, 0.6f);
-                    const float step = std::clamp(rdf(kTimeStep), 0.05f, 3.4f);
-                    float fov = rdf(kCam + 0x134);
-                    fov = fov >= 10.0f && fov <= 130.0f ? fov : 70.0f;
-                    const float want = std::min(127.0f, std::sqrt(std::fabs(g_mouse.pitch / step) / pitchSpeed(1, fov)));
-                    const int raw = rawFor(static_cast<int>(want + 0.5f) * (g_mouse.pitch < 0.0f ? -1 : 1));
-                    g_mouse.pitch -= pitchSpeed(gameStick(raw), fov) * step;
-                    // a stick pulled back (y > 0) looks up; the game's own invert flips it
-                    g_mouse.y = stickFloat(rd32(kInvertLook) ? -raw : raw);
+                    // pitch (up +), as the heading: the camera eases it toward the pitch its source points stand at, seen
+                    // from the target point (+0x1A0, which it placed them around), so those turn up / down about it by
+                    // the same angle. Through the stick it was capped at the stick's top speed (0.03 a step) and then
+                    // eased (20% of the gap a step), slower than the heading. Kept in the game's limits.
+                    const uint32_t indoors = rd32(kCamIndoors);
+                    const uint32_t table = kCamTable + (indoors != 0 && indoors != 4 ? 0x3Cu : 0u);
+                    const float alpha = rdf(kCam + 0x78);
+                    const float tilt = std::clamp(alpha + up * m.mouseLook, -rdf(table + 0x38), rdf(table + 0x34)) - alpha;
+                    if (tilt != 0.0f)
+                    {
+                        wrf(kCam + 0x78, alpha + tilt);
+                        const float tx = rdf(kCam + 0x1A0), ty = rdf(kCam + 0x1A4), tz = rdf(kCam + 0x1A8);
+                        for (uint32_t at : {kCam + 0x220u, kCam + 0x230u})
+                        {
+                            const float ox = rdf(at) - tx, oy = rdf(at + 4) - ty, oz = rdf(at + 8) - tz;
+                            const float h = std::sqrt(ox * ox + oy * oy), d = std::sqrt(h * h + oz * oz);
+                            if (h < 1e-4f)
+                                continue;
+                            // looking up is a source point below the target
+                            const float e = std::clamp(std::atan2(-oz, h) + tilt, -1.55f, 1.55f);
+                            const float k = d * std::cos(e) / h;
+                            wrf(at, tx + ox * k);
+                            wrf(at + 4, ty + oy * k);
+                            wrf(at + 8, tz - d * std::sin(e));
+                        }
+                    }
                 }
                 else
                 {
-                    g_mouse.pitch = 0.0f;
                     if (on && dt > 0.0f && dt < 0.25f)
                     {
                         // the mouse's speed as the game's stick value, past its dead third
@@ -433,9 +543,67 @@ namespace vcs::input
                         g_mouse.y = tilt(up / dt * m.mouseScale);
                     }
                 }
+
+                // the wheel (Keyboard > Mouse wheel): a notch is one weapon change on foot (R2 next, L2 previous: one
+                // press a frame, so the game sees each), or a zoom step in a scope that zooms. Not while a binding uses
+                // the wheel, nor while aiming (L2 / R2 change the lock-on's target there).
+                const uint16_t pressedLast = g_mouse.wheelButton;
+                g_mouse.wheelButton = 0;
+                bool notch[2] = {};
+                for (int w = 0; w < 2; ++w)
+                {
+                    const bool down = !blocked && ps2control::keyDown(w ? KEY_WHEEL_DOWN : KEY_WHEEL_UP);
+                    notch[w] = down && !g_mouse.wheelWas[w];
+                    g_mouse.wheelWas[w] = down;
+                }
+                bool wheelBound = false;
+                for (size_t i = 0; i < kControlCount; ++i)
+                    for (int k : m.keys[i])
+                        wheelBound = wheelBound || k == KEY_WHEEL_UP || k == KEY_WHEEL_DOWN;
+                if (!m.mouseWheel || wheelBound || game.driving || g_mouse.aim.camera || aim::aiming())
+                    g_mouse.wheelSteps = 0;
+                else if (zoomMode(mode))
+                {
+                    // the zoom the scope eases its FOV toward (0x487E2C, FUN_00297cb8), in the game's own limits: 70
+                    // down to 15 (4.8 for the camera)
+                    const float zoomed = rdf(kScopeZoom) * (notch[0] ? 0.8f : 1.0f) * (notch[1] ? 1.25f : 1.0f);
+                    wrf(kScopeZoom, std::clamp(zoomed, mode == 46 ? 4.8f : 15.0f, 70.0f));
+                    g_mouse.wheelSteps = 0;
+                }
+                else if (mode == kCamModeFollowPed)
+                {
+                    g_mouse.wheelSteps = std::clamp(g_mouse.wheelSteps + (notch[1] ? 1 : 0) - (notch[0] ? 1 : 0), -3, 3);
+                    // a press, then a frame up before the next one
+                    if (g_mouse.wheelSteps && !pressedLast)
+                    {
+                        g_mouse.wheelButton = g_mouse.wheelSteps > 0 ? kR2 : kL2;
+                        g_mouse.wheelSteps += g_mouse.wheelSteps > 0 ? -1 : 1;
+                    }
+                }
+                else
+                    g_mouse.wheelSteps = 0;
             }
             rx += g_mouse.x;
             ry += g_mouse.y;
+            buttons |= g_mouse.wheelButton;
+            if (g_mouse.aim.own)
+            {
+                // free aim has the target button (R1 + L3 to enter the game's free aim, then R1 held; R1 up while the
+                // button is held after the gun ran dry) and, aiming, the camera
+                buttons = static_cast<uint16_t>((buttons & ~(kR1 | kL3)) | (g_mouse.aim.r1 ? kR1 : 0) | (g_mouse.aim.l3 ? kL3 : 0));
+                if (g_mouse.aim.camera)
+                    rx = ry = 0.0f;
+            }
+            else if (g_mouse.aim.camera)
+            {
+                // the game's own free aim in a car (aim::update): the mouse / right stick turn it, not the left stick
+                rx = ry = 0.0f;
+                if (g_mouse.aim.leftStick)
+                    lx = ly = 0.0f;
+                // the right thumb is on the stick: the gamepad's R1 fires there (the user's ask), and is not R1 then
+                if (g_mouse.aim.padR1Fires && padR1)
+                    buttons = static_cast<uint16_t>((buttons & ~(keyR1 ? 0 : kR1)) | kCircle);
+            }
 
             const uint16_t word = static_cast<uint16_t>(~buttons);
             data[2] = static_cast<uint8_t>(word & 0xFF);
@@ -545,6 +713,31 @@ namespace vcs::input
                 s.defaultValue = 0;
                 s.onChange = onChange;
                 settings::add(s);
+
+                s = {};
+                s.key = "mouse.free_aim";
+                s.page = kKeys;
+                s.section = "Mouse";
+                s.label = "Free aim";
+                s.help = "With a gun, the target button (right mouse button / E) aims where the mouse points, with the "
+                         "game's aiming circle, instead of locking on; shots go through the circle. You move while aiming "
+                         "as you do locked on with that gun. Fists, melee and scoped weapons lock on as on the PS2.";
+                s.type = Type::Toggle;
+                s.defaultValue = 0;
+                s.onChange = onChange;
+                settings::add(s);
+
+                s = {};
+                s.key = "mouse.wheel";
+                s.page = kKeys;
+                s.section = "Mouse";
+                s.label = "Mouse wheel";
+                s.help = "On foot the wheel changes weapon (down: next, up: previous); in a sniper scope, the camera and "
+                         "binoculars it zooms. Off, or with the wheel bound to a control, it does only that.";
+                s.type = Type::Toggle;
+                s.defaultValue = 1;
+                s.onChange = onChange;
+                settings::add(s);
             }
 
             s = {};
@@ -630,6 +823,17 @@ namespace vcs::input
         s.defaultValue = KEY_F6;
         settings::add(s);
 
+        s = {};
+        s.key = "controls.screenshot_key";
+        s.page = kKeys;
+        s.section = "Menus";
+        s.label = "Screenshot";
+        s.help = "Saves what is on screen (menus and overlays included) as a PNG in the screenshots folder next to vcs.exe.";
+        s.type = Type::Key;
+        s.group = "keys";
+        s.defaultValue = KEY_F8;
+        settings::add(s);
+
         // ---- Gamepad ---------------------------------------------------------------------------------------------
         for (const Control &c : kControls)
         {
@@ -703,6 +907,18 @@ namespace vcs::input
         }
 
         s = {};
+        s.key = "pad.free_aim";
+        s.page = kPad;
+        s.section = "Sticks and triggers";
+        s.label = "Free aim";
+        s.help = "With a gun, R1's button (RB unless changed above; give R1 the LT to aim with the trigger) aims where "
+                 "the right stick points, with the game's aiming circle, instead of locking on. No aim assist.";
+        s.type = Type::Toggle;
+        s.defaultValue = 0;
+        s.onChange = onChange;
+        settings::add(s);
+
+        s = {};
         s.key = "pad.vibration";
         s.page = kPad;
         s.section = "Vibration";
@@ -750,6 +966,37 @@ namespace vcs::input
             g_injectedY += dy;
             reply("ok");
         });
+        // gamepad on|off | gamepad <a b x y lb rb back start ls rs up down left right> <0|1> | gamepad <lx ly rx ry lt rt>
+        // <value> -> ok: a gamepad set from here in place of the real one while on (free aim's checks in
+        // tools/controls_check.py; sticks -1..1, down / right +)
+        ps2control::addCommand("gamepad", [](const std::string &args, ps2control::Reply reply) {
+            static const char *const kButtons[GAMEPAD_BUTTON_COUNT] = {"a",  "b",  "x",  "y",  "back", "start", "ls",
+                                                                       "rs", "lb", "rb", "up", "down", "left",  "right"};
+            static const char *const kAxes[AXIS_COUNT] = {"lx", "ly", "rx", "ry", "lt", "rt"};
+            char name[16] = {};
+            float value = 0.0f;
+            const int n = std::sscanf(args.c_str(), "%15s %f", name, &value);
+            std::lock_guard<std::mutex> lock(g_injectedPadMutex);
+            if (n == 1 && (std::strcmp(name, "on") == 0 || std::strcmp(name, "off") == 0))
+            {
+                g_injectedPad = {};
+                g_injectedPad.on = name[1] == 'n';
+                return reply("ok");
+            }
+            for (int b = 0; n == 2 && b < GAMEPAD_BUTTON_COUNT; ++b)
+                if (std::strcmp(name, kButtons[b]) == 0)
+                {
+                    g_injectedPad.buttons[b] = value != 0.0f;
+                    return reply("ok");
+                }
+            for (int a = 0; n == 2 && a < AXIS_COUNT; ++a)
+                if (std::strcmp(name, kAxes[a]) == 0)
+                {
+                    g_injectedPad.axes[a] = std::clamp(value, -1.0f, 1.0f);
+                    return reply("ok");
+                }
+            reply("error usage: gamepad on|off | gamepad <button> <0|1> | gamepad <lx|ly|rx|ry|lt|rt> <value>");
+        });
     }
 
     void onHostFrame(bool menuOpen)
@@ -757,7 +1004,7 @@ namespace vcs::input
         bool camera = false;
         {
             std::lock_guard<std::mutex> lock(g_mapMutex);
-            camera = g_map.mouseCamera;
+            camera = g_map.mouseCamera || g_map.freeAimMouse;
         }
         setMouseCaptured(((g_enabled && camera) || freecam::flying()) && !menuOpen && ps2control::physicalInputOn());
 

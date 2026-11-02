@@ -15,6 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mipsdis  # noqa: E402
+import toolchain as tc  # noqa: E402
 
 # Common IOP library export names by (library, ordinal). Partial; extend as needed.
 NAMES = {
@@ -216,7 +217,7 @@ def decompile(path, out):
     import subprocess
     import tempfile
     image, size, stubs = load(path)
-    ghidra = os.environ.get("GHIDRA_INSTALL_DIR") or os.path.expanduser("~/scoop/apps/ghidra/current")
+    ghidra = tc.ghidra_home("GHIDRA_INSTALL_DIR")
     headless = os.path.join(ghidra, "support", "analyzeHeadless.bat" if os.name == "nt" else "analyzeHeadless")
     work = tempfile.mkdtemp(prefix="irxdis_")
     bin_path = os.path.join(work, os.path.basename(path) + ".bin")

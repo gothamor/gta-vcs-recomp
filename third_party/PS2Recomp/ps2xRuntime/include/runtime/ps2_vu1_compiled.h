@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#if defined(__AVX2__)
+#if defined(__AVX__)
 #include <immintrin.h>
 #endif
 
@@ -224,13 +224,15 @@ namespace vu1fast
     }
 }
 
-// The same rules on all four lanes of a register at once (SSE / AVX2): per lane exactly the operations of the
+// The same rules on all four lanes of a register at once (SSE4.1 / AVX): per lane exactly the operations of the
 // vu1fast helpers above, in the same order. Results are stored as whole registers (store<Dest> blends the lanes that
 // aren't written), so a later whole-register load is forwarded from one store. Dest / Lanes: bit c = component c
-// (x = bit 0). Without AVX2, V is four floats and each helper runs the vu1fast helper per lane.
+// (x = bit 0). Without AVX, V is four floats and each helper runs the vu1fast helper per lane.
+// [gta-recomp] __AVX__, not __AVX2__ (PS2X_CPU, 2026-10-31): nothing here needs AVX2 - the double lanes are AVX's
+// 256-bit pd - so an AVX build keeps the vector path; only an SSE4 build takes the per-lane one.
 namespace vu1v
 {
-#if defined(__AVX2__)
+#if defined(__AVX__)
     using V = __m128;
     using VI = __m128i;
 
@@ -322,6 +324,9 @@ namespace vu1v
 
     // MR32: (y, z, w, x)
     VU1_FORCEINLINE V rotate(V value) { return _mm_shuffle_ps(value, value, _MM_SHUFFLE(0, 3, 2, 1)); }
+    // (x, y, z, w) -> (y, z, x, w) and (z, x, y, w): the cross product's operands (OPMULA / OPMSUB)
+    VU1_FORCEINLINE V yzx(V value) { return _mm_shuffle_ps(value, value, _MM_SHUFFLE(3, 0, 2, 1)); }
+    VU1_FORCEINLINE V zxy(V value) { return _mm_shuffle_ps(value, value, _MM_SHUFFLE(3, 1, 0, 2)); }
     // an integer's bits in every lane (MFIR)
     VU1_FORCEINLINE V splatBits(int32_t bits) { return _mm_castsi128_ps(_mm_set1_epi32(bits)); }
 
@@ -397,6 +402,8 @@ namespace vu1v
     }
 
     VU1_FORCEINLINE V rotate(V v) { return V{{v.f[1], v.f[2], v.f[3], v.f[0]}}; }
+    VU1_FORCEINLINE V yzx(V v) { return V{{v.f[1], v.f[2], v.f[0], v.f[3]}}; }
+    VU1_FORCEINLINE V zxy(V v) { return V{{v.f[2], v.f[0], v.f[1], v.f[3]}}; }
     VU1_FORCEINLINE V splatBits(int32_t bits) { float f; std::memcpy(&f, &bits, 4); return splat(f); }
 
     template <unsigned Dest>

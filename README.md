@@ -15,8 +15,9 @@ for the Linux build in detail.
 1. Download the newest `VCS-Recomp-<version>-windows.zip` from the [Releases](../../releases) page and extract it
    somewhere short and local, like `C:\Games\VCS` (not Program Files, not a OneDrive-synced folder such as Desktop or
    Documents: the build writes thousands of files).
-2. Start **`VCSLauncher.exe`** in that folder. It goes through four steps and the big button always shows the next one:
-   - **Folders**: the game is built in `build\` next to the launcher, or in a folder you choose (another drive with
+2. Start **`VCSLauncher.exe`** in that folder. It walks you through four steps, one at a time, then shows a big
+   **Play** button:
+   - **Folder**: the game is built in `build\` next to the launcher, or in a folder you choose (another drive with
      more room, say): *Choose another folder* on this step.
    - **Disc**: it looks for your `.iso` in Downloads, Desktop, Documents and its own folder; otherwise choose it (or
      drag it onto the window, or copy your disc from a DVD drive). It checks that it is the USA release.
@@ -31,6 +32,29 @@ The launcher also backs up and restores your saves, makes a desktop shortcut, ch
 ask, or at start if you turn that on in *Settings*), and zips the logs into a report for bug reports. Windows may warn
 that the launcher is from an unknown publisher (it isn't signed): *More info > Run anyway*. How it works:
 [docs/LAUNCHER.md](docs/LAUNCHER.md). Everything it does is a script in `tools/` you can also run yourself (below).
+If the *Pricedown* font (GTA's lettering, free for personal desktop use from Typodermic) is installed on your PC, the
+launcher uses it for its title and Play button; its licence doesn't allow including it, so it isn't.
+
+## Install on Linux: the launcher (easiest)
+
+1. Download the newest `VCS-Recomp-<version>-x86_64.AppImage` from the [Releases](../../releases) page. It runs on
+   any 64-bit desktop with glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Linux Mint 21, Fedora, Arch and later, on
+   X11 or Wayland. It needs a Vulkan driver (Mesa or NVIDIA's) and `python3`, which every desktop has.
+2. Make it executable and start it: in the file manager, *Properties > Permissions > Allow executing as a program*, or
+   `chmod +x VCS-Recomp-*.AppImage && ./VCS-Recomp-*.AppImage`. The first start puts the game's files (the source,
+   the scripts, the libraries) in `~/.local/share/VCSRecomp/install`, where the game is built, then walks you through
+   the same steps as on Windows:
+   - **Folder**: where the game is built (another drive with more room: *Choose another folder*).
+   - **Disc**: your `.iso` from Downloads, Desktop or Documents, chosen, or dropped onto the window.
+   - **Build tools**: the compiler (clang 19 or newer) and the libraries the build needs, from your distribution.
+     *Install packages* asks for your password and installs them; *Install in a terminal* shows the command instead.
+     On Ubuntu 22.04 and Debian 12, whose clang is older, it adds LLVM's own repository ([apt.llvm.org](https://apt.llvm.org)) first.
+   - **Build**, then **Play**.
+
+The AppImage is the whole launcher: *Add a shortcut to the desktop* in *Settings* puts it in your applications menu
+too. Updates replace the AppImage itself (*Settings > Check now*); the next start puts the new files in place and only
+what changed is rebuilt. Without FUSE (some containers and minimal systems), start it with
+`--appimage-extract-and-run`.
 
 ## Install by hand (Windows and Linux)
 
@@ -108,6 +132,7 @@ where your disc is.
   saved in `vcs.ini` next to the game.
 - **Alt+Enter** switches between full screen and the window.
 - **F5** opens the trainer ([docs/TRAINER.md](docs/TRAINER.md)).
+- **F8** saves a screenshot to the `screenshots` folder next to the game.
 - Keyboard, mouse and gamepads (Xbox, PlayStation, Switch Pro, ...) all work: [docs/CONTROLS.md](docs/CONTROLS.md).
 - Saves (the memory card) live in `%LOCALAPPDATA%\VCSRecomp` on Windows and `~/.local/share/VCSRecomp` on Linux.
 
@@ -180,7 +205,8 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
 
 - **A release** (the launcher): *Check for updates*, then *Update now*: it puts the new release in place (keeping
   your built game, settings and saves) and the next *Update the build* compiles only what changed. By hand:
-  `python tools/update.py check` / `python tools/update.py apply`.
+  `python tools/update.py check` / `python tools/update.py apply`. On Linux the AppImage file is replaced; start it
+  again and it puts the new files in place.
 - **A git clone**: `git pull`, then build again: `python tools/build.py --recompile-if-needed` recompiles only when
   the recompiler or its config changed.
 
@@ -194,6 +220,7 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
 | `unsupported executable build` or `SLUS_215.90 not found on disc` | The disc isn't the USA release (SLUS-21590). Other regions aren't supported. |
 | CMake configure fails while downloading | Check the internet connection and that `git --version` works in a new terminal. |
 | `CMake 3.21 or newer not found, and downloading it failed` | Check the internet connection, or install CMake yourself ([cmake.org](https://cmake.org/download), or Visual Studio Installer, *Modify*, **C++ CMake tools for Windows**). `VCS_CMAKE` / `VCS_NINJA` set to a full path choose a particular one. |
+| A step fails within seconds, its log empty or ending in `exit code 0xC000001D (illegal instruction ...)` | The build was made for a newer processor than this PC's. Build again: the build follows the PC's processor (AVX2, AVX or SSE4; `python tools/doctor.py` shows which). Processors without SSE4.2 (before 2008) can't run the game. |
 | `vcs.exe` does nothing when started | It can't find the disc: put `iso=C:\path\to\your.iso` in `vcs.ini` next to `vcs.exe`. |
 | Linux: `clang 19 or newer not found` / `missing build dependencies` | Install what `python3 tools/build.py --check-deps` lists. |
 | Linux: `cannot find -lstdc++` | Install `libstdc++-<N>-dev` for your newest GCC (`build.py` works around it when an older one has it). |
@@ -217,7 +244,7 @@ to do next; `python tools/report.py` zips the logs for a bug report (no game fil
 | `python tools/doctor.py` | everything checked: folder, memory, compiler, disc, build state, the next step (`--json` for the launcher) |
 | `python tools/build_dir.py [set PATH \| reset]` | build in another folder (another drive...) instead of `build\`; every tool follows it |
 | `python tools/backup.py create\|list\|restore` | the memory card backed up / restored (order and times kept) |
-| `python tools/release.py [--worktree]` | the Windows release zip (source, launcher, embeddable Python, `deps/`), self-tested; refuses game files, and uncommitted changes without `--worktree` |
+| `python tools/release.py [--worktree]` | the Windows release zip (source, launcher, embeddable Python, `deps/`), self-tested; refuses game files, and uncommitted changes without `--worktree`. On Linux, `--platform linux` makes the AppImage |
 | `python tools/deps.py fetch` | the libraries the build downloads, into `deps/` (offline builds) |
 | `python tools/run.py 0` | run the game with its output logged to `build/run/run.log` (`run.py 60 name`: stop after 60 s, log to `name.log`) |
 | `python tools/gamectl.py` | control a running game: screenshots, key presses, perf numbers, quit |
@@ -232,7 +259,7 @@ on the code; the documentation is in [docs/](docs).
 | `game/vcs` | Recompiler config and function map for SLUS_215.90 |
 | `src` | Game-specific code (overrides, renderer, settings, platform) |
 | `tools` | Disc reader, build pipeline, launcher back end, test and analysis scripts |
-| `launcher` | The Windows launcher (SDL3 + Dear ImGui; runs the tools) |
+| `launcher` | The launcher (Windows and Linux, its own renderer and UI; runs the tools) |
 | `docs` | How the game works, decisions, progress |
 
 ## License

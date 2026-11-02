@@ -43,15 +43,15 @@ choices).
 | Path | What |
 |---|---|
 | `src/main.cpp` | Launcher: ISO, settings registration, runtime start |
-| `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`), frame timing (`vcs_framerate.cpp`, per-frame mission meters `vcs_script_timing.cpp`), the player's controls (`vcs_input.cpp`), the game's music / effects levels as settings (`vcs_volume.cpp`) |
+| `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`), frame timing (`vcs_framerate.cpp`, per-frame mission meters `vcs_script_timing.cpp`), the player's controls (`vcs_input.cpp`; free aim `vcs_aim.cpp`), the game's music / effects levels as settings (`vcs_volume.cpp`) |
 | `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders (HLSL; DXBC by fxc, SPIR-V by `tools/hlsl_spirv.py`), the RHI (backends `d3d11/`, `vulkan/`, `null/`; only they see a graphics API), SDL3 platform layer |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
 | `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2), the trainer menu (F5) |
-| `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch |
+| `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch, the F3 game-state panel (`game_info.cpp`, also `gamectl.py gameinfo`) |
 | `third_party/PS2Recomp/ps2xRuntime` | The runtime (EE, VIF, VU1, GS HW backend, IOP host, stubs); our changes marked `[gta-recomp]` |
 | `game/vcs/` | Recompiler config, function map, VU1 upload list |
 | `tools/` | Python 3 tools (standard library only) - see below |
-| `launcher/` | `VCSLauncher.exe` (SDL3 + Dear ImGui, a CMake project of its own): disc, build tools, build, play - a front end over `tools/` (docs/LAUNCHER.md) |
+| `launcher/` | `VCSLauncher.exe` / Linux `VCSLauncher` (a CMake project of its own, no third-party code: its own window - Win32, or X11 / Wayland -, renderer - D3D11 or Vulkan, one `ui.hlsl` -, DirectWrite / FreeType text, its own icons, animated UI, after uppies): disc, build tools, build, play - a front end over `tools/` (docs/LAUNCHER.md) |
 
 ## Build and run
 
@@ -63,14 +63,20 @@ python tools/build.py --quick               # no LTO (= --opt none): fast relink
 python tools/build.py --check-deps          # Linux: missing packages and the command that installs them
 python tools/build.py --opt none|lto|pgo    # game optimisation, kept until changed (lto: the default; pgo: ThinLTO + profile, trains if needed)
 python tools/bench.py [OUT]                  # game-thread benchmark: fixed city spots + an AI drive (game / worker ms)
+python tools/cruise.py run [OUT] [ENV=VAL]   # stutter rig: the car along a fixed route at 144 km/h, every frame timed;
+                                             # hitches with their texture / main-thread / game-thread cause (PERFORMANCE.md 21)
 python tools/clean.py [--apply] [--keep-days 7]   # delete test output in build/ (lists first; builds, saves, baselines kept)
-python tools/build.py --launcher             # the launcher (VCSLauncher.exe in the root; no disc, ~1 min the first time)
+python tools/build.py --launcher             # the launcher (VCSLauncher(.exe) in the root; no disc, ~20 s the first time)
+python3 tools/build.py --install-deps        # Linux: the missing packages through pkexec (what the launcher's button runs)
 python tools/build.py --recompile-if-needed  # recompile only when generated/ is stale (generated/recompile_stamp.json)
 python tools/doctor.py [--json]              # folder, compiler, disc, build state, the next step (the launcher reads --json)
 python tools/build_dir.py [check|set P|reset] # the build folder elsewhere (.vcs-build-dir, VCS_BUILD_DIR): tc.BUILD follows;
                                              # the test tools keep writing to build\ in the source folder
 python tools/release.py [--ref vX | --worktree]   # the Windows release zip (build/dist); refuses game files. The number is
-                                             # VERSION (root; 0.0.2): bump it before tagging - the tag must match
+                                             # VERSION (root; 0.2.0): bump it before tagging - the tag must match;
+                                             # the notes: docs/releases/<tag>.md (else GitHub generates them)
+python3 tools/release.py --platform linux [--worktree --allow-new-glibc]   # the Linux AppImage (CI builds it on
+                                             # Ubuntu 22.04 for glibc 2.35; a v* tag publishes zip + AppImage together)
 python tools/deps.py list|fetch|check        # the libraries CMake downloads; deps/ makes the build offline
 python tools/backup.py create|list|restore   # memory card backups (VCS_DATA_DIR honoured: test on copies)
 python tools/setup_vs.py status|install [--dry-run]   # Visual Studio Build Tools (+ clang) from Microsoft, elevated
@@ -82,6 +88,7 @@ python tools/run.py 60 name --control       # + control channel for tools/gamect
 python tools/scenes.py capture OUT          # reference scenes from an empty card (screenshots + perf)
 python tools/scenes.py compare REF NEW      # picture / perf diff of two captures
 python tools/gamectl.py press F2|screenshot f.png|perf|quit
+python tools/gamectl.py gameinfo           # player position / heading / state, vehicle, camera, clock, pauses, scripts (F3's panel)
 python tools/rig.py start --save build/rig/saves/fortbaxter   # straight into gameplay from a card copy
 python tools/rig.py player|scripts|peekf 0x4e4910 1|scm <hex>  # inspect / drive the running game
 python tools/tour.py OUT [--every 9 --limit 18]               # world tour (quick subset with --every/--limit)
@@ -92,6 +99,7 @@ python tools/soundcheck.py all OUT [--mission N]             # native sound vs t
 python tools/trainer_check.py [OUT] [--vehicles all]          # every trainer feature, checked in the game's memory
 python tools/finale_check.py [OUT] [--story] [--full]         # Last Stand's end from the trainer: final cutscene, credits
 python tools/controls_check.py [OUT]                          # bindings, presets, reset, vibration, volume levels; menu screenshots
+python tools/hud_check.py [OUT]                               # HUD at the screen edges: radar left, centred text in the middle
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```
@@ -126,7 +134,11 @@ card copies to start from (never the user's live card).
 - The launcher (`launcher/`, docs/LAUNCHER.md) only runs `tools/`: build logic stays in Python, so a change to the
   pipeline is a change to the scripts. The tools print `@vcs {json}` event lines (`toolchain.event` / `stage` / `fail`
   with a code) the launcher reads; keep them when changing a tool's output. `VCSLauncher.exe --screenshot F.png
-  [--step N | --demo error | --action build]` renders its window hidden (tests, docs); `--self-test` is CI's check.
+  [--screen home|task|sheet:saves|gallery... --demo error --frames N --action build]` renders its window offscreen
+  (tests, docs; `--screen gallery` shows every widget); `--hidden --quit-after S` runs the real loop unshown and prints
+  its cost; `--self-test` is CI's check. The launcher's UI is immediate mode: never open a file dialog inside a frame
+  (`screens::runPending`), and keep it idle - no animation that runs forever while nothing happens, except Home's
+  backdrop (the user's wish, 2026-11-01: 30 fps, off while the game runs and with reduce motion; DECISIONS.md).
 
 ## Rules that keep things working
 
@@ -171,6 +183,14 @@ card copies to start from (never the user's live card).
   (game-internals.md 11g). F12's draw log shows the black quad and the text; the active scripts show who is missing.
 - `ninja: error: manifest 'build.ninja' still dirty after 100 tries`: files dated after the clock (a zip from another
   time zone); `build.py` sets them to now (`toolchain.fix_future_files`, docs/LAUNCHER.md).
+- A tool fails within a second, its log empty (a player's report, 2026-10-31): a crash before the first line - the log
+  now ends with the exit code (`0xC000001D` illegal instruction: a build for a newer CPU, `PS2X_CPU`; DECISIONS.md).
+- `[main] fatal exception: No mapping for the Unicode character exists in the target multi-byte code page`, or a path
+  full of `?`s: a non-ASCII folder seen through the ANSI code page - vcs.exe's UTF-8 manifest missing or ignored
+  (`src/vcs.manifest`, DECISIONS.md 2026-11-01).
+- A save gone after saving (an empty slot file, or the whole save folder deleted): a card name the host could not
+  store, or a failed card write - the game deletes its save folder after one (game-internals.md 10f). The card is
+  zipped into `<data>/backups/auto-*.zip` before every change (`[MC] card backup` in the log).
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs

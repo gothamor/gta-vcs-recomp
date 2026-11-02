@@ -47,7 +47,8 @@ Newest at the bottom. Each entry: what, why, and what would change it.
   10.0.19041 Windows SDK. clang-cl also handles the huge generated files better
   than cl.exe. `tools/toolchain.py` sets this up (vswhere + vcvars64).
 - Baseline CPU: AVX2 (upstream's `/arch:AVX2`). Revisit if we want pre-Haswell
-  CPUs; the generated code mostly needs SSE4.1.
+  CPUs; the generated code mostly needs SSE4.1. (Revisited 2026-10-31: the build follows
+  the PC's CPU - AVX2, AVX or SSE4; see the entry of that date.)
 
 ## 2026-10-21 - Graphics plan
 1. Bring-up: upstream CPU GS backend (slow, but no extra work).
@@ -672,3 +673,331 @@ every file came out up to 13.5 h in the future, newer than any build.ninja CMake
   reports them (it changes nothing). A build tree that already looped recovers without being deleted (checked).
 - Ninja's "still dirty" still gets its own failure (`file_dates`) for what the repair can't reach - a clock that is
   wrong, a read-only file.
+
+## 2026-10-31 - The CPU baseline follows the PC that builds (AVX2, AVX, SSE4)
+- A player's report (Xeon E5-2687W, Sandy Bridge: AVX but no AVX2): "recompiling MIPS code to C++ fails in 1 second",
+  `recomp.log` empty. Every target was built with `/arch:AVX2`, so `ps2_recomp.exe` - and later `vcs.exe` - stopped at
+  its first AVX2 / BMI instruction (`STATUS_ILLEGAL_INSTRUCTION`, 0xC000001D) before printing a line; the tools didn't
+  say how it ended, and the doctor didn't look at the CPU.
+- Players build on their own PC (source-only releases), so the build is compiled for that PC's CPU:
+  `PS2X_CPU=AVX2|AVX|SSE4` (`ReleaseMode.cmake`; `/arch:AVX2` / `-march=x86-64-v3`, `/arch:AVX` / `-march=sandybridge`,
+  x86-64-v2), chosen by `toolchain.cpu_level()` (Windows `IsProcessorFeaturePresent`, Linux `/proc/cpuinfo`) at every
+  configure; a tree set up for another level is configured again (a full rebuild). `VCS_CPU=AVX|SSE4` builds an older
+  CPU's game on a newer PC (how it was tested). Below SSE4.2 (Core 2, 2006-08) the build stops with `cpu_unsupported`.
+- One binary with runtime dispatch was the alternative: it would need every hot path written twice and picked per call,
+  for a build players make themselves anyway. AVX2 stays the default and what releases are measured with.
+- Numerics are the same at every level: FP contraction is off everywhere (no FMA anywhere since 2026-10-22), and the
+  vector paths (`ps2_vu1_compiled.h`, `__SSE4_1__` in `ps2_runtime_macros.h`) have per-lane fallbacks that do the same
+  operations. `vu1v` (compiled VU1, native VU0) needs only AVX, so it is on `__AVX__` now: AVX builds keep it, SSE4
+  builds take the per-lane version (which had never been compiled: `vcs_vu0_native.cpp` shuffled `__m128` itself).
+  Checked by recompiler output and scene captures (PROGRESS.md, 2026-10-31).
+- A tool that fails now ends its log with how it ended (`toolchain.describe_exit`: the NTSTATUS name, or the signal),
+  and the launcher gets `illegal_instruction` / `missing_dll` instead of a bare `recompiler_failed`.
+
+## 2026-10-31 - Free aim: the game's own, driven by the host (the user's request)
+The user asked for free aim with a reticle, selectable in the settings, that feels as if the game had supported the
+mouse all along; their choices: aim while the right button is held, no lock-on with the mouse when it is on, free aim on
+the gamepad too (no aim assist), the mouse 1:1 in scopes and the wheel for weapons / zoom; no mouse steering. One rule
+from them: Vic moves while free aiming exactly when he can move locked on with that weapon - nothing new is added.
+- **The game's free aim, not a new one.** VCS has free aim (R1, then L3; game-internals.md 12c): a lock-on to an
+  invisible dummy object with its own circle reticle, aim pose, camera and no random spread. Building on it keeps all of
+  that (the reticle is the game's, scaled with the HUD; peds react as to any aim) and replaces only what feels bad: the
+  pad read enters it in one report (R1 + L3), the mouse / right stick turn the dummy about Vic (writing it every frame,
+  turning the lock-on camera by the same amount first so it does not lag), and the world update runs with the free-aim
+  bit cleared, so the game treats it as a lock-on to an object: Vic moves as he does locked on with that gun (the game's
+  free aim makes him stand still and puts the left stick on the aim). The camera and the HUD run with the bit set again
+  (the centred free-aim camera and the circle, not the lock-on view and triangles). The dummy stays 12 m from Vic: the
+  lock drops past ~30.
+- **Shots through the circle**: the gun's line to the dummy and the camera's line through it cross only at the dummy,
+  so near targets would be missed by the gun's line. The player's free-aim shot tests the camera's line instead (the
+  line test's start redirected to a point of it level with the gun; GTA VC's PC version does the same with its
+  third-person mouse aim), and the shot's end is put on it so the tracer agrees. The gun's own start stays for the
+  muzzle effects.
+- **Not an ImGui reticle** (the plan's first idea): the game draws its own circle exactly where the shots go, in the
+  HUD's style and scale; a second one would only disagree with it.
+- **Melee, thrown and scoped weapons keep R1** (lock-on is how fists fight; scopes are already free aim). Off by default
+  for both devices: it changes how the game plays (easier than lock-on at range), so "authentic by default" holds it
+  back, unlike the mouse camera. Mouse wheel is on by default: a binding, nothing in the game changes.
+- Hip fire (the left button with a gun) also aims for the shot, held 0.6 s after it, so every shot goes through the
+  circle as in a PC shooter.
+- `VCS_FREEAIM=0` installs none of the hooks (the reference). The guest scratch for the shot's start sits at 0x60000 in
+  the EE kernel's area, which nothing in the recompiled game uses.
+- (later the same day, the user) Going into and out of free aim was too slow: the game blends the camera 400 ms in and
+  350 ms out. Both blends are cut to 100 ms, only those two (the frames after free aim starts or ends): not an
+  instant cut, which jumps the view by about 2 m, and the game's other blends (vehicles, cutscenes, the PS2
+  lock-on) stay as they are.
+- (the user, after that) A lag between letting go of the right button and the aim ending: the hip-fire hold (0.6 s
+  after a left click) also held aims fired with the right button down - 15-17 frames after a shot. The hold is now
+  for shots fired without the target button only, and letting go of it clears the hold: 2 frames from the release to
+  the camera leaving the aim, shots or not (measured with the rig's `trace`).
+- (the user, next) Leaving the aim felt quicker than entering it - the camera blends were the same (100 ms, measured),
+  but entering also has Vic raising the gun. The exit blend is 200 ms now (the user's choice). And on release the view
+  snapped to another angle for one frame: the follow camera's first update resets its heading; that frame's view is now
+  turned back to the aim's heading in the hook after CCam::Process, before the frame's camera is built (the pad read's
+  hand-back came a frame late). The hand-back needs the free camera's hook (VCS_FREECAM=0 leaves it out).
+- (the user, next) With guns that stand Vic still the aim's end was instant, unlike the walking guns. The game does that
+  on purpose: CCamera::CamControl jump-cuts from the lock-on camera to the follow camera when the weapon can't move
+  while aiming (FUN_001F1698). Free aim answers that one question (its call in CamControl, only in the frames after the
+  aim ends) with yes, so all guns end in the same blend; Vic still stands still with those guns while aiming, and the
+  PS2 lock-on (free aim off) keeps its cut.
+- (the user, next) A gun running dry in free aim switched to the lock-on and flicked in and out. The game puts the
+  fists in Vic's hand when the gun is empty; free aim then let R1 through (fists lock on, as on the PS2), and retrying
+  the free-aim entry (R1 + L3) while Vic was busy could leave the game a frame of R1 alone - a lock-on to a ped - before
+  giving up and trying again. Now: once a free aim has ended because the gun went, R1 stays up until the button is let
+  go (a gun back in hand, e.g. by the wheel, aims again); an entry the game answers with a ped lock is let go at once,
+  and every retry waits 8 frames with R1 up. Starting with fists or melee is the PS2's R1 as before.
+- (2026-11-01, the user) Jive Drive's shooting from the passenger seat still aimed with the left stick. That is the
+  game's own free aim, which the mission starts itself (SET_PLAYER_DRIVEBY_MODE; game-internals.md 12c) - the only
+  mission that does. With free aim on for either device the host turns its dummy in the car too: the mouse and the
+  right stick, no button (the game aims all the time there), the left stick centred so the two don't fight. Kept from
+  the game: the dummy at the gun's range, the world direction while the car turns, 20 deg up / 5 down; the shots go
+  down the camera line as on foot. Both devices' sticks / mice turn it whichever setting is on: there is no button to
+  tell the devices apart, and the left stick no longer aims. Free aim off is the PS2's left stick.
+- (2026-11-01, the user, next) With the right stick aiming in Jive Drive's car, Circle (fire) was hard to reach. In
+  that car aim only, the gamepad's R1 button fires: it is sent as Circle, and not as R1 (the keyboard's R1 keys are
+  left as they are). Nowhere else changes: on foot R1 is the target button, and in the car
+  with free aim off it is R1 (controls_check checks both).
+- (2026-11-01, the user, next) Phil's shooting range also used the left-stick aim, and broke when the right button was
+  pressed: the range forces the game's free aim on foot (SET_PLAYER_FORCE_FREE_AIMING, bit 53), and our own free aim's
+  entry (R1 + L3) and exit (R1 let go) ended it - Vic back on the follow camera with no circle for the rest of the
+  round. A free aim a script forces is now taken over like the car's (one path, `scripted` in vcs_aim.cpp): the mouse /
+  right stick, no button, the left stick centred (Vic stands still there anyway), R1 left to the game (it does nothing
+  there). The game's on-foot limits are kept: 110 deg either side of Vic's heading, 40 up, 20 down (the game applies
+  them only while its own stick moves the dummy, so the host clamps). Asked, the user chose the gamepad's R1 firing
+  there too (the same reach problem as the car): it fires in any free aim a script starts, and is R1 everywhere else.
+
+## 2026-11-01 - The launcher draws itself (docs/LAUNCHER.md)
+
+The user asked for the launcher to become a high-performance application with its own native UI and beautiful
+animation - "not a sloppy web application", a purpose-built PC utility - multi-platform in design, Windows / D3D11 for
+now, built the way uppies (D:\aislop\uppies) is. The user approved the plan and chose: rethink the flow, a custom title
+bar, disc art behind Home later.
+
+- **Own window, renderer and UI, no third-party code.** SDL3 + Dear ImGui go: ImGui's look is a tool panel, its
+  SDL_Renderer path polled while idle, and SDL made the launcher an 81 s build. uppies' design instead: a platform layer
+  (Win32), one instanced draw of SDF primitives (D3D11), immediate-mode widgets with retained animation state. 1 MB, 17 s.
+- **Not the game's RHI.** It links ImGui and serves the game's presenter; the launcher wants exact control of
+  presentation (latency waitable, tearing, device loss) and must stay a project CI builds with nothing downloaded. Its
+  own five-call backend interface takes the same draw list on another API later (Vulkan on Linux), as uppies plans.
+- **DirectWrite, not FreeType** (uppies' choice): nothing to bundle or license, Windows' own rasterisation. The atlas,
+  cache and layout are platform independent; FreeType is the Linux rasteriser.
+- **Three modes instead of pages**: Setup (a guided sequence: one step at a time, the rail filling in), Home (one big
+  button over the sunset), Task (the running tool takes the window). Saves / Settings / Help are sheets. Every feature
+  of the 2026-10-30 launcher kept its place (the parity list in the plan; LAUNCHER.md "The player's flow").
+- **Custom chrome on a normal window**: WM_NCCALCSIZE / WM_NCHITTEST rather than a borderless popup, so snapping, the
+  system menu, the min / max animations and the shadow stay Windows'.
+- **Zero cost when idle**: the frame loop sleeps in the OS; tool output and process exit wake it (Process's reader
+  thread and a thread-pool wait); clocks on screen ask for a frame once a second; nothing animates continuously except
+  while a task runs (spinners, the bar's sheen) - never while the game plays (the game wants the GPU).
+- **Motion is optional**: the launcher's own *Reduce motion* makes everything snap. (Later the same day, the user:
+  panels opened instantly with it off. Windows' "Animate controls and elements inside windows" was off on the PC and
+  also turned motion off. Now the launcher's setting alone decides; Windows' only gives its value until it is set.
+  Then the user found reduce motion on after updating a release folder, whose launcher.ini didn't have the setting yet:
+  that starting value was Windows' again. It is now simply off until the player turns it on, Windows' ignored.)
+- **Tests stay hidden**: `--screenshot` renders offscreen on a fixed clock (same arguments, same picture), with
+  `--frames` for transitions; `--hidden --quit-after` runs the real window loop unshown and reports its cost.
+
+## 2026-11-01 - The launcher in light and dark, hot pink, no purple
+
+The user asked for a light and a dark mode following Windows' (with System / Light / Dark in Settings), hot pink as
+the primary colour - pink and white in light, pink and "a really nice black" in dark - no purple anywhere, other
+colours sparingly. The dusk-violet palette and the sunset orange went: dark is neutral blacks and greys
+(`#0A0A0B` behind, `#17171A` cards) with hot pink `#FF2E8B`; light is blush white behind (`#FFF4F8`), white cards,
+warm greys for text and a deeper, slightly redder pink `#EC1A62` (the user's choice; white text on it stays readable). Teal stays for done, amber and red
+for attention - signals only; decoration (the backdrop's sea lines, the playing indicator, the saves icon) is pink.
+Colours are fields of a palette struct, so the two blend field by field: switching crossfades instead of jumping.
+Overlays (hover tints, hairlines) are `theme::ink(a)` - white on dark, a deep pink-brown on light - and shadows
+`theme::shade(a)`, softer and pinker on light. Light mode's scrim washes the content out (a translucent blush)
+instead of darkening it. Screenshots default to dark (`--theme`), so docs and tests give the same picture on any PC.
+The app icon was redrawn in the same colours.
+
+## 2026-11-01 - Home's backdrop moves (the one exception to an idle launcher)
+
+The user wanted Home's backdrop more sophisticated and "more alive". It became Vice City at dusk - the striped sun
+behind palms and art deco towers, a sea that reflects them, stars at night - and it moves continuously but slowly:
+stripes sliding into the horizon, clouds, swaying palms, windows, a beacon, rolling water lines, a wavering
+reflection. A launcher that draws nothing when idle was a design rule (docs/LAUNCHER.md); this breaks it on Home
+only, within bounds: 30 frames a second (motion this slow needs no more; 15 when the window isn't focused), never
+while the game runs (it wants the GPU), never with reduce motion on (the scene stands still), never on the other
+screens, never minimized. Cost: ~0.16 ms of CPU a frame, about 0.5% of a core. All with the renderer's primitives
+(palms are chains of quads, each overlapping the next by 0.7 px so antialiased edges leave no seams; the reflection is
+drawn opaque, sunk toward the sea's colour, so overlapping pieces don't show darker).
+
+Next (the user): the palms went, the far row got windows of its own (smaller and dimmer), and no tower has a rounded
+top any more (a parapet instead). Then jets (the user): a speck crossing high up every ~30 s - each flight's height,
+slant, direction and pace from its number, so nothing is stored - laying a trail of soft dots that starts thin behind
+it and widens, sinks and fades over 32 s; white on the light sky (stronger there, or it vanishes), sunlit pink at night
+with a blinking strobe. They first all seemed to come from the right (the user): a flight's traits were hashes of
+neighbouring numbers, which came out alike. Each trait is now a hash of the flight and the trait mixed apart; slots
+(24 s, a random moment in each, some left empty) pair up flying opposite ways in a random order, and each flight also
+has its own distance (a far one smaller, fainter, slower), trail life (22-40 s) and patchiness.
+
+Then (the user) the sun's slices looked choppy, and the streaks across it drifted off and never came back. The slices
+are the disc drawn through clip rectangles, and the renderer clipped by shrinking each quad to the clip: a clip edge at
+a fraction of a pixel snapped to whole pixels, so slices sliding a few pixels a second stepped. The vertex shader now
+takes the clip out to whole pixels and the pixel shader multiplies by the part of the pixel inside it - a moving clip
+edge is antialiased (checked: an edge pixel's value now changes a little every frame), and a clip on pixel edges, all
+the UI's, draws exactly as before. The slices' top edge sits on a whole pixel, where the disc's solid top meets the
+first slice, so the two never leave a half-covered seam. The streaks are now scheduled like the jets: one every ~10 s
+at a random place around the sun, fading in, drifting right for 35-55 s and fading out.
+
+Then (the user) the jets' starting points and angles more random and varied. A flight's line is now a random point of
+the upper sky (10-90% across, 8-32% down) and an angle up to 24 degrees either way; it enters and leaves where that
+line meets the window's edges (a little outside them) or the skyline, so jets come in from the left, the right or down
+from the top, climbing or descending, and its pace is in pixels a second (a short diagonal is over sooner). Trails
+crossing the words on the left are dimmed to 30%, and fade out under the title bar, so a jet from the top seems to come
+out from under it.
+
+Two frame-loop faults turned up on the way: a sleep that ended on its timeout set `needsRedraw`, which also books a
+settle frame, so every timed wake drew two frames (a timed wake now draws one); and minimized, a frame asked for at a
+time already past made the loop wake at once, again and again - a core spinning behind the game while the "Playing"
+clock was due (minimized, those requests now wait for the restore).
+
+## 2026-11-01 - Pricedown in the launcher only when the player has it installed
+
+The user asked for Pricedown (GTA's lettering) on the launcher's prominent elements, from a zip of Typodermic's free
+desktop release (`Pricedown Bl.otf`). Its licence (Typodermic Desktop EULA v260817, in the zip) forbids distributing the
+font (4.1), bundling or embedding it in a desktop application or other software (4.3) and including it in open-source /
+publicly available software (4.6); the zip's guide says apps and software need another licence. So the font is not in
+the repository or the exe: the launcher asks DirectWrite for an installed "Pricedown" (each player may install their own
+copy, 2.1) and falls back to Bahnschrift. Used for three things only: the name on Home, Home's big button, the build
+percentage (GTA's money counter is Pricedown). A pre-rendered image of the lettering (fixed artwork, 2.2) was not
+chosen: digits for the percentage would be a reusable glyph set (4.5). A licence for embedding would change this.
+
+## 2026-11-01 - vcs.exe runs with the UTF-8 code page (non-ASCII folders)
+
+A player's report (issue #27): the built game stopped at start with "No mapping for the Unicode character exists in the
+target multi-byte code page". Reproduced with the game in `build\run\nonascii\Игры é\game`: the folder comes from
+`GetModuleFileNameW` (wide), and the first `std::filesystem::path::string()` on it throws, because MSVC's STL converts
+to the system's ANSI code page (cp1252 here), which has no Cyrillic. A second case fails the other way: a data folder
+with Cyrillic letters (a Windows user name, so `%LOCALAPPDATA%`) arrives through `getenv` as `?`s, and the game "cannot
+write" its cache. The game and the runtime pass paths as narrow strings in many places (`loadELF(std::string)`, fopen,
+the ini, the card), so converting each to wide calls was not the fix.
+
+vcs.exe now has its own manifest (`src/vcs.manifest` through `src/vcs.rc`, the linker's default off with
+`/MANIFEST:NO`): the same `asInvoker` as lld-link's default plus `activeCodePage` UTF-8 (Windows 10 1903 and later), so
+the ANSI code page of the process is UTF-8 - `path::string()`, `getenv`, `argv` and the CRT's narrow file functions
+all speak UTF-8 and round-trip any name. A resource, not `/MANIFESTINPUT`: lld-link merges manifests only when LLVM
+was built with libxml2 (else it calls mt.exe), which a player's clang may not be. Older Windows 10 ignores the setting
+and behaves as before.
+
+## 2026-11-01 - The launcher on Linux: native X11 and Wayland, Vulkan, FreeType (docs/LAUNCHER.md "Linux")
+
+The user asked for the launcher to support Linux as well - native, fast, high performance, drawing with Vulkan - and
+approved the plan with three choices: **both window systems natively** (picked at startup), **our own icons on both
+OSes**, and **CI on Linux now, a Linux release later**.
+
+- **Same launcher, other files.** The launcher was layered for this (2026-11-01 above): `screens/`, `ui/`, the draw
+  list, the glyph atlas and the model are shared; Linux adds `platform/platform_linux.cpp` + `platform/linux/` (X11,
+  Wayland, D-Bus), `render/vulkan/`, `render/font_freetype.cpp`, `model/process_posix.cpp`, `model/system_linux.cpp`.
+  The shared interfaces became UTF-8 (`std::string` argv, `const char *` titles and font names); only the Windows
+  files widen. One `ui.hlsl` for both renderers: glslang compiles it (`tools/hlsl_spirv.py --target-env vulkan1.1`),
+  its frame constants are push constants under `VCS_SPIRV`, and a flipped viewport keeps its D3D clip space.
+- **No toolkit, no SDL** (the 2026-11-01 reasons stand: idle cost, build time, control). Xlib and libwayland-client
+  directly, each with what makes it feel native: `_NET_WM_MOVERESIZE` / `xdg_toplevel.move` / `resize` so the window
+  manager moves, snaps and tiles; fractional-scale + viewporter (exact scale); cursor-shape (the compositor's theme);
+  XDND and `wl_data_device` for dropped discs; XSETTINGS and the portal for dark / light, animations, double-click.
+  Wayland is chosen when `WAYLAND_DISPLAY` is set, X11 otherwise (`VCS_LAUNCHER_VIDEO=x11|wayland`).
+- **Vulkan opened at run time** (`dlopen("libvulkan.so.1")`, our own table of entry points): a PC without a Vulkan
+  driver gets a message instead of a launcher that doesn't start, and nothing links against the loader. Vulkan 1.1 is
+  the floor (old GPUs, VMs; lavapipe in CI). Integrated GPUs are preferred: a launcher shouldn't wake a laptop's dGPU.
+  Present wait (`VK_KHR_present_wait`) gives DXGI's one-frame latency where the driver has it.
+- **Our own icons, both OSes**: Linux has no Segoe Fluent Icons, and bundling an icon font would be a third-party asset.
+  `render/icons.cpp` draws each icon from signed-distance shapes on a 24-unit grid into the glyph atlas (one glyph to
+  draw, overlapping strokes never darker, 1-pixel strokes snapped to pixel centres at small sizes). Windows' icons
+  change with it (same design language, slightly different drawings).
+- **System libraries only**: FreeType + fontconfig, libdbus-1, Xlib / Xcursor / Xrandr, libwayland-client / -cursor,
+  xkbcommon - every desktop has them, so the launcher stays "no third-party code" in the repository and builds offline.
+- **File dialogs through the desktop portal** (the desktop's own dialog, right on Wayland and in sandboxes), else
+  zenity, else kdialog. **Packages through `pkexec`** (`build.py --install-deps`: the desktop's own password prompt, the
+  logic in Python per AGENTS.md); without a polkit agent the launcher opens a terminal with the same command.
+- **Hidden runs on Linux draw offscreen**: presenting to a window that is never shown can block forever under Wayland
+  (FIFO waits for a frame callback); the frame loop is paced at the display's rate instead.
+- Update checks and copying a DVD are hidden on Linux until there are Linux releases and a Linux `rip_disc.py`.
+
+## 2026-11-01 - Card names the host can't store are %XX; the card is zipped before every change
+
+Players lost saves after saving (game-internals.md 10f): VCS names a slot file after the last mission, and "1 Kill Phil:
+Part 2" became an NTFS stream of an empty file after the game had deleted the old slot. And the game deletes a slot
+before writing it, and its whole save folder after a failed write, so any crash or host error mid-save loses saves.
+
+- **Names**: the characters Windows refuses (`<>:"/\|?*`), control bytes, bytes >= 0x7F (not UTF-8: they would throw
+  under the UTF-8 code page), `%` itself, trailing dots / spaces and device names (CON, COM1...) are stored as `%XX`;
+  the game sees the name it wrote. The same encoding on Linux, so a card folder copied between systems keeps working;
+  a name Linux stored before is still found. Readable in Explorer ("1 Kill Phil%3A Part 2"), ASCII, reversible. The
+  alternative - Unicode look-alikes (U+FF1A for `:`) - reads nicer but is a guess per character and not ASCII.
+- **Recovery**: on Windows the card layer turns an empty file whose stream holds 900+ bytes back into the save it was
+  meant to be, at the next listing (smaller streams are Windows' own, e.g. a download's Zone.Identifier). Players who
+  lost a save this way get it back by starting the new build. If they have saved in that slot since (a new game), the
+  recovered save goes to the first free slot rather than hide behind the newer one; the new save is never touched
+  (recovery never writes over an existing file).
+- **Backups**: before the first delete / write to an existing file / rename / format in 10 s, both cards go into
+  `<data>/backups/auto-<date>.zip`, tools/backup.py's own format, so the launcher's Saves sheet lists them and Restore
+  works unchanged; newest 10 kept (a card is ~0.5-1 MB, stored). In vcs.exe, not the launcher: players start vcs.exe on
+  its own too, and only the card layer knows when a change comes. Saving into an empty slot changes nothing old and
+  makes none. `PS2X_MC_BACKUP=0` turns it off.
+
+## 2026-11-02 - Stutter work: the music stop no longer holds the level swap; textures made off the main thread
+
+The user asked for stutters first (issues #16, #29), the game to behave as the original (PERFORMANCE.md 21).
+
+- **The level swap's music stop happens at once.** Crossing between Beach and Mainland the game stops the radio stream
+  and waits until it says stopped; CDSTREAM's music thread only sees the stop at its next refill IRQ, up to 448 ms - the
+  PS2 stood just as long (game-internals.md 9a). Only that wait changes: the commands, their order and every reply the
+  game reads are the IOP's; the stream just ends that much sooner (it is being stopped anyway, and the swap restarts
+  the radio after the load - the stations it picks are the same as with the wait). Kept as `VCS_MUSIC_STOP_WAIT=1`;
+  the sound replay comparison keeps the IRQ timing, since it checks the driver against recorded IOP times.
+- **Textures are made by helper threads on D3D11** and, with anisotropic filtering, their mip chains built on the CPU:
+  what the GPU gets is the same (static reference scenes identical), only who does the work and when. Vulkan keeps
+  creation on the main thread: its first contents go into the frame's set-up commands, not thread-safe.
+- **The stutter rig flies over the roofs** rather than drives the roads: the AI drivers the rig can make stood more
+  than they drove, and the route has to be the same every run to compare builds. Streaming, texture bursts and level
+  swaps come from the camera crossing new ground at speed, which the flight does.
+
+## 2026-11-02 - Linux: Vulkan makes textures off the main thread when asked, not by default
+
+The user asked whether the Windows stutter work helps the Linux port (PERFORMANCE.md 25). Everything but the texture
+helper threads is portable code and was already in. Vulkan now supports free-threaded creation (staged first
+contents, recorded at the next submit), but it stays off by default there: Vulkan's main thread only records a copy
+per new texture (~8 ms a 350-texture burst; D3D11's creation was 52 ms), and on the 2-core laptop the two helpers
+slowed the GS stage's decode more than they saved. `PS2X_HW_EARLY_TEXTURES=1` turns it on; a 4+ core Linux machine
+should decide the default. The cruise takes a copy of the player's card (`build/rig/saves/user`) where the rig's
+Fort Baxter card is missing; never the live card, and no new game (its first mission keeps the player out of the car).
+
+## 2026-11-02 - Vulkan drops the GS shader's depth output; D3D11 keeps it until checked
+
+The user's city hitches on the Linux laptop are partly the GPU (PERFORMANCE.md 26). The GS pixel shader's depth output
+dates from the GL renderer, where NDC lost precision; with D3D / Vulkan's 0..1 depth the rasterised value is the same,
+and dropping the output brings early depth rejection back (~1.5 ms of a ~10.7 ms GPU frame on the HD 520). Reference
+scenes on Vulkan show no change beyond run-to-run noise. D3D11 is the reference renderer and its GPU has the headroom,
+so it keeps the shader depth until a scenes compare on Windows says the same; then both can share the default.
+
+## 2026-11-03 - Linux releases: an AppImage, glibc 2.35 and up, shipped with Windows
+
+For the Linux launcher's first release the user chose **an AppImage** (not a tarball), **support for older
+distributions**, and **Linux released at the same time as Windows**.
+
+- **One AppImage, the release inside.** `tools/release.py --platform linux` makes `VCS-Recomp-<v>-x86_64.AppImage`:
+  the launcher, its desktop entry and icon, and the release's files (the source, the scripts, `deps/` - no Python or
+  FFmpeg: the system's) in `usr/share/vcs-recomp/release`. An AppImage is a read-only image, and the game is built
+  inside its release folder (`generated/`, `build/`), so the launcher copies those files to a folder of its own at
+  start - `$XDG_DATA_HOME/VCSRecomp/install` (`VCS_INSTALL_DIR`), next to the saves - when it is missing or holds
+  another version (`tools/update.py install`). Only files whose bytes differ are written: after an update, Ninja
+  rebuilds only what changed. The type 2 runtime is static (no libfuse2 on the player's system).
+- **Updates replace the AppImage file** (`$APPIMAGE`, set by the runtime): `update.py apply` downloads the new one,
+  checks its SHA-256 and the AppImage magic, and renames it over the old; the next start puts the files in place. No
+  AppImageUpdate / zsync: the same update.py and the same GitHub release as Windows.
+- **glibc 2.35 is the floor** (Ubuntu 22.04, Debian 12, Mint 21 and newer): CI builds the Linux launcher on
+  ubuntu-22.04 with the C++ runtime linked in (`-static-libstdc++`), and release.py refuses a binary that needs a newer
+  glibc (`--allow-new-glibc` for a test). 22.04's wayland-protocols is too old for fractional-scale and cursor-shape:
+  CI unpacks a pinned 1.45 (`VCS_WAYLAND_PROTOCOLS_DIR`); 22.04's wayland-scanner reads it. The launcher builds with
+  any clang or GCC (`toolchain.launcher_compiler_defines`), not only the game's clang 19.
+- **The game on those older distributions**: they ship no clang 19, so the package step adds LLVM's own repository
+  (apt.llvm.org, as it documents: its key - fingerprint checked when gpg is there - in /etc/apt/keyrings, a sources
+  entry for `llvm-toolchain-<codename>-20`) before installing clang-20 / lld-20 / llvm-20. That root work is
+  `tools/linux_packages.py`, standalone and short (it runs as root through pkexec or sudo); build.py and doctor.py
+  only decide what it should do.
+- **Shipped together**: on a `v*` tag each platform's job makes its file and uploads it; `publish` needs both and puts
+  them on one GitHub release. A failing platform publishes nothing.
+- Tools pinned by version and SHA-256 (no "continuous" builds): appimagetool 1.9.1, the type 2 runtime 20251108,
+  wayland-protocols 1.45.

@@ -40,7 +40,46 @@ game's own PS2 controls apply on top. Start or Cross (Enter / Shift) skips the i
 it can't be skipped, as on the PS2 (Game > Skip intro movies skips both).
 
 **Right mouse button = R1**: on foot it locks on to the ped nearest in front while held (with fists or a weapon), as R1
-does on the PS2; left mouse button (Circle) attacks / fires.
+does on the PS2; left mouse button (Circle) attacks / fires. With **Free aim** on (below) it aims a gun instead.
+
+## Free aim
+
+Keyboard > **Free aim** (off by default) and Gamepad > **Free aim** (off), each for its own device (src/game/vcs_aim.cpp,
+game-internals.md 12c):
+
+- With a gun in hand (pistols, shotguns, SMGs, rifles, the M249, minigun and flame-thrower), holding the target button
+  (R1's binding: the right mouse button / E; on the gamepad R1's button, RB unless changed) puts up the game's own
+  white aiming circle in the middle of the screen instead of locking on to the nearest person. The mouse (or the right
+  stick, 2 rad/s at full tilt, finer near the centre) turns the aim and the camera with it, 1:1 like the camera on foot
+  (Mouse sensitivity, Invert mouse up / down apply; zoomed views turn slower).
+- The left button (Circle) fires **through the circle**: a shot hits what is under it, whatever the gun's own line.
+  Firing a gun from the hip with the left button aims too (the aim is held 0.6 s after the last shot). Letting go of
+  the target button ends the aim at once (the camera leaves it 2 frames later), shots or not.
+- **Moving while aiming** is what the game allows locked on with that gun - a pistol walks and strafes; no new movement
+  is added. Letting go leaves the camera looking where the aim did. The camera moves into the aim in 0.1 s and out of
+  it in 0.2 s, with every gun (the game blends 0.35-0.4 s, and cuts out of the aim with the guns that stand Vic still;
+  its other camera changes keep their blends and cuts).
+- When the gun runs dry while aiming the game puts the fists in Vic's hand: with the button still held nothing
+  locks on until it is let go, and choosing another gun (the wheel) aims again at once.
+- Fists, melee weapons, thrown weapons and the scoped guns (sniper rifles, rocket launcher, camera, binoculars) keep
+  R1 as on the PS2. There is no aim assist on the gamepad.
+- It is the game's own free aim (R1 then L3 on the PS2: the left stick moves an aiming point while Vic stands still),
+  driven so that Vic can move and the mouse aims; `VCS_FREEAIM=0` leaves it out entirely.
+- **Shooting from a car** (Jive Drive: Vic in the passenger seat while Lance drives - the game's own free aim, which the
+  mission starts itself): with free aim on for either device, the mouse and the right stick turn the circle instead of
+  the left stick (the game's help text still says the left stick), no button to hold; the left button fires through
+  the circle. On the gamepad **R1 fires** there (as Circle, which still fires too): the right thumb is on the stick.
+  Only in this car aim and Phil's shooting range (below) - R1 is the target button everywhere else. The circle keeps its direction while the car turns, up to 20 degrees above level and 5 below, as the game
+  allows there. With free aim off it is the PS2's left stick.
+- **Phil's shooting range** (the game's free aim forced on foot, `SET_PLAYER_FORCE_FREE_AIMING`): the same - the mouse
+  and the right stick turn the circle, no button to hold, the left button fires; the right button does nothing there
+  (as R1 on the PS2), and on the gamepad **R1 fires** (as Circle), as in Jive Drive's car. Up to 110 degrees either
+  side of Vic's heading, 40 above level and 20 below, as the game allows.
+
+**In the scopes** (sniper rifles, rocket launcher, M16 view, camera, binoculars) the mouse turns the view itself, 1:1,
+with Mouse camera on (zoomed in it turns slower). **Mouse wheel** (Keyboard page, on by default): on foot down is the
+next weapon and up the previous one (R2 / L2, one per notch); in the sniper scope, the camera and binoculars it zooms.
+It does nothing of this while a control is bound to the wheel, while driving or while aiming.
 
 ## Keyboard page
 
@@ -48,7 +87,7 @@ does on the PS2; left mouse button (Circle) attacks / fires.
   button (left, right, middle, 4, 5) or turn the wheel (each notch is a short press); Esc cancels, a right-click on a
   slot clears it. Shift / Ctrl / Alt bind both sides, Enter is also Keypad Enter.
 - A key does one thing: binding it to a control takes it from the control that had it. The menu keys (Settings menu
-  F2, Trainer F5, Free camera F6, same page) never take a control's key, and a control can't take theirs - the menu says which setting
+  F2, Trainer F5, Free camera F6, Screenshot F8, same page) never take a control's key, and a control can't take theirs - the menu says which setting
   has it.
 - **Walk (hold)**: the left stick at the **Walking speed** (45% by default) while held - GTA walks below about half
   a tilt, which keys can't do otherwise.
@@ -58,9 +97,10 @@ does on the PS2; left mouse button (Circle) attacks / fires.
   in the menus and when the window is in the background). **On foot** it turns the camera itself, as in a PC game:
   every movement turns it by the same angle at any speed and frame rate (100%: 400 counts - half an inch at 800 DPI -
   a radian), moving the mouse forward looks up. Looking up / down goes through the game's own stick pitch, which has a
-  top speed (about 1.5 rad/s at 100%); a faster movement still arrives, a few frames later. **In vehicles, aiming and
-  locked on** the mouse's speed becomes the right stick's tilt (1,500 counts a second is full tilt), so very fast
-  flicks there turn no faster. **Mouse sensitivity** and **Invert mouse up / down**. (game-internals.md 12b)
+  top speed (about 1.5 rad/s at 100%); a faster movement still arrives, a few frames later. **In the scopes and free
+  aim** it turns the view itself too (above). **In vehicles and locked on** the mouse's speed becomes the right stick's
+  tilt (1,500 counts a second is full tilt), so very fast flicks there turn no faster. **Mouse sensitivity**, **Invert
+  mouse up / down**, **Free aim** and **Mouse wheel** (above). (game-internals.md 12b, 12c)
 
 ## Gamepad page
 
@@ -68,7 +108,8 @@ does on the PS2; left mouse button (Circle) attacks / fires.
   buttons may share one.
 - **Sticks and triggers**: deadzone per stick (12%; the range past it is stretched, so a small tilt beyond it still
   counts), **Camera speed** (the right stick's tilt scaled), **Trigger press point** (LT / RT are L2 / R2 buttons),
-  **Swap sticks**, **Invert camera** left / right and up / down.
+  **Swap sticks**, **Invert camera** left / right and up / down, **Free aim** (above; to aim with the left trigger,
+  give R1 the LT and move L2 to another button).
 - **Vibration**: the DualShock 2's motors on the gamepad's rumble, 0-200% (100% as on the PS2, 0% off). The game
   drives them itself (crashes, explosions, gunfire; game-internals.md 12a).
 
@@ -82,6 +123,17 @@ trainer: Up / Down or numpad 8 / 2 or the D-pad select, Left / Right or numpad 4
 5 / A applies, Backspace / numpad 0 / Escape / B goes back (and closes it on the first page). The game gets no input
 while a menu is open.
 
+## Screenshots
+
+**F8** (Keyboard > Menus > Screenshot, rebindable) saves the game's picture as a PNG in a `screenshots` folder next to
+vcs.exe, named `vcs_<date>_<time>.png` (`_2`, `_3`... for several in one second); a notice names the file once it is
+written. The shot is the window pixel for pixel - its resolution (the monitor's in full screen), its letterboxing, the
+UI where it was - and holds what is on screen: the settings or trainer menu, the F3 overlay, the frame-rate counter and
+the trainer's notices, except the notices of earlier shots, so shots in a row stay clean. The PNG is written on a thread
+of its own (a 2560x1440 one takes ~0.6 s to compress; the game keeps its frame rate meanwhile). It does nothing while
+the settings menu waits for a key to bind. `VCS_SCREENSHOT_DIR=<dir>` saves them elsewhere (the test tools do).
+(src/main.cpp `screenshotKey`; the control channel's `screenshot` stays at its fixed test size, `PS2X_CAPTURE_SIZE`)
+
 ## Window
 
 Alt+Enter switches between full screen and the window (Display > Window mode; saved in vcs.ini). Enter with Alt
@@ -91,7 +143,7 @@ held is not Start. Game > **In the background** decides what happens when anothe
 ## Debug keys
 | Key | Effect |
 |---|---|
-| F3 | performance overlay: game fps and frame-time percentiles, EE thread time per phase (game / render / IOP / wait), GS and DMA counters, host frame and GPU submit times, audio buffer, and a frame-time graph |
+| F3 | performance overlay: game fps and frame-time percentiles, EE thread time per phase (game / render / IOP / wait), GS and DMA counters, host frame and GPU submit times, audio buffer, and a frame-time graph; under it (beside it on a short screen) the game's state: the player's position, heading, state, health, armour, money and weapons, the vehicle (model, position, heading, health, speed), the camera (mode, position, heading, pitch, FOV), the clock, area, world level, game time, time step, pauses, pool use and the running scripts (the mission's with its IP). The same lines answer `python tools/gamectl.py gameinfo` |
 | F4 | start / stop recording one CSV row per game frame to `perf_<date>_<time>.csv` (working directory); summarise with `python tools/perf_report.py <file>` |
 | F12 | (hardware renderer) list the next frame's draws on stderr and dump its render targets |
 
@@ -102,7 +154,10 @@ keyboard / mouse / gamepad ignored (`PS2X_HIDDEN=1`). It listens on 127.0.0.1:47
 `key W down` / `up` (also `mouseleft`, `mouseright`, `wheelup`, `rshift`, `kpenter`, ...), `perf`, `quit`, and from
 the game layer `setting <key> [value]` (a setting read or changed; an action setting is pressed), `menu <page>` /
 `menu scroll <0..1>` / `menu close` (the settings menu for screenshots), `padstate` (the last pad report the
-bindings made, and the pad reads so far) and `mouse <dx> <dy>` (mouse motion in counts, y down, as the mouse sends it). `--control` (`PS2X_CONTROL=1`) opens the same channel with the window shown; `PS2X_INPUT=injected`
+bindings made, and the pad reads so far), `mouse <dx> <dy>` (mouse motion in counts, y down, as the mouse sends it),
+`gamepad on|off`, `gamepad <a b x y lb rb back start ls rs up down left right> <0|1>`, `gamepad <lx ly rx ry lt rt>
+<value>` (a gamepad set from the channel in place of the real one while on) and `aimstate` (free aim on or not, and
+the shots sent down the camera line so far). `--control` (`PS2X_CONTROL=1`) opens the same channel with the window shown; `PS2X_INPUT=injected`
 ignores physical input with the window shown. Injected keys go through the bindings like physical ones:
 `tools/controls_check.py` checks them (also a `regress.py` step). `VCS_INPUT_MAP=0` falls back to the runtime's fixed
 built-in mapping (`ps2_pad.cpp`, the old defaults).

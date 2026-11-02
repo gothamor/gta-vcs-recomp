@@ -1,3 +1,4 @@
+// Process on Windows: CreateProcessW in a Job Object (kill on close), output through a pipe read by a thread.
 #include "process.h"
 
 #include "system.h"
@@ -6,33 +7,35 @@
 
 namespace launcher
 {
-    std::wstring quoteArg(const std::wstring &arg)
-    {
-        // CommandLineToArgvW's rules: backslashes only escape when they precede a quote
-        if (!arg.empty() && arg.find_first_of(L" \t\"") == std::wstring::npos)
-            return arg;
-        std::wstring out = L"\"";
-        size_t backslashes = 0;
-        for (wchar_t c : arg)
-        {
-            if (c == L'\\')
-            {
-                ++backslashes;
-                continue;
-            }
-            if (c == L'"')
-                out.append(backslashes * 2 + 1, L'\\');
-            else
-                out.append(backslashes, L'\\');
-            backslashes = 0;
-            out += c;
-        }
-        out.append(backslashes * 2, L'\\');
-        return out + L"\"";
-    }
-
     namespace
     {
+        std::wstring quoteArg(const std::wstring &arg)
+        {
+            // CommandLineToArgvW's rules: backslashes only escape when they precede a quote
+            if (!arg.empty() && arg.find_first_of(L" \t\"") == std::wstring::npos)
+                return arg;
+            std::wstring out = L"\"";
+            size_t backslashes = 0;
+            for (wchar_t c : arg)
+            {
+                if (c == L'\\')
+                {
+                    ++backslashes;
+                    continue;
+                }
+                if (c == L'"')
+                    out.append(backslashes * 2 + 1, L'\\');
+                else
+                    out.append(backslashes, L'\\');
+                backslashes = 0;
+                out += c;
+            }
+            out.append(backslashes * 2, L'\\');
+            return out + L"\"";
+        }
+
+        void CALLBACK exited(void *, BOOLEAN) { Process::wakeUi(); }
+
         // The launcher's environment with `extra` set: a CREATE_UNICODE_ENVIRONMENT block.
         std::wstring environmentBlock(const std::vector<std::pair<std::string, std::string>> &extra)
         {
@@ -63,6 +66,8 @@ namespace launcher
 
     Process::~Process()
     {
+        if (m_exitWait)
+            UnregisterWaitEx(m_exitWait, INVALID_HANDLE_VALUE); // and its callback finished
         if (m_reader.joinable())
         {
             // a tool's tree still running, or a leftover grandchild holding the pipe open: the job ends them all
@@ -76,11 +81,11 @@ namespace launcher
             CloseHandle(m_process);
     }
 
-    bool Process::start(const std::vector<std::wstring> &argv, const Options &options, std::string &error)
+    bool Process::start(const std::vector<std::string> &argv, const Options &options, std::string &error)
     {
         std::wstring cmd;
         for (const auto &a : argv)
-            cmd += (cmd.empty() ? L"" : L" ") + quoteArg(a);
+            cmd += (cmd.empty() ? L"" : L" ") + quoteArg(widen(a));
 
         SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
         STARTUPINFOW si{};
@@ -107,7 +112,7 @@ namespace launcher
                                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
                 if (childOut == INVALID_HANDLE_VALUE)
                 {
-                    error = "cannot write " + narrow(options.outputFile.wstring());
+                    error = "cannot write " + pathText(options.outputFile);
                     CloseHandle(nul);
                     return false;
                 }
@@ -151,7 +156,7 @@ namespace launcher
         {
             if (readEnd)
                 CloseHandle(readEnd);
-            error = "cannot start " + narrow(argv[0]) + " (" + lastErrorText(lastError) + ")";
+            error = "cannot start " + argv[0] + " (" + lastErrorText(lastError) + ")";
             return false;
         }
         if (m_job)
@@ -160,6 +165,7 @@ namespace launcher
         CloseHandle(pi.hThread);
         m_process = pi.hProcess;
         m_readPipe = readEnd;
+        RegisterWaitForSingleObject(&m_exitWait, m_process, exited, nullptr, INFINITE, WT_EXECUTEONLYONCE);
         if (readEnd)
         {
             m_readerDone = false;
@@ -167,41 +173,13 @@ namespace launcher
                 char buffer[4096];
                 DWORD got = 0;
                 while (ReadFile(m_readPipe, buffer, sizeof(buffer), &got, nullptr) && got)
-                {
-                    std::lock_guard<std::mutex> lock(m_lock);
-                    for (DWORD i = 0; i < got; ++i)
-                    {
-                        const char c = buffer[i];
-                        if (c == '\n')
-                        {
-                            if (!m_partial.empty() && m_partial.back() == '\r')
-                                m_partial.pop_back();
-                            m_lines.push_back(std::move(m_partial));
-                            m_partial.clear();
-                        }
-                        else if (c == '\r' && i + 1 < got && buffer[i + 1] != '\n')
-                            m_partial.clear(); // a status line redrawn in place: keep its last version only
-                        else
-                            m_partial += c;
-                    }
-                }
-                std::lock_guard<std::mutex> lock(m_lock);
-                if (!m_partial.empty())
-                    m_lines.push_back(std::move(m_partial));
+                    consume(buffer, got);
                 CloseHandle(m_readPipe);
                 m_readPipe = nullptr;
-                m_readerDone = true;
+                finishReading();
             });
         }
         return true;
-    }
-
-    std::vector<std::string> Process::takeLines()
-    {
-        std::lock_guard<std::mutex> lock(m_lock);
-        std::vector<std::string> out;
-        out.swap(m_lines);
-        return out;
     }
 
     bool Process::running()
