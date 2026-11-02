@@ -101,6 +101,14 @@ It does nothing of this while a control is bound to the wheel, while driving or 
   aim** it turns the view itself too (above). **In vehicles and locked on** the mouse's speed becomes the right stick's
   tilt (1,500 counts a second is full tilt), so very fast flicks there turn no faster. **Mouse sensitivity**, **Invert
   mouse up / down**, **Free aim** and **Mouse wheel** (above). (game-internals.md 12b, 12c)
+- **Direct mouse camera** (experimental, off by default): looking up / down on foot, and the whole camera behind a car
+  or a boat, turn as far as the mouse moved instead of going through the stick (no top speed, no squared stick curve:
+  the mouse is a PC mouse, not a joystick). On foot the pitch is held where the mouse left it for 1.5 s, and a high
+  look pulls the camera in so the ground does not stop it. In a vehicle the heading and the height you gave the
+  camera are held while the mouse moves and for 1.5 s (heading) / 2.5 s (height) after, then the game's own swing
+  behind the vehicle takes them back over 2 s / 1.5 s; looking down stops at 0.9 rad (straight down is the camera above
+  the roof) and looking up where the ground holds the camera. With it on, the stick mouse in vehicles and lock-on is
+  also linear (the square root of the hand's speed, which the game squares) and 1.5x faster. (game-internals.md 12b)
 
 ## Gamepad page
 

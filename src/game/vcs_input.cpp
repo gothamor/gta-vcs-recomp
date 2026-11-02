@@ -166,6 +166,9 @@ namespace vcs::input
             float mouseScale = 1.0f; // stick deflection per mouse count per second (the cameras the stick turns)
             float mouseLook = 0.0025f; // radians per mouse count (the on-foot camera, turned directly)
             bool mouseInvertY = false;
+            bool mouseDirectVehicle = false; // in vehicles the mouse turns the camera's heading directly (experimental)
+            bool mouseLinear = false; // the cameras the stick turns (vehicles, lock-on): the mouse's speed linear, not squared
+            bool mouseDirectPitch = false; // on foot, looking up / down: the refined direct pitch (directPitch below)
             bool freeAimMouse = false, freeAimPad = false; // free aim (game/vcs_aim.h) on the keyboard / mouse, the gamepad
             bool mouseWheel = true;                        // the wheel changes weapons on foot and zooms scopes
             bool swapSticks = false, invertX = false, invertY = false;
@@ -196,9 +199,12 @@ namespace vcs::input
             m.mouseCamera = settings::value("mouse.camera") != 0;
             // 100%: a mouse moving 1,500 counts a second (a steady turn at 800 DPI) is a full stick; on foot 400 counts
             // (half an inch at 800 DPI) turn a radian, as the PC GTAs' default
-            m.mouseScale = settings::value("mouse.sensitivity") / 100.0f / 1500.0f;
+            m.mouseScale = settings::value("mouse.sensitivity") / 100.0f / 1500.0f * (settings::value("mouse.direct_pitch") != 0 ? 1.5f : 1.0f);
             m.mouseLook = settings::value("mouse.sensitivity") / 100.0f * 0.0025f;
             m.mouseInvertY = settings::value("mouse.invert_y") != 0;
+            m.mouseDirectPitch = settings::value("mouse.direct_pitch") != 0;
+            m.mouseLinear = m.mouseDirectPitch;
+            m.mouseDirectVehicle = m.mouseDirectPitch;
             m.freeAimMouse = settings::value("mouse.free_aim") != 0;
             m.freeAimPad = settings::value("pad.free_aim") != 0;
             m.mouseWheel = settings::value("mouse.wheel") != 0;
@@ -323,6 +329,340 @@ namespace vcs::input
             return g < 0 ? -a : a;
         }
         float stickFloat(int raw) { return raw == 0 ? 0.0f : (raw + 0.5f) / (raw > 0 ? 127.0f : 128.0f); }
+
+        // Direct heading behind a vehicle (experimental, Keyboard > Mouse > Direct mouse camera). Beta (+0x7C) is the
+        // angle from +x of the target-to-camera direction (game-internals.md 12b); turning it alone is undone by the
+        // camera's own swing, so the two source points are turned about the target point (+0x1A0) by the same angle, as
+        // on foot they turn about the player.
+        void directVehicleHeading(float turn)
+        {
+            const float tx = rdf(kCam + 0x1A0), ty = rdf(kCam + 0x1A4);
+            if (!std::isfinite(tx) || !std::isfinite(ty) || !std::isfinite(turn))
+                return;
+            // The game swings the camera back behind the vehicle by itself, at once. So the heading the mouse left is held
+            // for kHoldSeconds, then handed back to the game over kEaseSeconds (the share of the game's swing we undo
+            // falls from all to none), instead of snapping back the moment the mouse stops.
+            constexpr float kHoldSeconds = 1.5f, kEaseSeconds = 2.0f, kTwoPi = 6.2831855f;
+            static bool have = false;
+            static float holdBeta = 0.0f;
+            static uint32_t lastFrame = 0;
+            static std::chrono::steady_clock::time_point lastTurn{};
+            const auto clock = std::chrono::steady_clock::now();
+            const uint32_t frame = rd32(kFrameCounter);
+            if (frame - lastFrame > 3u)
+                have = false;
+            lastFrame = frame;
+            // The swing back behind the vehicle moves beta 0.01 .. 0.02 a frame, more than the mouse's own step at a normal
+            // speed, so looking back (the camera in front) never held while the mouse moved (log of 2026-11-02): the turn is
+            // added to the heading we left, not to the one the game has pulled it to - the share of the game's swing we undo
+            // is the same all the way through (all while the mouse moves and for kHoldSeconds after, then easing out).
+            float delta = turn;
+            if (turn != 0.0f)
+                lastTurn = clock;
+            if (have)
+            {
+                const float t = std::chrono::duration<float>(clock - lastTurn).count();
+                const float w = t < kHoldSeconds ? 1.0f : 1.0f - (t - kHoldSeconds) / kEaseSeconds;
+                if (w <= 0.0f)
+                    have = false;
+                else
+                {
+                    float diff = std::fmod(holdBeta - rdf(kCam + 0x7C), kTwoPi);
+                    if (diff > 3.1415927f)
+                        diff -= kTwoPi;
+                    else if (diff < -3.1415927f)
+                        diff += kTwoPi;
+                    delta = diff * w + turn;
+                }
+            }
+            if (delta == 0.0f)
+                return;
+            float beta = std::fmod(rdf(kCam + 0x7C) + delta, kTwoPi);
+            if (beta < 0.0f)
+                beta += kTwoPi;
+            wrf(kCam + 0x7C, beta);
+            holdBeta = beta;
+            have = true;
+            const float c = std::cos(delta), sn = std::sin(delta);
+            for (uint32_t at : {kCam + 0x220u, kCam + 0x230u})
+            {
+                const float ox = rdf(at) - tx, oy = rdf(at + 4) - ty;
+                wrf(at, tx + ox * c - oy * sn);
+                wrf(at + 4, ty + ox * sn + oy * c);
+            }
+        }
+
+        // Up / down behind a vehicle (experimental, with directVehicleHeading). The on-foot directPitch kept its own alpha
+        // and wrote it back, which a vehicle camera cannot take: the game resets alpha to its own value every frame, so
+        // any vertical count of the mouse (there is always some while turning sideways) swung the camera by the gap
+        // between the two (log of 2026-11-02: alpha -0.116 read, +0.184 held) and everything trembled. So alpha is only
+        // ever moved from the value the game has now, and the pitch is held through the source points' elevation, which
+        // is what the game's alpha eases toward: kept for kHold seconds after the last movement, then handed back.
+        bool directVehiclePitch(float up)
+        {
+            constexpr uint32_t kSources[2] = {kCam + 0x220u, kCam + 0x230u};
+            constexpr float kHold = 2.5f, kEase = 1.5f, kElevLow = -0.4f, kElevHigh = 0.75f;
+            static bool have = false;
+            static float held[2] = {0.0f, 0.0f};
+            static uint32_t lastFrame = 0;
+            static std::chrono::steady_clock::time_point lastMove{};
+            const float tx = rdf(kCam + 0x1A0), ty = rdf(kCam + 0x1A4), tz = rdf(kCam + 0x1A8);
+            if (!std::isfinite(tx) || !std::isfinite(ty) || !std::isfinite(tz) || !std::isfinite(up))
+                return false;
+            const uint32_t frame = rd32(kFrameCounter);
+            if (frame - lastFrame > 3u)
+                have = false;
+            lastFrame = frame;
+            const auto clock = std::chrono::steady_clock::now();
+            float w = 1.0f;
+            if (up != 0.0f)
+                lastMove = clock;
+            else
+            {
+                if (!have)
+                    return true;
+                const float t = std::chrono::duration<float>(clock - lastMove).count();
+                w = t < kHold ? 1.0f : 1.0f - (t - kHold) / kEase;
+                if (w <= 0.0f)
+                {
+                    have = false;
+                    return true;
+                }
+            }
+            float ox[2], oy[2], oz[2], elev[2], radius[2];
+            for (int i = 0; i < 2; ++i)
+            {
+                ox[i] = rdf(kSources[i]) - tx;
+                oy[i] = rdf(kSources[i] + 4) - ty;
+                oz[i] = rdf(kSources[i] + 8) - tz;
+                const float d = std::hypot(ox[i], oy[i]);
+                radius[i] = std::hypot(d, oz[i]);
+                if (!std::isfinite(radius[i]) || d < 0.05f || radius[i] < 0.5f || radius[i] > 40.0f)
+                    return false;
+                elev[i] = std::atan2(oz[i], d);
+            }
+            if (up != 0.0f)
+            {
+                // alpha from the game's own value now; the limits as on foot (and the ground for looking up)
+                const float alpha = rdf(kCam + 0x78);
+                const float lowLim = std::max(-rdf(kCamTable + 0x38), -0.9f);
+                const float highLim = std::min(rdf(kCamTable + 0x34), std::asin(std::min(1.0f, 1.25f / std::max(radius[1], 2.0f))));
+                if (std::isfinite(alpha) && std::isfinite(lowLim) && std::isfinite(highLim))
+                    wrf(kCam + 0x78, std::clamp(alpha + up, std::min(lowLim, alpha), std::max(highLim, alpha)));
+            }
+            for (int i = 0; i < 2; ++i)
+            {
+                float e2;
+                if (up != 0.0f)
+                {
+                    const float base = have ? held[i] : elev[i]; // a source point below the target looks up
+                    e2 = std::clamp(base - up, std::min(kElevLow, base), std::max(kElevHigh, base));
+                    held[i] = e2;
+                }
+                else
+                    e2 = elev[i] + (held[i] - elev[i]) * w;
+                const float d = std::hypot(ox[i], oy[i]);
+                const float k = std::cos(e2) * radius[i] / d;
+                wrf(kSources[i], tx + ox[i] * k);
+                wrf(kSources[i] + 4, ty + oy[i] * k);
+                wrf(kSources[i] + 8, tz + radius[i] * std::sin(e2));
+            }
+            have = true;
+            return true;
+        }
+
+        // Direct pitch (experimental; Keyboard > Mouse > Direct mouse camera, off by default). The heading is turned by
+        // writing it and rotating the camera's two source points about the player; this does the same for looking up /
+        // down: both source points are rotated in the vertical plane about the camera's target point (+0x1A0), so the
+        // camera pitches by exactly `up` radians (+ looks up) with no top speed and no delay, instead of going through
+        // the stick's pitch speed. Alpha then eases to the pitch the camera stands at (game-internals.md 12b). The
+        // elevation stays inside the game's own limits (0.785 up, 1.4835 down). Returns false, touching nothing, when
+        // the camera is not as expected (target far from the player, odd distances), and the caller uses the stick.
+        bool directPitch(float up)
+        {
+            constexpr uint32_t kTarget = kCam + 0x1A0u;
+            constexpr uint32_t kSources[2] = {kCam + 0x220u, kCam + 0x230u};
+            constexpr uint32_t kAlpha = kCam + 0x78u;
+            // The game's own limits for alpha (game-internals.md 12b: 0.785 up, 1.4835 down); the source points' elevation
+            // gets a wide margin, as a safety only.
+            // the game's limits, from its tuning table (outdoors / indoors, as the stick-free path reads them)
+            const uint32_t indoorsMode = rd32(kCamIndoors);
+            const uint32_t limitTable = kCamTable + (indoorsMode != 0 && indoorsMode != 4 ? 0x3Cu : 0u);
+            const float tableLow = -rdf(limitTable + 0x38), tableHigh = rdf(limitTable + 0x34);
+            const bool tableOk = std::isfinite(tableLow) && std::isfinite(tableHigh) && tableLow < -0.5f && tableHigh > 0.2f && tableHigh < 1.5f;
+            const float kAlphaLowest = tableOk ? tableLow : -1.4835f, kAlphaHighest = tableOk ? tableHigh : 0.785f;
+            constexpr float kSourceLowest = -1.2f, kSourceHighest = 1.5f;
+            // The game leaves the pitch to itself once the mouse stops: alpha slides down about 0.004 rad a frame (log of
+            // 2026-10-30, 91% of the idle frames), which feels like the camera going back to its place. So alpha is held
+            // where the mouse left it for kHoldSeconds after the last movement, then the game has it again.
+            constexpr float kHoldSeconds = 1.5f;
+            // The camera never stands more than 1.57 below its target (the ground; log of 2026-10-31: -1.59 at the lowest,
+            // whatever the distance), and the game only clamps its height, it does not bring the camera closer. So with a
+            // far camera (distance 4.5 / 5.5) looking up stopped at asin(1.57 / distance) = 0.29 .. 0.36 rad, while the near
+            // cameras (half that distance) reached the top at 0.785 (a drop of 1.41). Looking up therefore pulls the camera
+            // in: the source points' radius is scaled so the drop stays under kFloor. Experimental: whether the camera
+            // follows that radius is what the log tells.
+            constexpr float kFloor = 1.2f, kMinScale = 0.3f; // 1.2: the ground was at -1.37 once (log 2026-10-31 00:25, f=6600)
+            static bool reportedUse = false;
+            static float holdAlpha = 0.0f;
+            static bool haveHold = false;
+            static uint32_t lastFrame = 0;
+            static std::chrono::steady_clock::time_point lastMotion{};
+            static int quiet = 1000; // frames since the mouse last moved vertically
+            static float scale = 1.0f;                // the source points' radius against the game's
+            static float baseRadius[2] = {0.0f, 0.0f}; // the game's radii
+            static float lastRadius[2] = {0.0f, 0.0f}; // the radii written last
+            static float baseRatio = 1.0f;            // the camera's distance / the source radius, unscaled
+            if (up != 0.0f)
+                quiet = 0;
+            else if (quiet < 1000)
+                ++quiet;
+            const uint32_t ped = g_rdram ? rd32(kPlayerPed) : 0;
+            if (!ped)
+                return false;
+            const float tx = rdf(kTarget), ty = rdf(kTarget + 4), tz = rdf(kTarget + 8);
+            const float px = rdf(ped + 0x30), py = rdf(ped + 0x34);
+            bool sane = std::isfinite(tx) && std::isfinite(ty) && std::isfinite(tz) && std::hypot(tx - px, ty - py) < 3.0f;
+            float ox[2] = {}, oy[2] = {}, oz[2] = {}, elev[2] = {}, radius[2] = {};
+            for (int i = 0; sane && i < 2; ++i)
+            {
+                const uint32_t at = kSources[i];
+                ox[i] = rdf(at) - tx;
+                oy[i] = rdf(at + 4) - ty;
+                oz[i] = rdf(at + 8) - tz;
+                const float d = std::hypot(ox[i], oy[i]);
+                radius[i] = std::hypot(d, oz[i]);
+                if (!std::isfinite(radius[i]) || d < 0.05f || radius[i] < 0.5f || radius[i] > 30.0f)
+                {
+                    sane = false;
+                    break;
+                }
+                elev[i] = std::atan2(oz[i], d); // a source point below the target looks up
+            }
+            const uint32_t frame = g_rdram ? rd32(kFrameCounter) : 0;
+            if (!sane)
+            {
+                haveHold = false;
+                scale = 1.0f;
+                return false;
+            }
+            // the camera itself (+0x20 Source): its elevation above the target, its distance from it and its height
+            // against the target's
+            const float chd = std::hypot(rdf(kCam + 0x20) - tx, rdf(kCam + 0x24) - ty), cdz = rdf(kCam + 0x28) - tz;
+            const float camDist = std::hypot(chd, cdz);
+            // Where the pitch starts from: alpha is the camera's pitch (the camera stands at -alpha above the target, to
+            // 0.001 in the log), so the mouse adds to alpha as the game has it - no jump when a movement starts. The
+            // game does NOT keep alpha = minus the source points' elevation: at rest they differ by up to 0.26 rad, so
+            // deriving alpha from them made the camera jump that much on the first frame of a movement.
+            const auto clock = std::chrono::steady_clock::now();
+            const bool restart = frame - lastFrame > 3u; // the camera was not ours for a few frames (lock-on, a vehicle, a pause)
+            if (restart)
+                haveHold = false;
+            lastFrame = frame;
+            const bool ours = haveHold && std::chrono::duration<float>(clock - lastMotion).count() < kHoldSeconds;
+            if (up != 0.0f)
+                lastMotion = clock;
+            const float alphaNow = rdf(kAlpha);
+            const float base = ours ? holdAlpha : alphaNow; // alpha as we left it, or as the game has it
+            // positive = looks up; one already past a limit may only come back
+            // The camera follows alpha within 0.001 rad a frame, except while the game changes its distance (the view
+            // change, v9 log f=6755..6778: ~20 frames in which the camera stood still, then one frame snapped it 0.63 rad to
+            // where the mouse had gone). While it does not follow, the mouse waits: alpha stays where the camera is.
+            // v10 log: with 0.08 and a jump back to the camera, alpha ran 0.1 ahead and was pulled back every third frame
+            // (a sawtooth) while the camera crept 0.004 a frame at the ground; at the end of the view change the camera
+            // popped 1.3 m closer. So the leash is short: once the camera is more than kLagStart behind, alpha stays within
+            // kLagBand of it until it follows again.
+            constexpr float kLagStart = 0.03f, kLagBand = 0.02f;
+            const float camElev = std::atan2(cdz, chd);
+            // v12 log, the view change 4.0 -> 5.5 while looking up (f=7560..7585): with the camera held at the ground each
+            // frame the leash let go (the error was inside kLagStart again), the mouse ran 0.13 ahead, and the next frame
+            // pulled alpha back: alpha went 0.50, 0.38, 0.50, 0.38 ... for 25 frames. So once leashed it stays leashed
+            // until the camera follows again (error under kLagEnd), or kLagMaxSeconds.
+            constexpr float kLagEnd = 0.008f, kLagMaxSeconds = 0.6f;
+            static bool leashed = false;
+            static std::chrono::steady_clock::time_point leashStart{};
+            const float camErr = std::fabs(base + camElev);
+            if (!ours)
+                leashed = false;
+            else if (!leashed && camErr > kLagStart)
+            {
+                leashed = true;
+                leashStart = clock;
+            }
+            else if (leashed && (camErr < kLagEnd || std::chrono::duration<float>(clock - leashStart).count() > kLagMaxSeconds))
+                leashed = false;
+            const bool lagging = leashed;
+            const float alphaFree = up != 0.0f ? std::clamp(base + up, std::min(kAlphaLowest, base), std::max(kAlphaHighest, base)) : base;
+            const float alphaNext = lagging ? std::clamp(alphaFree, -camElev - kLagBand, -camElev + kLagBand) : alphaFree;
+            const float turned = alphaNext - base;
+
+            // the pull-in: the radii as the game has them are the base, unless they are ours (scaled)
+            bool restoreNow = false;
+            if (scale != 1.0f)
+            {
+                const bool gameChanged = std::fabs(radius[0] - lastRadius[0]) > 0.05f || std::fabs(radius[1] - lastRadius[1]) > 0.05f;
+                if (gameChanged)
+                    scale = 1.0f; // a new radius from the game (another distance, or it put them back): that is the base now
+                else if (restart)
+                    restoreNow = true; // the camera was somebody else's for a while: back to the game's radius at once
+            }
+            if (scale == 1.0f)
+            {
+                baseRadius[0] = radius[0];
+                baseRadius[1] = radius[1];
+                baseRatio = std::clamp(camDist / radius[0], 0.3f, 1.0f);
+            }
+            float scaleTarget = 1.0f;
+            if (!restoreNow && alphaNext > 0.05f)
+            {
+                const float needed = kFloor / std::sin(std::min(alphaNext, 1.4f)); // the camera's distance that keeps the drop under kFloor
+                const float have = baseRatio * baseRadius[0];
+                if (needed < have)
+                    scaleTarget = std::max(kMinScale, needed / have);
+            }
+            // the radius follows the pitch directly (a function of alpha, so it moves as smoothly as the mouse does): the game
+            // puts its own radius back every frame, so a rate-limited scale never got below 0.96 and the camera, held by the
+            // ground, snapped in one frame once the game gave way (log of 2026-10-31, f=7324: elevation -0.27 -> -0.76)
+            float scaleNext = restoreNow ? 1.0f : scaleTarget;
+            if (std::fabs(scaleNext - 1.0f) < 0.002f)
+                scaleNext = 1.0f;
+            const bool rescale = scaleNext != scale;
+
+            if (up == 0.0f && !rescale && !lagging)
+            {
+                if (ours)
+                    wrf(kAlpha, holdAlpha); // the sources stay as the game has them; only the pitch is held
+                return true;
+            }
+            // the source points turn by the same angle about the target, so what the game eases alpha toward moves with
+            // it, and take the scaled radius
+            for (int i = 0; i < 2; ++i)
+            {
+                const float d = std::hypot(ox[i], oy[i]);
+                const float e2 = std::clamp(elev[i] - turned, std::min(kSourceLowest, elev[i]), std::max(kSourceHighest, elev[i]));
+                const float rad = baseRadius[i] * scaleNext;
+                const float k = std::cos(e2) * rad / d;
+                const uint32_t at = kSources[i];
+                wrf(at, tx + ox[i] * k);
+                wrf(at + 4, ty + oy[i] * k);
+                wrf(at + 8, tz + rad * std::sin(e2));
+                lastRadius[i] = rad;
+            }
+            scale = scaleNext;
+            if (up != 0.0f || ours)
+            {
+                wrf(kAlpha, alphaNext);
+                holdAlpha = alphaNext;
+                haveHold = true;
+            }
+            if (!reportedUse)
+            {
+                reportedUse = true;
+                std::fprintf(stderr, "[input] direct pitch on (target %.2f %.2f %.2f)\n", tx, ty, tz);
+            }
+            return true;
+        }
+
 
         bool readPad(uint8_t *data)
         {
@@ -506,30 +846,33 @@ namespace vcs::input
                             wrf(at + 4, py + ox * s + oy * c);
                         }
                     }
-                    // pitch (up +), as the heading: the camera eases it toward the pitch its source points stand at, seen
-                    // from the target point (+0x1A0, which it placed them around), so those turn up / down about it by
-                    // the same angle. Through the stick it was capped at the stick's top speed (0.03 a step) and then
-                    // eased (20% of the gap a step), slower than the heading. Kept in the game's limits.
-                    const uint32_t indoors = rd32(kCamIndoors);
-                    const uint32_t table = kCamTable + (indoors != 0 && indoors != 4 ? 0x3Cu : 0u);
-                    const float alpha = rdf(kCam + 0x78);
-                    const float tilt = std::clamp(alpha + up * m.mouseLook, -rdf(table + 0x38), rdf(table + 0x34)) - alpha;
-                    if (tilt != 0.0f)
+                    if (!(m.mouseDirectPitch && directPitch(up * m.mouseLook)))
                     {
-                        wrf(kCam + 0x78, alpha + tilt);
-                        const float tx = rdf(kCam + 0x1A0), ty = rdf(kCam + 0x1A4), tz = rdf(kCam + 0x1A8);
-                        for (uint32_t at : {kCam + 0x220u, kCam + 0x230u})
+                        // pitch (up +), as the heading: the camera eases it toward the pitch its source points stand at, seen
+                        // from the target point (+0x1A0, which it placed them around), so those turn up / down about it by
+                        // the same angle. Through the stick it was capped at the stick's top speed (0.03 a step) and then
+                        // eased (20% of the gap a step), slower than the heading. Kept in the game's limits.
+                        const uint32_t indoors = rd32(kCamIndoors);
+                        const uint32_t table = kCamTable + (indoors != 0 && indoors != 4 ? 0x3Cu : 0u);
+                        const float alpha = rdf(kCam + 0x78);
+                        const float tilt = std::clamp(alpha + up * m.mouseLook, -rdf(table + 0x38), rdf(table + 0x34)) - alpha;
+                        if (tilt != 0.0f)
                         {
-                            const float ox = rdf(at) - tx, oy = rdf(at + 4) - ty, oz = rdf(at + 8) - tz;
-                            const float h = std::sqrt(ox * ox + oy * oy), d = std::sqrt(h * h + oz * oz);
-                            if (h < 1e-4f)
-                                continue;
-                            // looking up is a source point below the target
-                            const float e = std::clamp(std::atan2(-oz, h) + tilt, -1.55f, 1.55f);
-                            const float k = d * std::cos(e) / h;
-                            wrf(at, tx + ox * k);
-                            wrf(at + 4, ty + oy * k);
-                            wrf(at + 8, tz - d * std::sin(e));
+                            wrf(kCam + 0x78, alpha + tilt);
+                            const float tx = rdf(kCam + 0x1A0), ty = rdf(kCam + 0x1A4), tz = rdf(kCam + 0x1A8);
+                            for (uint32_t at : {kCam + 0x220u, kCam + 0x230u})
+                            {
+                                const float ox = rdf(at) - tx, oy = rdf(at + 4) - ty, oz = rdf(at + 8) - tz;
+                                const float h = std::sqrt(ox * ox + oy * oy), d = std::sqrt(h * h + oz * oz);
+                                if (h < 1e-4f)
+                                    continue;
+                                // looking up is a source point below the target
+                                const float e = std::clamp(std::atan2(-oz, h) + tilt, -1.55f, 1.55f);
+                                const float k = d * std::cos(e) / h;
+                                wrf(at, tx + ox * k);
+                                wrf(at + 4, ty + oy * k);
+                                wrf(at + 8, tz - d * std::sin(e));
+                            }
                         }
                     }
                 }
@@ -538,9 +881,30 @@ namespace vcs::input
                     if (on && dt > 0.0f && dt < 0.25f)
                     {
                         // the mouse's speed as the game's stick value, past its dead third
-                        auto tilt = [](float t) { return stickFloat(rawFor(static_cast<int>(std::lround(std::clamp(t, -1.0f, 1.0f) * 127.0f)))); };
+                        // The game turns by the stick's value squared (|x| x, game-internals.md 12b), so a half-speed hand
+                        // movement turned a quarter as fast; Direct mouse camera takes the square root first, so the camera
+                        // turns in proportion to the hand (its top speed, the stick at full tilt, stays).
+                        const bool linear = m.mouseLinear;
+                        auto tilt = [linear](float t) {
+                            t = std::clamp(t, -1.0f, 1.0f);
+                            if (linear)
+                                t = t < 0.0f ? -std::sqrt(-t) : std::sqrt(t);
+                            return stickFloat(rawFor(static_cast<int>(std::lround(t * 127.0f))));
+                        };
                         g_mouse.x = tilt(dx / dt * m.mouseScale);
                         g_mouse.y = tilt(up / dt * m.mouseScale);
+                        // Behind a car (mode 18) or a boat (22) the heading is turned directly, as on foot: no stick, so
+                        // no top speed and no smoothing. The follow camera still swings back behind the vehicle by itself
+                        // (FUN_0029FAF0); the source points turn about the target point with the heading, or that swing
+                        // would undo every movement. Up / down stays on the stick.
+                        if (m.mouseDirectVehicle && game.driving && (mode == 18 || mode == 22))
+                        {
+                            directVehicleHeading(-dx * m.mouseLook);
+                            g_mouse.x = 0.0f;
+                            // up / down too, as on foot (the stick is left alone when this took it)
+                            if (directVehiclePitch(up * m.mouseLook))
+                                g_mouse.y = 0.0f;
+                        }
                     }
                 }
 
@@ -709,6 +1073,19 @@ namespace vcs::input
                 s.section = "Mouse";
                 s.label = "Invert mouse up / down";
                 s.help = "Moving the mouse forward looks down instead of up.";
+                s.type = Type::Toggle;
+                s.defaultValue = 0;
+                s.onChange = onChange;
+                settings::add(s);
+
+                s = {};
+                s.key = "mouse.direct_pitch";
+                s.page = kKeys;
+                s.section = "Mouse";
+                s.label = "Direct mouse camera (experimental)";
+                s.help = "Looking up / down on foot, and the camera behind cars and boats, turn as far as the mouse moved "
+                         "instead of going through the stick's top speed. In vehicles the camera keeps the heading you gave "
+                         "it for a moment before swinging back. If the camera jumps or looks wrong, turn it off.";
                 s.type = Type::Toggle;
                 s.defaultValue = 0;
                 s.onChange = onChange;

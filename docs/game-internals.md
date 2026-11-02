@@ -1969,6 +1969,27 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
 - Teleported to (575, 175) the camera ends up at its lowest pitch (-1.483, straight down) - the game's own doing (the
   same with `VCS_INPUT_MAP=0`).
 
+- **Direct mouse camera** (2026-11-02, src/game/vcs_input.cpp `directPitch`, `directVehicleHeading`,
+  `directVehiclePitch`; Keyboard > Mouse > Direct mouse camera; found with a per-frame log of the camera while the mouse
+  moved). On foot: the follow camera stands at most **1.4 m below its target** (the ground; the lowest seen is -1.59)
+  whatever the distance, and the game only clamps the height, it does not bring the camera closer, so with the far
+  views (4.5 / 5.5) looking up stopped at asin(1.4 / distance) = 0.3 rad while the near ones reached the 0.785 limit;
+  scaling the source points' radius with the pitch (floor 1.2) pulls the camera in. After the mouse stops the game
+  slides alpha down about 0.004 a frame, so alpha is held 1.5 s. The camera follows alpha within 0.001 a frame, except
+  while the game eases the radius on a view change (r 4.0 -> 5.5 over ~40 frames: the camera stands still, then
+  snaps), so alpha waits for it (a short "leash"). Vehicles (mode 18 behind a car; boats 22 not checked): beta has the
+  same meaning (the angle of target-to-camera; cam = beta in the log) and +0x220 / +0x230 are the source points, but
+  the vehicle camera's radii differ (near view: camera 6.83, source 0 9.75, source 1 6.83; far: 13.8 / 15 / 13.8) and
+  its distance is cut in by collision (6.8 <-> 4.4 on alternate frames, now and then 0.5). The game **writes alpha back
+  to its own value every frame** in a vehicle: holding alpha (the on-foot way) made the camera tremble between the held
+  and the game's value (+0.184 held, -0.116 read), and any stray vertical count of the mouse set it off; so a vehicle's
+  alpha is only moved from the value read now and the pitch is held through the source points' elevation. The swing
+  behind the vehicle moves beta 0.01 .. 0.02 a frame (165 fps), more than a mouse step, so looking back never stayed
+  until the turn was added to the heading we left (`holdBeta`) and not to the one the game had pulled it to. Looking
+  down in a vehicle reaches 1.5 rad (the camera over the roof, nothing to steer by): limited to 0.9; looking up to
+  asin(1.25 / source 1 radius). On the squared stick: the mouse in vehicles and lock-on, as the right stick, turned a
+  half-speed hand movement a quarter as fast (|x| x); the linear option takes the square root first.
+
 ### 12c. Aiming: lock-on, the game's free aim, shots, scopes (2026-10-31)
 
 Found for free aim with the mouse (src/game/vcs_aim.cpp), by decompiling (`tools/eedecomp.py`; the files in
