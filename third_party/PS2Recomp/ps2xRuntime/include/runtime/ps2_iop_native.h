@@ -29,7 +29,7 @@ namespace ps2_iop_native
 
     // PS2X_RPC_RECORD=<file>: every RPC call to `sid`s listed in PS2X_RPC_RECORD_SIDS (hex, comma separated; all when
     // unset) is appended to <file> - IOP time (u64 EE cycles), sid, function, send size, receive size (u32 each), the
-    // bytes sent, the reply's first word - so a native server can be replayed against the emulated IOP's run (tools/soundcheck.py). The time
+    // bytes sent, the reply's first word - so a native server can be replayed against the emulated IOP's run (VCS_SOUND_REPLAY). The time
     // is the emulated IOP's own when it runs (it runs ahead of EE time while an IOP server waits inside a call).
     [[nodiscard]] bool recording();
     void record(const uint8_t *rdram, const ps2x::iop::RpcRequest &request, uint64_t iopTimeEeCycles);

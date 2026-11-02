@@ -488,8 +488,8 @@ namespace
         s.page = "Game";
         s.section = "Start-up";
         s.label = "Skip intro movies";
-        s.help = "The Rockstar logos and the intro movie at start-up. Off plays them as on the PS2 (Start or Cross skips the "
-                 "intro, not the logos); on goes straight to the game.";
+        s.help = "The Rockstar logos and the intro movie at start-up. Off plays them as on the PS2 (Options or Cross skips "
+                 "the intro, not the logos); on goes straight to the game.";
         s.type = Type::Toggle;
         s.defaultValue = 0;
         s.env = "VCS_SKIP_MOVIES";

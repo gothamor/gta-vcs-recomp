@@ -13,7 +13,7 @@ gta4-ps5 port uses it) into a PIE ELF (build/ps5/vcs.elf) that tools/ps5.py turn
 - the payload SDK fork's platform layer (libps5platform.a): malloc and its family wrapped onto a heap in direct memory
   (libc's own runs out long before the game does), pthread_create onto thread stacks there, and the libc functions the
   console lacks or refuses mapped onto its own (--defsym);
-- stat / lstat wrapped (ps5/runtime/ps5_stat.c: stat("") as on Linux); the emulated TLS is ps5/runtime/ps5_emutls.c,
+- stat / lstat wrapped (ps5/runtime/ps5_stat.c: stat("") answering ENOENT); the emulated TLS is ps5/runtime/ps5_emutls.c,
   compiled into the game by CMake;
 - the SDK's system-library stubs (libkernel, libScePad, libSceAudioOut, ...), as needed.
 

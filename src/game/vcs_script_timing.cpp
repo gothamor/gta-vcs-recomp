@@ -277,7 +277,7 @@ namespace vcs
         }
 
         // VCS_SCRIPT_TIMESTEP_CHECK=1: whenever a different mission has been loaded, decode every site at its offset and
-        // log the ones that are there (tools/framerate_audit.py --sites: each listed mission's sites must all match)
+        // log the ones that are there (each listed mission's sites must all match; the frame-rate audit checked it)
         void checkSites(const uint8_t *rdram, uint32_t script)
         {
             static uint64_t lastSignature = 0;

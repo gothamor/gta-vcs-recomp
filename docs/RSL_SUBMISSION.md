@@ -56,7 +56,8 @@ Numbers while driving: ~470 KB built a frame, ~4.7 MB through VIF1 (90% prebuilt
 state setters and culling stay game logic) and most of the worker's VIF1 / copy time; worth continuing, but it does
 not by itself make 60 fps driving: the other ~80% of game code is game logic.
 
-Tools: `VCS_TRACE_RSL=1`, `PS2X_CHAIN_CENSUS=1`, `VCS_PROFILE_GUEST_FILE`, `tools/eedecomp.py`.
+Tools: `VCS_TRACE_RSL=1`, `PS2X_CHAIN_CENSUS=1`, `tools/eedecomp.py` (the profiles below came from the PC build's
+sampling profiler, `VCS_PROFILE*`, removed with it 2026-10-31).
 
 Planned (kept for reference):
 

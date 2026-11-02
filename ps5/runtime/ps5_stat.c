@@ -1,7 +1,7 @@
-/* stat("") and lstat("") as on Linux, linked into the game with --wrap=stat --wrap=lstat (tools/ps5_link.py), from
+/* stat("") and lstat("") answering ENOENT (as POSIX libcs do), linked into the game with --wrap=stat --wrap=lstat (tools/ps5_link.py), from
  * the gta4-ps5 port (ps5/tools/ps5_stat.c, GPL-3.0).
  *
- * The PS5 answers an empty path with EINVAL where Linux says ENOENT, and std::filesystem::exists("") throws on
+ * The PS5 answers an empty path with EINVAL where other POSIX systems say ENOENT, and std::filesystem::exists("") throws on
  * anything but "not found". */
 #include <errno.h>
 #include <sys/stat.h>

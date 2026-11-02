@@ -193,12 +193,12 @@ def check(args, quiet=False):
         problems.append("generated/: recompile the game from your disc first (python3 tools/recompile.py <iso>)")
 
     tri = find_triangle(getattr(args, "triangle", None))
-    line(bool(tri), "ps5-plume-triangle", tri or "not found: git clone https://github.com/Nazky/ps5-plume-triangle, "
-         "make in it, then --triangle <dir>")
+    line(bool(tri), "ps5-plume-triangle", tri or "not found: python3 tools/ps5.py setup (or git clone "
+         "https://github.com/Nazky/ps5-plume-triangle, make in it, then --triangle <dir>)")
     sdk = find_sdk(getattr(args, "sdk", None), tri)
     paths = {"triangle": tri, "sdk": sdk, "clang": clang, "clangxx": clangxx}
     if not tri:
-        problems.append("ps5-plume-triangle, built once (docs/PS5.md)")
+        problems.append("ps5-plume-triangle, built once: python3 tools/ps5.py setup (docs/PS5.md)")
     else:
         pieces = [
             ("start-up code", [os.path.join(tri, "build", "obj", "app_crt.o"), os.path.join(tri, "build", "obj", "app_cpp_runtime.o")]),
@@ -627,16 +627,13 @@ def cmd_padtest(args):
     if platform.system() != "Linux":
         tc.fail("the controller test runs on the build machine (Ubuntu 24.04 or WSL 2)")
     env = tc.build_env()
-    clang, clangxx = shutil.which("clang", path=env.get("PATH")), shutil.which("clang++", path=env.get("PATH"))
-    if not clang or not clangxx or tc.clang_version(clang) < tc.MIN_CLANG:
-        tc.fail("clang %d or newer not found (sudo apt install clang-20 lld-20)" % tc.MIN_CLANG)
     tools = tc.build_tools(env)
     tree = os.path.join(tc.BUILD, "ps5-padtest")
     os.makedirs(tree, exist_ok=True)
     if not os.path.isfile(os.path.join(tree, "build.ninja")):
+        # the build machine's clang 19+ and Ninja, with the libstdc++ the tools tree uses (tc.compiler_defines)
         cmd = [tools["cmake"], "-S", os.path.join(tc.ROOT, "ps5", "tests"), "-B", tree, "-G", "Ninja",
-               "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx,
-               "-DCMAKE_MAKE_PROGRAM=" + tools["ninja"]]
+               "-DCMAKE_BUILD_TYPE=Release"] + tc.compiler_defines(env)
         log = os.path.join(tree, "configure.log")
         if tc.run_with_progress(cmd, log, "[ps5] configure (controller test)", env=env) != 0:
             print(tc.tail(log, 30))

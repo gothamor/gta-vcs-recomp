@@ -22,7 +22,7 @@ reads no pressure bytes - game-internals.md 12a). Every binding can be changed o
 | Options | Start | the pause menu |
 | Touchpad click | Select | (the Create button belongs to the system: apps never see it) |
 
-Start or Cross skips the intro movie; the Rockstar logos before it can't be skipped, as on the PS2 (Game > Skip intro
+Options (Start) or Cross skips the intro movie; the Rockstar logos before it can't be skipped, as on the PS2 (Game > Skip intro
 movies skips both). While driving, Cross accelerates, Square brakes then reverses and R1 is the handbrake (measured in
 game: game-internals.md 12a).
 

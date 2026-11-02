@@ -37,7 +37,7 @@ else()
 endif()
 
 # The console's start-up pieces that come with the game: emulated TLS that runs C++ thread_local destructors before
-# freeing the thread's storage, and stat("") as on Linux (ps5/runtime/).
+# freeing the thread's storage, and stat("") answering ENOENT (ps5/runtime/).
 add_library(vcs_ps5_runtime OBJECT
     "${CMAKE_SOURCE_DIR}/ps5/runtime/ps5_emutls.c"
     "${CMAKE_SOURCE_DIR}/ps5/runtime/ps5_stat.c"

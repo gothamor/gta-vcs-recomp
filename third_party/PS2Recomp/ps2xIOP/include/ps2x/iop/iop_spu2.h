@@ -127,7 +127,7 @@ namespace ps2x::iop::detail
         } m_stats;
         void reportStats();
         // PS2X_SPU2_TRACE=<file>: every register write and DMA of this instance to <file>.<n> (n = instances made
-        // before it) - the emulated IOP's and a native driver's SPU2 compared write for write (tools/soundcheck.py)
+        // before it) - the emulated IOP's and a native driver's SPU2 compared write for write (VCS_SOUND_REPLAY)
         std::FILE *m_trace = nullptr;
         bool m_voiceLog = std::getenv("PS2X_SPU2_VOICE_LOG") != nullptr; // key-ons and sounding voices every 0.1 s
         void reportVoices();

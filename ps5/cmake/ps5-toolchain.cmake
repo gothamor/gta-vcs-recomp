@@ -54,9 +54,9 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON) # the eboot is a PIE
 
 # The payload SDK's own compiler wrappers' flags (bin/prospero-clang++), and:
-#   -march=znver2: the PS5's CPU (a superset of the x86-64-v3 the PC builds use)
+#   -march=znver2: the PS5's CPU (Zen 2: x86-64-v3 and more)
 #   -fdenormal-fp-math=ieee: the target's default, preserve-sign, assumes a flush-to-zero MXCSR; the app's start-up
-#       code sets the IEEE state the PC builds compute in (MXCSR 0x1f80; main.cpp checks it)
+#       code sets the IEEE state the game's numerics were checked in (MXCSR 0x1f80; main.cpp checks it)
 #   -femulated-tls: the PS5's ABI for thread_local (ps5/runtime/ps5_emutls.c)
 #   -fexperimental-library: libc++ 18 keeps std::jthread / stop_token behind it
 #   -isysroot: clang's PS5 driver then finds <sdk>/target/include and target/include_common itself

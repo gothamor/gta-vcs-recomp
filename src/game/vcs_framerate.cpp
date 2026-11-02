@@ -60,7 +60,7 @@ namespace vcs
         // Independent timing's frame-rate ceiling and the step floor that goes with it (CTimer's step: 1.0 = 1/50 s).
         // The game floors the step at 0.5 (100 fps); below that peds ran at a quarter of their speed - FUN_001f1d38
         // turned animation movement into a velocity with `* 0.5` instead of `/ step` there, a branch dead on the PS2
-        // (patched in game/vcs/overrides.toml, 2026-10-25). With that fixed the audit (tools/framerate_audit.py) runs,
+        // (patched in game/vcs/overrides.toml, 2026-10-25). With that fixed the frame-rate audit runs,
         // sprints, drives and falls at 1/144 - 1/240 s as at 1/30 - 1/100 (sprint -5% / -11% at 1/200 / 1/240), so the
         // ceiling is 240 fps (it was 100). Faster frames get the floor (the game runs a little fast). VCS_MIN_STEP=<x>
         // lowers the floor further for experiments (then an unlimited cap is unlimited).

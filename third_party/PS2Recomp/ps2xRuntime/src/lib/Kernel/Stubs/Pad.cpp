@@ -606,16 +606,14 @@ namespace ps2_stubs
                 const int gamepad = findFirstGamepad();
                 const bool gamepadStartPressed =
                     (gamepad >= 0) && platform::gamepadButton(platform::GAMEPAD_START);
-                const bool startPressed = (data[2] != 0xFFu || data[3] != 0xFFu ||
-                                           platform::keyDown(platform::KEY_ENTER) || gamepadStartPressed);
+                const bool startPressed = (data[2] != 0xFFu || data[3] != 0xFFu || gamepadStartPressed); // [gta-recomp] no keyboard
                 if (startPressed)
                 {
                     const uint32_t guestButtons =
                         (static_cast<uint32_t>(static_cast<uint8_t>(data[2] ^ 0xFFu)) << 8) |
                         static_cast<uint32_t>(static_cast<uint8_t>(data[3] ^ 0xFFu));
-                    std::printf("[padread] port=%d slot=%d data2=0x%02x data3=0x%02x guestButtons=0x%04x enter=%d gamepadStart=%d\n",
-                                port, slot, data[2], data[3], guestButtons,
-                                platform::keyDown(platform::KEY_ENTER) ? 1 : 0, gamepadStartPressed ? 1 : 0);
+                    std::printf("[padread] port=%d slot=%d data2=0x%02x data3=0x%02x guestButtons=0x%04x gamepadStart=%d\n",
+                                port, slot, data[2], data[3], guestButtons, gamepadStartPressed ? 1 : 0);
                     ++g_padReadLogCount;
                 }
             }

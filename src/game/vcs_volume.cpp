@@ -9,7 +9,7 @@
 // The settings hold the level in percent of 127. A changed setting is written to both places at the next frame kick; a
 // change made in the pause menu (the setters called from its Audio page, return addresses 0x2AEF84 / 0x2AEF9C) is
 // taken into the setting and vcs.ini. Every other call of the setters gets the setting's level, so loading a save or
-// a new game keeps the player's levels, as PC games keep their settings across saves.
+// a new game keeps the player's levels, as the port keeps its settings (vcs.ini) across saves.
 //
 // VCS_GAME_VOLUME=0 leaves the game's levels alone (no hooks, no sync): the settings then do nothing.
 #include "game/vcs_volume.h"
@@ -131,7 +131,7 @@ namespace vcs::volume
             hook(g_levels[0], &setter<0>);
             hook(g_levels[1], &setter<1>);
         }
-        // soundstate -> ok music=<0..127> effects=<0..127> (the game's levels at the last frame kick; tools/controls_check.py)
+        // soundstate -> ok music=<0..127> effects=<0..127> (the game's levels at the last frame kick; tools/gamectl.py)
         ps2control::addCommand("soundstate", [](const std::string &, ps2control::Reply reply) {
             char text[64];
             std::snprintf(text, sizeof(text), "ok music=%d effects=%d", g_levels[0].seen.load(), g_levels[1].seen.load());

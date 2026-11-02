@@ -1332,7 +1332,7 @@ namespace vcs
 
         // VCS_SOUND_REPLAY=<record>: feed RPCs recorded from a run (PS2X_RPC_RECORD, runtime/ps2_iop_native.h) to the
         // native driver at their recorded IOP times and write its SPU2 output to VCS_SOUND_REPLAY_OUT (a WAV), then
-        // exit - the native driver checked against the emulated IOP's run on identical input (tools/soundcheck.py).
+        // exit - the native driver checked against the emulated IOP's run on identical input (DECISIONS.md 2026-10-24).
         uint32_t g_replayWaits = 0, g_replayWaitMax = 0; // opens that waited for a native stop to finish (ms)
 
         void replay(const char *recordPath)
