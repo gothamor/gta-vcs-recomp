@@ -119,6 +119,7 @@ python tools/rwconv_check.py [FOLDER]                        # the mod loader's 
 python tools/carmod_verify.py FOLDER [--native]               # converted VC vehicles vs their .dff, triangle by triangle (intact + damaged)
 python tools/weaponmod_check.py [OUT] [--folder DIR]          # a PC weapon mod in the game: each weapon in Vic's hand (front, side), the HUD icon
 python tools/weaponfit.py --vc VC/models/gta3.img [--check]   # where VCS holds each weapon against VC: the converters' WEAPON_PLACES
+python tools/fire_check.py [OUT] [--variant NAME=ENV=VAL]      # fire on screen: a burning car, the flame-thrower, a molotov (fire pixels counted)
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```
@@ -210,6 +211,8 @@ card copies to start from (never the user's live card).
 - A save gone after saving (an empty slot file, or the whole save folder deleted): a card name the host could not
   store, or a failed card write - the game deletes its save folder after one (game-internals.md 10f). The card is
   zipped into `<data>/backups/auto-*.zip` before every change (`[MC] card backup` in the log).
+- No fire (flame-thrower, molotovs, explosions, burning cars) while their smoke shows: GS sprites lost in the D3D11
+  renderer - the pixel shader's depth output was the cause once (game-internals.md 6m); `tools/fire_check.py`.
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs

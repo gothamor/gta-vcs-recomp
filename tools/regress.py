@@ -23,6 +23,8 @@ Steps (each a tool of its own, run in turn; the game window shows):
             PHI_A2's heat bar as fast per game second at 1/144 as at 1/30
   controls  tools/controls_check.py: every default key binding, rebinding, walk, wheel, presets, Reset all settings,
             the game's vibration reaching the host
+  fire      tools/fire_check.py: a burning car, the flame-thrower and a molotov - fire on screen (the GS fire sprites
+            lost to the D3D11 shader depth, game-internals.md 6m)
 
 Writes OUT/report.md and OUT/metrics.json (default OUT: build/regress/<date-time>). --set-baseline stores this
 run as build/regress/baseline (metrics.json + the scenes capture); later runs report what changed against it:
@@ -200,6 +202,18 @@ def step_controls(out, quick):
     return {"pass": good, "failed": [name for name, ok, _ in c.results if not ok], "checks": len(c.results)}
 
 
+def step_fire(out, quick):
+    """Fire on screen (game-internals.md 6m): tools/fire_check.py, one run as the player plays."""
+    d = os.path.abspath(os.path.join(out, "fire"))
+    r = subprocess.run([sys.executable, os.path.join(TOOLS, "fire_check.py"), d, "--variant", "as-is="], capture_output=True,
+                       text=True, timeout=900)
+    try:
+        res = json.load(open(os.path.join(d, "result.json")))["as-is"]
+    except (OSError, ValueError, KeyError):
+        return {"pass": False, "error": (r.stdout or r.stderr)[-300:]}
+    return {"pass": res.get("pass") is True, "best": res.get("best")}
+
+
 def step_menushape(out, quick):
     """The pause menu's shape (SETTINGS_MENU_WIDESCREEN.md): 32:9 game, 16:9 screen; every presented frame for 50 frames
     after Start, in and out (control command "burst"). Each frame's picture rectangle (4:3 or wide) has to fit its
@@ -285,6 +299,8 @@ def compare(base, new):
         notes.append("shakedown: the shop entry failed %s (see shakedown/)" % json.dumps(new["shakedown"]))
     if "controls" in new and new["controls"].get("pass") is not True:
         notes.append("controls: failed checks %s (tools/controls_check.py)" % new["controls"].get("failed"))
+    if "fire" in new and new["fire"].get("pass") is not True:
+        notes.append("fire: no fire on screen %s (tools/fire_check.py, game-internals.md 6m)" % json.dumps(new["fire"]))
     if "meters" in new and new["meters"].get("pass") is not True:
         notes.append("meters: per-frame mission meters off the time step %s (PHI_A2's heat at 144 vs 30)" % json.dumps(new["meters"]))
     ms = new.get("menushape", {})
@@ -310,7 +326,8 @@ def main():
     metrics = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "quick": a.quick}
     for name, fn in (("scenes", step_scenes), ("tour", step_tour), ("missions", step_missions), ("drive", step_drive),
                      ("evening", step_evening), ("saves", step_saves), ("shakedown", step_shakedown),
-                     ("widecull", step_widecull), ("menushape", step_menushape), ("meters", step_meters), ("controls", step_controls)):
+                     ("widecull", step_widecull), ("menushape", step_menushape), ("meters", step_meters), ("controls", step_controls),
+                     ("fire", step_fire)):
         print("[regress] %s" % name)
         t0 = time.time()
         try:
