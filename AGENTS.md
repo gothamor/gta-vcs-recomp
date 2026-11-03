@@ -50,7 +50,7 @@ choices).
 | `src/debug/` | Crash handler, watchdog, self-test, memory watch, the overlay's game-state panel (`game_info.cpp`, also `gamectl.py gameinfo`), the control channel's automation commands (`rig.cpp`: the stutter rig's `cruise` among them) |
 | `third_party/PS2Recomp/ps2xRuntime` | The runtime (EE, VIF, VU1, GS HW backend, IOP host, stubs); our changes marked `[gta-recomp]` |
 | `game/vcs/` | Recompiler config, function map, VU1 upload list |
-| `ps5/` | The PS5 build's own pieces: the CMake toolchain file and link rule (`cmake/`), start-up code linked into the game (`runtime/`: emulated TLS, `stat` wrapper, RELRO padding), the controller test (`tests/`) |
+| `ps5/` | The PS5 build's own pieces: the CMake toolchain file and link rule (`cmake/`), start-up code linked into the game (`runtime/`: emulated TLS, `stat` wrapper, the libc functions a title cannot use as the console has them, RELRO padding), the controller test (`tests/`) |
 | `tools/` | Python 3 tools (standard library only) - see below |
 
 ## Build and run
@@ -66,7 +66,7 @@ python3 tools/ps5.py ffmpeg                                   # FFmpeg for the P
 python3 tools/ps5.py compile-check --sdk DIR [--triangle T]   # the PS5 build against stand-in code (no disc; CI)
 python3 tools/ps5.py padtest                                  # the DualSense -> DualShock 2 path, console functions mocked (71 checks)
 python3 tools/release.py [--ref vX | --worktree]              # the release zip (build/dist): the source + PS5-README.txt;
-                                                              # refuses game files. The number is VERSION (root; 0.3.3):
+                                                              # refuses game files. The number is VERSION (root; 0.3.4):
                                                               # bump it before tagging - the tag must match
 python3 tools/gamectl.py ...                                  # the game's control channel (runtime/ps2_control.h)
 python3 tools/perf_report.py logs/perf_*.csv                  # a performance recording (Advanced > Record performance)
@@ -105,7 +105,8 @@ python3 tools/eedecomp.py 0x2f7d58 [...] [--out FILE]         # game functions a
 4. **The console's limits** (docs/PS5.md): no file mappings of big files (the disc is read with `pread`), `thread_local`
    at most 32-byte aligned, no `preserve_none` for the PS5 target, `clock_gettime` is a system call (the TSC for hot
    timing), the Create button is the system's, there is no keyboard or mouse, and an app started from the home screen
-   gets no environment (the `PS2X_*` / `VCS_*` switches: docs/PS5.md's work list).
+   gets no environment (the `PS2X_*` / `VCS_*` switches: docs/PS5.md's work list). A libc function only libkernel_sys
+   exports is null for a title (the link refuses one; ps5/runtime/ps5_libc.c has the game's own).
 5. **Patch scripts**: shell heredocs can turn `\n` inside Python strings into real newlines and corrupt C++ string
    literals. Use the Edit tool, or write the script to a file first.
 6. **Scripts are Python 3, standard library only**, runnable from any shell; extend `tools/*.py`

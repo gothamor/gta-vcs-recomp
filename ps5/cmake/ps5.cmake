@@ -37,10 +37,12 @@ else()
 endif()
 
 # The console's start-up pieces that come with the game: emulated TLS that runs C++ thread_local destructors before
-# freeing the thread's storage, and stat("") answering ENOENT (ps5/runtime/).
+# freeing the thread's storage, stat("") answering ENOENT, and the libc functions a title cannot use as the console has
+# them (getcwd, pathconf, readlink, symlink, link, fork: ps5_libc.c) (ps5/runtime/).
 add_library(vcs_ps5_runtime OBJECT
     "${CMAKE_SOURCE_DIR}/ps5/runtime/ps5_emutls.c"
     "${CMAKE_SOURCE_DIR}/ps5/runtime/ps5_stat.c"
+    "${CMAKE_SOURCE_DIR}/ps5/runtime/ps5_libc.c"
 )
 set_target_properties(vcs_ps5_runtime PROPERTIES C_STANDARD 11)
 # -fno-visibility-from-dllstorageclass: on the PS5 target clang takes visibility from dllexport-style storage classes,

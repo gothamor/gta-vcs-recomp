@@ -921,12 +921,12 @@ namespace ps2_stubs
                         std::error_code entryEc;
                         const bool dir = it->is_directory(entryEc);
                         const auto [c, m] = mcEpochTimes(it->path());
-                        entries.push_back({std::filesystem::relative(it->path(), data, entryEc).generic_string(), dir, c, m,
+                        entries.push_back({it->path().lexically_relative(data).generic_string(), dir, c, m,
                                            it->path()});
                         fileCount += dir ? 0u : 1u;
                     }
                     const auto [c, m] = mcEpochTimes(card);
-                    entries.push_back({std::filesystem::relative(card, data, ec).generic_string(), true, c, m, card});
+                    entries.push_back({card.lexically_relative(data).generic_string(), true, c, m, card});
                 }
                 if (fileCount == 0u)
                 {

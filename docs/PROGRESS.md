@@ -703,6 +703,19 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
       its ps5_stat.c), and `ps5_link.py` fails right after the link when the ELF exports anything (`elf_exports`), so
       compile-check catches it. Checked against the converter's source (it could not be run here): no exports, the 9
       needed modules have stubs, all 290 imports exported by them, .text at 0, RELRO first `.data.rel.ro`. VERSION 0.3.3.
+- [x] **The first console run** (2026-11-03, the user's PS5): the eboot loaded and started; the crash handler logged
+      `SIGSEGV at 0` right after the settings were applied, in `main` -> `PS2Runtime::getIoPaths()` -> the runtime's
+      default paths -> `std::filesystem::current_path()` (symbolized on the user's vcs.elf). libc++ calls `pathconf`
+      there - exported only by libkernel_sys, a system module, so the title's import was null - and then `getcwd`, whose
+      libc version calls `__getcwd`, also libkernel_sys only. The SDK's stubs list what the console's modules export,
+      not what a title may call; the SDK fork's newer revisions (2026-10-24) replace such functions, the one the
+      triangle pins (2026-09-28) does not. The game now brings its own (`ps5/runtime/ps5_libc.c`: getcwd by the classic
+      walk up from ".", pathconf, readlink, symlink, link, fork - linked over the imports, kept local), and
+      `ps5_link.py` refuses a link that still imports anything only libkernel_sys exports (it found exactly these five
+      in the old ELF; the new one does not need libkernel_sys at all). The card backups use `lexically_relative`
+      instead of `std::filesystem::relative` (realpath and current_path underneath). Checked: the replacements against
+      Linux's getcwd in six folders (root, mount points), compile-check (no exports, no system-only imports, libc++'s
+      current_path calls ours), padtest 71/71. Not run on the console yet. VERSION 0.3.4.
 - [ ] The first run on a console (docs/PS5.md's checklist); FFmpeg for the PS5 built and the movies checked; frame
       rate there; ThinLTO; 120 Hz / VRR; DualSense extras; the control channel on the LAN; the debug switches below from a
       file in the app's folder (a homebrew app gets no environment).

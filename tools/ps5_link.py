@@ -33,6 +33,13 @@ WRAPPED = ["pthread_create", "pthread_join", "pthread_detach", "fclose", "fflush
            "malloc", "calloc", "realloc", "free", "posix_memalign", "aligned_alloc", "memalign",
            "malloc_usable_size", "reallocf", "reallocarray", "getline", "getdelim",
            "stat", "lstat"]  # (the last two: ps5/runtime/ps5_stat.c)
+# libc functions a title cannot use as the console has them, replaced by the game's own (ps5/runtime/ps5_libc.c, the
+# names kept local): only libkernel_sys - a system module - exports pathconf, readlink, symlink, link and fork, so a
+# title's import of them is null when it loads, and libc's getcwd calls __getcwd there and faults. The first console
+# run died in std::filesystem::current_path() (pathconf, then getcwd), 2026-11-03.
+REPLACED = ["getcwd", "pathconf", "readlink", "symlink", "link", "fork"]
+# a module a title may not import from: what only it exports is null at run time
+SYSTEM_ONLY = ("libkernel_sys.so",)
 REDIRECTED = [
     "qsort_r", "mkstemps", "openlog", "popen", "pclose", "open_memstream", "__xuname", "__assert",
     "__memset_chk", "regcomp", "regexec", "regfree", "regerror", "localtime_r", "newlocale", "freelocale",
@@ -130,28 +137,41 @@ ZLIB_CORE = {"deflate", "deflateInit2_", "inflate", "inflateInit2_", "adler32", 
 def elf_exports(path):
     """The names an ELF64's .dynsym defines (exports, not imports): ps5-native-tool converts only imports and stops on
     the first export ("native converter does not yet publish application exports"). Empty when none or unreadable."""
+    return sorted(elf_dynamic(path)[0])
+
+def elf_dynamic(path):
+    """(defined, undefined): the names an ELF64's .dynsym defines and the names it imports; empty when unreadable."""
     import struct
     try:
         with open(path, "rb") as f:
             data = f.read()
     except OSError:
-        return []
+        return set(), set()
     if data[:4] != b"\x7fELF" or data[4] != 2:
-        return []
+        return set(), set()
     shoff, = struct.unpack_from("<Q", data, 0x28)
     shentsize, shnum = struct.unpack_from("<HH", data, 0x3A)
     sections = [struct.unpack_from("<IIQQQQIIQQ", data, shoff + i * shentsize) for i in range(shnum)]
-    names = []
+    defined, undefined = set(), set()
     for _, sh_type, _, _, offset, size, link, _, _, entsize in sections:
         if sh_type != 11 or not entsize:  # SHT_DYNSYM
             continue
         strtab = sections[link][4]
         for i in range(1, size // entsize):
             st_name, _, _, st_shndx = struct.unpack_from("<IBBH", data, offset + i * entsize)
-            if st_shndx != 0:  # defined here: an export
-                end = data.index(b"\0", strtab + st_name)
-                names.append(data[strtab + st_name:end].decode("latin-1"))
-    return names
+            end = data.index(b"\0", strtab + st_name)
+            (defined if st_shndx != 0 else undefined).add(data[strtab + st_name:end].decode("latin-1"))
+    return defined, undefined
+
+
+def system_only_imports(elf, stub_dir):
+    """The imports of `elf` that only SYSTEM_ONLY modules among the SDK's stubs export: null when a title loads."""
+    _, imports = elf_dynamic(elf)
+    title, system = set(), set()
+    for stub in glob.glob(os.path.join(stub_dir, "*.so")):
+        exported, _ = elf_dynamic(stub)
+        (system if os.path.basename(stub) in SYSTEM_ONLY else title).update(exported)
+    return sorted(n for n in imports if n in system and n not in title)
 
 
 def find_lld(clang):
@@ -230,7 +250,7 @@ def main():
     # the redirected names stay local to the game (the recipe's version script)
     local_map = os.path.join(work, "platform-local.map")
     with open(local_map, "w", encoding="utf-8") as f:
-        f.write("{\n    local:\n" + "".join("        %s;\n" % n for n in REDIRECTED + ["___mb_cur_max"]) + "};\n")
+        f.write("{\n    local:\n" + "".join("        %s;\n" % n for n in REDIRECTED + REPLACED + ["___mb_cur_max"]) + "};\n")
 
     lld = find_lld(known.clang)
     cmd = [lld, "-m", "elf_x86_64", "-pie", "--eh-frame-hdr", "-z", "max-page-size=0x4000", "--hash-style=gnu",
@@ -239,6 +259,7 @@ def main():
            "--no-dynamic-linker", "--exclude-libs=ALL", "-e", "_start", "-o", out]
     cmd += ["--wrap=" + n for n in WRAPPED]
     cmd += ["--defsym=%s=ps5_%s" % (n, n) for n in REDIRECTED] + ["--defsym=___mb_cur_max=ps5____mb_cur_max_l"]
+    cmd += ["--defsym=%s=vcs_ps5_%s" % (n, n) for n in REPLACED]
     cmd += ["--version-script", local_map, "--version-script", os.path.join(tri, "tooling", "native", "app-symbols.map")]
     if known.lto_cache:
         cmd += ["--thinlto-cache-dir=" + known.lto_cache, "--thinlto-cache-policy=cache_size_bytes=1g:prune_after=72h"]
@@ -267,6 +288,14 @@ def main():
         print("[ps5-link] the game exports %d symbol(s), which ps5-native-tool cannot convert: %s - give them hidden "
               "visibility (on the PS5 target with -fno-visibility-from-dllstorageclass) or a version script's local:"
               % (len(exports), ", ".join(sorted(exports)[:20])), file=sys.stderr)
+        os.remove(out)
+        return 1
+    # an import only a system module exports is null when the title loads (ps5/runtime/ps5_libc.c)
+    unusable = system_only_imports(out, lib)
+    if unusable:
+        print("[ps5-link] the game imports %d function(s) only %s exports, which are null for a title on the console: "
+              "%s - give the game its own (ps5/runtime/ps5_libc.c, REPLACED here) or keep the code that calls them out"
+              % (len(unusable), " / ".join(SYSTEM_ONLY), ", ".join(unusable)), file=sys.stderr)
         os.remove(out)
         return 1
     return 0
