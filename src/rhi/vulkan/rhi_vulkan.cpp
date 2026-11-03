@@ -166,6 +166,13 @@ namespace rhi
             case Format::RGBA8: return VK_FORMAT_R8G8B8A8_UNORM;
             case Format::R32F: return VK_FORMAT_R32_SFLOAT;
             case Format::D32F: return VK_FORMAT_D32_SFLOAT;
+            case Format::BGRA8: return VK_FORMAT_B8G8R8A8_UNORM;
+            case Format::BC1: return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+            case Format::BC2: return VK_FORMAT_BC2_UNORM_BLOCK;
+            case Format::BC3: return VK_FORMAT_BC3_UNORM_BLOCK;
+            case Format::BC4: return VK_FORMAT_BC4_UNORM_BLOCK;
+            case Format::BC5: return VK_FORMAT_BC5_UNORM_BLOCK;
+            case Format::BC7: return VK_FORMAT_BC7_UNORM_BLOCK;
             default: return VK_FORMAT_UNDEFINED;
             }
         }
@@ -649,6 +656,7 @@ namespace rhi
             }
 
             bool freeThreadedCreation() const override { return true; } // off the owner thread: stage() (PERFORMANCE.md 25)
+            bool blockCompression() const override { return m_blockCompression; }
 
             std::unique_ptr<Texture> createTexture(const TextureDesc &desc, const void *data, uint32_t rowPitch) override
             {
@@ -814,7 +822,7 @@ namespace rhi
                     uint32_t pitches[16];
                     const uint32_t n = std::min({t->mips, levelCount, 16u});
                     for (uint32_t i = 0; i < n; ++i)
-                        pitches[i] = std::max(1u, t->desc().width >> i) * 4u;
+                        pitches[i] = rowBytes(d.format, std::max(1u, t->desc().width >> i));
                     if (!stage(*t, levels, pitches, n))
                         return nullptr;
                     return t;
@@ -828,7 +836,7 @@ namespace rhi
                 for (uint32_t i = 0; i < t.mips && i < levelCount; ++i)
                 {
                     const uint32_t w = std::max(1u, t.desc().width >> i), h = std::max(1u, t.desc().height >> i);
-                    uploadRegion(cmd, t, 0, 0, w, h, levels[i], w * 4u, i);
+                    uploadRegion(cmd, t, 0, 0, w, h, levels[i], rowBytes(d.format, w), i);
                 }
                 barrier(cmd, t, t.resting);
                 return base;
@@ -1407,6 +1415,7 @@ namespace rhi
                 VkPhysicalDeviceFeatures supported{};
                 vkGetPhysicalDeviceFeatures(m_core->physical, &supported);
                 m_anisotropy = supported.samplerAnisotropy == VK_TRUE;
+                m_blockCompression = supported.textureCompressionBC == VK_TRUE; // texture packs' DDS (docs/TEXTURE_PACKS.md)
                 const float priority = 1.0f;
                 VkDeviceQueueCreateInfo qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
                 qi.queueFamilyIndex = m_queueFamily;
@@ -1429,6 +1438,7 @@ namespace rhi
                 f2.features.depthClamp = VK_TRUE;
                 f2.features.shaderClipDistance = VK_TRUE;
                 f2.features.samplerAnisotropy = supported.samplerAnisotropy;
+                f2.features.textureCompressionBC = supported.textureCompressionBC;
                 std::vector<const char *> extensions{VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
                 if (!m_offscreen)
                     extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
@@ -2441,6 +2451,7 @@ namespace rhi
                 st.aspect = t.aspect;
                 st.mips = t.mips;
                 st.resting = t.resting;
+                const Format format = t.desc().format;
                 VkDeviceSize size = 0;
                 for (uint32_t i = 0; i < count; ++i)
                 {
@@ -2450,7 +2461,7 @@ namespace rhi
                     c.bufferOffset = size;
                     c.imageSubresource = {t.aspect, i, 0, 1};
                     c.imageExtent = {w, h, 1};
-                    size += (static_cast<VkDeviceSize>(w) * h * 4u + 15u) & ~VkDeviceSize(15);
+                    size += (static_cast<VkDeviceSize>(rowBytes(format, w)) * rowCount(format, h) + 15u) & ~VkDeviceSize(15);
                 }
                 VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
                 bi.size = std::max<VkDeviceSize>(size, 16);
@@ -2468,13 +2479,13 @@ namespace rhi
                 for (uint32_t i = 0; i < st.count; ++i)
                 {
                     const VkBufferImageCopy &c = st.regions[i];
-                    const uint32_t row = c.imageExtent.width * 4u;
+                    const uint32_t row = rowBytes(format, c.imageExtent.width), rows = rowCount(format, c.imageExtent.height);
                     uint8_t *dst = static_cast<uint8_t *>(info.pMappedData) + c.bufferOffset;
                     const auto *src = static_cast<const uint8_t *>(levels[i]);
                     if (pitches[i] == row)
-                        std::memcpy(dst, src, static_cast<size_t>(row) * c.imageExtent.height);
+                        std::memcpy(dst, src, static_cast<size_t>(row) * rows);
                     else
-                        for (uint32_t y = 0; y < c.imageExtent.height; ++y)
+                        for (uint32_t y = 0; y < rows; ++y)
                             std::memcpy(dst + static_cast<size_t>(y) * row, src + static_cast<size_t>(y) * pitches[i], row);
                 }
                 t.layout = t.resting;
@@ -2515,9 +2526,9 @@ namespace rhi
             void uploadRegion(VkCommandBuffer cmd, VkTexture &t, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const void *data, uint32_t pitch,
                               uint32_t level = 0)
             {
-                const uint32_t row = w * 4u;
-                const Slice s = ringAlloc(static_cast<VkDeviceSize>(row) * h);
-                for (uint32_t i = 0; i < h; ++i)
+                const uint32_t row = rowBytes(t.desc().format, w), rows = rowCount(t.desc().format, h); // texels or 4x4 blocks
+                const Slice s = ringAlloc(static_cast<VkDeviceSize>(row) * rows);
+                for (uint32_t i = 0; i < rows; ++i)
                     std::memcpy(s.data + static_cast<size_t>(i) * row, static_cast<const uint8_t *>(data) + static_cast<size_t>(i) * pitch, row);
                 VkBufferImageCopy copy{};
                 copy.bufferOffset = s.offset;
@@ -2905,6 +2916,7 @@ namespace rhi
             }
             bool m_debugUtils = false;
             bool m_anisotropy = false;
+            bool m_blockCompression = false; // textureCompressionBC
             float m_maxAnisotropy = 1.0f;
             std::string m_adapterName;
             VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
