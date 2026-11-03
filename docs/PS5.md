@@ -156,7 +156,9 @@ second.
   libraries: an executable needs the PS5 link. The recompiler is not built (it runs on the host).
 - **The link** (`tools/ps5_link.py`, CMake's link rule in `ps5/cmake/ps5.cmake`): ld.lld beside the compiler with the
   flags of the SDK's `prospero-lld` (`-pie`, 16 KB pages, `-mllvm -emulated-tls`) and ps5-plume-triangle's recipe:
-  its linker script and start-up objects, RADV whole, the SDK's libc++ / libc++abi / libunwind, compiler-rt's builtins,
+  its linker script and start-up objects, RADV whole (with the zlib 1.3.1 PS5_Mesa's build bundles into it: the game's
+  own `libz.a`, the same version, is then left out - the first real build stopped on every zlib symbol defined twice,
+  2026-11-03), the SDK's libc++ / libc++abi / libunwind, compiler-rt's builtins,
   and the fork's `libps5platform.a`: `malloc` and its family wrapped onto a heap in direct memory (libc's own heap runs
   out long before a game does), `pthread_create` onto 2 MB stacks there (twice what the game thread is known to
   need), and 83 libc functions the console lacks or refuses mapped onto the platform's

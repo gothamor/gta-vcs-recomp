@@ -102,6 +102,31 @@ def split_inputs(args):
     return inputs, flags
 
 
+def archive_symbols(path):
+    """The global symbols an ar archive's index lists (the GNU "/" or "/SYM64/" index llvm-ar writes, thin archives
+    too); an empty set when it has none or can't be read."""
+    try:
+        with open(path, "rb") as f:
+            if f.read(8) not in (b"!<arch>\n", b"!<thin>\n"):
+                return set()
+            header = f.read(60)
+            name = header[:16].rstrip(b" ")
+            if len(header) < 60 or name not in (b"/", b"/SYM64/"):
+                return set()
+            data = f.read(int(header[48:58].strip() or b"0"))
+    except (OSError, ValueError):
+        return set()
+    width = 8 if name == b"/SYM64/" else 4
+    count = int.from_bytes(data[:width], "big")
+    return {n.decode("latin-1") for n in data[width + count * width:].split(b"\0")[:count]}
+
+
+# PS5_Mesa's build bundles zlib (ps5-plume-triangle tools/build-radv.sh: -Dzlib=enabled --force-fallback-for=zlib, the
+# wrap's 1.3.1) into libvulkan_radeon.ps5.a, which is linked whole: the game's own zlib (src/platform's FetchContent,
+# the same 1.3.1) would then define every zlib symbol twice. With these in RADV's index, its zlib is the game's too.
+ZLIB_CORE = {"deflate", "deflateInit2_", "inflate", "inflateInit2_", "adler32", "crc32"}
+
+
 def find_lld(clang):
     for cand in (os.path.join(os.path.dirname(os.path.realpath(shutil.which(clang) or clang)), "ld.lld"),
                  shutil.which("ld.lld")):
@@ -167,6 +192,11 @@ def main():
     # absolute: tools/ps5.py links again from elsewhere with the saved response file (the RELRO padding)
     inputs = [os.path.abspath(i) for i in inputs]
     flags = ["-L" + os.path.abspath(f[2:]) if f.startswith("-L") and len(f) > 2 else f for f in flags]
+    own_zlib = [i for i in inputs if os.path.basename(i) == "libz.a"]
+    if own_zlib and ZLIB_CORE <= archive_symbols(radv):
+        inputs = [i for i in inputs if i not in own_zlib]
+        print("[ps5-link] zlib: RADV's (it bundles zlib 1.3.1, linked whole); the game's own left out (%s)"
+              % ", ".join(os.path.relpath(i) for i in own_zlib))
     out = os.path.abspath(known.output)
     work = os.path.join(os.path.dirname(out), "ps5-link")
     os.makedirs(work, exist_ok=True)

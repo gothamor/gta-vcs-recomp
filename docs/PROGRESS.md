@@ -689,6 +689,12 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
       from `llvm-config --bindir`, and Fedora has llvm-config only with llvm-devel, in /usr/lib64/llvm<N>/bin. setup
       now passes the llvm-config next to the build's clang as `LLVM_CONFIG` (else one on the PATH; none: the package
       lines for Ubuntu and Fedora), and README / PS5-README / PS5.md list both distributions' packages. VERSION 0.3.1.
+- [x] The first link against a real RADV (2026-11-03, the user's build): `duplicate symbol: adler32_z`, `deflateInit_`,
+      ... - PS5_Mesa's build bundles zlib 1.3.1 into libvulkan_radeon.ps5.a (the triangle's `--force-fallback-for=zlib`),
+      linked whole, and the game brings its own (src/platform, also 1.3.1). `ps5_link.py` now leaves the game's `libz.a`
+      out when RADV's archive index defines zlib (`archive_symbols`). Reproduced with a stand-in RADV holding zlib (the
+      same errors), then linked; the empty stand-in keeps the game's zlib. The compile-check's empty RADV could not
+      show it. VERSION 0.3.2.
 - [ ] The first run on a console (docs/PS5.md's checklist); FFmpeg for the PS5 built and the movies checked; frame
       rate there; ThinLTO; 120 Hz / VRR; DualSense extras; the control channel on the LAN; the debug switches below from a
       file in the app's folder (a homebrew app gets no environment).
