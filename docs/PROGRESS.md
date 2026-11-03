@@ -695,6 +695,14 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
       out when RADV's archive index defines zlib (`archive_symbols`). Reproduced with a stand-in RADV holding zlib (the
       same errors), then linked; the empty stand-in keeps the game's zlib. The compile-check's empty RADV could not
       show it. VERSION 0.3.2.
+- [x] The first eboot conversion (2026-11-03, the user's build): ps5-native-tool stopped with "native converter does not
+      yet publish application exports" - the game's .dynsym defined `__wrap_lstat`. ps5_stat.c marks it hidden, but on
+      the PS5 target clang takes visibility from dllexport-style storage classes and the toolchain's
+      `-fvisibility-nodllstorageclass=default` overrode the attribute (lstat is in a system stub, so lld exported the
+      wrapper). `ps5/runtime/*.c` are compiled with `-fno-visibility-from-dllstorageclass` now (as gta4-ps5 compiles
+      its ps5_stat.c), and `ps5_link.py` fails right after the link when the ELF exports anything (`elf_exports`), so
+      compile-check catches it. Checked against the converter's source (it could not be run here): no exports, the 9
+      needed modules have stubs, all 290 imports exported by them, .text at 0, RELRO first `.data.rel.ro`. VERSION 0.3.3.
 - [ ] The first run on a console (docs/PS5.md's checklist); FFmpeg for the PS5 built and the movies checked; frame
       rate there; ThinLTO; 120 Hz / VRR; DualSense extras; the control channel on the LAN; the debug switches below from a
       file in the app's folder (a homebrew app gets no environment).

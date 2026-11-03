@@ -158,7 +158,9 @@ second.
   flags of the SDK's `prospero-lld` (`-pie`, 16 KB pages, `-mllvm -emulated-tls`) and ps5-plume-triangle's recipe:
   its linker script and start-up objects, RADV whole (with the zlib 1.3.1 PS5_Mesa's build bundles into it: the game's
   own `libz.a`, the same version, is then left out - the first real build stopped on every zlib symbol defined twice,
-  2026-11-03), the SDK's libc++ / libc++abi / libunwind, compiler-rt's builtins,
+  2026-11-03), the SDK's libc++ / libc++abi / libunwind, compiler-rt's builtins, and nothing exported (ps5-native-tool
+  converts imports only: the link fails when the ELF's .dynsym defines a symbol; `ps5/runtime/*.c` are compiled with
+  `-fno-visibility-from-dllstorageclass` so their `hidden` holds on the PS5 target),
   and the fork's `libps5platform.a`: `malloc` and its family wrapped onto a heap in direct memory (libc's own heap runs
   out long before a game does), `pthread_create` onto 2 MB stacks there (twice what the game thread is known to
   need), and 83 libc functions the console lacks or refuses mapped onto the platform's

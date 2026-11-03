@@ -127,6 +127,33 @@ def archive_symbols(path):
 ZLIB_CORE = {"deflate", "deflateInit2_", "inflate", "inflateInit2_", "adler32", "crc32"}
 
 
+def elf_exports(path):
+    """The names an ELF64's .dynsym defines (exports, not imports): ps5-native-tool converts only imports and stops on
+    the first export ("native converter does not yet publish application exports"). Empty when none or unreadable."""
+    import struct
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return []
+    if data[:4] != b"\x7fELF" or data[4] != 2:
+        return []
+    shoff, = struct.unpack_from("<Q", data, 0x28)
+    shentsize, shnum = struct.unpack_from("<HH", data, 0x3A)
+    sections = [struct.unpack_from("<IIQQQQIIQQ", data, shoff + i * shentsize) for i in range(shnum)]
+    names = []
+    for _, sh_type, _, _, offset, size, link, _, _, entsize in sections:
+        if sh_type != 11 or not entsize:  # SHT_DYNSYM
+            continue
+        strtab = sections[link][4]
+        for i in range(1, size // entsize):
+            st_name, _, _, st_shndx = struct.unpack_from("<IBBH", data, offset + i * entsize)
+            if st_shndx != 0:  # defined here: an export
+                end = data.index(b"\0", strtab + st_name)
+                names.append(data[strtab + st_name:end].decode("latin-1"))
+    return names
+
+
 def find_lld(clang):
     for cand in (os.path.join(os.path.dirname(os.path.realpath(shutil.which(clang) or clang)), "ld.lld"),
                  shutil.which("ld.lld")):
@@ -231,7 +258,18 @@ def main():
         return 0
     print("[ps5-link] %d objects and libraries + RADV -> %s" % (len(inputs), os.path.relpath(out)))
     result = subprocess.run([lld, "@" + os.path.join(work, "link.rsp")])
-    return result.returncode
+    if result.returncode != 0:
+        return result.returncode
+    # ps5-native-tool publishes no exports: the game must define nothing in its dynamic symbol table (a symbol a system
+    # stub also has, under default visibility, ends up there - __wrap_lstat did, 2026-11-03)
+    exports = elf_exports(out)
+    if exports:
+        print("[ps5-link] the game exports %d symbol(s), which ps5-native-tool cannot convert: %s - give them hidden "
+              "visibility (on the PS5 target with -fno-visibility-from-dllstorageclass) or a version script's local:"
+              % (len(exports), ", ".join(sorted(exports)[:20])), file=sys.stderr)
+        os.remove(out)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

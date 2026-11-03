@@ -43,7 +43,11 @@ add_library(vcs_ps5_runtime OBJECT
     "${CMAKE_SOURCE_DIR}/ps5/runtime/ps5_stat.c"
 )
 set_target_properties(vcs_ps5_runtime PROPERTIES C_STANDARD 11)
-target_compile_options(vcs_ps5_runtime PRIVATE -O2 -fPIC)
+# -fno-visibility-from-dllstorageclass: on the PS5 target clang takes visibility from dllexport-style storage classes,
+# and the toolchain's -fvisibility-nodllstorageclass=default then overrides `visibility("hidden")` - __wrap_lstat came
+# out exported (lstat is in a system stub), which ps5-native-tool refuses ("does not yet publish application exports").
+# gta4-ps5 compiles its ps5_stat.c the same way.
+target_compile_options(vcs_ps5_runtime PRIVATE -O2 -fPIC -fno-visibility-from-dllstorageclass)
 
 function(vcs_ps5_game target)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:vcs_ps5_runtime>)
