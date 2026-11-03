@@ -1,7 +1,15 @@
 # Progress
 
+## 2026-11-02 - This fork (willzmkv/gta-vcs-recomp)
+
+The game's fog as a setting; texture packs in DDS (BC7) or PNG and a texture dump; a mod loader in PC Mod Loader's
+style - `modloader/` folders, `modloader.ini`, F2 > Mods with switches and priority sliders, applied live. The changes,
+their checks (`fog_check.py`, `texture_check.py`, `mods_check.py`) and the work list are in docs/FORK.md; the mods in
+docs/MODS.md. The section below (2026-10-31) is upstream PR #8's, which this fork took onto 0.2.0 and builds on.
+
 ## 2026-10-31 - Optional PCSX2 PNG texture packs
 
+- (Since 2026-11-02 in this fork: F2 > Mods > Replace textures, live, and packs as mods in `modloader/`.)
 - F2 > Graphics > Texture replacements (restart; off by default), existing `SLUS-21590/replacements` found beside
   the exe or in the source root. Configurable path, async PNG decoding, shared GPU images, byte-budgeted LRU,
   original fallback and high-resolution sampling with the game's wrap/region/alpha rules. `docs/TEXTURE_PACKS.md`.
