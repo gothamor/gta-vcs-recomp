@@ -35,7 +35,69 @@ Texture replacement is not one of these mods: it comes from upstream PR #8 (PCSX
 | Xbox rim light / gloss / screen water drops (SkyGFX neo) | Native shader variants in `vcs_hle_world.cpp` / `gs_draw.hlsl` | Backlog |
 | Per-pixel lit pipelines, shadow maps, deferred lights, car paint reflections, rain on cars, PBR sky, volumetric clouds | The native renderer drawing the scene a second time (light view) and new shaders | Backlog; milestone-sized each |
 | Ragdolls (Proper Ragdoll) | A physics engine driving the ped skeleton on death / falls, against VCS's collision | Backlog; gameplay, not render |
-| ASI loader, CLEO, ModLoader | Trainer (F5) and the rig's `scm` for scripts | Not ported (no PC executable) |
+| ModLoader (`ModLoader/`: folders as mods, `modloader.ini`, an in-game menu, hot swapping) | The mod loader below: `modloader/`, the same ini, F2 > Mods, live | **Core done** 2026-11-02 (textures); game files: T1c |
+| ModLoader's `.dff` / `.txd` replacement | VCS has neither format (below): its own files (`.mdl`, `.xtx` in the `.IMG` archives) through the mod loader; PC `.dff` / `.txd` only by conversion | T1c (VCS formats), T9 (PC formats, research) |
+| ASI loader, CLEO | Trainer (F5) and the rig's `scm` for scripts | Not ported (no PC executable) |
+
+## The mod loader
+
+PC GTA's Mod Loader (LINK/2012; the copy in `Mods/ModLoader/`) made mods folders: nothing of the game's is replaced
+on disc, everything is injected at run time, each mod can be switched off in a menu, and mods can be swapped while
+the game runs. `src/mods/modloader.cpp` does the same for this port:
+
+- **Where**: `modloader/` beside vcs.exe, or in the checkout's root when vcs.exe is in `build/` (`VCS_MODLOADER_DIR`
+  elsewhere). Not `mods/`: on Windows that is the `Mods/` folder of PC mods kept for reference. `modloader/README.md`
+  is the only file of it in git.
+- **A mod** is any folder in it (a leading `.` hides one). `modloader/modloader.ini` is read in Mod Loader's own
+  format, so a player's knowledge carries over: `[Folder.Config] Profile`, and the profile's `[...Priority]
+  Mod=1..100` (50 by default, 0 ignores the mod; a higher one wins a file two mods have), `[...IgnoreMods]`
+  (wildcards; `_ignore` when there is no file yet, as Mod Loader ships it) and `[...Config] IgnoreAllMods`. Profiles
+  beyond that (parents, `UseIfModule`) are not read. The game **makes the file** in `modloader/` when it is missing
+  (Mod Loader's template, every installed mod listed at 50), so it is there to see and edit.
+- **Priorities in F2**: a slider (1-100) beside each mod's switch. It writes `modloader.ini` (its line replaced, or
+  added to the profile's Priority section; the rest of the file kept), so the file stays the one source: the
+  priorities are not in vcs.ini (`settings::Spec::saved = false`, read back with `read`), and Rescan reads an edited
+  file again. Reset page to defaults puts every mod back on, at 50.
+- **F2 > Mods**: Load mods (`mods.enabled`), Replace textures (`graphics.texture_replacements`, which also governs the
+  packs outside `modloader/`: `VCS_TEXTURE_PACK`, `graphics.texture_pack` in vcs.ini, `textures/SLUS-21590`), one
+  switch per mod (`mods.<name>`, with its file count and priority as help), Rescan (files read again) and Open folder.
+  A switch is applied at the next host frame: the sources are indexed again on the main thread (~20 ms for 6279 files
+  here) and `gsHwSetTextureReplacements` hands the pack to the GS stage, which swaps it at its next frame (the old
+  pack's GPU textures dropped; the game's own or the new pack's come back as they are drawn). A new mod folder shows
+  after a restart (the settings registry is built at start-up).
+- **What a mod can hold**: texture packs so far (PCSX2-named `.dds` / `.png` anywhere in it, `dumps/` aside;
+  docs/TEXTURE_PACKS.md). Game files are next (T1c).
+- **Test runs stay authentic**: a hidden run loads mods only with `VCS_MODS=1`, the other packs only with
+  `VCS_TEXTURE_REPLACEMENTS=1`, or both with `VCS_TEST_MODS=1` (switches left free for the `setting` command), and
+  writes nothing into the player's `modloader/` - only into a folder of its own given by `VCS_MODLOADER_DIR`.
+- **Checked** (`tools/mods_check.py`, 2026-11-02): a `modloader/` with no ini of "HD" (the HD pack, linked), "Tinted"
+  (half of a city spot's dumped textures painted magenta), `_ignore` and `.hidden`: the game makes `modloader.ini` (HD
+  and Tinted at 50, `_ignore` ignored); at 50 / 50 HD wins the shared textures (Tinted supplies its 7 own, no magenta);
+  Tinted's slider to 60 (`setting mods.tinted.priority 60`) - Tinted supplies 377, magenta, `Tinted=60` in the ini;
+  then Tinted off (no magenta, HD stays), Replace textures off (the game's own), on again (HD back), Load mods off -
+  6 swaps, pass. With the player's own two mods linked in: "HUD Remastered" (160 PNG, 152 of them in the HD pack too)
+  supplies 8 textures at 50 / 50 (the DDS wins a tie) and all 160 at 60, the HD pack ceding its 152.
+
+### `.dff` / `.txd`: what PC mods replace, and what VCS has
+
+PC GTA III / VC / SA mods are RenderWare 3 files: `.dff` (a clump: frames, geometry, materials, skin) and `.txd` (a
+texture dictionary), loaded by the PC executable's RenderWare and streamed from `gta3.img`. **VCS on the PS2 has
+neither**: its models are Leeds' RenderWare Stories (RSL) structures with PS2-native geometry (VU1 packets, game-
+internals.md 6d), in `GTA3PS2.IMG` and the world's `BEACH / MAINLA / MALL.IMG` + `.LVZ`; its textures are `.XTX`
+(GS formats, section 7). A PC `.dff` / `.txd` dropped into the game would not be read. Two different things can be
+built:
+
+1. **VCS's own files from a mod** (T1c) - what Mod Loader's `std.stream` does on PC, for VCS's formats: a file in a
+   mod named as an archive entry (or a loose file: `MAIN.SCM`, the `.GXT` texts) is read in place of the disc's. The
+   disc reads are native already (`src/game/vcs_stream.cpp`), so the bytes can come from the mod's file; what has to
+   be found first is each archive's directory (entry names, offsets, sizes - where VCS keeps them: `GAME.DTZ`?) and
+   what the game assumes about an entry's size (buffers sized from the directory). Mods made with VCS / LCS
+   modding tools for the PS2 / PSP versions would then work.
+2. **PC `.dff` / `.txd` themselves** (T9, research): either converted to VCS's formats ahead of time (RW 3 clump ->
+   RSL structures with PS2 strips and VU1 data, TXD -> XTX), or loaded on the host and drawn by the native renderer in
+   place of a model the game submits (needs draws at the RSL level: docs/RSL_SUBMISSION.md, milestone 7). Either is a
+   project of its own; the texture half is already possible today as a texture pack (textures are matched by content,
+   not by file).
 
 ## The pre-HUD pass (the infrastructure T4-T7 need)
 

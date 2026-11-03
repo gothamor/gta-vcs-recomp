@@ -1017,3 +1017,60 @@ passes the game's values through untouched - the authentic default, with `VCS_FO
 "Fog distance" stops at 100 %: the game's fog is total exactly at the far plane (2000), so going further would show
 the draw distance's pop-in. A height / volumetric fog like Proper Shaders' needs the depth buffer in a post pass; that
 is a separate step (docs/MODS.md).
+
+## 2026-10-31 - PCSX2 PNG packs as optional host textures
+
+The user supplied `SLUS-21590/replacements` and asked to use its PCSX2 textures in the native port. Accept those
+filenames directly: PCSX2 pixel/palette hashes and format bits, including the older TCC bit. Keep the original
+disc, raster uploads, renderer and fallback intact; match at the shared texture cache so the world, HUD and menus
+all benefit. The option is off by default and applies after restart. Decode PNGs asynchronously, share one GPU
+copy per pack image, and bound the replacement cache by bytes (512 MiB by default). Keep GS logical sizes separate
+from physical replacement sizes, including non-integer scales and region wrap. Start with the format actually
+provided (full-texture PNGs); DDS, archives and separate region/mipmap files are outside this first implementation.
+The pack remains external, ignored by git and rejected by the release guard. See `docs/TEXTURE_PACKS.md`.
+
+The user subsequently requested `textures/SLUS-21590/`: automatic discovery checks `textures/` beside the exe and,
+for the default source build, in the checkout root before the older bare serial folders. The pack-check tool uses
+this layout by default too. Tests were skipped at the user's request for this folder-discovery change.
+
+## 2026-11-02 - Texture packs: DDS first, on upstream PR #8 (FORK.md T1)
+
+Upstream PR #8 (rofhima13) reads PCSX2 PNG packs: PCSX2's names and hashes, an async loader, a GPU budget. The user
+wanted DDS instead, believing the PS2's own files are DDS; they are not (the GS's paletted formats in `.XTX` / TXD),
+but DDS is still the better pack format, for other reasons: block-compressed and mip-mapped as the GPU samples it,
+nothing decoded on load, 4-8x less GPU memory than a PNG, and PCSX2 reads it under the same names - the user's HD
+pack is 6279 BC7 DDS files. So the PR was taken as it is (its commits, its author) and DDS added beside PNG rather
+than replacing it: existing PNG packs keep working, a name in both formats takes the DDS. DDS headers are read by our
+own code (a header and a copy of the levels: no new library), BC1-BC5 / BC7 and 32-bit RGBA / BGRA; sRGB variants
+are sampled as stored, like PNG values (PCSX2 does the same). A block-compressed DDS on a GPU without BC sampling
+keeps the original texture. A dump (`VCS_TEXTURE_DUMP=1`) writes uncompressed DDS rather than PNG: lossless, no PNG
+encoder to vendor, and texconv / Compressonator take it straight to BC7.
+
+## 2026-11-02 - A mod loader, PC Mod Loader's way (FORK.md T1b)
+
+The user asked for texture packs switchable in F2 and then for "a mod structure like Mod Loader" (the PC plugin; a copy
+is in `Mods/ModLoader/`). Both are one feature: a texture pack is the first kind of mod content. Choices:
+
+- `modloader/`, not `mods/`: on Windows `mods/` is the existing `Mods/` (PC mods kept for reference); and the name is
+  the one GTA players know. Beside vcs.exe, or the checkout's root when vcs.exe is in `build/`.
+- Mod Loader's own `modloader.ini` format (priorities 1-100 with 50 the default and 0 off, ignore wildcards,
+  IgnoreAllMods, the profile name) rather than one of our own: what players already know, and the PC docs apply.
+  The per-mod on / off switches live in vcs.ini (`mods.<name>`) like every other setting, so the menu is the registry's.
+- Load mods and Replace textures default on: installing a mod is the opt-in, and with no mods nothing changes (the
+  authentic default holds). Test runs are the exception - hidden runs load nothing unless asked (`VCS_MODS`,
+  `VCS_TEXTURE_REPLACEMENTS`, `VCS_TEST_MODS`), so reference captures never pick up a player's mods.
+- Live: indexing a pack takes ~20 ms, so a switch re-indexes on the main thread and the GS stage swaps the pack at its
+  next frame (GPU textures of the old pack dropped there). New mod folders need a restart: the settings registry is
+  built at start-up, and a menu row per mod is worth that.
+- PC `.dff` / `.txd`: VCS has neither format (RSL models, XTX textures); the mod loader will take VCS's own files
+  next (T1c), and importing PC formats is a research task of its own (T9; docs/MODS.md).
+
+## 2026-11-02 - Mod priorities: sliders in F2, kept in modloader.ini
+
+Two mods with the same textures (the user's HUD Remastered and HD Texture Pack share 152) need the player to say which
+wins, in the game. A slider (1-100) beside each mod's switch; the value stays in `modloader.ini` - Mod Loader's file,
+which the game now makes in `modloader/` when it is missing, visible and editable - rather than vcs.ini, so there is
+one source: the menu writes the file, Rescan reads an edited one. The settings registry got two small things for it:
+`Spec::saved = false` (a value kept elsewhere: `read` gives it, onChange stores it) and a Toggle's `partner` Integer
+drawn as a slider in the same row. At equal priority a DDS still beats a PNG, so a PNG mod has to be set above a DDS
+pack it shares textures with.

@@ -7,8 +7,13 @@ draws as on the PS2), a switch back to the reference for every hook, game knowle
 [game-internals.md](game-internals.md). [MODS.md](MODS.md) maps each mod effect to the game; this file is the work list.
 
 - **Base**: upstream `main` at 0.2.0 (`728c8c8`). The fork's `main` is upstream plus the commits below.
-- **Not in git**: `Mods/` (the PC mods, kept locally for reference), texture packs, the release-zip extras of a player
-  install (`deps/`, `python/`, `RELEASE.json`).
+- **Not in git**: `Mods/` (the PC mods, kept locally for reference), the player's mods in `modloader/` (all but its
+  README; `modloader.ini` too), texture packs, the release-zip extras of a player install (`deps/`, `python/`,
+  `RELEASE.json`).
+
+**Where it stands (2026-11-02)**: the game's fog as a setting; texture packs in DDS (BC7) or PNG with PCSX2 names; a
+mod loader in PC Mod Loader's style - `modloader/` folders as mods, `modloader.ini`, F2 > Mods with a switch and a
+priority slider per mod, everything applied while the game runs. Next: T1c (game files from mods) or T2 (draw distance).
 
 ## Changes so far
 
@@ -17,6 +22,9 @@ draws as on the PS2), a switch back to the reference for every hook, game knowle
 | Exposure on the shown picture | A brightness pass in the presenter (`present.hlsl`, `presenter.cpp`) on the finished picture, HUD included. Interim: T6 replaces it with tone mapping before the HUD | Graphics > Image quality: `graphics.post_process` (off), `graphics.exposure` (100 %) | - |
 | Fog: the game's own fog range as settings | `src/game/vcs_fog.cpp` wraps `FUN_002F6008(start, end)`, the RSL fog-range setter, and scales its arguments. The fog stays the game's: per vertex from the depth, in the time cycle's colour and weather, in every renderer path (VU1, CPU HLE, native shaders, clipper), at no cost | Graphics > Fog: `fog.distance` (10-100 %), `fog.start` (0-300 %); 100 % = the game's own values, untouched. `VCS_FOG_HOOK=0` = reference, `VCS_TRACE_FOG=1`, command `fogstate` | `tools/fog_check.py` (passes) |
 | Fork documentation | This file, MODS.md, README's note, `.gitignore` for `Mods/` and texture packs | - | - |
+| Texture packs (T1): upstream PR #8 + DDS | PR #8's PCSX2 PNG packs (its commits and author, merged onto 0.2.0's helper-thread textures), then DDS read as stored - BC1-BC5 / BC7, RGBA8 / BGRA8, the file's mips - through new block formats in the RHI (D3D11, Vulkan), a DDS winning over a PNG of the same name, and `VCS_TEXTURE_DUMP` to make packs (docs/TEXTURE_PACKS.md) | `graphics.texture_pack` (vcs.ini); `VCS_TEXTURE_PACK`, `VCS_TEXTURE_DUMP=1` | `tools/texture_check.py` loader / `--validate-pack` / game / `--dump-check` (all pass) |
+| Texture packs switched live; sources with priorities | `gsHwSetTextureReplacements`: the GS stage swaps the pack at its next frame (the old pack's GPU textures dropped, the game's or the new pack's back as they are drawn); `TextureReplacements` indexes several folders, a name going to the highest priority | - | `tools/mods_check.py` |
+| Mod loader (T1b) | `src/mods/modloader.cpp`: `modloader/<mod>/` folders as mods, Mod Loader's `modloader.ini` (made by the game in `modloader/`; priorities 1-100, ignore lists), F2 > Mods, live; test runs authentic. Settings registry: `Spec::saved = false`, a Toggle's `partner` slider; `platform::openFolder` | F2 > Mods: `mods.enabled`, `graphics.texture_replacements` (now live, on), `mods.<name>` + its priority slider (in modloader.ini), Rescan, Open folder; `VCS_MODLOADER_DIR`, `VCS_MODS`, `VCS_TEST_MODS` | `tools/mods_check.py` (passes) |
 
 What was learned on the way is in game-internals.md 6l (the fog setters, the camera's begin-update `FUN_0018EE48`,
 camera +0x78 near / +0x7C far / +0x80 fog plane, FOGCOL from `0x4E1B30`; measured: far plane 2000 everywhere, fog start
@@ -29,14 +37,17 @@ One task at a time, in this order. T3 is the base for T4-T7.
 
 | # | Task | Depends on | Status | Issue |
 |---|---|---|---|---|
-| T1 | Texture replacement: PCSX2-compatible packs, **DDS** first-class, PNG kept | - | Next | [#1](https://github.com/willzmkv/gta-vcs-recomp/issues/1) |
-| T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Planned (research first) | [#2](https://github.com/willzmkv/gta-vcs-recomp/issues/2) |
+| T1 | Texture replacement: PCSX2-compatible packs, **DDS** first-class, PNG kept | - | **Done** (Vulkan compiled, not run) | [#1](https://github.com/willzmkv/gta-vcs-recomp/issues/1) |
+| T1b | Mod loader (PC Mod Loader's way): `modloader/` folders as mods, `modloader.ini`, F2 > Mods switched live with priority sliders; texture packs as its first content | T1 | **Done** | [#10](https://github.com/willzmkv/gta-vcs-recomp/issues/10) |
+| T1c | Mod loader: VCS's own game files from mods (archive entries `.mdl` / `.xtx` / ..., `MAIN.SCM`, `.GXT`) - the `std.stream` of PC Mod Loader | T1b | Planned (research first) | [#11](https://github.com/willzmkv/gta-vcs-recomp/issues/11) |
+| T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Next (research first) | [#2](https://github.com/willzmkv/gta-vcs-recomp/issues/2) |
 | T3 | Pre-HUD post-processing pass (colour + depth before the 2D) | - | Planned | [#3](https://github.com/willzmkv/gta-vcs-recomp/issues/3) |
 | T4 | Volumetric height fog (Proper Shaders `[VolumetricFog]`) | T3 | Planned | [#4](https://github.com/willzmkv/gta-vcs-recomp/issues/4) |
 | T5 | SMAA 1x | T3 | Planned | [#5](https://github.com/willzmkv/gta-vcs-recomp/issues/5) |
 | T6 | Simulated HDR: tone mapping, exposure, bloom (replaces the interim Exposure) | T3 | Planned | [#6](https://github.com/willzmkv/gta-vcs-recomp/issues/6) |
 | T7 | Sun rays | T3 | Planned | [#7](https://github.com/willzmkv/gta-vcs-recomp/issues/7) |
 | T8 | Presets and player docs (Authentic / Enhanced), release notes | T1-T7 | Planned | [#8](https://github.com/willzmkv/gta-vcs-recomp/issues/8) |
+| T9 | PC `.dff` / `.txd` in mods: convert RW 3 clumps / TXDs to VCS's formats, or draw them natively (research) | T1c, RSL submission | Research | [#12](https://github.com/willzmkv/gta-vcs-recomp/issues/12) |
 
 Backlog (not scheduled): SkyGFX's Xbox rim light / gloss / screen water drops, YCbCr correction, a larger reflection
 map, shadow maps, deferred lights, PBR sky, volumetric clouds, car paint reflections, rain on cars, ragdolls.
@@ -70,6 +81,38 @@ is based on `9b9211d` (0.1.0); its first three commits are toolchain fixes that 
 
 **Done when.** A pack of `.dds` files replaces textures in game on D3D11 and Vulkan builds; PNG packs still work;
 replacements off = the original picture; the GPU budget holds; the check passes. Packs stay out of git.
+
+**Result (2026-11-02).** Steps 1-6 done. With the user's HD pack (6279 BC7 DDS, full mips, 851 MiB): all 6279 load;
+1095 matched and shown across Fort Baxter and four city spots, each loaded once (119 MiB), 30 fps held; the dump round
+trip brings back 753 / 753 dumped textures, and 742 of those names are in the HD pack (PCSX2's identities). PNG packs:
+PR #8's loader checks still pass. Open: running the Vulkan backend with a pack (it compiles; this PC has no
+glslangValidator for a Vulkan build) - on Linux, `tools/texture_check.py --pack DIR`.
+
+### T1b - Mod loader
+
+**Done (core, 2026-11-02)**: `src/mods/modloader.cpp`, docs/MODS.md "The mod loader". `modloader/<mod>/` folders,
+Mod Loader's `modloader.ini` (made by the game in `modloader/`; priorities, ignore lists), F2 > Mods (Load mods,
+Replace textures, a switch and a priority slider 1-100 per mod - the slider writes modloader.ini -, Rescan, Open
+folder), switches applied while the game runs (`gsHwSetTextureReplacements`), test runs authentic.
+Checked by `tools/mods_check.py`. Content read so far: texture packs.
+
+### T1c - Game files from mods (VCS's formats)
+
+**Goal.** A file in a mod named as one of the game's - an entry of `GTA3PS2.IMG` / the world's `.IMG` (models `.mdl`,
+textures `.xtx`, ...) or a loose file (`MAIN.SCM`, `.GXT`) - is read in place of the disc's, as PC Mod Loader's
+`std.stream` / `std.scm` / `std.text` do. **Not** PC `.dff` / `.txd` (VCS has neither; T9).
+
+**Steps.** Research first: the archives' directories (names, offsets, sizes; where VCS keeps them), how the native
+streaming (`src/game/vcs_stream.cpp`) reads an entry and what the game assumes about its size; then an override table
+built from the enabled mods (priority as for textures), served by the stream layer; loose files at their open. A
+check: a mod replacing one model / one text, seen in game.
+
+### T9 - PC `.dff` / `.txd` (research)
+
+Whether, and how, PC RenderWare 3 models and texture dictionaries can stand in for VCS's: converted ahead of time to
+RSL structures with PS2 geometry (and XTX), or loaded on the host and drawn by the native renderer in place of a
+model the game submits (draws at the RSL level, docs/RSL_SUBMISSION.md). Outcome: a written answer with a prototype or
+the reasons against. (A `.txd`'s textures can already be used today as a texture pack.)
 
 ### T2 - Draw distance (Project2DFX)
 
@@ -147,6 +190,19 @@ indoors.
 
 Graphics presets (Authentic = every default; Enhanced = the tasks' recommended values), the README's feature list,
 release notes for a fork build.
+
+## Progress log
+
+- **2026-11-02 - fork set up.** Rebased onto upstream 0.2.0; the screen-space "fog" of a first attempt replaced by
+  the game's own fog range as settings (game-internals.md 6l); docs and the work list (this file, MODS.md); issues
+  #1-#8; the launcher's release update off for a clone (no `RELEASE.json`).
+- **2026-11-02 - T1, texture packs.** Upstream PR #8 (PNG packs) onto 0.2.0 with its author; DDS (BC1-BC7, RGBA8 /
+  BGRA8, the file's mips) through block formats in the RHI; the texture dump. With the user's HD pack (6279 BC7): all
+  load, 1095 shown in a city tour, each once (119 MiB), 30 fps; dump round trip 753 / 753, 742 names in the pack.
+- **2026-11-02 - T1b, the mod loader.** `modloader/` folders as mods, `modloader.ini` in Mod Loader's format, F2 > Mods
+  (switches, priority sliders, Rescan, Open folder), all applied while the game runs. With the user's two mods: HUD
+  Remastered (160 PNG, 152 shared with the HD pack) supplies 8 textures at 50 / 50 and all 160 at 60. PC `.dff` / `.txd`
+  analysed: VCS has neither format; its own files from mods are T1c, PC formats research (T9).
 
 ## How the work is done
 

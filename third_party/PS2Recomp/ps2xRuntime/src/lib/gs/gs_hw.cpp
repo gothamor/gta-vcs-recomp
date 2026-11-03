@@ -10,6 +10,7 @@
 #include "runtime/ps2_control.h" // [gta-recomp] keys: physical or injected
 
 #include "render/gs_shaders.h" // [gta-recomp] D3D11 (RHI) execution
+#include "render/texture_replacements.h" // [gta-recomp] PCSX2-named PNG packs
 #include "rhi/rhi.h"
 #include "runtime/ps2_hle_survey.h"
 
@@ -23,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem> // [gta-recomp] VCS_TEXTURE_DUMP
 #include <thread>
 #include <mutex>
 #include <map>
@@ -159,6 +161,17 @@ int64_t gsHwShownInputNs() { return g_shownInputNs.load(std::memory_order_relaxe
 // [gta-recomp] gsHwSetShowEveryFrame (gs_hw.h). PS2X_HW_QUEUE=<n> / PS2X_HW_BATCH_MAX=<n> (0: all) override either mode.
 static std::atomic<bool> g_showEveryFrame{false};
 void gsHwSetShowEveryFrame(bool on) { g_showEveryFrame.store(on, std::memory_order_relaxed); }
+
+// [gta-recomp] gsHwSetTextureReplacements: the pack the GS stage takes at its next frame (generation: one per call)
+static std::mutex g_packMutex;
+static std::shared_ptr<render::TextureReplacements> g_pack;
+static std::atomic<uint64_t> g_packGeneration{0};
+void gsHwSetTextureReplacements(std::shared_ptr<render::TextureReplacements> pack)
+{
+    std::lock_guard<std::mutex> lock(g_packMutex);
+    g_pack = std::move(pack);
+    g_packGeneration.fetch_add(1, std::memory_order_release);
+}
 namespace
 {
     size_t envCount(const char *name, size_t fallback)
@@ -287,6 +300,7 @@ namespace
         std::vector<uint32_t> pixels;
         std::vector<uint32_t> mips; // [gta-recomp] anisotropic filtering: levels 1.. after each other (buildMipChain)
         std::shared_ptr<EarlyTexture> early; // [gta-recomp] being made on a helper thread (pixels moved there)
+        std::shared_ptr<const render::ReplacementImage> replacement; // [gta-recomp] decoded asynchronously
     };
 
     // [gta-recomp] The levels of a texture: level 0 (pixels) then its mips, as createTextureLevels takes them.
@@ -890,10 +904,24 @@ namespace
                     d.width = t.w;
                     d.height = t.h;
                     d.usage = rhi::UsageSampled;
-                    d.name = "gs texture";
+                    d.name = t.replacement ? "replacement texture" : "gs texture"; // [gta-recomp]
                     d.mipLevels = m_anisotropy ? 0u : 1u; // [gta-recomp] anisotropic filtering samples a mip chain
                     const auto createStart = std::chrono::steady_clock::now(); // [gta-recomp] tex_create_us / tex_kb
-                    if (t.early) // [gta-recomp] made on a helper thread (makeTextureEarly): usually done long before
+                    if (t.replacement && t.replacement->dds()) // [gta-recomp] a pack DDS: its levels as stored (level 0
+                    {                                          // alone without anisotropic filtering, which reads mips)
+                        const render::ReplacementImage &r = *t.replacement;
+                        const void *levels[16];
+                        const uint32_t n = m_anisotropy ? std::min<uint32_t>(uint32_t(r.levelOffsets.size()), 16u) : 1u;
+                        for (uint32_t i = 0; i < n; ++i)
+                            levels[i] = r.levels.data() + r.levelOffsets[i];
+                        d.format = r.format;
+                        m_textures[t.key] = m_dev.createTextureLevels(d, levels, n);
+                        if (!m_textures[t.key])
+                            std::fprintf(stderr, "[textures] texture %ux%u (format %u) not made\n", t.w, t.h, unsigned(r.format));
+                    }
+                    else if (t.replacement) // [gta-recomp] a pack PNG (decoded on the loader thread); mips by the GPU (d.mipLevels)
+                        m_textures[t.key] = m_dev.createTexture(d, t.replacement->pixels.data(), t.w * 4u);
+                    else if (t.early) // [gta-recomp] made on a helper thread (makeTextureEarly): usually done long before
                     {
                         t.early->done.wait(false);
                         m_textures[t.key] = std::move(t.early->made);
@@ -908,17 +936,20 @@ namespace
                     ps2perf::add(ps2perf::Counter::TexCreateUs, static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                                     std::chrono::steady_clock::now() - createStart).count()));
                     ps2perf::add(ps2perf::Counter::TexKBytes,
-                                 ((t.early ? t.early->bytes : (t.pixels.size() + t.mips.size()) * 4u) + 1023u) / 1024u);
+                                 ((t.replacement ? t.replacement->gpuBytes(m_anisotropy != 0) : t.early ? t.early->bytes : (t.pixels.size() + t.mips.size()) * 4u) + 1023u) / 1024u);
+                    // [gta-recomp] the dump reads RGBA8 texels: a PNG's, or the GS's when they stayed here (not moved to a helper)
+                    const std::vector<uint32_t> &texels = t.replacement ? t.replacement->pixels : t.pixels;
+                    const uint32_t *pixels = texels.empty() ? nullptr : texels.data();
                     // [gta-recomp] PS2X_HW_DUMP_TEX=<key hex>: write that decoded texture (hw_tex_<key>.ppm, alpha dropped)
                     static const uint64_t dumpTex = std::getenv("PS2X_HW_DUMP_TEX") ? std::strtoull(std::getenv("PS2X_HW_DUMP_TEX"), nullptr, 16) : 0u;
-                    if (dumpTex && t.key == dumpTex)
+                    if (dumpTex && t.key == dumpTex && pixels)
                     {
                         char name[64];
                         std::snprintf(name, sizeof(name), "hw_tex_%llx.ppm", static_cast<unsigned long long>(t.key));
-                        writePpm(name, reinterpret_cast<const uint8_t *>(t.pixels.data()), t.w, t.h);
-                        std::vector<uint32_t> alpha(t.pixels.size());
+                        writePpm(name, reinterpret_cast<const uint8_t *>(pixels), t.w, t.h);
+                        std::vector<uint32_t> alpha(size_t(t.w) * t.h);
                         for (size_t i = 0; i < alpha.size(); ++i)
-                            alpha[i] = (t.pixels[i] >> 24) * 0x010101u; // alpha as grey
+                            alpha[i] = (pixels[i] >> 24) * 0x010101u; // alpha as grey
                         std::snprintf(name, sizeof(name), "hw_tex_%llx_alpha.ppm", static_cast<unsigned long long>(t.key));
                         writePpm(name, reinterpret_cast<const uint8_t *>(alpha.data()), t.w, t.h);
                     }
@@ -2310,6 +2341,9 @@ namespace
             c.tmeTfxTccFst[2] = s.tcc;
             c.tmeTfxTccFst[3] = s.fst;
             c.linearIipFgeAte[0] = s.linear;
+            // [gta-recomp] Replacement dimensions are independent of GS dimensions (including non-integer scales).
+            const bool replacement = !s.texIsRt && !plainTexture && tex &&
+                (s.texKey & 0xFFFFFFFF00000000ull) == render::TextureReplacements::key(0);
             // [gta-recomp] anisotropic filtering (GSHwOptions::anisotropy): a bilinear-filtered game texture with plain
             // repeat / clamp wrapping is sampled by the hardware - trilinear over a mip chain, anisotropic - instead of
             // the GS's own bilinear; region wraps, render targets and nearest filtering keep the exact GS path
@@ -2366,6 +2400,13 @@ namespace
             c.rtOrigin[1] = s.rtOy;
             c.rtOrigin[2] = pixelCentreOffset();
             c.rtOrigin[3] = rtScale.y;
+            if (replacement && !hwSampler) // [gta-recomp] full-resolution fetches with GS wrap/region rules
+            {
+                c.atstArefAfailRt[3] = 2;
+                c.targetRtFix[2] = float(tex->desc().width) / std::max<uint32_t>(s.tw, 1u);
+                c.rtOrigin[0] = c.rtOrigin[1] = 0.0f;
+                c.rtOrigin[3] = float(tex->desc().height) / std::max<uint32_t>(s.th, 1u);
+            }
             c.fogColor[0] = s.fogR;
             c.fogColor[1] = s.fogG;
             c.fogColor[2] = s.fogB;
@@ -2497,7 +2538,11 @@ namespace
         ~HwBackend() override { stopTextureMakers(); } // [gta-recomp]
 
         // ---- GSRasterBackend (game thread) ----------------------------------------------------------------
-        void Initialize(uint8_t *vram, uint32_t vramSize) override { m_cpu.Initialize(vram, vramSize); }
+        void Initialize(uint8_t *vram, uint32_t vramSize) override
+        {
+            m_cpu.Initialize(vram, vramSize);
+            m_textureVram = vram; // [gta-recomp] read-only, after materializing queued texture uploads
+        }
         void Reset() override { m_cpu.Reset(); }
 
         void Submit(const GSPrimitiveBatch &batch) override
@@ -3959,8 +4004,71 @@ namespace
         }
 
         // ---- frame hand-over (game thread) -------------------------------------------------------------------
+        // [gta-recomp] gsHwSetTextureReplacements: the old pack's textures go - TexDeletes in this frame's commands, after
+        // the draws already recorded with them -, its lookups and the bind memos start again, and the new pack (or none)
+        // takes over: the game's textures, or the new pack's, come back as they are bound.
+        void switchTexturePack(uint64_t generation)
+        {
+            std::shared_ptr<render::TextureReplacements> pack;
+            {
+                std::lock_guard<std::mutex> lock(g_packMutex);
+                pack = g_pack;
+            }
+            m_packGeneration = generation;
+            Frame &f = *m_frame;
+            size_t dropped = 0;
+            for (auto it = m_texLru.begin(); it != m_texLru.end();)
+            {
+                if (!render::TextureReplacements::isKey(it->first))
+                {
+                    ++it;
+                    continue;
+                }
+                f.cmds.push_back({CmdType::TexDelete, static_cast<uint32_t>(f.texDeletes.size())});
+                f.texDeletes.push_back(it->first);
+                it = m_texLru.erase(it);
+                ++dropped;
+            }
+            for (auto it = g_rasterTextures.begin(); it != g_rasterTextures.end();)
+                it = render::TextureReplacements::isKey(it->second) ? g_rasterTextures.erase(it) : std::next(it);
+            m_replacementAliases.clear();
+            m_replacementSizes.clear();
+            m_replacementBytes = 0;
+            ++m_texStateVersion;
+            ++m_texEvictions;
+            m_bindCacheValid = false;
+            m_replacements = pack ? std::move(pack)
+                                  : std::make_shared<render::TextureReplacements>(std::vector<render::TextureReplacements::Source>{});
+            m_replacements->setBlockCompression(m_blockCompression);
+            std::fprintf(stderr, "[textures] pack switched: %zu replacement textures dropped\n", dropped);
+        }
+
         void endFrame(const uint64_t (&privRegs)[15]) override
         {
+            if (const uint64_t generation = g_packGeneration.load(std::memory_order_acquire); generation != m_packGeneration)
+                switchTexturePack(generation); // [gta-recomp]
+            // [gta-recomp] Publish images in command order. Current draws still name their originals; future binds
+            // use the shared replacement key. Invalidate both texture-bind memo paths when images become ready.
+            auto ready = m_replacements->takeReady();
+            if (!ready.empty())
+            {
+                for (auto &image : ready)
+                {
+                    const uint64_t key = render::TextureReplacements::key(image->id);
+                    TexCreate t;
+                    t.key = key; t.w = image->width; t.h = image->height;
+                    const size_t bytes = image->gpuBytes(m_anisotropy != 0); // [gta-recomp] a DDS's own size (block-compressed)
+                    t.replacement = std::move(image);
+                    m_frame->cmds.push_back({CmdType::TexCreate, uint32_t(m_frame->textures.size())});
+                    m_frame->textures.push_back(std::move(t));
+                    m_texLru[key] = m_frameIndex;
+                    m_replacementBytes += bytes;
+                    m_replacementSizes[key] = bytes;
+                }
+                ++m_texStateVersion; ++m_texEvictions;
+                m_bindCacheValid = false;
+            }
+            if (m_replacementBytes > m_replacements->budget()) evictTextures();
             Frame &f = *m_frame;
             std::memcpy(f.privRegs, privRegs, sizeof(f.privRegs));
             static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
@@ -4178,6 +4286,8 @@ namespace
             }
             if (!m_rhi->ready())
                 return false;
+            m_blockCompression = device.blockCompression(); // [gta-recomp] texture packs' block-compressed DDS
+            m_replacements->setBlockCompression(m_blockCompression);
             // [gta-recomp] PS2X_HW_EARLY_TEXTURES: 0 off, 1 on; unset: on with D3D11, off with Vulkan - its main thread
             // only records a copy per new texture (~8 ms a 350-texture burst, D3D11's creation was 52), and on a
             // 2-core CPU the helpers slowed the GS stage's decode more than they saved there (PERFORMANCE.md 25)
@@ -4509,6 +4619,151 @@ namespace
             return result;
         }
 
+        // [gta-recomp] PCSX2 HashTextureLevel: raw GS blocks in texture block order; sub-block textures and formats
+        // occupying only part of a word are hashed as expanded indices/colours. Hash only on cache misses and only
+        // for a format/size present in the pack. The original cache key remains independent of PCSX2's identity.
+        bool appendReplacementHashLevel(const GSDrawState &d)
+        {
+            const auto &t = d.context.tex0;
+            uint32_t bw = 8, bh = 8;
+            switch (t.psm)
+            {
+            case GS_PSM_T4: bw = 32; bh = 16; break;
+            case GS_PSM_T8: bw = 16; bh = 16; break;
+            case GS_PSM_CT16: case GS_PSM_CT16S: bw = 16; break;
+            case GS_PSM_CT32: case GS_PSM_CT24: case GS_PSM_T8H: case GS_PSM_T4HL: case GS_PSM_T4HH: break;
+            default: return false;
+            }
+            materializeRectKeepTransfer(t.psm, t.tbp0, t.tbw, 0, 0, d.textureWidth, d.textureHeight);
+            const bool indexed = t.psm == GS_PSM_T4 || t.psm == GS_PSM_T8 || t.psm == GS_PSM_T8H ||
+                                 t.psm == GS_PSM_T4HL || t.psm == GS_PSM_T4HH;
+            if (d.textureWidth < bw || d.textureHeight < bh || t.psm == GS_PSM_CT24 ||
+                t.psm == GS_PSM_CT16 || t.psm == GS_PSM_CT16S ||
+                t.psm == GS_PSM_T8H || t.psm == GS_PSM_T4HL || t.psm == GS_PSM_T4HH)
+            {
+                if (indexed)
+                    for (uint32_t y = 0; y < d.textureHeight; ++y)
+                        for (uint32_t x = 0; x < d.textureWidth; ++x)
+                            m_replacementHashBytes.push_back(uint8_t(m_cpu.ReadVram(t.psm, t.tbp0, t.tbw, x, y)));
+                else
+                {
+                    m_cpu.DecodeTexture(d, m_replacementScratch);
+                    const auto *p = reinterpret_cast<const uint8_t *>(m_replacementScratch.data());
+                    m_replacementHashBytes.insert(m_replacementHashBytes.end(), p, p + m_replacementScratch.size() * 4);
+                }
+                return true;
+            }
+            for (uint32_t y = 0; y < d.textureHeight; y += bh)
+                for (uint32_t x = 0; x < d.textureWidth; x += bw)
+                {
+                    uint32_t bit = 0, width = 0;
+                    if (!GSMem::PixelBits(t.psm, t.tbp0, t.tbw, x, y, bit, width)) return false;
+                    const auto *p = m_textureVram + ((bit >> 11) * 256u);
+                    m_replacementHashBytes.insert(m_replacementHashBytes.end(), p, p + 256);
+                }
+            return true;
+        }
+
+        // [gta-recomp] PCSX2's format bits of a texture (its file name's last field)
+        static uint32_t replacementBits(const GSDrawState &d)
+        {
+            const auto &t = d.context.tex0;
+            uint32_t bits = t.psm | (uint32_t(t.tw) << 6) | (uint32_t(t.th) << 10);
+            if (t.psm == GS_PSM_CT24 || t.psm == GS_PSM_CT16 || t.psm == GS_PSM_CT16S)
+                bits |= (uint32_t(d.texa.ta0) << 15) | (uint32_t(d.texa.aem) << 23) | (uint32_t(d.texa.ta1) << 24);
+            return bits;
+        }
+
+        // [gta-recomp] PCSX2's palette hash: the loaded CLUT expanded (indexed formats; 0 for the others)
+        uint64_t replacementPalette(const GSDrawState &d)
+        {
+            const auto &t = d.context.tex0;
+            const bool four = t.psm == GS_PSM_T4 || t.psm == GS_PSM_T4HL || t.psm == GS_PSM_T4HH;
+            if (!four && t.psm != GS_PSM_T8 && t.psm != GS_PSM_T8H)
+                return 0;
+            std::vector<uint32_t> indices(four ? 16 : 256);
+            for (uint32_t i = 0; i < indices.size(); ++i) indices[i] = i;
+            m_cpu.DecodeTextureFromTexels(d, indices, m_replacementScratch);
+            return render::textureHash(m_replacementScratch.data(), m_replacementScratch.size() * 4);
+        }
+
+        // [gta-recomp] VCS_TEXTURE_DUMP=1 (docs/TEXTURE_PACKS.md): a texture the game decodes, once per name, as an
+        // uncompressed DDS (RGBA8, the GS's alpha: 128 = opaque) under PCSX2's base-level name in the dump folder - what a
+        // pack is made from (convert to BC7 / BC1 with texconv or Compressonator, keep the name, put it in replacements/).
+        void dumpTexture(const GSDrawState &d, const std::vector<uint32_t> &pixels)
+        {
+            static const std::string folder = [] {
+                const char *dir = std::getenv("VCS_TEXTURE_DUMP_DIR");
+                return std::string(dir && *dir ? dir : "textures/SLUS-21590/dumps");
+            }();
+            const uint32_t w = d.textureWidth, h = d.textureHeight;
+            if (!m_textureVram || pixels.size() != size_t(w) * h)
+                return;
+            const uint32_t bits = replacementBits(d);
+            const uint64_t palette = replacementPalette(d);
+            m_replacementHashBytes.clear();
+            if (!appendReplacementHashLevel(d))
+                return;
+            const uint64_t hash = render::textureHash(m_replacementHashBytes.data(), m_replacementHashBytes.size());
+            char name[64];
+            if (palette)
+                std::snprintf(name, sizeof(name), "%llx-%llx-%08x.dds", (unsigned long long)hash, (unsigned long long)palette, bits);
+            else
+                std::snprintf(name, sizeof(name), "%llx-%08x.dds", (unsigned long long)hash, bits);
+            if (!m_texturesDumped.insert(name).second)
+                return;
+            std::error_code ec;
+            std::filesystem::create_directories(std::filesystem::u8path(folder), ec);
+            const std::filesystem::path path = std::filesystem::u8path(folder) / name;
+            if (std::filesystem::exists(path, ec))
+                return; // from an earlier run
+            // DDS_HEADER: caps | height | width | pixel format | pitch; DDPF_RGB | DDPF_ALPHAPIXELS, RGBA masks
+            uint32_t header[32] = {0x20534444u, 124u, 0x100Fu, h, w, w * 4u};
+            header[19] = 32u;
+            header[20] = 0x41u;
+            header[22] = 32u;
+            header[23] = 0x000000FFu;
+            header[24] = 0x0000FF00u;
+            header[25] = 0x00FF0000u;
+            header[26] = 0xFF000000u;
+            header[27] = 0x1000u; // DDSCAPS_TEXTURE
+            if (FILE *f = std::fopen(path.string().c_str(), "wb"))
+            {
+                std::fwrite(header, 4, 32, f);
+                std::fwrite(pixels.data(), 4, pixels.size(), f);
+                std::fclose(f);
+                if (m_texturesDumped.size() <= 20u || m_texturesDumped.size() % 100u == 0u)
+                    std::fprintf(stderr, "[textures] dumped %s (%ux%u; %zu so far, %s)\n", name, w, h, m_texturesDumped.size(), folder.c_str());
+            }
+        }
+
+        uint32_t findReplacement(const GSDrawState &d)
+        {
+            const uint32_t bits = replacementBits(d);
+            if (!m_replacements->candidate(bits) || !m_textureVram) return 0;
+            const uint64_t palette = replacementPalette(d);
+            m_replacementHashBytes.clear();
+            GSDrawState level = d;
+            // Packs dumped with mipmapping disabled hash just level 0; enabled packs hash the mip chain too.
+            const uint32_t levels = std::min<uint32_t>((d.context.tex1 >> 2) & 7u, 6u);
+            for (uint32_t mip = 0; mip <= levels; ++mip)
+            {
+                if (mip)
+                {
+                    const uint64_t reg = mip <= 3 ? d.context.miptbp1 : d.context.miptbp2;
+                    const uint32_t shift = ((mip - 1) % 3) * 20;
+                    level.context.tex0.tbp0 = uint32_t((reg >> shift) & 0x3FFFu);
+                    level.context.tex0.tbw = uint8_t((reg >> (shift + 14)) & 0x3Fu);
+                    level.textureWidth = std::max<uint16_t>(1, d.textureWidth >> mip);
+                    level.textureHeight = std::max<uint16_t>(1, d.textureHeight >> mip);
+                }
+                if (!appendReplacementHashLevel(level)) return 0;
+                if (const uint32_t id = m_replacements->find(render::textureHash(m_replacementHashBytes.data(), m_replacementHashBytes.size()), palette, bits))
+                    return id;
+            }
+            return 0;
+        }
+
         bool bindTextureUncached(const GSDrawState &d, HwState &s)
         {
             const GSTex0Reg &t = d.context.tex0;
@@ -4592,6 +4847,26 @@ namespace
                 for (uint32_t p = first; p < last && p < kPages; ++p)
                     key = mix64(key, m_pageGen[p]);
             s.texKey = key;
+            // [gta-recomp] Cache both matches and misses under the existing content/invalidation key. All aliases of
+            // one pack image share a single GPU texture. A streamed-out replacement is requested again on demand.
+            if (m_replacements->candidate(t.psm | (uint32_t(t.tw) << 6) | (uint32_t(t.th) << 10)))
+            {
+                if (m_replacementAliases.size() >= 32768u) m_replacementAliases.clear();
+                auto [alias, added] = m_replacementAliases.try_emplace(key, 0);
+                if (added) alias->second = findReplacement(d);
+                if (alias->second)
+                {
+                    const uint64_t replacementKey = render::TextureReplacements::key(alias->second);
+                    if (auto cached = m_texLru.find(replacementKey); cached != m_texLru.end())
+                    {
+                        cached->second = m_frameIndex;
+                        s.texKey = replacementKey;
+                        if (raster) g_rasterTextures[raster] = replacementKey;
+                        return true;
+                    }
+                    m_replacements->request(alias->second);
+                }
+            }
             if (raster) // [gta-recomp] step 3d: the texture by the raster it came from
                 g_rasterTextures[raster] = key;
             ++m_bindLookups;
@@ -4640,6 +4915,9 @@ namespace
                                  d.textureHeight, m_pendingUploads.empty() ? "nothing queued" : "not one queued upload's");
 
             }
+            static const bool dump = std::getenv("VCS_TEXTURE_DUMP") && *std::getenv("VCS_TEXTURE_DUMP") == '1'; // [gta-recomp]
+            if (dump)
+                dumpTexture(d, tc.pixels);
             // [gta-recomp] anisotropic filtering samples a mip chain: built here, on the GS stage, not on the main thread's
             // GPU queue (PS2X_HW_CPU_MIPS=0: a render-target texture and GenerateMips each, as before)
             static const bool cpuMips = [] {
@@ -4747,14 +5025,23 @@ namespace
             std::vector<std::pair<uint64_t, uint64_t>> byAge(m_texLru.begin(), m_texLru.end());
             std::sort(byAge.begin(), byAge.end(), [](auto &a, auto &b) { return a.second < b.second; });
             Frame &f = *m_frame;
-            for (size_t i = 0; i < byAge.size() / 4; ++i)
+            // [gta-recomp] Evict by bytes as well as count. At 30 fps alternate VBlanks have no draws: protect the
+            // two previous frames too, or a small budget evicts the entire active HUD on each empty VBlank.
+            for (size_t i = 0; i < byAge.size() &&
+                 (i < byAge.size() / 4 || m_replacementBytes > m_replacements->budget()); ++i)
             {
-                if (byAge[i].second == m_frameIndex)
+                if (byAge[i].second + 2u >= m_frameIndex)
                     break;
                 f.cmds.push_back({CmdType::TexDelete, static_cast<uint32_t>(f.texDeletes.size())});
                 f.texDeletes.push_back(byAge[i].first);
                 ++m_texStateVersion;
                 m_texLru.erase(byAge[i].first);
+                if (auto size = m_replacementSizes.find(byAge[i].first); size != m_replacementSizes.end())
+                {
+                    m_replacementBytes -= size->second;
+                    m_replacementSizes.erase(size);
+                }
+                m_replacementAliases.erase(byAge[i].first);
             }
         }
 
@@ -5036,6 +5323,19 @@ namespace
         std::vector<std::thread> m_makers;
         bool m_makeStop = false;
         GSCpuBackend m_cpu;
+        // [gta-recomp] Optional PCSX2 texture packs; none of these data are game assets. Never null: an empty pack until
+        // gsHwSetTextureReplacements gives one (switchTexturePack)
+        std::shared_ptr<render::TextureReplacements> m_replacements =
+            std::make_shared<render::TextureReplacements>(std::vector<render::TextureReplacements::Source>{});
+        uint64_t m_packGeneration = 0;
+        bool m_blockCompression = true; // the device's, for every pack
+        uint8_t *m_textureVram = nullptr;
+        std::vector<uint8_t> m_replacementHashBytes;
+        std::vector<uint32_t> m_replacementScratch;
+        std::unordered_set<std::string> m_texturesDumped; // [gta-recomp] VCS_TEXTURE_DUMP: names written this run
+        std::unordered_map<uint64_t, uint32_t> m_replacementAliases;
+        std::unordered_map<uint64_t, size_t> m_replacementSizes;
+        size_t m_replacementBytes = 0;
         GSTransferCommand m_transfer{};
         std::unique_ptr<Frame> m_frame;
         uint64_t m_frameIndex = 0;

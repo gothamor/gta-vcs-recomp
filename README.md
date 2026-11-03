@@ -2,8 +2,14 @@
 
 > **This is a fork** of [gothamor/gta-vcs-recomp](https://github.com/gothamor/gta-vcs-recomp) that brings the effects of
 > PC mods (Proper Shaders, SkyGFX, Project2DFX, texture packs) to the native port as settings, authentic by default.
-> Done so far: the game's distance fog as a setting (Graphics > Fog). What it changes and what comes next:
-> [docs/FORK.md](docs/FORK.md). Everything below is upstream's.
+> Done so far:
+> - **Fog**: the game's own distance fog as a setting (F2 > Graphics > Fog).
+> - **Texture packs**: PCSX2-named DDS (BC7 / BC1 / BC3, with mips) or PNG files; a texture dump to make them
+>   ([docs/TEXTURE_PACKS.md](docs/TEXTURE_PACKS.md)).
+> - **Mod loader**, the way PC GTA's Mod Loader works: one folder per mod in `modloader/`, `modloader.ini`, and F2 > Mods
+>   with a switch and a priority slider per mod, applied while the game runs ([docs/MODS.md](docs/MODS.md)).
+>
+> What it changes and what comes next: [docs/FORK.md](docs/FORK.md). Everything below is upstream's.
 
 A native **Windows and Linux** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
 recompiling the game's PS2 executable into C++. Both are built from the same source and run natively: Direct3D 11 on
@@ -174,6 +180,7 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
 - Internal resolution from 1x (640x448) up to 8x, or the window's own resolution, with the effects keeping their
   original look.
 - Anti-aliasing (MSAA 2x / 4x / 8x) and anisotropic texture filtering (up to 16x).
+- Optional [PCSX2 PNG texture packs](docs/TEXTURE_PACKS.md), enabled in F2 > Graphics > Texture replacements.
 - Windowed or borderless full screen (Alt+Enter).
 
 **Controls**

@@ -245,6 +245,23 @@ namespace ui
                 noteItem();
                 if (changed)
                     settings::set(s.key, on ? 1 : 0);
+                // a partner Integer: its slider in the rest of the row (a mod's priority), usable while the switch is on
+                if (const settings::Spec *second = s.partner.empty() ? nullptr : findSpec(s.partner);
+                    second && second->type == settings::Type::Integer)
+                {
+                    ImGui::SameLine(0.0f, style.ItemSpacing.x * 2.0f);
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::BeginDisabled(v == 0 || settings::overridden(second->key));
+                    int edited = settings::value(second->key);
+                    const bool moved = ImGui::SliderInt("##partner", &edited, second->min, second->max, second->format.c_str(),
+                                                        ImGuiSliderFlags_AlwaysClamp);
+                    overItem = overItem || ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+                    if (ImGui::IsItemFocused())
+                        focusedNow = s.key;
+                    if (moved)
+                        settings::set(second->key, edited);
+                    ImGui::EndDisabled();
+                }
                 break;
             }
             case settings::Type::Choice:

@@ -52,7 +52,7 @@ APPIMAGE_RUNTIME = ("https://github.com/AppImage/type2-runtime/releases/download
                     "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d")
 GLIBC_FLOOR = (2, 35)  # Ubuntu 22.04; Debian 12 has 2.36
 CACHE = os.path.join(DIST, "cache")
-FORBIDDEN_DIRS = ("generated/", "build/", "ghidra/project/", "ghidra/export/", "mc0/", "mc1/")
+FORBIDDEN_DIRS = ("generated/", "build/", "ghidra/project/", "ghidra/export/", "mc0/", "mc1/", "SLUS-21590/", "textures/")
 FORBIDDEN_NAME = re.compile(r"(?i)(\.iso|\.gzf|\.chd|\.cso|\.cue)$|(^|/)(SLUS|SLES|SCUS|SLPM|SLPS)_\d{3}\.\d{2}")
 
 

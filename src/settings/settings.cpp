@@ -72,7 +72,7 @@ namespace settings
                 const std::string key = trim(t.substr(0, eq));
                 if (g_overridden.count(key))
                     continue; // the environment's value is for this run only
-                if (auto it = g_values.find(key); it != g_values.end() && g_index.count(key))
+                if (auto it = g_values.find(key); it != g_values.end() && g_index.count(key) && g_specs[g_index.at(key)].saved)
                 {
                     line = key + "=" + std::to_string(it->second);
                     written[key] = true;
@@ -86,7 +86,7 @@ namespace settings
             for (const Spec &s : g_specs)
             {
                 const int v = g_values[s.key];
-                if (!written[s.key] && !g_overridden.count(s.key) && v != s.defaultValue)
+                if (s.saved && !written[s.key] && !g_overridden.count(s.key) && v != s.defaultValue)
                     lines.push_back(s.key + "=" + std::to_string(v));
             }
             for (const auto &[key, text] : g_state)
@@ -193,6 +193,12 @@ namespace settings
         const std::string iniName = ini.string();
         for (const Spec &s : g_specs)
         {
+            if (!s.saved) // kept elsewhere: its own reader
+            {
+                if (s.read)
+                    take(s, std::to_string(s.read()), s.key.c_str());
+                continue;
+            }
             if (auto it = found.find(s.key); it != found.end())
                 take(s, it->second, iniName.c_str());
             else if (auto old = found.find(s.alias); !s.alias.empty() && old != found.end())

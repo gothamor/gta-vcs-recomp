@@ -9,6 +9,8 @@ SLES_*
 SCUS_*
 /gamefiles/
 /disc/
+/SLUS-21590/
+/textures/
 
 # --- Generated from the user's own ELF: contains translated game code ---
 generated/
@@ -37,3 +39,6 @@ __pycache__/
 # --- This fork: the PC mods kept for reference and texture packs are third-party: never commit (docs/FORK.md) ---
 /Mods/
 /textures/
+# the mod loader's folder: the player's mods, never committed - but its README
+/modloader/*
+!/modloader/README.md
