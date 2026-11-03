@@ -161,6 +161,17 @@ int64_t gsHwShownInputNs() { return g_shownInputNs.load(std::memory_order_relaxe
 // [gta-recomp] gsHwSetShowEveryFrame (gs_hw.h). PS2X_HW_QUEUE=<n> / PS2X_HW_BATCH_MAX=<n> (0: all) override either mode.
 static std::atomic<bool> g_showEveryFrame{false};
 void gsHwSetShowEveryFrame(bool on) { g_showEveryFrame.store(on, std::memory_order_relaxed); }
+
+// [gta-recomp] gsHwSetTextureReplacements: the pack the GS stage takes at its next frame (generation: one per call)
+static std::mutex g_packMutex;
+static std::shared_ptr<render::TextureReplacements> g_pack;
+static std::atomic<uint64_t> g_packGeneration{0};
+void gsHwSetTextureReplacements(std::shared_ptr<render::TextureReplacements> pack)
+{
+    std::lock_guard<std::mutex> lock(g_packMutex);
+    g_pack = std::move(pack);
+    g_packGeneration.fetch_add(1, std::memory_order_release);
+}
 namespace
 {
     size_t envCount(const char *name, size_t fallback)
@@ -3993,11 +4004,52 @@ namespace
         }
 
         // ---- frame hand-over (game thread) -------------------------------------------------------------------
+        // [gta-recomp] gsHwSetTextureReplacements: the old pack's textures go - TexDeletes in this frame's commands, after
+        // the draws already recorded with them -, its lookups and the bind memos start again, and the new pack (or none)
+        // takes over: the game's textures, or the new pack's, come back as they are bound.
+        void switchTexturePack(uint64_t generation)
+        {
+            std::shared_ptr<render::TextureReplacements> pack;
+            {
+                std::lock_guard<std::mutex> lock(g_packMutex);
+                pack = g_pack;
+            }
+            m_packGeneration = generation;
+            Frame &f = *m_frame;
+            size_t dropped = 0;
+            for (auto it = m_texLru.begin(); it != m_texLru.end();)
+            {
+                if (!render::TextureReplacements::isKey(it->first))
+                {
+                    ++it;
+                    continue;
+                }
+                f.cmds.push_back({CmdType::TexDelete, static_cast<uint32_t>(f.texDeletes.size())});
+                f.texDeletes.push_back(it->first);
+                it = m_texLru.erase(it);
+                ++dropped;
+            }
+            for (auto it = g_rasterTextures.begin(); it != g_rasterTextures.end();)
+                it = render::TextureReplacements::isKey(it->second) ? g_rasterTextures.erase(it) : std::next(it);
+            m_replacementAliases.clear();
+            m_replacementSizes.clear();
+            m_replacementBytes = 0;
+            ++m_texStateVersion;
+            ++m_texEvictions;
+            m_bindCacheValid = false;
+            m_replacements = pack ? std::move(pack)
+                                  : std::make_shared<render::TextureReplacements>(std::vector<render::TextureReplacements::Source>{});
+            m_replacements->setBlockCompression(m_blockCompression);
+            std::fprintf(stderr, "[textures] pack switched: %zu replacement textures dropped\n", dropped);
+        }
+
         void endFrame(const uint64_t (&privRegs)[15]) override
         {
+            if (const uint64_t generation = g_packGeneration.load(std::memory_order_acquire); generation != m_packGeneration)
+                switchTexturePack(generation); // [gta-recomp]
             // [gta-recomp] Publish images in command order. Current draws still name their originals; future binds
             // use the shared replacement key. Invalidate both texture-bind memo paths when images become ready.
-            auto ready = m_replacements.takeReady();
+            auto ready = m_replacements->takeReady();
             if (!ready.empty())
             {
                 for (auto &image : ready)
@@ -4016,7 +4068,7 @@ namespace
                 ++m_texStateVersion; ++m_texEvictions;
                 m_bindCacheValid = false;
             }
-            if (m_replacementBytes > m_replacements.budget()) evictTextures();
+            if (m_replacementBytes > m_replacements->budget()) evictTextures();
             Frame &f = *m_frame;
             std::memcpy(f.privRegs, privRegs, sizeof(f.privRegs));
             static const bool debug = std::getenv("PS2X_HW_DEBUG") != nullptr;
@@ -4234,7 +4286,8 @@ namespace
             }
             if (!m_rhi->ready())
                 return false;
-            m_replacements.setBlockCompression(device.blockCompression()); // [gta-recomp] texture packs' block-compressed DDS
+            m_blockCompression = device.blockCompression(); // [gta-recomp] texture packs' block-compressed DDS
+            m_replacements->setBlockCompression(m_blockCompression);
             // [gta-recomp] PS2X_HW_EARLY_TEXTURES: 0 off, 1 on; unset: on with D3D11, off with Vulkan - its main thread
             // only records a copy per new texture (~8 ms a 350-texture burst, D3D11's creation was 52), and on a
             // 2-core CPU the helpers slowed the GS stage's decode more than they saved there (PERFORMANCE.md 25)
@@ -4687,7 +4740,7 @@ namespace
         uint32_t findReplacement(const GSDrawState &d)
         {
             const uint32_t bits = replacementBits(d);
-            if (!m_replacements.candidate(bits) || !m_textureVram) return 0;
+            if (!m_replacements->candidate(bits) || !m_textureVram) return 0;
             const uint64_t palette = replacementPalette(d);
             m_replacementHashBytes.clear();
             GSDrawState level = d;
@@ -4705,7 +4758,7 @@ namespace
                     level.textureHeight = std::max<uint16_t>(1, d.textureHeight >> mip);
                 }
                 if (!appendReplacementHashLevel(level)) return 0;
-                if (const uint32_t id = m_replacements.find(render::textureHash(m_replacementHashBytes.data(), m_replacementHashBytes.size()), palette, bits))
+                if (const uint32_t id = m_replacements->find(render::textureHash(m_replacementHashBytes.data(), m_replacementHashBytes.size()), palette, bits))
                     return id;
             }
             return 0;
@@ -4796,7 +4849,7 @@ namespace
             s.texKey = key;
             // [gta-recomp] Cache both matches and misses under the existing content/invalidation key. All aliases of
             // one pack image share a single GPU texture. A streamed-out replacement is requested again on demand.
-            if (m_replacements.candidate(t.psm | (uint32_t(t.tw) << 6) | (uint32_t(t.th) << 10)))
+            if (m_replacements->candidate(t.psm | (uint32_t(t.tw) << 6) | (uint32_t(t.th) << 10)))
             {
                 if (m_replacementAliases.size() >= 32768u) m_replacementAliases.clear();
                 auto [alias, added] = m_replacementAliases.try_emplace(key, 0);
@@ -4811,7 +4864,7 @@ namespace
                         if (raster) g_rasterTextures[raster] = replacementKey;
                         return true;
                     }
-                    m_replacements.request(alias->second);
+                    m_replacements->request(alias->second);
                 }
             }
             if (raster) // [gta-recomp] step 3d: the texture by the raster it came from
@@ -4975,7 +5028,7 @@ namespace
             // [gta-recomp] Evict by bytes as well as count. At 30 fps alternate VBlanks have no draws: protect the
             // two previous frames too, or a small budget evicts the entire active HUD on each empty VBlank.
             for (size_t i = 0; i < byAge.size() &&
-                 (i < byAge.size() / 4 || m_replacementBytes > m_replacements.budget()); ++i)
+                 (i < byAge.size() / 4 || m_replacementBytes > m_replacements->budget()); ++i)
             {
                 if (byAge[i].second + 2u >= m_frameIndex)
                     break;
@@ -5270,8 +5323,12 @@ namespace
         std::vector<std::thread> m_makers;
         bool m_makeStop = false;
         GSCpuBackend m_cpu;
-        // [gta-recomp] Optional PCSX2 texture packs; none of these data are game assets.
-        render::TextureReplacements m_replacements;
+        // [gta-recomp] Optional PCSX2 texture packs; none of these data are game assets. Never null: an empty pack until
+        // gsHwSetTextureReplacements gives one (switchTexturePack)
+        std::shared_ptr<render::TextureReplacements> m_replacements =
+            std::make_shared<render::TextureReplacements>(std::vector<render::TextureReplacements::Source>{});
+        uint64_t m_packGeneration = 0;
+        bool m_blockCompression = true; // the device's, for every pack
         uint8_t *m_textureVram = nullptr;
         std::vector<uint8_t> m_replacementHashBytes;
         std::vector<uint32_t> m_replacementScratch;

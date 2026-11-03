@@ -92,6 +92,14 @@ void gsHwSetAspectWidening(float widening);
 // shown per host frame - a GPU-bound machine shows every frame it renders (the HD 520: 76 shown fps instead of 30 at the
 // same GPU load; docs/PERFORMANCE.md 17) with the least latency. Any thread.
 void gsHwSetShowEveryFrame(bool on);
+namespace render
+{
+    class TextureReplacements;
+}
+// [gta-recomp] Texture packs (docs/TEXTURE_PACKS.md, the mod loader src/mods): the replacements to use from the GS
+// stage's next frame on (null: none - the game's own textures). The old pack's textures are dropped then, and the
+// game's or the new pack's come back as they are drawn. Any thread; the caller indexed the pack.
+void gsHwSetTextureReplacements(std::shared_ptr<render::TextureReplacements> pack);
 // [gta-recomp] The input snapshot time (PSPadBackend::lastInputNs) of the frame the last host frame showed: for the
 // input-to-screen delay (rhi::Device::setFrameInputTime). Main thread.
 int64_t gsHwShownInputNs();

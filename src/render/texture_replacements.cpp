@@ -209,8 +209,14 @@ namespace render
 
     struct TextureReplacements::Impl
     {
-        struct File { std::filesystem::path path; bool pending = false, failed = false, matched = false; };
+        struct File
+        {
+            std::filesystem::path path;
+            int source = 0, priority = 0;
+            bool dds = false, pending = false, failed = false, matched = false;
+        };
         std::vector<File> files{1}; // id 0 = no match
+        std::vector<size_t> perSource; // names each source supplies (after priorities)
         std::unordered_map<Name, uint32_t, NameHash> names;
         std::unordered_set<uint32_t> shapes;
         size_t gpuBudget = memoryBudget(), readyBytes = 0;
@@ -260,6 +266,7 @@ namespace render
 
     TextureReplacements::TextureReplacements() : m(std::make_unique<Impl>())
     {
+        // the environment's one pack (tools, tests): VCS_TEXTURE_REPLACEMENTS=1 + VCS_TEXTURE_PACK
         const char *enabled = std::getenv("VCS_TEXTURE_REPLACEMENTS");
         if (!enabled || enabled[0] != '1') return;
         const char *dir = std::getenv("VCS_TEXTURE_PACK");
@@ -268,42 +275,70 @@ namespace render
             std::fprintf(stderr, "[textures] no pack directory configured; keeping originals\n");
             return;
         }
-        const auto *utf8 = reinterpret_cast<const char8_t *>(dir);
-        auto root = std::filesystem::path(std::u8string_view(utf8));
-        std::error_code ec;
-        if (std::filesystem::is_directory(root / "replacements", ec)) root /= "replacements";
-        std::vector<std::filesystem::path> paths;
-        for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, ec), end;
-             !ec && it != end; it.increment(ec))
+        index({{std::filesystem::path(std::u8string_view(reinterpret_cast<const char8_t *>(dir))), 50, "VCS_TEXTURE_PACK"}});
+    }
+
+    TextureReplacements::TextureReplacements(const std::vector<Source> &sources) : m(std::make_unique<Impl>()) { index(sources); }
+
+    void TextureReplacements::index(const std::vector<Source> &sources)
+    {
+        uint32_t rejected = 0, duplicates = 0;
+        bool scanFailed = false;
+        m->perSource.assign(sources.size(), 0);
+        for (size_t s = 0; s < sources.size(); ++s)
         {
-            if (it->is_regular_file(ec)) paths.push_back(it->path());
-        }
-        std::sort(paths.begin(), paths.end()); // deterministic duplicate handling
-        uint32_t rejected = 0, duplicates = 0, dds = 0;
-        for (const auto &path : paths)
-        {
-            auto ext = path.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-            if (ext != ".png" && ext != ".dds") continue;
-            Name n;
-            if (!parseName(path.stem().string(), n)) { ++rejected; continue; }
-            const auto [it, added] = m->names.emplace(n, uint32_t(m->files.size()));
-            if (!added)
+            auto root = sources[s].path;
+            std::error_code ec;
+            if (std::filesystem::is_directory(root / "replacements", ec)) root /= "replacements";
+            std::vector<std::filesystem::path> paths;
+            for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, ec), end;
+                 !ec && it != end; it.increment(ec))
             {
-                ++duplicates;
-                // one name as both: the DDS (the GPU's own format, nothing to decode)
-                if (ext == ".dds" && !isDds(m->files[it->second].path)) { m->files[it->second].path = path; ++dds; }
-                continue;
+                if (it->is_directory(ec) && it->path().filename() == "dumps")
+                    it.disable_recursion_pending(); // PCSX2's own dumps beside a pack's replacements are not replacements
+                else if (it->is_regular_file(ec))
+                    paths.push_back(it->path());
             }
-            dds += ext == ".dds";
-            m->files.push_back({path});
-            m->shapes.insert(n.bits & 0x3FFFu);
+            scanFailed |= bool(ec);
+            std::sort(paths.begin(), paths.end()); // deterministic duplicate handling
+            for (const auto &path : paths)
+            {
+                auto ext = path.extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+                if (ext != ".png" && ext != ".dds") continue;
+                Name n;
+                if (!parseName(path.stem().string(), n)) { ++rejected; continue; }
+                const Impl::File file{path, int(s), sources[s].priority, ext == ".dds"};
+                const auto [it, added] = m->names.emplace(n, uint32_t(m->files.size()));
+                if (!added)
+                {
+                    ++duplicates;
+                    // one name twice: the higher priority (a mod over another), then the DDS (the GPU's own format)
+                    Impl::File &held = m->files[it->second];
+                    if (file.priority > held.priority || (file.priority == held.priority && file.dds && !held.dds))
+                        held = file;
+                    continue;
+                }
+                m->files.push_back(file);
+                m->shapes.insert(n.bits & 0x3FFFu);
+            }
         }
-        std::fprintf(stderr, "[textures] indexed %zu replacements (%u DDS, %zu PNG) in %s (%u unsupported names, %u duplicates); cache %zu MiB%s\n",
-                     m->names.size(), dds, m->names.size() - dds, root.string().c_str(), rejected, duplicates, m->gpuBudget >> 20,
-                     ec ? "; directory scan failed" : "");
+        size_t dds = 0;
+        for (size_t i = 1; i < m->files.size(); ++i)
+        {
+            ++m->perSource[size_t(m->files[i].source)];
+            dds += m->files[i].dds;
+        }
+        std::fprintf(stderr, "[textures] indexed %zu replacements (%zu DDS, %zu PNG) from %zu source(s) (%u unsupported names, %u duplicates); cache %zu MiB%s\n",
+                     m->names.size(), dds, m->names.size() - dds, sources.size(), rejected, duplicates, m->gpuBudget >> 20,
+                     scanFailed ? "; a directory scan failed" : "");
+        for (size_t s = 0; s < sources.size(); ++s)
+            std::fprintf(stderr, "[textures]   %s (priority %d): %zu in use, %s\n", sources[s].name.c_str(), sources[s].priority,
+                         m->perSource[s], sources[s].path.string().c_str());
         if (!m->names.empty()) m->worker = std::thread([this] { m->run(); });
     }
+
+    const std::vector<size_t> &TextureReplacements::perSource() const { return m->perSource; }
     TextureReplacements::~TextureReplacements()
     {
         { std::lock_guard lock(m->mutex); m->stopping = true; }

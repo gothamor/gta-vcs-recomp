@@ -29,7 +29,17 @@ namespace render
     class TextureReplacements
     {
     public:
-        TextureReplacements();
+        // Where replacements come from: a pack folder (a PCSX2 SLUS-21590 folder, its replacements/, or a mod's folder:
+        // every PCSX2-named .dds / .png under it, `dumps/` folders aside). A name in several: the highest priority.
+        struct Source
+        {
+            std::filesystem::path path;
+            int priority = 50;
+            std::string name; // for the log
+        };
+
+        TextureReplacements(); // VCS_TEXTURE_REPLACEMENTS=1 + VCS_TEXTURE_PACK, or nothing
+        explicit TextureReplacements(const std::vector<Source> &sources); // indexes them on the calling thread
         ~TextureReplacements();
         TextureReplacements(const TextureReplacements &) = delete;
         TextureReplacements &operator=(const TextureReplacements &) = delete;
@@ -42,9 +52,13 @@ namespace render
         // Whether the device can make block-compressed textures (rhi::Device::blockCompression): set before the first
         // request; without it a block-compressed DDS keeps the original texture.
         void setBlockCompression(bool supported);
+        // per source (in the order given): the names it supplies, after priorities
+        const std::vector<size_t> &perSource() const;
         static constexpr uint64_t key(uint32_t id) { return 0xFFFF545800000000ull | id; }
+        static constexpr bool isKey(uint64_t key) { return (key & 0xFFFFFFFF00000000ull) == 0xFFFF545800000000ull; }
 
     private:
+        void index(const std::vector<Source> &sources);
         struct Impl;
         std::unique_ptr<Impl> m;
     };
