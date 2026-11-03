@@ -211,6 +211,11 @@ release notes for a fork build.
   A VCS vehicle `.mdl` (an `ldm` resource) has the very frame names of a VC car `.dff` and named textures: route (a),
   converting `.dff` -> `ldm` and loading it through T1c's game files, chosen; (c) by-name skins only fit VCS's own
   models; (b) host drawing kept as the alternative. The MixMods tutorial could not be fetched (Cloudflare check).
+- **2026-11-03 - T9 steps 1-2.** `tools/mdlinfo.py` reads a VCS `ldm` vehicle: the node tree with VC's names and
+  positions, the elements (an intact and a damaged one per part), materials, and the PS2 meshes decoded from their VIF
+  batches (V3-16 positions with the geometry's scale / position, V2-8 UVs, V3-8 normals; strips sharing two vertices
+  between batches) - every geometry of all 75 named vehicles decodes, with exactly the triangle counts the files state;
+  `--png` draws the decoded wireframe (the Admiral's shape).
 
 ## How the work is done
 
