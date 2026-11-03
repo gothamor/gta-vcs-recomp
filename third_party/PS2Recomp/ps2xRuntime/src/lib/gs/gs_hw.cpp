@@ -1567,15 +1567,18 @@ namespace
         // [gta-recomp] Does the GS pixel shader write the depth (SV_Depth)? A shader depth turns early depth rejection off:
         // every hidden pixel of the city's overdraw shaded and textured (on the laptop's HD 520 ~1.8 of ~10.7 ms of the
         // frame, PERFORMANCE.md 26). D3D / Vulkan take the 0..1 depth as given, so the rasterised value is the shader's
-        // (the explicit write was GL's: its NDC lost the precision). PS2X_HW_SHADER_DEPTH=1 / 0 forces it; unset: off
-        // with Vulkan, on with D3D11 until checked against the Windows reference there.
+        // (the explicit write was GL's: its NDC lost the precision). PS2X_HW_SHADER_DEPTH=1 / 0 forces it; unset: off.
+        // [gta-recomp] D3D11 kept the shader depth until checked against the Windows reference; with it the game's fire
+        // was gone (the flame-thrower's, molotovs', explosions', burning cars': additive GS sprites, ZTST GEQUAL) whenever
+        // the pixel shader took a bilinear path (four loads, Gather, the anisotropic sampler) - the same SV_Depth as the
+        // nearest and full shaders, which drew it. The rasterised depth draws it on every path (game-internals.md 6m).
         bool shaderDepth() const
         {
             static const int forced = [] {
                 const char *e = std::getenv("PS2X_HW_SHADER_DEPTH");
                 return e && *e ? (*e == '0' ? 0 : 1) : -1;
             }();
-            return forced >= 0 ? forced == 1 : m_dev.backend() != rhi::Backend::Vulkan;
+            return forced == 1;
         }
 
         rhi::Pipeline &drawPipeline(const GsBlend &b, uint8_t mask, bool depthTest, uint32_t ztst, bool zwrite, uint8_t mode,

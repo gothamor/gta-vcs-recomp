@@ -1221,6 +1221,34 @@ comments, then measured live with the rig (`fogstate`, `peekf 0x742B28 2`) and `
 - So scaling the setter's two arguments moves the fog in every renderer path at once (VU1, CPU HLE, the native
   vertex shaders' `nativeFog`, the clipper), with the time cycle's colour; at 100 % the game's own values go in.
 
+### 6m. Fire: GS sprites lost to the pixel shader's depth on D3D11 (2026-11-03)
+
+Reported by the player: no flames at all - the flame-thrower's, molotovs', explosions', burning cars'; their smoke was
+there. Reproduced by `tools/fire_check.py` (a car set to health 200, the flame-thrower fired, a molotov thrown; fire
+pixels counted) and found with F12 draw logs, a read-back of the depth buffer just before the flame draw, and switches.
+
+- **The fire is GS-path sprites** drawn after the native 3D: the flame texture (64x64, `key 48cd3e4b597ff6e`, the
+  decode correct: orange, alpha 0x80) as additive quads - `Cs*FIX + Cd` with FIX 128 (vertex colour ~0x1F, dozens of
+  quads adding up) and `Cs*As + Cd` (colour 0xFF, alpha 0x78) - with ZTST GEQUAL, no Z write. The explosion is the same
+  kind of sprite.
+- **Their Z** is the game's: `FUN_0039FBF0(z) = FUN_002F9F58(z) >> 4` (as a float), and `FUN_002F9F58(z) =
+  (A z + B) / (C z)` with A, C, B the GS window matrix's z terms at `0x520A68`, `0x520A6C`, `0x520A78` (the matrix at
+  `0x520A40`: x / y scale 426.54 / -426.54, centre 320 / 224, A 166,850, C 1, B 1,849,800 at 4:3 in game) - the same
+  mapping as the world's (a flame 3-9 m from the camera: 0.0014-0.0027 of Z24; the ground behind it 0.0016-0.0021,
+  the player at ~2 m 0.0034-0.0044). CDraw's near / far (`0x4CD130` / `0x4CD12C`: 0.1125 / 2000) are the camera's.
+  So the sprites' depth is right, and on a PS2 they pass in front of what is behind them.
+- **Why they vanished**: the D3D11 GS pixel shader wrote its depth (SV_Depth = the interpolated vertex depth, a
+  leftover of the GL renderer's precision fix, PERFORMANCE.md 26). With it, these draws failed wherever the shader
+  took a bilinear path - the four loads, Gather, the anisotropic hardware sampler - and showed with the nearest and the
+  full shader (`PS2X_HW_SPECIALISE=0`), all writing the same SV_Depth from the same interpolant; drawn opaque without
+  depth they come out textured. Neither the depth values (forced 0.5 nearer: still gone) nor the post effects
+  (`PS2X_HW_POSTFX=0`), MSAA, anisotropy, fog or the aspect changed it; `PS2X_HW_SHADER_DEPTH=0` (the rasterised
+  depth, what Vulkan already used) drew the fire everywhere. Why only the bilinear variants lose it with SV_Depth is
+  not understood (most likely the driver: the GTX 1080 Ti here); the fix does not depend on it.
+- **Fixed**: the rasterised depth on D3D11 too (`gs_hw.cpp` `shaderDepth`, PS2RECOMP_PATCHES.md) - the same value with
+  a 0..1 depth range, and early depth rejection back on. `fire_check.py` passes: fire pixels in the best frame from
+  0-12 to hundreds (flame-thrower) and thousands (molotov).
+
 ## 7. Textures: `.XTX`
 
 **Host replacement identity (2026-10-31).** PCSX2 packs match the GS texture as it is sampled, rather than the RAM
