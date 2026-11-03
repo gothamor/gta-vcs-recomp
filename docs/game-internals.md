@@ -1478,6 +1478,11 @@ Found for the mod loader's game files (docs/MODS.md "Game files"), with the rig 
 - **Entries are relocatable**: the CHEETAH's entry served as the ADMIRAL's (smaller: the rest of the buffer zeros)
   loads and draws a Cheetah under the name Admiral, no crash (`tools/gamefiles_check.py`) - a model resource carries
   what the game needs to place it anywhere in the streaming memory.
+- **GTA3PS2.IMG is read as an open file**: `FUN_00220EC8(file, ?, bytes)` reads from the open-file records at
+  `0x5058A8` (0x14 bytes: {?, LSN, bytes, position, ?}) at `LSN + position / 2048` and moves the position on, held to
+  the file's size - so an entry's offset past the archive's end is cut back to it (found when a larger mod entry,
+  moved past the disc, was never read: 2026-11-03). Raising the archive's size there (and in the file table) lets
+  the game read it.
 - **Loose files go through the same stream**: `AMERICAN.GXT` / `ENGLISH.GXT` (and `MAIN.SCM`) are read by
   `FUN_00221818` at their file-table LSN, `bytes` long - a mod's copy laid over those sectors is what the game loads
   (a GXT with "Admiral" written "ADMIRAL" made the game's text for the key ADMIRAL read "ADMIRAL", 2026-11-03).

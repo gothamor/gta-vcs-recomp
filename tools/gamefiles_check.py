@@ -7,7 +7,9 @@ one GTA3PS2.IMG entry replaced from a mod's file, the archive untouched.
 Needs build/img/streaming.json (python tools/img.py table). Three hidden runs from the card copy (default the rig's
 user copy), each spawning an ADMIRAL (model 171) at a city street and taking a picture: no mod; a mod holding
 admiral.mdl = the disc's own entry (must look the same: the overlay path changes nothing); a mod holding the CHEETAH's
-entry as admiral.mdl (must look different: the ADMIRAL drawn as a Cheetah, no crash). A fourth run takes the text
+entry as admiral.mdl (must look different: the ADMIRAL drawn as a Cheetah, no crash); and the ADMIRAL's entry - larger -
+as cheetah.mdl, a CHEETAH spawned: the record moved past the disc, the game reads it there and goes on (bigger.png
+shows the Admiral's body under the name Cheetah; another model spawns with another camera, so it is not compared). A fourth run takes the text
 files from a mod (AMERICAN.GXT / ENGLISH.GXT with "Admiral" written "ADMIRAL"): the game's text for the key ADMIRAL
 must read "ADMIRAL" (its text table in memory, *0x48A2A0). Mod folders under OUT; the
 extracted entries stay there (game data: never in git). Results: OUT/result.json. Exit code 0 = pass.
@@ -45,7 +47,7 @@ def game_text(g, key):
     return None
 
 
-def run(out, name, mods, save):
+def run(out, name, mods, save, model=171):
     env = {'VCS_TEST_MODS': '1', 'VCS_MODLOADER_DIR': str(mods)} if mods else {}
     g = rig.Game.start(save=save, name='gamefiles_' + name, seconds=300, env=env)
     try:
@@ -54,7 +56,7 @@ def run(out, name, mods, save):
         g.weather(0)
         g.teleport(STREET[0], STREET[1], -100.0, heading=STREET[2])
         time.sleep(4)
-        g.spawn_car(171, ahead=4.0)
+        g.spawn_car(model, ahead=4.0)
         time.sleep(5)
         shot = out / (name + '.png')
         g.cmd('screenshot ' + str(shot))
@@ -91,6 +93,11 @@ def main():
     text_mod.mkdir(parents=True)
     for name, data in gxts.items():
         (text_mod / name).write_bytes(data)
+    bigger = out / 'modloader_bigger' / 'Test bigger'  # the ADMIRAL's entry (37 sectors) as cheetah.mdl (30): larger
+    if bigger.parent.is_dir():
+        shutil.rmtree(bigger.parent)
+    bigger.mkdir(parents=True)
+    (bigger / 'cheetah.mdl').write_bytes(admiral)
     for mod, data in (('same', admiral), ('swap', cheetah)):
         folder = out / ('modloader_' + mod) / ('Test ' + mod)
         if folder.parent.is_dir():
@@ -99,16 +106,18 @@ def main():
         (folder / 'admiral.mdl').write_bytes(data)
     shots, logs, alive = {}, {}, {}
     for name, mods in (('original', None), ('same', out / 'modloader_same'), ('swap', out / 'modloader_swap'),
-                       ('text', out / 'modloader_text')):
-        shots[name], logs[name], alive[name] = run(out, name, mods, a.save)
+                       ('text', out / 'modloader_text'), ('bigger', out / 'modloader_bigger')):
+        shots[name], logs[name], alive[name] = run(out, name, mods, a.save, 172 if name == 'bigger' else 171)
     result = {name: mods_check.picture_stats(shots[name], shots['original']) for name in shots}
     result['resolved'] = {n: 'admiral.mdl -> GTA3PS2.IMG entry 171' in logs[n] for n in ('same', 'swap')}
     result['alive'] = alive
     result['texts'] = texts
+    result['moved'] = ('cheetah.mdl -> GTA3PS2.IMG entry 172' in logs['bigger'] and 'larger than the disc' in logs['bigger'] and
+                       "read of a mod's moved file" in logs['bigger'])
     result['text_file'] = [l.split(' -> ')[1] for l in logs['text'].splitlines() if 'GXT -> disc file' in l]
     result['pass'] = (all(result['resolved'].values()) and all(alive.values()) and
                       result['swap']['diff_from_original'] > max(3 * result['same']['diff_from_original'], 1.0) and
-                      texts.get('original') == 'Admiral' and texts.get('text') == 'ADMIRAL' and
+                      texts.get('original') == 'Admiral' and texts.get('text') == 'ADMIRAL' and result['moved'] and
                       not any('[crash]' in t for t in logs.values()))
     (out / 'result.json').write_text(json.dumps(result, indent=1), encoding='utf-8')
     print(json.dumps(result, indent=1))
