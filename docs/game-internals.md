@@ -1487,6 +1487,151 @@ Found for the mod loader's game files (docs/MODS.md "Game files"), with the rig 
   `FUN_00221818` at their file-table LSN, `bytes` long - a mod's copy laid over those sectors is what the game loads
   (a GXT with "Admiral" written "ADMIRAL" made the game's text for the key ADMIRAL read "ADMIRAL", 2026-11-03).
 
+- **A vehicle's entry** (`admiral.mdl`, 75,776 bytes): a relocatable resource - magic `ldm\0` ("mdl" reversed), then
+  sizes and the relocation table's offset (`0x12095`, `0x1182c`, `0x11880`, 0x1e2 ...: the LCS / VCS resource header,
+  to be mapped). Its strings are **the frame names of a PC VC `.dff`**: `chassis_dummy`, `chassis_hi`, `chassis_vlo`,
+  `wheel_lf/rf/lb/rb_dummy`, `door_lf/rf/lr/rr_dummy`, `bonnet_dummy`, `boot_dummy`, `bump_front/rear_dummy`,
+  `windscreen_dummy`, `wing_lf/rf_dummy`, `car_parts`; and its textures' names: `admiral868bit_sl` (the body),
+  `xv_vehiclegeneric_sl`, `xv_vehiclegrunge_sl`, `xv_scratch_sl`, `xv_vcs_licenseplates_cs`, `xv_vc_crackedglassa_sl`,
+  `xv_vehiclesteering_sl` (found 2026-11-03 with `tools/img.py extract admiral` and a strings pass).
+- **The `ldm` / `tex` resource layout** (2026-11-03, `tools/mdlinfo.py`, `tools/dff2mdl.py`, `tools/txd2xtx.py`;
+  aap's storiesconv as a reference): a 0x20 header `{ident, shrink, fileSize, dataSize, relocTab, numRelocs,
+  globalTab, u16 classes, u16 functions}`; pointers are file offsets, each listed in the relocation table. The game
+  keeps `[0, dataSize)`; what follows is the global table, the relocation table and - **after the relocation table** -
+  strings read once at load: the materials' texture names (`admiral868bit_sl` at 0x12084 of 0x12095). A rewritten file
+  has to move that tail as a whole and every pointer into it.
+- **A vehicle `ldm`**: at 0x20 `{element group, extras count, extras, paint}`: the **first-colour paint list** at 0x2C
+  (30 material pointers, null-ended when fewer) and the **second-colour list** at 0xA4 (25); the game colours those
+  materials with the car's colours (the ADMIRAL lists 14 materials, all first colour; the COMET 15 + 2). Paint
+  materials use `xv_vehiclegrunge_sl` / `xv_scratch_sl` (the dirt and scratches over the colour) or the car's own
+  texture. Node `RslNode`: modelling matrix +0x10, child +0x90, next +0x94, name +0xA8 (size 0xB0); element: node +4,
+  geometry +0x14, group link +0x1C; an intact and a damaged element per `X_dummy`. Geometry: a 32-byte RslGeometry
+  (materials list +0x0C, count +0x10), the 0x40 PS2 header, 0x30-byte meshes, the DMA data (section 6d's batches).
+  Material (16 bytes): `{texture name, RGBA, 2, matfx}` - a null name is drawn in its colour; matfx points at the
+  effect data (paint's reflection).
+- **A vehicle's elements, more** (2026-11-03, the player's review of converted VC cars): an `X_dummy` holds its
+  intact element(s) - **object flags (+2) bit 4 set** - and its damaged one (bit clear, component id +0x2A one higher),
+  in either order in the group's list; a van's door dummy holds two intact pieces (door, window) and one damaged.
+  Extras are a list of their own at 0x28 (count 0x24), elements whose nodes hang free (no parent: root-relative), not in
+  the group. At load `FUN_00394438` gives each element a render callback by its node's name: `moving_rotor` ->
+  `0x36e100`, `moving_rotor2` -> `0x36e1f8` (drawn translucent, sorted by distance), `extra*` and the rest by whether a
+  material has alpha. A helicopter's `moving_rotor` is a blur disc (texture `rotor` or `black64a`, in the vehicle's own
+  dictionary) faded in with the rotor's speed, `static_rotor` the blades. The 0x30-byte mesh header ends with the
+  mesh's **int16 bounding box** in the geometry's quantised space (min xyz, max xyz, two units out), the geometry header
+  (+0x1C) with the union; mesh +0x18 is an int the storiesconv notes tie to the raster (0 in 169 of the game's meshes).
+  Every vehicle's TXD has the vehicle's name; `boxvil`, `enforce`, `fbiran`, `policem`, `sabretb`, `washin` are VC's
+  `boxville`, `enforcer`, `fbiranch`, `police`, `sabretur`, `washing`. The wheel models `wheel_rim` .. `wheel_smallcar`
+  (320-329, VC's names) have no streaming data: resident, from GAME.DTZ.
+- **Texture dictionaries** are archive entries too (ident `tex\0`, 823 of them): **TXD slot `i` is streaming entry
+  `*(*(0x489FF8) + 8) + i`** (7534 on this disc; then `+0xC` 8365, `+0x10` 8392, `+0x14` 8482 the total). A model
+  info's TXD slot is the halfword at +0x1E (ADMIRAL 167 -> entry 7701, COMET 262 -> 7796). The TXD store's pool is
+  `*(0x489ECC)` = `{items, flags, size 2000, ...}` with 0x1C-byte items `{RslTexList *, refs, name[20]}` - a vehicle's
+  TXD carries the vehicle's name (found in a RAM dump: the pool header holds the name "TexList"). The resource: at
+  0x20 the RslTexList `{object (type 6), texturesInDict {next, prev}, lInInstance}`; per texture `{raster, dict,
+  lInDictionary {next, prev}, name[32], mask[32]}`; the raster `{0, upload word, texels, flags}` with flags = log2 w |
+  log2 h << 6 | depth << 12 | levels << 20 | swizzle << 24 and the upload word `0x450000 | row bytes` (4 bit) or
+  `0x250000 | row bytes` (8 bit). The texels are linear, the palette after them (RGBA, alpha 0..0x80; 8 bit in CSM1
+  order: index bits 3 and 4 swapped). **Every texture on the disc is 4 or 8 bit, one level, unswizzled, 8..256
+  pixels** (a survey of all 823 dictionaries).
+
+### 9e. Memory: the main heap and the streaming heap (2026-11-03)
+
+Found when VC car mods (4-5x the size of VCS's cars) made `LOAD_ALL_MODELS_NOW` spin after five of them (11e: the
+game's own cars do that after 28); read with headless Ghidra (`tools/eedecomp.py`) and a RAM dump taken in game.
+
+- **One heap type** (`FUN_002bb768(heap, base, size, granularity)` builds it): `+0x0` size, `+0x4` the
+  out-of-memory callback (called by the large-block allocator `FUN_002bc7e8` when the free list `+0x8` has no fit),
+  `+0xC` first block, `+0x10` end, `+0x14` bytes in use, `+0x24..` 64 pools for blocks up to 256 bytes
+  (`FUN_002bc730(heap, size)`: pools, else `FUN_002bc7e8`). Blocks are `{size, flags}` headers (flags < 0: free);
+  `FUN_002bc268` prints a "HEAP DUMP" (size / in use / free / wastage / pools) - debug code, never called.
+- **The main heap** `0x51D6A0` (`FUN_002bb658` returns it, built once by `FUN_002bb6a0` ->
+  `FUN_002bb6f8(0x74DF54, 0x18920AC)`, granularity 0x80000): everything from the end of the executable's data
+  (`0x74DF54`) to `0x1FE0000` - 24.57 MB. In game (Vice Point, after a load) **23.03 MB in use**: about 1.5 MB slack.
+  Out of memory it calls `FUN_0021c468`, which removes vehicles and peds the player does not see and retries.
+- **The streaming heap** `0x51F420`: `FUN_002e5688(heap)` takes **0x567000 bytes (5.4 MB)** from the main heap
+  (`FUN_002bd178`, kept at `heap + 0x130`) and builds the heap in it - base `0x1180B78` in the dump, its blocks
+  between it and `0x16E77F8`. **Every streamed resource lives here**: `FUN_003c7ed8` (CStreaming's request) makes room
+  (`FUN_003cb760(streaming, bytes)`), then `FUN_003c6478` allocates the entry's size from `0x51F420`
+  (`FUN_002bc730`) and the read goes straight into it (`FUN_002213d0`). Out of memory it calls `FUN_0021c300`:
+  CStreaming removes what it can (`FUN_0021c270` -> `FUN_003cba50(0)`), the heap is **defragmented**
+  (`FUN_002bcfc0(0x51F420)`: resources are relocatable, 9d), and the allocation is tried again. In the dump: 89 blocks,
+  4.33 MB in use, 1.07 MB free.
+- So VCS keeps about 5.4 MB of models and textures in memory at once (a VCS car with its textures: 30-120 KB, median
+  76 KB). Larger resources mean fewer at once; when a script forces loads the game cannot meet it spins
+  (`LOAD_ALL_MODELS_NOW`). Within the PS2's 32 MB there is no room to grow the streaming heap by much (the main heap
+  has 1.5 MB slack): the plan is more EE memory for the port (FORK.md T10).
+- **CStreaming's cap of 51** (read in `FUN_003c7ed8`): before a request it counts the resources on its loaded list
+  (`streaming + 0xD8`); at `0x33` or more it calls `FUN_003c9de8(streaming, 0x83)` (call at `0x3C8030`, return
+  `0x3C8038`), which removes the least used one even when the heap has room. The other caller is `FUN_003c9f10`
+  (return `0x3CA0AC`), the make-room loop: that one is about bytes and stays.
+- **In the port (T10, 2026-11-03).** The host holds 64 MB of EE RAM (`PS2_RAM_SIZE`); the game still sees 32 MB
+  (`GetMemorySize`, the default thread stack top: `PS2_GUEST_RAM_SIZE`), so its own layout is the PS2's. Game >
+  Memory > Streaming memory (`memory.streaming`, `VCS_STREAMING_MB`; src/game/vcs_memory.cpp) replaces `FUN_002e5688`:
+  the streaming heap is built at `0x2000000` (past the PS2's RAM) with 12 / 20 / 30 MB - heap `+0x130` = that base,
+  `+0x12C` = 1 as the original leaves them, then a tail call to `FUN_002bb768` - and the cap of 51 is skipped for the
+  request's caller only (`FUN_003c9de8` with `$ra` = `0x3C8038` returns 0). PS2 (5.4 MB) leaves both alone.
+  Measured with `rig.py memstate` (Vice Point, 30 MB): the main heap's use drops from 24.2 to 18.6 MB (the 5.4 MB it
+  no longer gives), the streaming heap holds ~6 MB (5.5 MB at the PS2's size); the game only keeps what it asks for, so
+  more room shows as more car models in traffic (fewer repeats), not as more world detail - that is the areas (9f).
+
+### 9f. The world's streamed areas (2026-11-03)
+
+Read with `tools/eedecomp.py` (`FUN_0023c820`, `FUN_002415b0`, `FUN_002417d0`, `FUN_0023d740`) and RAM in game, for
+the pop-in while driving (FORK.md T2).
+
+- The level object (`*(0x48F4F8)` = `0x750340`) streams the high-detail geometry of **areas of 3 x 3 hex cells**
+  (cells 125 x 108.25 units) into **four slots** of 0xA0 bytes at `level + 0x2C`, their buffers in
+  `0xCB7A80..0x112A660` (~4.5 MB, inside the main heap: not the streaming heap). `+0x248` is the area being drawn,
+  `+0x250` the next, `+0x258` another (the words after each, `+0x24C` / `+0x254` / `+0x25C`, their pairs).
+- `FUN_0023c820` every frame picks the next area from a predicted point: camera + front x 50 + velocity x 150.
+  `FUN_0023c188` chooses the area for a position.
+- `FUN_002415b0(level, cell x, cell y)` requests an area; `FUN_002417d0(level, piece)` reads one of its pieces
+  asynchronously (`FUN_002213d0`, priority 500), whose callback `FUN_00241440` -> `FUN_00241278` takes the piece and
+  starts the next (`level + 0x270` = 4 while reading). `FUN_00242078` says whether an area is in; `FUN_0023d740`
+  swaps the next area in once the camera is nearer it than the current one.
+- The sectors' draw (`FUN_00240ed8` / `FUN_002409c8`) has no distance LOD: what is in the slots is drawn, the rest of
+  the city is the level's low-detail image. The "70 / FOV" scale in `FUN_003fb610` is the sprites', not a LOD.
+- `VCS_TRACE_AREAS=1` (src/game/vcs_world.cpp) logs every request, piece read / done and swap with its time.
+  Measured on the cruise route (144 km/h over the roofs, the player's mods, 30 MB streaming memory;
+  `build/cruise/t10_areas/game.log`): the request names a new cell every ~2.7 s (one cell per 108 m), and is repeated
+  every frame until the area is in; 107 cell changes, an area in **~20 ms** after its request (p50; p90 200 ms: behind
+  the models' reads), a piece 7 ms (p90 12 ms); the swap comes 1.1 s (p50, p90 2.2 s) after the request - by design,
+  when the camera is nearer the new area. So reading is not what makes the pop-in: the detailed city reaches as far
+  as the areas in the slots cover, the rest is the low-detail image. Further detail needs more slots (their buffers,
+  the chooser) or another source of detail (FORK.md T2). The trace's own logging costs frames (~160 lines a second):
+  not for timing runs.
+
+### 9g. Weapon models and dictionaries (2026-11-03)
+
+Read from the extracted entries (`tools/mdlinfo.py`, `tools/txd2xtx.py info`) for PC weapon mods (FORK.md T11).
+
+- **Weapon model infos** are type 4 (byte `+0x10`; vehicles 6), models 330-369 (339 machete, 341 chnsaw, 343 teargas,
+  344 molotov, 346 beretta, 347 python, 348 ak47, 349 chromegun, 350 shotgspa, 351 buddyshot, 352 m16, 353 skorpion,
+  354 uzi, 355 ingramsl, 356 mplng, 357 sniper, 358 laser, 359 rocketla, 360 flame, 361 m249, 362 minigun). The
+  trainer gives them as weapon types (src/game/vcs_trainer.cpp; type 25 holds model 354 `uzi`, 24 model 353).
+- **The model** (`ldm`): at 0x20 one element (object type 1, flags `0x0004AA01`), not a vehicle's element group (type
+  2); its node has no name, parent or child. One geometry, 140-593 triangles, one or two materials (`gun_uzi3`,
+  `iz_gun_beretta`). Its file's tail is not a vehicle's order: the relocation table comes right after the data, the
+  global table (one entry) after it, strings on both sides (`molotov`: `xv_chromenv` before the relocation table,
+  `iz_gun_molotov` after the global table); the header's `globalTab` > `relocTab`.
+- **The dictionary** (the TXD of the model's name) holds the weapon's textures and its **HUD icon**, the texture named
+  like the model (`uzi`: `uzi` 64 x 64 4-bit + `gun_uzi3` 32 x 32): the HUD finds the icon by the model's name in its
+  dictionary, as VC does - with VC's `.txd` converted as it came, VC's icon (and its look) replaced VCS's. Shown by
+  the conversion: VC's texture renamed (`uzi_pc`) and VCS's kept, the HUD draws VCS's icon.
+- **VCS holds its weapons elsewhere than VC** (found when the player saw VC mods misplaced in Vic's hand). VCS's
+  weapon models are VC's own meshes (VC's `gun_uzi2` / `gun_chainsaw2` textures are VCS's `gun_uzi3` /
+  `iz_gun_chainsaw2`; VC's originals fitted onto VCS's leave 2-6 mm), each moved in the hand's space and turned:
+  4-14 cm along the barrel (+x) and up to 16 cm along z, 2-10 degrees for guns, 15-30 for melee weapons, the
+  chainsaw and the minigun. VCS's animations hold the moved models, so a VC model (or a VC mod, made to sit where
+  VC's own does) is drawn into Vic's palm, a chainsaw's handles miss his hands. `tools/weaponfit.py` fits VC's
+  originals (read from a VC PC's `models/gta3.img`) onto VCS's models into the converters' table
+  (dff2mdl.WEAPON_PLACES): by their outlines (side, top and front silhouettes, intersection over union), not nearest
+  points - where VCS's model is another mesh (VC's M4 onto VCS's M16, VC's rocket launcher with its rocket) a
+  nearest-point fit (ICP) slid along the barrels and left the grips 10 cm apart, or turned the launcher over. Some are
+  other meshes: ak47 (VC's ruger), m16 (m4), m249 (m60), rocketla, minigun - fitted by grip and magazine.
+
+## 10. Memory card and saves
+
 ## 10. Memory card and saves
 
 libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`); files live in `%LOCALAPPDATA%/VCSRecomp/mc0`

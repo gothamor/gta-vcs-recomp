@@ -774,6 +774,54 @@ loads including later reloads after changing views, no per-VBlank churn or failu
 protected even when it exceeds the budget. All 160 PNGs decode in the standalone check; pack pixels total 805 MiB
 at RGBA8 before mips, so loading on demand matters.
 
+### 30. The player's mods while driving: larger streaming memory, VC cars, an HD pack (2026-11-03)
+
+The player saw the game lose a lot of speed with their mods (FORK.md T10). `cruise.py run` (144 fps cap, D3D11, the
+quick build, `build/rig/saves/fortbaxter`), each from its own card copy, the mods through test folders of junctions
+(`build/bench_mods` all, `build/bench_cars` the VC cars only, `build/bench_tex` the HD texture pack only):
+
+| Run | fps | p95 ms | p99 ms | hitches | excess ms / min |
+|---|---|---|---|---|---|
+| no mods, PS2 streaming memory | 142.3 | 7.2 | 9.3 | 20 | 160 |
+| no mods, 30 MB streaming memory | 141.7 | 7.3 | 10.8 | 30 | 200 |
+| the VC cars (Fixed Xbox Vehicles) | 132.5 | 11.4 | 16.4 | 160 | 854 |
+| the HD texture pack | 134.5 | 10.7 | 15.7 | 207 | 1100 |
+| the HD texture pack, its images made off the main thread | 140.6 | 7.4 | 13.3 | 31 | 227 |
+| all the player's mods, the same | 131.1 | 12.2 | 16.4 | 163 | 880 |
+
+- **The streaming memory itself costs nothing measurable** (the 30 MB run is within the runs' noise).
+- **The HD pack's hitches**: its DDS images (with their mip levels, 16 with anisotropy) were created on the main
+  thread when the GS stage first met the texture. The pack's ready images now go through the same early-creation path
+  as decoded textures (`gs_hw.cpp` `makeReplacementEarly`, the helper threads; PS2RECOMP_PATCHES.md): 207 -> 31
+  hitches, p95 10.7 -> 7.4 ms.
+- **The VC cars** stay the cost: the main thread's frame phase rises to ~11 ms in traffic, ~7 us per draw against 4.5
+  for VCS's cars - VC's models have many small materials (one draw and one texture bind each; the conversion already
+  merges parts sharing a texture and colour). Next: fewer state changes per car (a texture atlas per converted car),
+  measured the same way.
+- Outputs: `build/cruise/t10_{nomods,30only,cars,cars_noaa,tex,mods}`, `t10b_{tex,mods}` (after the pack change).
+
+### 31. PC mods: their conversion at boot, an HD weapon's frame cost (2026-11-03)
+
+- **Conversion at boot** (src/game/vcs_stream.cpp): the mod loader converts PC `.dff` / `.txd` once, on the stream
+  thread, before the game's first read, while the game waits. One file at a time, the player's mods took ~5.3 s
+  (160 car files ~4.1 s, 22 weapon files ~1.2 s). Now they convert on every core first (`[mods] N PC file(s) ready on
+  T thread(s)`): 194 files in **1.7 s on 16 threads**. The converters share no mutable state and the disc image is
+  mapped memory, so concurrent reads are safe.
+- **An HD weapon in view** (`HD Weapons`; Vic holding it, the free camera 1.7 m away, uncapped, D3D11, quick build):
+
+  | Weapon | fps | frame ms | game ms | worker ms | GS ms | draws |
+  |---|---|---|---|---|---|---|
+  | VCS's minigun / HD (12.5k triangles) | 180.7 / 154.9 | 5.56 / 6.62 | 4.92 / 5.40 | 4.04 / 4.98 | 3.94 / 5.02 | 1767 / 2158 |
+  | VCS's chainsaw / HD (12.2k triangles) | 188.2 / 134.6 | 5.32 / 7.48 | 4.66 / 5.80 | 3.80 / 6.32 | 3.82 / 5.86 | 1777 / 2668 |
+
+  The cost is the strips, then the draws. The HD chainsaw is faceted: every triangle has its own normals and UVs, so
+  no two triangles share a vertex. Its 12,220 triangles become strips of one triangle each, 61,098 strip vertices
+  (5 per triangle); welding identical vertices first would save 6 %. The PS2 meshes are batches of ~70 vertices, and
+  each batch is one native draw with its own mesh and constants: +891 draws, ~2.4 us each over the game thread
+  (decoding), the GS stage and the worker. The VC cars pay the same way (section 30). Next, in the native path: one draw
+  for consecutive batches of one mesh with the same state and constants (their meshes joined, or one buffer per
+  element), measured here and on the cruise.
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker

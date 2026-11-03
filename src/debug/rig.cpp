@@ -1,5 +1,7 @@
 // See rig.h.
 #include "debug/rig.h"
+#include "game/vcs_freecam.h"
+#include "game/vcs_trainer.h"
 
 #include "ps2_runtime.h"
 #include "runtime/ps2_control.h"
@@ -29,7 +31,7 @@ namespace vcs::rig
 {
     namespace
     {
-        constexpr uint32_t kRamSize = 0x02000000u; // 32 MB EE RAM
+        constexpr uint32_t kRamSize = PS2_RAM_SIZE; // the EE RAM (runtime/ps2_memory.h)
         constexpr uint32_t kRamMask = kRamSize - 1u;
 
         uint8_t *g_rdram = nullptr;
@@ -169,6 +171,25 @@ namespace vcs::rig
                     reply("ok");
                 });
             });
+            // campose <x> <y> <z> <yaw> <pitch> | off -> ok: the free camera there, looking along yaw / pitch (degrees; yaw from
+            // +x toward +y) - pictures from a chosen place (tools/carmod_check.py); off: back behind the player
+            ps2control::addCommand("campose", [](const std::string &args, ps2control::Reply reply) {
+                const auto w = words(args);
+                if (w.size() == 1 && w[0] == "off")
+                {
+                    trainer::setToggle(trainer::FreeCamera, false);
+                    return reply("ok");
+                }
+                if (w.size() < 5)
+                    return reply("error usage: campose <x> <y> <z> <yaw> <pitch> | off");
+                float v[5];
+                for (int i = 0; i < 5; ++i)
+                    v[i] = std::strtof(w[static_cast<size_t>(i)].c_str(), nullptr);
+                constexpr float kRad = 3.14159265f / 180.0f;
+                freecam::place(v[0], v[1], v[2], v[3] * kRad, v[4] * kRad);
+                trainer::setToggle(trainer::FreeCamera, true);
+                reply("ok");
+            });
             // findvec <x> <y> <z> <tolerance> [lo hi] -> ok addr addr ... (three consecutive floats near the point)
             ps2control::addCommand("findvec", [](const std::string &args, ps2control::Reply reply) {
                 const auto w = words(args);
@@ -240,13 +261,21 @@ namespace vcs::rig
             // dump <path> [addr len] -> RAM (all 32 MB by default) to a file, taken on the game thread between frames.
             // Game memory: keep dumps under build/analysis/ (never committed).
             ps2control::addCommand("dump", [](const std::string &args, ps2control::Reply reply) {
+                // the path is everything before an optional "addr len" pair: it may hold spaces
                 const auto w = words(args);
                 uint32_t addr = 0, len = kRamSize;
-                if (w.empty() || (w.size() >= 3 && (!parseU32(w[1], addr) || !parseU32(w[2], len))))
+                size_t pathWords = w.size();
+                if (w.size() >= 3 && parseU32(w[w.size() - 2], addr) && parseU32(w[w.size() - 1], len))
+                    pathWords -= 2;
+                else
+                    addr = 0, len = kRamSize;
+                if (pathWords == 0)
                     return reply("error usage: dump <path> [addr len]");
                 addr &= kRamMask;
                 len = std::min(len, kRamSize - addr);
-                const std::string path = w[0];
+                std::string path = w[0];
+                for (size_t i = 1; i < pathWords; ++i)
+                    path += " " + w[i];
                 runOnGameThread([path, addr, len, reply](uint8_t *rdram, R5900Context *, PS2Runtime *) {
                     FILE *f = std::fopen(path.c_str(), "wb");
                     if (!f)
@@ -527,10 +556,24 @@ namespace vcs::rig
                     return reply("error usage: cruise start <file> <speed> [loop] [from <m>] | stop | status");
                 if (w[0] == "start" && w.size() >= 3)
                 {
+                    // the file is every word before the speed (the first number): a path may hold spaces
+                    size_t speedAt = 2;
+                    for (; speedAt < w.size(); ++speedAt)
+                    {
+                        char *end = nullptr;
+                        std::strtof(w[speedAt].c_str(), &end);
+                        if (end && *end == '\0' && end != w[speedAt].c_str())
+                            break;
+                    }
+                    if (speedAt >= w.size())
+                        return reply("error usage: cruise start <file> <speed> [loop] [from <m>] | stop | status");
+                    std::string path = w[1];
+                    for (size_t i = 2; i < speedAt; ++i)
+                        path += " " + w[i];
                     Cruise c;
-                    FILE *f = std::fopen(w[1].c_str(), "r");
+                    FILE *f = std::fopen(path.c_str(), "r");
                     if (!f)
-                        return reply("error cannot read " + w[1]);
+                        return reply("error cannot read " + path);
                     for (float px, py, pz; std::fscanf(f, "%f %f %f", &px, &py, &pz) == 3;)
                     {
                         if (!c.x.empty())
@@ -548,8 +591,8 @@ namespace vcs::rig
                     std::fclose(f);
                     if (c.x.size() < 2)
                         return reply("error the route needs two points or more");
-                    c.speed = std::strtof(w[2].c_str(), nullptr);
-                    for (size_t i = 3; i < w.size(); ++i)
+                    c.speed = std::strtof(w[speedAt].c_str(), nullptr);
+                    for (size_t i = speedAt + 1; i < w.size(); ++i)
                         if (w[i] == "loop")
                             c.loop = true;
                         else if (w[i] == "from" && i + 1 < w.size())
