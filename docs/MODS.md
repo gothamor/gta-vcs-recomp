@@ -84,9 +84,11 @@ As the player suggested: no archive is rebuilt or replaced - a mod holds only th
 those from the mod. VCS's model archive has no directory on the disc (game-internals.md 9d): the game's own table gives
 each entry its sectors, and its model infos keep each name's key, so a file named after a model finds its entry.
 
-- **In a mod**: `<model name>.mdl` (`admiral.mdl`) or `#<streaming index>.<anything>` (`#1234.bin`), anywhere in the
-  mod's folder. The priority slider decides between two mods with the same entry. A file larger than its entry is
-  refused (the game's buffer is the entry's size; logged); a smaller one is padded with zeros.
+- **In a mod**: `<model name>.mdl` (`admiral.mdl`) or `#<streaming index>.<anything>` (`#1234.bin`) for an archive
+  entry, and a loose disc file by its own name (`AMERICAN.GXT`, `ENGLISH.GXT`, `MAIN.SCM`), anywhere in the mod's folder. The priority slider decides between two mods with the same entry. **Any size**: a smaller file is
+  padded with zeros; a larger one has its record moved past the end of the disc (the streaming info's offset and
+  size, LSN 0x180000 on, and the archive's size raised to reach it), where only the mod's bytes are served - the
+  game allocates the mod's size and the entry touches no neighbour; the game's values come back when the mod goes.
 - **How**: the mod loader hands the list to the stream layer (`vcs::setStreamFiles`); at the next read the stream
   thread resolves each name against the game's tables (the disc's file table for GTA3PS2.IMG's LSN, the model infos'
   keys, the streaming info's offset / size) and lays the mod's bytes over every disc read that covers the entry. An
@@ -95,9 +97,10 @@ each entry its sectors, and its model infos keep each name's key, so a file name
   (from the player's disc image into `build/img/GTA3PS2`, named `admiral.mdl` / `#1234.bin`): an extracted folder is a
   mod as it is. The entries are the game's data - never in git.
 - **Checked** (`tools/gamefiles_check.py`): an ADMIRAL spawned in the street with no mod, with its own entry from a mod
-  (the same picture: 0.28) and with the CHEETAH's entry as `admiral.mdl` (a Cheetah drawn as "Admiral": 1.76) - pass.
-- **Next**: loose files (`MAIN.SCM`, `*.GXT`) the same way (they are files in the disc table, read through the same
-  stream); entries larger than the original (the streaming info's size raised before the game allocates).
+  (the same picture: 0.32) and with the CHEETAH's entry as `admiral.mdl` (a Cheetah drawn as "Admiral": 1.82); and the
+  text files from a mod with "Admiral" written "ADMIRAL" - the game's text for that key reads "ADMIRAL" - pass.
+  And the ADMIRAL's entry (37 sectors) as `cheetah.mdl` (30): a CHEETAH spawned draws the Admiral's body, read from
+  past the disc. A loose file larger than the disc's moves the same way (its file-table record).
 
 ### `.dff` / `.txd`: what PC mods replace, and what VCS has
 

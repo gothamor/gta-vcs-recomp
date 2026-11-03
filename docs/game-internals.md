@@ -1478,6 +1478,14 @@ Found for the mod loader's game files (docs/MODS.md "Game files"), with the rig 
 - **Entries are relocatable**: the CHEETAH's entry served as the ADMIRAL's (smaller: the rest of the buffer zeros)
   loads and draws a Cheetah under the name Admiral, no crash (`tools/gamefiles_check.py`) - a model resource carries
   what the game needs to place it anywhere in the streaming memory.
+- **GTA3PS2.IMG is read as an open file**: `FUN_00220EC8(file, ?, bytes)` reads from the open-file records at
+  `0x5058A8` (0x14 bytes: {?, LSN, bytes, position, ?}) at `LSN + position / 2048` and moves the position on, held to
+  the file's size - so an entry's offset past the archive's end is cut back to it (found when a larger mod entry,
+  moved past the disc, was never read: 2026-11-03). Raising the archive's size there (and in the file table) lets
+  the game read it.
+- **Loose files go through the same stream**: `AMERICAN.GXT` / `ENGLISH.GXT` (and `MAIN.SCM`) are read by
+  `FUN_00221818` at their file-table LSN, `bytes` long - a mod's copy laid over those sectors is what the game loads
+  (a GXT with "Admiral" written "ADMIRAL" made the game's text for the key ADMIRAL read "ADMIRAL", 2026-11-03).
 
 - **A vehicle's entry** (`admiral.mdl`, 75,776 bytes): a relocatable resource - magic `ldm\0` ("mdl" reversed), then
   sizes and the relocation table's offset (`0x12095`, `0x1182c`, `0x11880`, 0x1e2 ...: the LCS / VCS resource header,
@@ -1910,8 +1918,8 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   and diffing RAM); `0x4CD104` CTimer's milliseconds - it stands still while the game is paused (the pause menu, the
   save screen; found by diffing RAM in play and in the pause menu), so it tells running frames from paused ones.
   The player's money: `0x4E49CC` (in CPlayerInfo).
-- **Names**: the text (GXT) table is `**(0x48A2A0)` = {entries, count, data, size}; an entry is 12 bytes {u32 UTF-16
-  text, char key[8]}, sorted by key. Vehicle models are ids 171..280 in `CModelInfo::ms_modelInfoPtrs`
+- **Names**: the text (GXT) table is `*(0x48A2A0)` = {entries, count, data, size} (2553 entries); an entry is 12
+  bytes {UTF-16 text pointer (absolute), char key[8]}, sorted by key (corrected 2026-11-03: one dereference, not two). Vehicle models are ids 171..280 in `CModelInfo::ms_modelInfoPtrs`
   (`*(0x486518)`); a vehicle model info's game name (its text key, e.g. `SENTINL`) is at +0x158. Zones: 56-byte
   records {name[8], min xyz, max xyz, ...} around `0x1a6e3e0`; the main districts' names are text keys (`A_PORT`
   Escobar International, `ARMYB`, `BEACH1..3`, `DOCKS`, `DTOWN`, `GOLFC`, `HAITI`, `HAVANA`, `PORNI`, `STARI`, `JUNKY`).

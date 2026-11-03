@@ -39,7 +39,7 @@ One task at a time, in this order. T3 is the base for T4-T7.
 |---|---|---|---|---|
 | T1 | Texture replacement: PCSX2-compatible packs, **DDS** first-class, PNG kept | - | **Done** (Vulkan compiled, not run) | [#1](https://github.com/willzmkv/gta-vcs-recomp/issues/1) |
 | T1b | Mod loader (PC Mod Loader's way): `modloader/` folders as mods, `modloader.ini`, F2 > Mods switched live with priority sliders; texture packs as its first content | T1 | **Done** | [#10](https://github.com/willzmkv/gta-vcs-recomp/issues/10) |
-| T1c | Mod loader: VCS's own game files from mods (archive entries `.mdl` / `.xtx` / ..., `MAIN.SCM`, `.GXT`) - the `std.stream` of PC Mod Loader | T1b | **GTA3PS2.IMG entries done**; loose files next | [#11](https://github.com/willzmkv/gta-vcs-recomp/issues/11) |
+| T1c | Mod loader: VCS's own game files from mods (archive entries `.mdl` / `.xtx` / ..., `MAIN.SCM`, `.GXT`) - the `std.stream` of PC Mod Loader | T1b | **Done** (archive entries and loose files, any size) | [#11](https://github.com/willzmkv/gta-vcs-recomp/issues/11) |
 | T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Next (research first) | [#2](https://github.com/willzmkv/gta-vcs-recomp/issues/2) |
 | T3 | Pre-HUD post-processing pass (colour + depth before the 2D) | - | Planned | [#3](https://github.com/willzmkv/gta-vcs-recomp/issues/3) |
 | T4 | Volumetric height fog (Proper Shaders `[VolumetricFog]`) | T3 | Planned | [#4](https://github.com/willzmkv/gta-vcs-recomp/issues/4) |
@@ -108,6 +108,23 @@ built from the enabled mods (priority as for textures), served by the stream lay
 check: a mod replacing one model / one text, seen in game.
 
 ### T9 - PC `.dff` / `.txd` (research)
+
+**Plan for route (a), the converter (2026-11-03)** - the player's test mod is `Mods/Fixed_Xbox_Vehs_1.3` (VC PC cars):
+1. `tools/mdlinfo.py`: read a VCS `ldm` - its 0x20-byte chunk header (ident, shrink, file / data size, relocation
+   table, global table), the pointer fix-ups, then the clump (`RslElementGroup`), nodes (`RslNode`: matrices, child /
+   next, name), elements (`RslElement` -> `RslGeometry`), materials (texture names, colours, MatFX env) and the PS2
+   geometry (`sPs2Geometry` + `sPs2GeometryMesh`: bound, scale / position, per-mesh DMA packet, triangle count,
+   material) - checked by printing `admiral.mdl` and redrawing nothing yet.
+2. The meshes' DMA data as the VU1 programs read it (game-internals.md 6d: V3-16 positions with the mesh's scale /
+   position, V2-8 UVs, V4-5 colours, normals): decode one mesh of `admiral.mdl` to triangles and compare with what the
+   game draws (F12 draw log).
+3. `tools/dff2mdl.py`: a VC `.dff` -> `ldm` writer - the node tree by name (the hierarchy already matches), each
+   geometry quantised into the same DMA layout, materials by texture name, the relocation table.
+4. Textures: the car's `.txd` (DXT) into the vehicle's TXD entry (RSL TXD, PS2 paletted rasters), or the textures given
+   to the renderer by name through the texture packs (simpler, and no PS2 size limits).
+5. In the game: `comet.dff` + `comet.txd` from the test mod as a mod file over a VCS car, spawned and compared.
+Format reference: aap's storiesconv (github.com/aap/librwgta, tools/storiesconv - RSL to RW, the other direction).
+That repository states no licence: it is read for the formats only, nothing of its code is copied here.
 
 Whether, and how, PC RenderWare 3 models and texture dictionaries can stand in for VCS's: converted ahead of time to
 RSL structures with PS2 geometry (and XTX), or loaded on the host and drawn by the native renderer in place of a
@@ -206,7 +223,9 @@ release notes for a fork build.
 - **2026-11-03 - T1c, game files.** GTA3PS2.IMG has no directory on the disc: the game's streaming info (from
   GAME.DTZ) gives each entry's sectors and the model infos keep ~CRC32 of each name (game-internals.md 9d). A mod's
   `admiral.mdl` / `#1234.bin` replaces just that entry, laid over the stream's reads; `tools/img.py` lists and extracts
-  entries (75 vehicles named). Checked: the CHEETAH's entry as `admiral.mdl` draws a Cheetah as "Admiral".
+  entries (75 vehicles named). Loose files (`AMERICAN.GXT`, `MAIN.SCM`) by their disc name the same way. Checked: the
+  CHEETAH's entry as `admiral.mdl` draws a Cheetah as "Admiral"; a GXT from a mod changes the game's text; a larger
+  entry (the Admiral as `cheetah.mdl`) loads from past the disc - mods are not held to the original's size.
 - **2026-11-03 - T9, research.** `tools/rwinfo.py` reads PC `.dff` / `.txd` (checked on the player's VC car mods).
   A VCS vehicle `.mdl` (an `ldm` resource) has the very frame names of a VC car `.dff` and named textures: route (a),
   converting `.dff` -> `ldm` and loading it through T1c's game files, chosen; (c) by-name skins only fit VCS's own
