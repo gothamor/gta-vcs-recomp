@@ -22,7 +22,8 @@ namespace present
         {
             float rect[4];  // NDC left, top, right, bottom
             float uvMax[2];
-            float pad[2];
+            float exposure; // 1.0 = original; post-process exposure multiplier
+            float pad;
         };
 
         std::unique_ptr<rhi::Device> g_device;
@@ -45,6 +46,8 @@ namespace present
 
         std::atomic<float> g_displayAspect{4.0f / 3.0f};
         int g_backendSetting = -1; // rhi::Backend; -1: the default
+        std::atomic<bool> g_postProcessEnabled{false};
+        std::atomic<int> g_exposurePercent{100};
 
         rhi::Backend chooseBackend()
         {
@@ -78,9 +81,13 @@ namespace present
             auto ndcX = [&](float px) { return px / targetWidth * 2.0f - 1.0f; };
             auto ndcY = [&](float py) { return 1.0f - py / targetHeight * 2.0f; };
             const rhi::TextureDesc &td = picture.texture->desc();
+            const float exposure = g_postProcessEnabled.load(std::memory_order_relaxed)
+                                       ? static_cast<float>(g_exposurePercent.load(std::memory_order_relaxed)) / 100.0f
+                                       : 1.0f;
             const Params params{{ndcX(x0), ndcY(y0), ndcX(x0 + w), ndcY(y0 + h)},
                                 {static_cast<float>(srcWidth) / td.width, static_cast<float>(srcHeight) / td.height},
-                                {0.0f, 0.0f}};
+                                exposure,
+                                0.0f};
             g_device->updateBuffer(*g_params, &params, sizeof(params));
             g_device->setPipeline(*g_pipeline);
             g_device->setConstants(0, *g_params);
@@ -95,6 +102,11 @@ namespace present
     int backend() { return static_cast<int>(g_device ? g_device->backend() : chooseBackend()); }
 
     bool backendNeedsVulkanWindow() { return chooseBackend() == rhi::Backend::Vulkan; }
+
+    void setPostProcessEnabled(bool on) { g_postProcessEnabled.store(on, std::memory_order_relaxed); }
+    void setExposurePercent(int percent) { g_exposurePercent.store(percent, std::memory_order_relaxed); }
+    bool postProcessEnabled() { return g_postProcessEnabled.load(std::memory_order_relaxed); }
+    int exposurePercent() { return g_exposurePercent.load(std::memory_order_relaxed); }
 
     bool init(int width, int height)
     {

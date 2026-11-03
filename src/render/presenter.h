@@ -50,6 +50,12 @@ namespace present
     // How present() shows frames (the Display > Vertical sync setting; main thread).
     void setPresentMode(int mode); // rhi::Device::PresentMode: 0 Immediate, 1 Vsync, 2 Tearing
 
+    // Post-processing (opt-in enhancement): exposure percent (100 = original) applied as a full-screen pass.
+    void setPostProcessEnabled(bool on);
+    void setExposurePercent(int percent);
+    bool postProcessEnabled();
+    int exposurePercent();
+
     // The same picture and Dear ImGui output (scaled) rendered off-screen at width x height; RGB rows top-down.
     bool capture(const Picture &picture, int srcWidth, int srcHeight, float aspect, int width, int height, std::vector<uint8_t> &rgb,
                  float frameAspect = 0.0f);

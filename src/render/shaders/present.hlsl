@@ -3,7 +3,8 @@ cbuffer Params : register(b0)
 {
     float4 rect;  // NDC: left, top, right, bottom
     float2 uvMax; // the used part of the texture
-    float2 pad;
+    float exposure; // 1.0 = original; post-process exposure multiplier
+    float pad;
 };
 
 struct VSOut
@@ -26,5 +27,9 @@ SamplerState pictureSampler : register(s0);
 
 float4 ps_main(VSOut i) : SV_Target
 {
-    return picture.Sample(pictureSampler, i.uv);
+    float4 color = picture.Sample(pictureSampler, i.uv);
+    // Post-processing: exposure applied as a full-screen pass (opt-in via settings).
+    // exposure is squared for even perceptual steps, matching the audio gain curve.
+    color *= (exposure * exposure);
+    return color;
 }

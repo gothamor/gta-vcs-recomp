@@ -634,6 +634,44 @@ namespace
         s.onChange = [](int v) { setEnv("PS2X_HW_ANISO", std::to_string(v)); };
         settings::add(s);
 
+        // Post-processing (native equivalent of shader/enhancement mods such as ProperShaders):
+        // opt-in, authentic default (off). Applied by the presenter as a full-screen pass.
+        s = {};
+        s.key = "graphics.post_process";
+        s.page = "Graphics";
+        s.section = "Image quality";
+        s.label = "Post-processing";
+        s.help = "Exposure / colour tweaks applied to the final picture (native enhancement, not the PS2 look). Off is authentic.";
+        s.type = Type::Toggle;
+        s.defaultValue = 0;
+        s.env = "VCS_POST_PROCESS";
+        s.onChange = [](int v) {
+            present::setPostProcessEnabled(v != 0);
+            // when the toggle is switched on and exposure is still at its default, give a
+            // visible nudge so the effect is immediately apparent; switching off restores it
+            if (v != 0 && settings::value("graphics.exposure") == 100)
+                settings::set("graphics.exposure", 120);
+            else if (v == 0)
+                settings::set("graphics.exposure", 100);
+        };
+        settings::add(s);
+
+        s = {};
+        s.key = "graphics.exposure";
+        s.page = "Graphics";
+        s.section = "Image quality";
+        s.label = "Exposure";
+        s.help = "Brightness of the final picture, percent (100 = original). Needs Post-processing on.";
+        s.type = Type::Integer;
+        s.min = 0;
+        s.max = 200;
+        s.defaultValue = 100;
+        s.format = "%d%%";
+        s.env = "VCS_EXPOSURE";
+        s.onChange = [](int v) { present::setExposurePercent(v); };
+        settings::add(s);
+
+
         // The graphics API, when the build has more than one (Windows with VCS_RHI_VULKAN); VCS_RHI=d3d11|vulkan|null
         // chooses for one run (render/presenter.h).
         s = {};
