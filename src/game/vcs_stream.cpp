@@ -165,17 +165,17 @@ namespace vcs
             std::vector<uint8_t> out;
             std::string report;
             bool ok = false;
-            if (f.format == StreamFile::Format::PcTxd)
-                ok = rwconv::txdToXtx(readWhole(f.path), 128, out, report);
+            // the disc's own entry: the model the .dff goes onto, or the dictionary whose other textures the .txd keeps
+            std::vector<uint8_t> templ(size_t(templateSectors) * 2048u);
+            IPS2DiscImage *disc = ps2_disc::image();
+            if (!disc || !disc->readBytes(uint64_t(templateLsn) * 2048u, static_cast<uint32_t>(templ.size()), templ.data()))
+                report = "the disc's entry could not be read";
+            else if (f.format == StreamFile::Format::PcTxd)
+                ok = rwconv::txdToXtx(readWhole(f.path), 128, &templ, out, report);
             else
             {
-                std::vector<uint8_t> templ(size_t(templateSectors) * 2048u);
-                IPS2DiscImage *disc = ps2_disc::image();
                 const std::vector<uint8_t> txd = f.companion.empty() ? std::vector<uint8_t>() : readWhole(f.companion);
-                if (!disc || !disc->readBytes(uint64_t(templateLsn) * 2048u, static_cast<uint32_t>(templ.size()), templ.data()))
-                    report = "the disc's entry could not be read";
-                else
-                    ok = rwconv::dffToMdl(readWhole(f.path), templ, f.companion.empty() ? nullptr : &txd, out, report);
+                ok = rwconv::dffToMdl(readWhole(f.path), templ, f.companion.empty() ? nullptr : &txd, out, report);
             }
             std::fprintf(stderr, "[mods] %s: %s converted%s in %.0f ms: %s\n", f.mod.c_str(), f.path.c_str(), ok ? "" : " - FAILED, not used",
                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), report.c_str());
@@ -305,7 +305,14 @@ namespace vcs
                 const uint32_t sectors = index < kResources ? rd32(rdram, at + 0x14u) : 0u;
                 if (offset == 0xFFFFFFFFu || !sectors || offset + sectors > imgSectors)
                 {
-                    std::fprintf(stderr, "[mods] %s: %s is no entry of GTA3PS2.IMG; not used\n", f.mod.c_str(), f.path.c_str());
+                    if (f.format == StreamFile::Format::Vcs)
+                        std::fprintf(stderr, "[mods] %s: %s is no entry of GTA3PS2.IMG; not used\n", f.mod.c_str(), f.path.c_str());
+                    else if (f.name == "wheels") // VC's models/generic/wheels.dff: VCS's wheel models are resident (GAME.DTZ)
+                        std::fprintf(stderr, "[mods] %s: %s - VCS keeps its wheels in memory from the start, not in GTA3PS2.IMG: "
+                                             "not supported yet (FORK.md T10); not used\n", f.mod.c_str(), f.path.c_str());
+                    else
+                        std::fprintf(stderr, "[mods] %s: %s - VCS has no vehicle \"%s\" (rename the files as the one it should "
+                                             "replace); not used\n", f.mod.c_str(), f.path.c_str(), f.name.c_str());
                     continue;
                 }
                 if (std::find(taken.begin(), taken.end(), index) != taken.end())

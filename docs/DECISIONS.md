@@ -1101,3 +1101,11 @@ mods), so either can be used to look into a result. Choices inside:
   vehicle textures are 128 at most); unpaletted ones would weigh far more in the PS2's memory.
 - Python 3.12's `sum()` compensates rounding: the tool sums left to right itself, so its output does not depend on the
   Python version, and the C++ matches it.
+
+## 2026-11-03 - Larger VC models: more memory for the game, not smaller models (FORK.md T10)
+
+Converted VC cars are 4-5x VCS's (VC's Xbox models have about four times the triangles; VCS's own strips are no
+tighter than ours), and VCS streams everything into a fixed 5.4 MB heap. Shrinking the mods (fewer triangles, smaller
+or 4-bit textures) would trade away what the player installs them for. The player's call: give VCS more streaming
+memory instead (T10, issue #15: a larger EE RAM, the streaming heap built there). Until then the conversion stays
+lossless (only shorter strips); textures stay 128 px, 4 or 8 bit like the disc's.

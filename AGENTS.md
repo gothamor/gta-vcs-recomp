@@ -94,6 +94,7 @@ python tools/gamectl.py press F2|screenshot f.png|perf|quit
 python tools/gamectl.py gameinfo           # player position / heading / state, vehicle, camera, clock, pauses, scripts (F3's panel)
 python tools/rig.py start --save build/rig/saves/fortbaxter   # straight into gameplay from a card copy
 python tools/rig.py player|scripts|peekf 0x4e4910 1|scm <hex>  # inspect / drive the running game
+                                                              # (control channel: `campose x y z yaw pitch|off` = free camera there)
 python tools/tour.py OUT [--every 9 --limit 18]               # world tour (quick subset with --every/--limit)
 python tools/saves.py [OUT]                                   # save / Load Game / Delete Game through the menus
 python tools/soak.py [OUT] --hours 3                          # hours of autodrive: crash / hang / leak / falling
@@ -115,6 +116,7 @@ python tools/txd2xtx.py convert CAR.txd OUT.xtx | info F.xtx [--png DIR]   # a V
 python tools/carmod_check.py [OUT] [--dff F --txd F --vehicle admiral --model 171] [--direct] [--folder DIR --models 266,172]
                                                               # VC cars in the game (converted ahead, or by the mod loader)
 python tools/rwconv_check.py [FOLDER]                        # the mod loader's .dff/.txd converters = the Python tools, byte for byte
+python tools/carmod_verify.py FOLDER [--native]               # converted VC vehicles vs their .dff, triangle by triangle (intact + damaged)
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```

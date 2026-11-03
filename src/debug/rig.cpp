@@ -1,5 +1,7 @@
 // See rig.h.
 #include "debug/rig.h"
+#include "game/vcs_freecam.h"
+#include "game/vcs_trainer.h"
 
 #include "ps2_runtime.h"
 #include "runtime/ps2_control.h"
@@ -168,6 +170,25 @@ namespace vcs::rig
                         std::memcpy(rdram + ((addr + i * 4) & kRamMask), &values[i], 4);
                     reply("ok");
                 });
+            });
+            // campose <x> <y> <z> <yaw> <pitch> | off -> ok: the free camera there, looking along yaw / pitch (degrees; yaw from
+            // +x toward +y) - pictures from a chosen place (tools/carmod_check.py); off: back behind the player
+            ps2control::addCommand("campose", [](const std::string &args, ps2control::Reply reply) {
+                const auto w = words(args);
+                if (w.size() == 1 && w[0] == "off")
+                {
+                    trainer::setToggle(trainer::FreeCamera, false);
+                    return reply("ok");
+                }
+                if (w.size() < 5)
+                    return reply("error usage: campose <x> <y> <z> <yaw> <pitch> | off");
+                float v[5];
+                for (int i = 0; i < 5; ++i)
+                    v[i] = std::strtof(w[static_cast<size_t>(i)].c_str(), nullptr);
+                constexpr float kRad = 3.14159265f / 180.0f;
+                freecam::place(v[0], v[1], v[2], v[3] * kRad, v[4] * kRad);
+                trainer::setToggle(trainer::FreeCamera, true);
+                reply("ok");
             });
             // findvec <x> <y> <z> <tolerance> [lo hi] -> ok addr addr ... (three consecutive floats near the point)
             ps2control::addCommand("findvec", [](const std::string &args, ps2control::Reply reply) {

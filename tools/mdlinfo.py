@@ -98,7 +98,7 @@ class Mdl:
             uv_scale = struct.unpack_from("<2f", self.d, m + 16)
             packet, tris, mat = struct.unpack_from("<IHh", self.d, m + 28)
             verts, faces, kinds = self.decode(dma_base + packet, scale, pos, uv_scale)
-            meshes.append({"material": mat, "triangles": tris, "decoded_vertices": len(verts), "decoded_triangles": len(faces),
+            meshes.append({"material": mat, "triangles": tris, "uv_scale": uv_scale, "decoded_vertices": len(verts), "decoded_triangles": len(faces),
                            "attributes": kinds, "verts": verts, "faces": faces})
         return {"num_verts": num_verts, "flags": flags, "scale": scale, "pos": pos, "meshes": meshes,
                 "materials": self.materials(geom)}

@@ -181,26 +181,38 @@ python tools/txd2xtx.py convert comet.txd "modloader/VC Comet/admiral.xtx"
 python tools/carmod_check.py                 # the Comet from Mods/Fixed_Xbox_Vehs_1.3 as the ADMIRAL, in the game
 ```
 
-- **The model** (`dff2mdl convert DFF TEMPLATE OUT [--txd TXD]`): the VCS car replaced is the template - its handling,
-  collision, wheels, sounds and model info stay (the tutorial's advice, by construction). The `.dff`'s frames place
-  the VCS nodes of the same name (`wheel_*_dummy`, `door_*_dummy`, ...); each part (`chassis_hi` / `_vlo`, and
-  `X_hi_ok` / `X_hi_dam` under `X_dummy` - VCS keeps an intact and a damaged element per dummy) becomes a new geometry:
-  the triangles from the bin mesh (exporters leave the triangles' own material numbers at 0), greedy tristrips along
-  shared edges joined by degenerate triangles (the Comet: 640 KB with a strip per triangle, 290 KB), one PS2 mesh per
-  material, encoded as the game's own meshes are (`--self-test`: 3466 / 3466 meshes byte for byte). UVs are unsigned
-  in the PS2 format: a mesh is shifted by whole texture repeats so none is negative. A part the VC car lacks (the
-  ADMIRAL's rear doors on the two-door Comet) gets one degenerate triangle.
+- **The model** (`dff2mdl convert DFF TEMPLATE OUT [--txd TXD]`): the VCS vehicle replaced is the template - its
+  handling, collision, wheels, sounds and model info stay (the tutorial's advice, by construction).
+  - **Nodes**: each VCS node with a VC frame of its name is put where that frame is relative to the root, whatever the
+    trees in between (`wheel_*_dummy`, `door_*_dummy`, `brakelights` ...); the root itself is the vehicle's place.
+  - **Parts** (each element gets VC parts): the part of its node's name (`chassis_hi`, a bike's `forks_front` /
+    `wheel_front` / `handlebars`, a boat's `boat_hi` and flaps, `extra1`); an `X_dummy`'s intact element (object flag
+    4) `X_hi_ok`, its damaged one `X_hi_dam`; a helicopter's `static_rotor(2)` VC's `toprotor` / `rearrotor` (VCS's
+    `moving_rotor` blur discs stay theirs: the game fades them in with the speed). VC parts left over: damaged ones,
+    extras and LODs go; the rest - the wings VCS builds into its chassis, small parts - join `chassis_hi` (or a boat's
+    hull) where they are. Elements no part reaches are emptied (one degenerate triangle): VCS-only pieces (`car_parts`,
+    `part1`, `glass_hi`, a van door's second piece) would show VCS geometry with textures the new dictionary lacks.
+  - **Meshes**: the triangles from the bin mesh (exporters leave the triangles' own material numbers at 0), strips
+    started at the triangle with the fewest free neighbours and grown both ways, one PS2 mesh per material (and per
+    UV repeat when a material spans more than two: the 8-bit UVs keep the game's precision), encoded as the game's own
+    (`--self-test`: 3466 / 3466 byte for byte), with each mesh's and the geometry's int16 bounding box (game-internals
+    9d). NaN in a `.dff` reads as 0.
 - **Materials**: one per VC material, with VC's texture name (found in the `.xtx` below) and colour; VC's paint colours
   (`3CFF00` first, `FF00AF` second) put the material into the vehicle's paint lists - the game colours those with the
   car's colours - and lend it the template's paint effects (the reflection). A texture the `.txd` lacks maps to VCS's
   shared one where there is one (`vehiclegeneric256` -> `xv_vehiclegeneric_sl`, ...) or goes (the material's colour
   alone).
-- **The textures** (`txd2xtx convert TXD OUT [--max 128]`): D3D8 textures (DXT1 / 3 / 5, 8-bit palettes, 8888 / 888 /
-  1555 / 565 / 4444 / LUM8) decoded, halved down to 128 pixels (VCS's own vehicle textures are 128 at most) and
-  quantised (median cut) to 4 bit when nothing is lost, else 8 bit - the format of every texture on the disc. `info
-  FILE.xtx --png DIR` shows a dictionary's textures (the disc's too).
+- **The textures** (`txd2xtx convert TXD OUT [--max 128] [--keep VCS.xtx]`): D3D8 textures (DXT1 / 3 / 5, 8-bit
+  palettes, 8888 / 888 / 1555 / 565 / 4444 / LUM8) decoded, halved down to 128 pixels (VCS's own vehicle textures are
+  128 at most) and quantised (median cut) to 4 bit when nothing is lost, else 8 bit - the format of every texture on
+  the disc. The VCS dictionary's own textures the `.txd` has no name for follow, as they are (a helicopter's `rotor`
+  blur). `info FILE.xtx --png DIR` shows a dictionary's textures (the disc's too); `tools/img.py extract
+  build/img/GTA3PS2 "*"` writes the vehicles' models and dictionaries (`admiral.mdl`, `admiral.xtx`).
 - **The mod loader** takes `<texture dictionary>.xtx` by the TXD's name (the game's TXD store keeps the names; a
-  vehicle's is the vehicle's name), as `<model>.mdl` by the model's.
+  vehicle's is the vehicle's name), as `<model>.mdl` by the model's. VC names VCS shortened map to VCS's: `boxville`,
+  `enforcer`, `fbiranch`, `police`, `sabretur`, `washing` -> `boxvil`, `enforce`, `fbiran`, `policem`, `sabretb`,
+  `washin`. A VC vehicle VCS does not have (Infernus, Landstalker ...) is named in the log: rename its files as the
+  vehicle it should replace. VC's `wheels.dff` / `.txd` are not used yet: VCS's wheel models are resident (T10).
 - **Checked** (`tools/carmod_check.py`): the ADMIRAL with no mod, then the Comet in its place (both entries larger than
   the disc's: 292 KB model, 165 KB textures) - spawned in the street, the player in it, from behind: the VC Comet with
   its own textures, the game's paint, no crash.
@@ -209,9 +221,14 @@ python tools/carmod_check.py                 # the Comet from Mods/Fixed_Xbox_Ve
   (160 files converted, none failed): the VC Xbox Comet, Cheetah, Taxi, Voodoo, Stinger, Mesa and PCJ-600 spawned,
   each VC's model with its textures. The C++ and Python converters agree byte for byte on all 236 `.dff` / `.txd` of
   the player's mods (`tools/rwconv_check.py`).
-- **Not yet**: the template's `car_parts` element stays (the VCS car's extras); VC's own extras (`extra1` ...) are not
-  converted; bikes, boats and aircraft get their chassis and dummies' parts only (other node sets); a VC car with no
-  VCS car of its name needs renaming to the one it should replace.
+- **Checked triangle by triangle** (`tools/carmod_verify.py FOLDER [--native]`): both cars put together as drawn -
+  the VC one from its frames, the converted one from its node tree and decoded PS2 meshes - intact and damaged; every
+  VC triangle must be at its place (5 mm) with its texture and UVs, and nothing else may be there. 67 / 67 vehicles of
+  `Fixed_Xbox_Vehs_1.3` (both converters), and the in-game pictures from four sides (`carmod_check.py --views`, the
+  rig's `campose` free-camera pose) for cars, a bike, boats and helicopters.
+- **Not yet**: VC's wheels (`wheels.dff`, resident in VCS); VC extras where VCS has no extra element of that name;
+  memory - a VC car with its textures is 4-5x a VCS car, and VCS streams into a fixed 5.4 MB heap (game-internals.md
+  9e): loading many different VC cars at once can exhaust it. T10 (issue #15) gives the port more memory.
 
 ## The pre-HUD pass (the infrastructure T4-T7 need)
 

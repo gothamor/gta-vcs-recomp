@@ -5,7 +5,8 @@ they port (tools/dff2mdl.py, tools/txd2xtx.py): every .dff and .txd under a fold
     python tools/rwconv_check.py [FOLDER] [--out DIR] [--limit N]
 
 FOLDER: default Mods/ (the player's PC mods). A .dff goes onto the VCS vehicle of its name when there is one (else the
-ADMIRAL), with the .txd beside it when there is one; extracted vehicles needed (python tools/img.py extract). Outputs
+ADMIRAL), with the .txd beside it when there is one; a .txd keeps the textures of the VCS dictionary of its name;
+extracted vehicles and dictionaries needed (python tools/img.py extract build/img/GTA3PS2 "*"). Outputs
 under build/rwconv_check (game data: never in git). Exit code 0 = every file the same (files both refuse count as
 the same).
 """
@@ -68,16 +69,18 @@ def main():
         tag = '%04d_%s' % (i, stem)
         py, cc = os.path.join(a.out, tag + '.py' + ext), os.path.join(a.out, tag + '.cc' + ext)
         if ext.lower() == '.dff':
-            template = os.path.join(VEHICLES, stem.lower() + '.mdl')
+            template = os.path.join(VEHICLES, dff2mdl.VC_NAMES.get(stem.lower(), stem.lower()) + '.mdl')
             if not os.path.isfile(template):
                 template = os.path.join(VEHICLES, 'admiral.mdl')
             txd = os.path.join(os.path.dirname(path), stem + '.txd')
             txd = txd if os.path.isfile(txd) else None
             p = python_side(dff2mdl.convert, path, template, py, txd)
             ok, msg = native_side(exe, '--rwconv-dff', path, template, cc, *([txd] if txd else []))
-        else:
-            p = python_side(txd2xtx.convert, path, py)
-            ok, msg = native_side(exe, '--rwconv-txd', path, cc)
+        else:  # with the VCS dictionary of its name, when there is one: its other textures are kept
+            keep = os.path.join(VEHICLES, dff2mdl.VC_NAMES.get(stem.lower(), stem.lower()) + '.xtx')
+            keep = keep if os.path.isfile(keep) else None
+            p = python_side(txd2xtx.convert, path, py, 128, None, keep)
+            ok, msg = native_side(exe, '--rwconv-txd', path, cc, *([keep] if keep else []))
         if p is not True and not ok:
             results['refused_both'] += 1
             continue

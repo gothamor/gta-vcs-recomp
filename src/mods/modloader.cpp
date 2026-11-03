@@ -10,6 +10,7 @@
 // (VCS_TEXTURE_PACK, textures/SLUS-21590) only with VCS_TEXTURE_REPLACEMENTS=1 - or both with VCS_TEST_MODS=1, which
 // leaves the switches free for the `setting` command (an environment value fixes its setting).
 #include "mods/modloader.h"
+#include "mods/rwconv.h"
 
 #include "game/vcs_stream.h"
 #include "platform/platform.h"
@@ -383,8 +384,9 @@ namespace vcs::mods
                             if (ext == ".dff" || ext == ".txd")
                             {
                                 f.format = ext == ".dff" ? vcs::StreamFile::Format::PcDff : vcs::StreamFile::Format::PcTxd;
+                                f.name = vcs::rwconv::vcsName(f.name); // police.dff: VCS's policem
                                 for (const fs::path &other : list) // the car's textures: the .txd of its name in the mod
-                                    if (ext == ".dff" && lower(other.extension().string()) == ".txd" && lower(utf8(other.stem())) == lower(f.name))
+                                    if (ext == ".dff" && lower(other.extension().string()) == ".txd" && lower(utf8(other.stem())) == lower(utf8(file.stem())))
                                     {
                                         f.companion = utf8(other);
                                         break;

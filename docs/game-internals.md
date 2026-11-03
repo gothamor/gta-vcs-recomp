@@ -1509,6 +1509,19 @@ Found for the mod loader's game files (docs/MODS.md "Game files"), with the rig 
   (materials list +0x0C, count +0x10), the 0x40 PS2 header, 0x30-byte meshes, the DMA data (section 6d's batches).
   Material (16 bytes): `{texture name, RGBA, 2, matfx}` - a null name is drawn in its colour; matfx points at the
   effect data (paint's reflection).
+- **A vehicle's elements, more** (2026-11-03, the player's review of converted VC cars): an `X_dummy` holds its
+  intact element(s) - **object flags (+2) bit 4 set** - and its damaged one (bit clear, component id +0x2A one higher),
+  in either order in the group's list; a van's door dummy holds two intact pieces (door, window) and one damaged.
+  Extras are a list of their own at 0x28 (count 0x24), elements whose nodes hang free (no parent: root-relative), not in
+  the group. At load `FUN_00394438` gives each element a render callback by its node's name: `moving_rotor` ->
+  `0x36e100`, `moving_rotor2` -> `0x36e1f8` (drawn translucent, sorted by distance), `extra*` and the rest by whether a
+  material has alpha. A helicopter's `moving_rotor` is a blur disc (texture `rotor` or `black64a`, in the vehicle's own
+  dictionary) faded in with the rotor's speed, `static_rotor` the blades. The 0x30-byte mesh header ends with the
+  mesh's **int16 bounding box** in the geometry's quantised space (min xyz, max xyz, two units out), the geometry header
+  (+0x1C) with the union; mesh +0x18 is an int the storiesconv notes tie to the raster (0 in 169 of the game's meshes).
+  Every vehicle's TXD has the vehicle's name; `boxvil`, `enforce`, `fbiran`, `policem`, `sabretb`, `washin` are VC's
+  `boxville`, `enforcer`, `fbiranch`, `police`, `sabretur`, `washing`. The wheel models `wheel_rim` .. `wheel_smallcar`
+  (320-329, VC's names) have no streaming data: resident, from GAME.DTZ.
 - **Texture dictionaries** are archive entries too (ident `tex\0`, 823 of them): **TXD slot `i` is streaming entry
   `*(*(0x489FF8) + 8) + i`** (7534 on this disc; then `+0xC` 8365, `+0x10` 8392, `+0x14` 8482 the total). A model
   info's TXD slot is the halfword at +0x1E (ADMIRAL 167 -> entry 7701, COMET 262 -> 7796). The TXD store's pool is
@@ -1520,6 +1533,33 @@ Found for the mod loader's game files (docs/MODS.md "Game files"), with the rig 
   `0x250000 | row bytes` (8 bit). The texels are linear, the palette after them (RGBA, alpha 0..0x80; 8 bit in CSM1
   order: index bits 3 and 4 swapped). **Every texture on the disc is 4 or 8 bit, one level, unswizzled, 8..256
   pixels** (a survey of all 823 dictionaries).
+
+### 9e. Memory: the main heap and the streaming heap (2026-11-03)
+
+Found when VC car mods (4-5x the size of VCS's cars) made `LOAD_ALL_MODELS_NOW` spin after five of them (11e: the
+game's own cars do that after 28); read with headless Ghidra (`tools/eedecomp.py`) and a RAM dump taken in game.
+
+- **One heap type** (`FUN_002bb768(heap, base, size, granularity)` builds it): `+0x0` size, `+0x4` the
+  out-of-memory callback (called by the large-block allocator `FUN_002bc7e8` when the free list `+0x8` has no fit),
+  `+0xC` first block, `+0x10` end, `+0x14` bytes in use, `+0x24..` 64 pools for blocks up to 256 bytes
+  (`FUN_002bc730(heap, size)`: pools, else `FUN_002bc7e8`). Blocks are `{size, flags}` headers (flags < 0: free);
+  `FUN_002bc268` prints a "HEAP DUMP" (size / in use / free / wastage / pools) - debug code, never called.
+- **The main heap** `0x51D6A0` (`FUN_002bb658` returns it, built once by `FUN_002bb6a0` ->
+  `FUN_002bb6f8(0x74DF54, 0x18920AC)`, granularity 0x80000): everything from the end of the executable's data
+  (`0x74DF54`) to `0x1FE0000` - 24.57 MB. In game (Vice Point, after a load) **23.03 MB in use**: about 1.5 MB slack.
+  Out of memory it calls `FUN_0021c468`, which removes vehicles and peds the player does not see and retries.
+- **The streaming heap** `0x51F420`: `FUN_002e5688(heap)` takes **0x567000 bytes (5.4 MB)** from the main heap
+  (`FUN_002bd178`, kept at `heap + 0x130`) and builds the heap in it - base `0x1180B78` in the dump, its blocks
+  between it and `0x16E77F8`. **Every streamed resource lives here**: `FUN_003c7ed8` (CStreaming's request) makes room
+  (`FUN_003cb760(streaming, bytes)`), then `FUN_003c6478` allocates the entry's size from `0x51F420`
+  (`FUN_002bc730`) and the read goes straight into it (`FUN_002213d0`). Out of memory it calls `FUN_0021c300`:
+  CStreaming removes what it can (`FUN_0021c270` -> `FUN_003cba50(0)`), the heap is **defragmented**
+  (`FUN_002bcfc0(0x51F420)`: resources are relocatable, 9d), and the allocation is tried again. In the dump: 89 blocks,
+  4.33 MB in use, 1.07 MB free.
+- So VCS keeps about 5.4 MB of models and textures in memory at once (a VCS car with its textures: 30-120 KB, median
+  76 KB). Larger resources mean fewer at once; when a script forces loads the game cannot meet it spins
+  (`LOAD_ALL_MODELS_NOW`). Within the PS2's 32 MB there is no room to grow the streaming heap by much (the main heap
+  has 1.5 MB slack): the plan is more EE memory for the port (FORK.md T10).
 
 ## 10. Memory card and saves
 

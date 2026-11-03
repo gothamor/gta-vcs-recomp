@@ -12,6 +12,7 @@
 #include <iterator>
 #include <map>
 #include <optional>
+#include <queue>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -66,6 +67,13 @@ namespace vcs::rwconv
             float f;
             std::memcpy(&f, &bits, 4);
             return f;
+        }
+
+        // a .dff's float: NaN / infinity (some exporters write them) read as 0 (dff2mdl.finite)
+        double finite32(const Bytes &d, uint64_t at)
+        {
+            const double v = f32(d, at);
+            return std::isfinite(v) ? v : 0.0;
         }
 
         void put32(Bytes &d, uint64_t at, uint32_t v)
@@ -246,9 +254,9 @@ namespace vcs::rwconv
                         Frame f{};
                         const uint64_t at = s.first + 4 + uint64_t(i) * 56;
                         for (int k = 0; k < 9; ++k)
-                            f.rot[k] = f32(d, at + 4 * k);
+                            f.rot[k] = finite32(d, at + 4 * k);
                         for (int k = 0; k < 3; ++k)
-                            f.pos[k] = f32(d, at + 36 + 4 * k);
+                            f.pos[k] = finite32(d, at + 36 + 4 * k);
                         f.parent = static_cast<int32_t>(u32(d, at + 48));
                         out.frames.push_back(f);
                     }
@@ -281,7 +289,7 @@ namespace vcs::rwconv
                         if (!nsets)
                             nsets = (flags & 0x80) ? 2 : (flags & 0x04) ? 1 : 0;
                         for (uint32_t i = 0; i < nverts; ++i)
-                            g.uvs.push_back(nsets ? V2{f32(d, at + i * 8ull), f32(d, at + i * 8ull + 4)} : V2{0.0, 0.0});
+                            g.uvs.push_back(nsets ? V2{finite32(d, at + i * 8ull), finite32(d, at + i * 8ull + 4)} : V2{0.0, 0.0});
                         at += uint64_t(nsets) * nverts * 8;
                         for (uint32_t i = 0; i < ntris; ++i)
                         {
@@ -292,11 +300,11 @@ namespace vcs::rwconv
                         const uint32_t hasNormals = u32(d, at + 4);
                         at += 8;
                         for (uint32_t i = 0; i < nverts; ++i)
-                            g.verts.push_back({f32(d, at + i * 12ull), f32(d, at + i * 12ull + 4), f32(d, at + i * 12ull + 8)});
+                            g.verts.push_back({finite32(d, at + i * 12ull), finite32(d, at + i * 12ull + 4), finite32(d, at + i * 12ull + 8)});
                         at += uint64_t(nverts) * 12;
                         if (hasNormals)
                             for (uint32_t i = 0; i < nverts; ++i)
-                                g.normals.push_back({f32(d, at + i * 12ull), f32(d, at + i * 12ull + 4), f32(d, at + i * 12ull + 8)});
+                                g.normals.push_back({finite32(d, at + i * 12ull), finite32(d, at + i * 12ull + 4), finite32(d, at + i * 12ull + 8)});
                         std::vector<Material> own;
                         const auto ml = child(d, gc.at, gc.end, kMatList);
                         if (ml)
@@ -376,82 +384,184 @@ namespace vcs::rwconv
             return out;
         }
 
-        V3 apply(const Frame &f, const double *pos, const V3 &v)
+        // ---- matrices (dff2mdl.mat_mul / mat_inv / mat_apply): RW's row vectors, v * r + p ------------------------------
+        struct Mat
         {
-            return {v[0] * f.rot[0] + v[1] * f.rot[3] + v[2] * f.rot[6] + pos[0], v[0] * f.rot[1] + v[1] * f.rot[4] + v[2] * f.rot[7] + pos[1],
-                    v[0] * f.rot[2] + v[1] * f.rot[5] + v[2] * f.rot[8] + pos[2]};
+            double r[9], p[3];
+        };
+        constexpr Mat kIdentity{{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, {0.0, 0.0, 0.0}};
+
+        Mat matMul(const Mat &a, const Mat &b) // a then b
+        {
+            Mat out{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    out.r[3 * i + j] = a.r[3 * i] * b.r[j] + a.r[3 * i + 1] * b.r[3 + j] + a.r[3 * i + 2] * b.r[6 + j];
+            for (int j = 0; j < 3; ++j)
+                out.p[j] = a.p[0] * b.r[j] + a.p[1] * b.r[3 + j] + a.p[2] * b.r[6 + j] + b.p[j];
+            return out;
+        }
+
+        Mat matInv(const Mat &m)
+        {
+            const double a = m.r[0], b = m.r[1], c = m.r[2], d = m.r[3], e = m.r[4], f = m.r[5], g = m.r[6], h = m.r[7], i = m.r[8];
+            const double det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+            if (std::fabs(det) < 1e-12)
+                return kIdentity;
+            const double cof[9] = {e * i - f * h, c * h - b * i, b * f - c * e, f * g - d * i, a * i - c * g,
+                                   c * d - a * f, d * h - e * g, b * g - a * h, a * e - b * d};
+            Mat out{};
+            for (int k = 0; k < 9; ++k)
+                out.r[k] = cof[k] / det;
+            for (int j = 0; j < 3; ++j)
+                out.p[j] = -(m.p[0] * out.r[j] + m.p[1] * out.r[3 + j] + m.p[2] * out.r[6 + j]);
+            return out;
+        }
+
+        V3 matApply(const Mat &m, const V3 &v, bool translate = true)
+        {
+            V3 out;
+            for (int j = 0; j < 3; ++j)
+                out[j] = v[0] * m.r[j] + v[1] * m.r[3 + j] + v[2] * m.r[6 + j] + (translate ? m.p[j] : 0.0);
+            return out;
+        }
+
+        // dff2mdl.uv_tiles: a material's triangles as meshes - one while its UVs span at most two repeats, else one per
+        // triangle's repeat (its lowest whole u, v)
+        std::vector<std::vector<std::array<uint32_t, 3>>> uvTiles(const std::vector<std::array<uint32_t, 3>> &tris, const std::vector<V2> &uvs)
+        {
+            if (tris.empty())
+                return {tris};
+            double minU = 0, maxU = 0, minV = 0, maxV = 0;
+            bool first = true;
+            for (const auto &t : tris)
+                for (const uint32_t i : t)
+                {
+                    const V2 &uv = uvs.at(i);
+                    minU = first ? uv[0] : std::min(minU, uv[0]), maxU = first ? uv[0] : std::max(maxU, uv[0]);
+                    minV = first ? uv[1] : std::min(minV, uv[1]), maxV = first ? uv[1] : std::max(maxV, uv[1]);
+                    first = false;
+                }
+            if (maxU - std::floor(minU) <= 2.0 && maxV - std::floor(minV) <= 2.0)
+                return {tris};
+            std::vector<std::pair<std::pair<double, double>, std::vector<std::array<uint32_t, 3>>>> tiles;
+            for (const auto &t : tris)
+            {
+                const std::pair<double, double> tile{std::floor(std::min({uvs[t[0]][0], uvs[t[1]][0], uvs[t[2]][0]})),
+                                                     std::floor(std::min({uvs[t[0]][1], uvs[t[1]][1], uvs[t[2]][1]}))};
+                auto it = std::find_if(tiles.begin(), tiles.end(), [&](const auto &x) { return x.first == tile; });
+                if (it == tiles.end())
+                    tiles.push_back({tile, {t}});
+                else
+                    it->second.push_back(t);
+            }
+            std::vector<std::vector<std::array<uint32_t, 3>>> out;
+            for (auto &x : tiles)
+                out.push_back(std::move(x.second));
+            return out;
         }
 
         // ---- strips and the PS2 mesh (dff2mdl.strip_of, encode) -----------------------------------------------------------
+        // dff2mdl.strip_of: strips started at the triangle with the fewest free neighbours, grown along shared edges to
+        // the neighbour with the fewest free neighbours, both ways, joined by repeating a vertex at each end
         std::vector<uint32_t> stripOf(const std::vector<std::array<uint32_t, 3>> &input)
         {
             std::vector<std::array<uint32_t, 3>> tris;
             for (const auto &t : input)
                 if (t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
                     tris.push_back(t);
+            const size_t count = tris.size();
             auto key = [](uint32_t a, uint32_t b) { return (uint64_t(std::min(a, b)) << 32) | std::max(a, b); };
             std::unordered_map<uint64_t, std::vector<size_t>> byEdge;
-            for (size_t t = 0; t < tris.size(); ++t)
+            for (size_t t = 0; t < count; ++t)
             {
                 const auto &[a, b, c] = tris[t];
                 byEdge[key(a, b)].push_back(t);
                 byEdge[key(b, c)].push_back(t);
                 byEdge[key(c, a)].push_back(t);
             }
-            std::vector<char> used(tris.size(), 0);
-            auto grow = [&](std::vector<uint32_t> s, std::unordered_set<size_t> &mark) {
-                for (;;)
+            std::vector<std::vector<size_t>> neighbours(count);
+            for (size_t t = 0; t < count; ++t)
+            {
+                const auto &[a, b, c] = tris[t];
+                for (const uint64_t e : {key(a, b), key(b, c), key(c, a)})
+                    for (const size_t u : byEdge[e])
+                        if (u != t && std::find(neighbours[t].begin(), neighbours[t].end(), u) == neighbours[t].end())
+                            neighbours[t].push_back(u);
+            }
+            std::vector<char> used(count, 0);
+            std::vector<int64_t> freeCount(count);
+            using Entry = std::pair<int64_t, size_t>;
+            std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> heap;
+            for (size_t t = 0; t < count; ++t)
+            {
+                freeCount[t] = static_cast<int64_t>(neighbours[t].size());
+                heap.push({freeCount[t], t});
+            }
+            auto grow = [&](std::vector<uint32_t> s, std::set<size_t> &taken) {
+                for (int pass = 0; pass < 2; ++pass) // forward, then from the other end
                 {
-                    const auto it = byEdge.find(key(s[s.size() - 2], s[s.size() - 1]));
-                    size_t next = SIZE_MAX;
-                    if (it != byEdge.end())
-                        for (const size_t t : it->second)
-                            if (!used[t] && !mark.count(t))
+                    for (;;)
+                    {
+                        const auto it = byEdge.find(key(s[s.size() - 2], s[s.size() - 1]));
+                        size_t best = SIZE_MAX;
+                        if (it != byEdge.end())
+                            for (const size_t u : it->second)
+                                if (!used[u] && !taken.count(u) &&
+                                    (best == SIZE_MAX || Entry{freeCount[u], u} < Entry{freeCount[best], best}))
+                                    best = u;
+                        if (best == SIZE_MAX)
+                            break;
+                        taken.insert(best);
+                        const uint32_t x = s[s.size() - 2], y = s[s.size() - 1];
+                        for (const uint32_t v : tris[best])
+                            if (v != x && v != y)
                             {
-                                next = t;
+                                s.push_back(v);
                                 break;
                             }
-                    if (next == SIZE_MAX)
-                        return s;
-                    mark.insert(next);
-                    const uint32_t x = s[s.size() - 2], y = s[s.size() - 1];
-                    for (const uint32_t v : tris[next])
-                        if (v != x && v != y)
-                        {
-                            s.push_back(v);
-                            break;
-                        }
+                    }
+                    std::reverse(s.begin(), s.end());
                 }
+                return s;
             };
             std::vector<uint32_t> out;
-            for (size_t t = 0; t < tris.size(); ++t)
+            while (!heap.empty())
             {
-                if (used[t])
-                    continue;
+                const Entry top = heap.top();
+                heap.pop();
+                const size_t t = top.second;
+                if (used[t] || top.first != freeCount[t])
+                    continue; // taken, or an older entry for it
                 const auto &[a, b, c] = tris[t];
                 std::vector<uint32_t> best;
-                std::unordered_set<size_t> bestMark;
+                std::set<size_t> bestTaken;
                 bool have = false;
                 for (const auto &start : {std::vector<uint32_t>{a, b, c}, std::vector<uint32_t>{b, c, a}, std::vector<uint32_t>{c, a, b}})
                 {
-                    std::unordered_set<size_t> mark{t};
-                    std::vector<uint32_t> s = grow(start, mark);
-                    if (!have || s.size() > best.size())
+                    std::set<size_t> taken{t};
+                    std::vector<uint32_t> s = grow(start, taken);
+                    if (!have || taken.size() > bestTaken.size())
                     {
                         best = std::move(s);
-                        bestMark = std::move(mark);
+                        bestTaken = std::move(taken);
                         have = true;
                     }
                 }
-                for (const size_t k : bestMark)
+                for (const size_t k : bestTaken) // a std::set: in order, as sorted() in the Python
                     used[k] = 1;
+                for (const size_t k : bestTaken)
+                    for (const size_t u : neighbours[k])
+                        if (!used[u])
+                        {
+                            --freeCount[u];
+                            heap.push({freeCount[u], u});
+                        }
                 if (!out.empty())
                 {
                     const uint32_t last = out.back();
                     out.push_back(last);
                     out.push_back(best[0]);
-                    if (out.size() % 2) // the next strip's first vertex at an even position
-                        out.push_back(best[0]);
                 }
                 out.insert(out.end(), best.begin(), best.end());
             }
@@ -593,6 +703,8 @@ namespace vcs::rwconv
 
             Bytes meshes, dma;
             uint32_t total = 0;
+            int gbox[6] = {0, 0, 0, 0, 0, 0};
+            bool firstMesh = true;
             for (const auto &[material, strip] : groups)
             {
                 double offU = 0, offV = 0, maxU = 0, maxV = 0;
@@ -627,6 +739,21 @@ namespace vcs::rwconv
                     raw.push_back(r);
                 }
                 const Bytes packet = encode(raw);
+                // the mesh's box in the geometry's int16 space, two units out (as the game's own)
+                int box[6];
+                for (int k = 0; k < 3; ++k)
+                {
+                    int lo = raw[0].p[k], hi = raw[0].p[k];
+                    for (const Raw &r : raw)
+                        lo = std::min<int>(lo, r.p[k]), hi = std::max<int>(hi, r.p[k]);
+                    box[k] = std::max(-32768, lo - 2), box[3 + k] = std::min(32767, hi + 2);
+                }
+                for (int k = 0; k < 3; ++k)
+                {
+                    gbox[k] = firstMesh ? box[k] : std::min(gbox[k], box[k]);
+                    gbox[3 + k] = firstMesh ? box[3 + k] : std::max(gbox[3 + k], box[3 + k]);
+                }
+                firstMesh = false;
                 V3 mc{};
                 for (int k = 0; k < 3; ++k)
                 {
@@ -649,7 +776,7 @@ namespace vcs::rwconv
                 add16(meshes, static_cast<uint32_t>(strip.size() - 2));
                 add16(meshes, static_cast<uint32_t>(static_cast<int16_t>(material)));
                 for (int k = 0; k < 6; ++k)
-                    add16(meshes, 0);
+                    add16(meshes, static_cast<uint32_t>(static_cast<uint16_t>(static_cast<int16_t>(box[k]))));
                 dma.insert(dma.end(), packet.begin(), packet.end());
                 total += static_cast<uint32_t>(strip.size());
             }
@@ -662,7 +789,7 @@ namespace vcs::rwconv
             add16(body, total & 0xFFFF);
             add16(body, 0x40 + n * 0x30);
             for (int k = 0; k < 6; ++k)
-                add16(body, u16(m.d, templateGeom + 32 + 28 + 2ull * k));
+                add16(body, static_cast<uint32_t>(static_cast<uint16_t>(static_cast<int16_t>(gbox[k]))));
             for (const double x : {scale[0], scale[1], scale[2], centre[0], centre[1], centre[2]})
                 addf(body, x);
             body.insert(body.end(), meshes.begin(), meshes.end());
@@ -737,20 +864,74 @@ namespace vcs::rwconv
                 }
             }
 
-            // the nodes: VC's dummies' places over VCS's (same names)
+            const uint32_t root = m.ptr(group + 4);
+            const uint32_t extraList = m.ptr(0x28), extraCount = u32(templ, 0x24);
+            const std::vector<uint32_t> groupElements = m.elements(group);
+            std::vector<uint32_t> elements = groupElements;
+            if (extraList && extraCount <= 64)
+                for (uint32_t k = 0; k < extraCount; ++k)
+                {
+                    const uint32_t e = m.ptr(extraList + 4 * k);
+                    if (e && std::find(groupElements.begin(), groupElements.end(), e) == groupElements.end())
+                        elements.push_back(e);
+                }
+
+            // a VC frame's matrix relative to the clump's root (the root's own is the vehicle's place: the game sets it)
+            auto rrVc = [&](size_t i) {
+                Mat mat = kIdentity;
+                for (int guard = 0; frames.at(i).parent >= 0 && guard < 64; ++guard)
+                {
+                    Mat local{};
+                    std::copy(frames[i].rot, frames[i].rot + 9, local.r);
+                    std::copy(frames[i].pos, frames[i].pos + 3, local.p);
+                    mat = matMul(mat, local);
+                    i = static_cast<size_t>(frames[i].parent);
+                }
+                return mat;
+            };
+            // a VCS node's, from the data as it stands (extras' nodes hang free: their own)
+            auto rrVcs = [&](uint32_t n) {
+                Mat mat = kIdentity;
+                for (int guard = 0; n && n != root && guard < 64; ++guard)
+                {
+                    Mat local{};
+                    for (int k = 0; k < 9; ++k)
+                        local.r[k] = f32(data, n + 0x10 + (k / 3) * 16 + (k % 3) * 4);
+                    for (int k = 0; k < 3; ++k)
+                        local.p[k] = f32(data, n + 0x40 + k * 4);
+                    mat = matMul(mat, local);
+                    n = m.ptr(n + 4);
+                }
+                return mat;
+            };
+
+            // the nodes: where the VC frame of the same name is, relative to the root - whatever the trees between
             std::vector<std::pair<uint32_t, std::string>> nodeList;
-            m.nodes(m.ptr(group + 4), nodeList);
-            int moved = 0;
-            for (const auto &[at, name] : nodeList)
+            m.nodes(root, nodeList);
+            std::vector<uint32_t> placed;
+            for (const auto &entry : nodeList)
+                if (entry.first != root)
+                    placed.push_back(entry.first);
+            for (const uint32_t e : elements)
             {
-                const auto it = byName.find(lower(name));
-                if (it == byName.end() || name.empty())
+                const uint32_t n = m.ptr(e + 4);
+                if (n && std::find(placed.begin(), placed.end(), n) == placed.end())
+                    placed.push_back(n);
+            }
+            int moved = 0;
+            for (const uint32_t n : placed)
+            {
+                const std::string name = lower(m.cstr(m.ptr(n + 0xA8)));
+                const auto it = byName.find(name);
+                if (name.empty() || it == byName.end() || frames[it->second].parent < 0)
                     continue;
-                const Frame &f = frames[it->second];
+                const Mat want = rrVc(it->second);
+                const uint32_t parent = m.ptr(n + 4);
+                const Mat loc = parent && parent != root ? matMul(want, matInv(rrVcs(parent))) : want;
                 for (int k = 0; k < 9; ++k)
-                    putf(data, at + 0x10 + (k / 3) * 16 + (k % 3) * 4, f.rot[k]);
+                    putf(data, n + 0x10 + (k / 3) * 16 + (k % 3) * 4, loc.r[k]);
                 for (int k = 0; k < 3; ++k)
-                    putf(data, at + 0x10 + 48 + k * 4, f.pos[k]);
+                    putf(data, n + 0x40 + k * 4, loc.p[k]);
                 ++moved;
             }
 
@@ -828,31 +1009,105 @@ namespace vcs::rwconv
                 return at;
             };
 
-            // each VCS element by its node: chassis_hi / _vlo, and X_dummy's two (intact, damaged) from X_hi_ok / X_hi_dam
+            // Each VCS element gets VC parts (dff2mdl.convert): the part of its node's name; X_dummy's two elements X_hi_ok
+            // and X_hi_dam (X_hi_ok again when there is no damaged one); a helicopter's rotors their VC rotor. Left over:
+            // damaged parts, extras and LODs go; the rest joins the chassis (or a boat's hull). Elements no part reaches
+            // are emptied.
+            std::vector<std::string> namesOf;
+            for (const Atomic &at : dff.atomics)
+                namesOf.push_back(lower(frames.at(at.frame).name));
+            std::vector<char> used(namesOf.size(), 0);
+            auto take = [&](const std::string &name, bool keep) -> int {
+                for (size_t k = 0; k < namesOf.size(); ++k)
+                    if (namesOf[k] == name && (keep || !used[k]))
+                    {
+                        used[k] = 1;
+                        return static_cast<int>(k);
+                    }
+                return -1;
+            };
+            auto endsWith = [](const std::string &s, const std::string &tail) {
+                return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
+            };
             std::vector<std::pair<std::string, std::vector<uint32_t>>> byNode;
-            for (const uint32_t e : m.elements(group))
+            for (const uint32_t e : elements)
             {
-                const std::string name = m.cstr(m.ptr(m.ptr(e + 4) + 0xA8));
+                const std::string name = lower(m.cstr(m.ptr(m.ptr(e + 4) + 0xA8)));
                 auto it = std::find_if(byNode.begin(), byNode.end(), [&](const auto &p) { return p.first == name; });
                 if (it == byNode.end())
                     byNode.push_back({name, {e}});
                 else
                     it->second.push_back(e);
             }
-            std::map<std::string, Atomic> atoms;
-            for (const Atomic &a : dff.atomics)
+            // still rotors from VC's; the moving ones (a blur disc the game fades in with the speed) stay VCS's
+            static const std::map<std::string, std::string> kAliases = {{"static_rotor", "toprotor"}, {"static_rotor2", "rearrotor"}};
+            auto keptNode = [](const std::string &name) { return name == "moving_rotor" || name == "moving_rotor2"; };
+            std::map<uint32_t, std::vector<int>> assign;
+            for (const auto &[name, els] : byNode)
             {
-                if (a.frame >= frames.size() || a.geometry >= dff.geometries.size())
-                    throw Bad("an atomic refers past the frames or geometries");
-                atoms[lower(frames[a.frame].name)] = a;
+                if (endsWith(name, "_dummy"))
+                {
+                    // intact elements have object flag 4 (+2: shown), damaged ones not, in any order; a dummy can hold more
+                    // than one of a kind (a van's door and its window): VC's part goes into the first, the others are emptied
+                    std::vector<uint32_t> intact, damaged;
+                    for (const uint32_t e : els)
+                        ((u8(templ, e + 2) & 4) ? intact : damaged).push_back(e);
+                    if (intact.empty())
+                    {
+                        intact.assign(els.begin(), els.begin() + 1);
+                        damaged.assign(els.begin() + 1, els.end());
+                    }
+                    const std::string base = name.substr(0, name.size() - 6);
+                    const int ok = take(base + "_hi_ok", false), dam = take(base + "_hi_dam", false);
+                    if (!intact.empty() && (ok >= 0 || dam >= 0))
+                        assign[intact[0]] = {ok >= 0 ? ok : dam};
+                    if (!damaged.empty() && (ok >= 0 || dam >= 0))
+                        assign[damaged[0]] = {dam >= 0 ? dam : ok};
+                }
+                else if (const auto alias = kAliases.find(name); alias != kAliases.end())
+                {
+                    const int k = take(alias->second, true);
+                    if (k >= 0)
+                        assign[els[0]] = {k};
+                }
+                else
+                    for (const uint32_t e : els)
+                    {
+                        const int k = take(name, false);
+                        if (k >= 0)
+                            assign[e] = {k};
+                    }
+            }
+            uint32_t host = 0;
+            for (const auto &[name, els] : byNode)
+                if (name == "chassis_hi" || name == "boat_hi")
+                {
+                    host = els[0];
+                    break;
+                }
+            std::vector<std::string> dropped;
+            for (size_t k = 0; k < namesOf.size(); ++k)
+            {
+                if (used[k])
+                    continue;
+                const std::string &n = namesOf[k];
+                if (endsWith(n, "_dam") || n.rfind("extra", 0) == 0 || endsWith(n, "_vlo") || !host)
+                    dropped.push_back(n);
+                else
+                    assign[host].push_back(static_cast<int>(k));
             }
             padTo(data, 16);
-            std::vector<std::string> replaced;
+            std::vector<std::string> replaced, blanked;
+            uint32_t anyGeom = 0;
+            for (const uint32_t e : elements)
+                if (!anyGeom)
+                    anyGeom = m.ptr(e + 0x14);
 
             auto put = [&](uint32_t element, const std::vector<V3> &verts, const std::vector<V3> &normals, const std::vector<V2> &uvs,
                            const std::vector<std::pair<int, std::vector<uint32_t>>> &groups, const std::vector<uint32_t> &mats) {
                 std::vector<uint32_t> inner;
-                Bytes block = buildGeometry(m, m.ptr(element + 0x14), verts, normals, uvs, groups, mats, inner);
+                const uint32_t own = m.ptr(element + 0x14);
+                Bytes block = buildGeometry(m, own ? own : anyGeom, verts, normals, uvs, groups, mats, inner);
                 padTo(data, 16); // the DMA data inside on qwords
                 const auto at = static_cast<uint32_t>(data.size());
                 put32(block, 0x0C, at + u32(block, 0x0C));
@@ -861,60 +1116,57 @@ namespace vcs::rwconv
                     relocs.insert(at + r);
                 put32(data, element + 0x14, at);
             };
-
-            auto endsWith = [](const std::string &s, const std::string &tail) {
-                return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
+            auto blank = [&](uint32_t element) {
+                const uint32_t mat = material(Material{{0, 0, 0, 0}, ""});
+                put(element, {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}, {}, {{0, 0}, {0, 0}, {0, 0}}, {{0, {0, 1, 2}}}, {mat});
+                blanked.push_back(m.cstr(m.ptr(m.ptr(element + 4) + 0xA8)));
             };
-            for (const auto &[node, elements] : byNode)
+
+            std::vector<std::string> kept;
+            for (const uint32_t e : elements)
             {
-                std::vector<std::pair<uint32_t, std::string>> pairs;
-                if (node == "chassis_hi" || node == "chassis_vlo")
-                    pairs.push_back({elements[0], node});
-                else if (endsWith(node, "_dummy"))
+                const uint32_t node = m.ptr(e + 4);
+                const auto found = assign.find(e);
+                if ((found == assign.end() || found->second.empty()) && keptNode(lower(m.cstr(m.ptr(node + 0xA8)))))
                 {
-                    const std::string base = node.substr(0, node.size() - 6);
-                    const std::string parts[2] = {base + "_hi_ok", base + "_hi_dam"};
-                    for (size_t i = 0; i < elements.size() && i < 2; ++i)
-                        pairs.push_back({elements[i], parts[i]});
-                }
-                else
+                    kept.push_back(m.cstr(m.ptr(node + 0xA8)));
                     continue;
-                for (const auto &[element, part] : pairs)
+                }
+                if (found == assign.end() || found->second.empty())
                 {
-                    const auto atom = atoms.find(part);
-                    if (atom == atoms.end() && endsWith(node, "_dummy") && !byName.count(node))
-                    {
-                        // a part the mod's car does not have (the ADMIRAL's rear doors on a two-door): one degenerate triangle
-                        const uint32_t blank = material(Material{{0, 0, 0, 0}, ""});
-                        put(element, {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}}, {}, {{0, 0}, {0, 0}, {0, 0}}, {{0, {0, 1, 2}}}, {blank});
-                        replaced.push_back("-" + node);
-                        continue;
-                    }
-                    if (atom == atoms.end())
-                        continue;
-                    const Geometry &g = dff.geometries[atom->second.geometry];
-                    const Frame &f = frames[atom->second.frame];
-                    // vertices into the dummy's space: the part's own frame, when it sits under the dummy
-                    const bool toDummy = f.parent >= 0 && static_cast<size_t>(f.parent) < frames.size() &&
-                                         lower(frames[static_cast<size_t>(f.parent)].name) == node && part != node;
-                    static const double zero[3] = {0.0, 0.0, 0.0};
-                    std::vector<V3> verts = g.verts, normals = g.normals;
-                    if (toDummy)
-                    {
-                        for (V3 &v : verts)
-                            v = apply(f, f.pos, v);
-                        for (V3 &n : normals)
-                            n = apply(f, zero, n);
-                    }
-                    std::vector<uint32_t> mats;
-                    std::vector<std::pair<std::pair<std::string, std::array<uint8_t, 4>>, std::pair<int, std::vector<std::array<uint32_t, 3>>>>> byKey;
+                    blank(e);
+                    continue;
+                }
+                const std::vector<int> &parts = found->second;
+                const Mat toNode = matInv(rrVcs(node));
+                std::vector<V3> verts, normals;
+                std::vector<V2> uvs;
+                std::vector<uint32_t> mats;
+                std::vector<std::pair<std::pair<std::string, std::array<uint8_t, 4>>, std::pair<int, std::vector<std::array<uint32_t, 3>>>>> byKey;
+                bool hasNormals = false;
+                for (const int k : parts)
+                    hasNormals = hasNormals || !dff.geometries.at(dff.atomics[k].geometry).normals.empty();
+                std::string list;
+                for (const int k : parts)
+                {
+                    const Geometry &g = dff.geometries.at(dff.atomics[k].geometry);
+                    const Mat to = matMul(rrVc(dff.atomics[k].frame), toNode); // the part's frame -> the element's node
+                    const auto base = static_cast<uint32_t>(verts.size());
+                    for (const V3 &v : g.verts)
+                        verts.push_back(matApply(to, v));
+                    if (!g.normals.empty())
+                        for (const V3 &n : g.normals)
+                            normals.push_back(matApply(to, n, false));
+                    else
+                        normals.insert(normals.end(), g.verts.size(), V3{0.0, 0.0, 1.0});
+                    uvs.insert(uvs.end(), g.uvs.begin(), g.uvs.end());
                     for (size_t mi = 0; mi < g.materials.size(); ++mi)
                     {
                         const Material &mat = g.materials[mi];
                         std::vector<std::array<uint32_t, 3>> tris;
                         for (const Tri &t : g.tris)
                             if (t.mat == mi)
-                                tris.push_back({t.a, t.b, t.c});
+                                tris.push_back({t.a + base, t.b + base, t.c + base});
                         if (tris.empty())
                             continue;
                         const auto key = std::make_pair(lower(mat.texture), std::array<uint8_t, 4>{mat.rgba[0], mat.rgba[1], mat.rgba[2], mat.rgba[3]});
@@ -927,18 +1179,23 @@ namespace vcs::rwconv
                         }
                         it->second.second.insert(it->second.second.end(), tris.begin(), tris.end());
                     }
-                    std::vector<std::pair<int, std::vector<uint32_t>>> groups;
-                    for (const auto &entry : byKey)
-                    {
-                        std::vector<uint32_t> s = stripOf(entry.second.second);
-                        if (!s.empty())
-                            groups.push_back({entry.second.first, std::move(s)});
-                    }
-                    if (groups.empty())
-                        continue;
-                    put(element, verts, normals, g.uvs, groups, mats);
-                    replaced.push_back(part);
+                    list += (list.empty() ? "" : "+") + namesOf[static_cast<size_t>(k)];
                 }
+                std::vector<std::pair<int, std::vector<uint32_t>>> groups;
+                for (const auto &entry : byKey)
+                    for (const auto &tile : uvTiles(entry.second.second, uvs))
+                    {
+                        std::vector<uint32_t> strip = stripOf(tile);
+                        if (!strip.empty())
+                            groups.push_back({entry.second.first, std::move(strip)});
+                    }
+                if (groups.empty())
+                {
+                    blank(e);
+                    continue;
+                }
+                put(e, verts, hasNormals ? normals : std::vector<V3>(), uvs, groups, mats);
+                replaced.push_back(m.cstr(m.ptr(node + 0xA8)) + "<" + list);
             }
 
             // the file's tail moves as a whole: global table, relocation table, the strings after it
@@ -983,12 +1240,16 @@ namespace vcs::rwconv
             put32(data, 24, static_cast<uint32_t>(dataSize));
             data[28] = static_cast<uint8_t>(m.numClasses), data[29] = static_cast<uint8_t>(m.numClasses >> 8);
             data[30] = static_cast<uint8_t>(m.numFuncs), data[31] = static_cast<uint8_t>(m.numFuncs >> 8);
-            std::string list;
-            for (const std::string &p : replaced)
-                list += (list.empty() ? "" : ", ") + p;
-            char line[160];
-            std::snprintf(line, sizeof(line), "%d nodes placed from the .dff, %zu parts converted (", moved, replaced.size());
-            report = line + list + ")" + (report.empty() ? "" : "; " + report);
+            auto join = [](const std::vector<std::string> &v) {
+                std::string out;
+                for (const std::string &x : v)
+                    out += (out.empty() ? "" : ", ") + x;
+                return out.empty() ? std::string("none") : out;
+            };
+            char line[64];
+            std::snprintf(line, sizeof(line), "%d nodes placed; elements: ", moved);
+            report = line + join(replaced) + "; emptied: " + join(blanked) + "; kept: " + join(kept) + "; left out: " + join(dropped) +
+                     (report.empty() ? "" : "; " + report);
             return data;
         }
 
@@ -1332,7 +1593,32 @@ namespace vcs::rwconv
             int depth;
             std::vector<RGBA> palette;
             std::vector<std::vector<int>> indices;
+            Bytes raw; // a VCS texture kept as it is: texels and palette (txd2xtx --keep)
         };
+
+        // txd2xtx.read_xtx_raw: a VCS dictionary's textures as stored
+        std::vector<VcsTexture> readXtxRaw(const Bytes &d)
+        {
+            if (u32(d, 0) != 0x00746578u)
+                throw Bad("the kept dictionary is not a VCS texture dictionary");
+            std::vector<VcsTexture> out;
+            uint32_t link = u32(d, 0x28);
+            for (int guard = 0; link && link != 0x28 && guard < 4096; ++guard)
+            {
+                const uint32_t tex = link - 8, ras = u32(d, tex), texels = u32(d, ras + 8), flags = u32(d, ras + 12);
+                const int depth = static_cast<int>(flags >> 12 & 63);
+                if (depth != 4 && depth != 8)
+                    throw Bad("a kept texture of a depth not handled");
+                VcsTexture t{cString(d, tex + 16, tex + 48), size_t(1) << (flags & 63), size_t(1) << (flags >> 6 & 63), depth, {}, {}, {}};
+                const uint64_t size = t.width * t.height * static_cast<uint64_t>(depth) / 8 + (depth == 4 ? 16 : 256) * 4;
+                if (texels + size > d.size())
+                    throw Bad("a kept texture runs past the end");
+                t.raw.assign(d.begin() + texels, d.begin() + static_cast<ptrdiff_t>(texels + size));
+                out.push_back(std::move(t));
+                link = u32(d, link);
+            }
+            return out;
+        }
 
         // txd2xtx.write_xtx
         Bytes writeXtx(const std::vector<VcsTexture> &textures)
@@ -1349,6 +1635,11 @@ namespace vcs::rwconv
             {
                 padTo(data, 16);
                 texelAt.push_back(static_cast<uint32_t>(data.size()));
+                if (!t.raw.empty())
+                {
+                    data.insert(data.end(), t.raw.begin(), t.raw.end());
+                    continue;
+                }
                 std::vector<RGBA> pal = t.palette;
                 if (t.depth == 8)
                 {
@@ -1435,6 +1726,16 @@ namespace vcs::rwconv
         }
     }
 
+    std::string vcsName(const std::string &vcName)
+    {
+        static const std::map<std::string, std::string> kNames = {{"boxville", "boxvil"}, {"enforcer", "enforce"},
+                                                                  {"fbiranch", "fbiran"}, {"police", "policem"},
+                                                                  {"sabretur", "sabretb"}, {"washing", "washin"}};
+        const std::string name = lower(vcName);
+        const auto it = kNames.find(name);
+        return it != kNames.end() ? it->second : name;
+    }
+
     bool dffToMdl(const std::vector<uint8_t> &dff, const std::vector<uint8_t> &templateMdl, const std::vector<uint8_t> *txd,
                   std::vector<uint8_t> &out, std::string &report)
     {
@@ -1451,7 +1752,8 @@ namespace vcs::rwconv
         }
     }
 
-    bool txdToXtx(const std::vector<uint8_t> &txd, int maxSize, std::vector<uint8_t> &out, std::string &report)
+    bool txdToXtx(const std::vector<uint8_t> &txd, int maxSize, const std::vector<uint8_t> *keep, std::vector<uint8_t> &out,
+                  std::string &report)
     {
         report.clear();
         try
@@ -1465,12 +1767,26 @@ namespace vcs::rwconv
                 std::unordered_set<RGBA, RgbaHash> distinct;
                 for (const auto &row : rows)
                     distinct.insert(row.begin(), row.end());
-                VcsTexture v{t.name, rows[0].size(), rows.size(), distinct.size() <= 16 ? 4 : 8, {}, {}};
+                VcsTexture v{t.name, rows[0].size(), rows.size(), distinct.size() <= 16 ? 4 : 8, {}, {}, {}};
                 quantise(rows, size_t(1) << v.depth, v.palette, v.indices);
                 char line[96];
                 std::snprintf(line, sizeof(line), "%s%s %zux%zu %d bit", report.empty() ? "" : ", ", v.name.c_str(), v.width, v.height, v.depth);
                 report += line;
                 textures.push_back(std::move(v));
+            }
+            if (keep) // the VCS dictionary's own textures the .txd has no name for, after them
+            {
+                std::set<std::string> have;
+                for (const VcsTexture &t : textures)
+                    have.insert(lower(t.name));
+                int kept = 0;
+                for (VcsTexture &t : readXtxRaw(*keep))
+                    if (!have.count(lower(t.name)))
+                    {
+                        textures.push_back(std::move(t));
+                        ++kept;
+                    }
+                report += "; " + std::to_string(kept) + " of VCS's kept";
             }
             out = writeXtx(textures);
             return true;
@@ -1494,10 +1810,10 @@ namespace vcs::rwconv
         bool ok = false;
         if (command == "--rwconv-dff" && argc >= 5 && readFile(argv[2], a) && readFile(argv[3], b) && (argc < 6 || readFile(argv[5], c)))
             ok = dffToMdl(a, b, argc >= 6 ? &c : nullptr, out, report) && writeFile(argv[4], out);
-        else if (command == "--rwconv-txd" && argc >= 4 && readFile(argv[2], a))
-            ok = txdToXtx(a, argc >= 5 ? std::atoi(argv[4]) : 128, out, report) && writeFile(argv[3], out);
+        else if (command == "--rwconv-txd" && argc >= 4 && readFile(argv[2], a) && (argc < 5 || readFile(argv[4], b)))
+            ok = txdToXtx(a, 128, argc >= 5 ? &b : nullptr, out, report) && writeFile(argv[3], out);
         else
-            report = "usage: --rwconv-dff DFF TEMPLATE OUT [TXD] | --rwconv-txd TXD OUT [MAX]";
+            report = "usage: --rwconv-dff DFF TEMPLATE OUT [TXD] | --rwconv-txd TXD OUT [VCS.xtx]";
         std::printf("%s: %s (%zu bytes)\n", ok ? "ok" : "failed", report.c_str(), out.size());
         return ok ? 0 : 1;
     }

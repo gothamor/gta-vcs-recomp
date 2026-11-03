@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PC VC texture dictionary (.txd) -> VCS texture dictionary (`.xtx`, the game's `tex` resource), FORK.md T9.
 
-    python tools/txd2xtx.py convert IN.txd OUT.xtx [--max 128] [--only name,name]
+    python tools/txd2xtx.py convert IN.txd OUT.xtx [--max 128] [--only name,name] [--keep VCS.xtx]
     python tools/txd2xtx.py info FILE.xtx [--png DIR]      a VCS texture dictionary: its textures (PNG each with --png)
     python tools/txd2xtx.py --self-test
 
@@ -15,7 +15,9 @@ levels << 20 | swizzle << 24; the upload word 0x450000 | row bytes (4 bit) or 0x
 GS's CSM1 order (index bits 3 and 4 swapped). The disc's textures are all 4 or 8 bit, one level, 8..256 pixels.
 
 A PC texture (D3D8 native: DXT1/3/5, 8-bit palettes, 8888 / 888 / 1555 / 565 / 4444 / LUM8) is decoded, its top level
-halved down to --max, and quantised (median cut) to 16 colours when it has at most 16, else 256.
+halved down to --max, and quantised (median cut) to 16 colours when it has at most 16, else 256. --keep: the VCS
+dictionary this one replaces - its textures the .txd has no name for follow, copied as they are (parts of the VCS model
+the conversion keeps use them: a helicopter's rotor blur).
 """
 import os
 import struct
@@ -213,6 +215,9 @@ def write_xtx(textures):
         data += b"\0" * (-len(data) % 16)
         texel_at.append(len(data))
         w, h, d = t["width"], t["height"], t["depth"]
+        if "raw" in t:  # a VCS texture kept as it is: texels and palette (alpha 0..0x80, CSM1 order) unchanged
+            data += t["raw"]
+            continue
         if d == 8:
             data += bytes(i for row in t["indices"] for i in row)
             pal = t["palette"] + [(0, 0, 0, 0)] * (256 - len(t["palette"]))
@@ -244,6 +249,28 @@ def write_xtx(textures):
     data += struct.pack("<%dI" % len(relocs), *relocs)
     struct.pack_into("<7I2H", data, 0, TEX_IDENT, 0, len(data), data_size, data_size, len(relocs), 0, 0, 0)
     return bytes(data)
+
+
+def read_xtx_raw(data):
+    """A VCS texture dictionary's textures as stored: [{name, width, height, depth, raw (texels + palette)}]."""
+    ident = struct.unpack_from("<I", data, 0)[0]
+    if ident != TEX_IDENT:
+        raise ValueError("not a VCS texture dictionary (ident 0x%08x)" % ident)
+    u = lambda a: struct.unpack_from("<I", data, a)[0]  # noqa: E731
+    out, link, guard = [], u(0x28), 0
+    while link and link != 0x28 and guard < 4096:
+        tex = link - 8
+        ras = u(tex)
+        _unk, _upload, texels, flags = struct.unpack_from("<4I", data, ras)
+        w, h, d = 1 << (flags & 63), 1 << (flags >> 6 & 63), flags >> 12 & 63
+        if d not in (4, 8):
+            raise ValueError("depth %d not handled" % d)
+        size = w * h * d // 8 + (16 if d == 4 else 256) * 4
+        out.append({"name": data[tex + 16:tex + 48].split(b"\0")[0].decode("latin1"), "width": w, "height": h,
+                    "depth": d, "raw": bytes(data[texels:texels + size])})
+        link = u(link)
+        guard += 1
+    return out
 
 
 def read_xtx(data):
@@ -287,7 +314,7 @@ def png(path, rows):
                 chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
-def convert(txd_path, out_path, max_size=128, only=None):
+def convert(txd_path, out_path, max_size=128, only=None, keep=None):
     textures = []
     for t in read_pc_txd(open(txd_path, "rb").read()):
         if only is not None and t["name"].lower() not in only:
@@ -299,6 +326,9 @@ def convert(txd_path, out_path, max_size=128, only=None):
         palette, indices = quantise(rows, 1 << depth)
         textures.append({"name": t["name"], "width": len(rows[0]), "height": len(rows), "depth": depth,
                          "palette": palette, "indices": indices})
+    if keep:  # the VCS dictionary's own textures the .txd has no name for, after them
+        have = {t["name"].lower() for t in textures}
+        textures += [t for t in read_xtx_raw(open(keep, "rb").read()) if t["name"].lower() not in have]
     data = write_xtx(textures)
     with open(out_path, "wb") as f:
         f.write(data)
@@ -335,7 +365,8 @@ def main():
     if len(args) >= 3 and args[0] == "convert":
         max_size = int(args[args.index("--max") + 1]) if "--max" in args else 128
         only = set(args[args.index("--only") + 1].lower().split(",")) if "--only" in args else None
-        convert(args[1], args[2], max_size, only)
+        keep = args[args.index("--keep") + 1] if "--keep" in args else None
+        convert(args[1], args[2], max_size, only, keep)
         return 0
     if len(args) >= 2 and args[0] == "info":
         texs = read_xtx(open(args[1], "rb").read())
