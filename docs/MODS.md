@@ -123,9 +123,20 @@ built:
 ### T9 findings: PC VC car mods in VCS (2026-11-03)
 
 - **The tutorial** the player pointed to (MixMods, vehicles in GTA SA PS2:
-  https://forum.mixmods.com.br/f250-tutoriais/t1411-gta-ps2-veiculos) sits behind a Cloudflare JavaScript check:
-  neither the fetch tool nor a plain HTTP client gets the page. Its steps are to be added here from the text (pasted
-  or saved by the player).
+  https://forum.mixmods.com.br/f250-tutoriais/t1411-gta-ps2-veiculos) sits behind a Cloudflare JavaScript check; the
+  player pasted the pages into a text file (kept locally in `Mods/`, not in git). It holds aap's "About SkyGFX" and the
+  forum's follow-up thread of tips for converting PC cars to SA PS2 (the t1411 steps themselves are not in it). What
+  carries over to VCS:
+  - **Keep the original car's collision**: converted cars with their own collision float or sink; the fix is the
+    replaced car's collision put back (RW Analyze). In VCS the mod loader replaces only the `.mdl`: the collision,
+    handling and model info stay the VCS car's - the same choice, by construction.
+  - **Textures as PS2 paletted rasters (PAL4 / PAL8, Magic.TXD)**: unpaletted ones weigh far more in the game and
+    flicker. VCS's own are mostly PSMT4 + CLUT (game-internals.md 6e). For the converter: either quantise a `.txd`'s
+    DXT textures to PAL4 / PAL8 rasters in the vehicle's TXD (authentic, lossy), or hand them to the renderer by name
+    through the texture packs (no quantisation, no PS2 memory limits) - the second first.
+  - aap: RSL is "at the high level a simplified copy & paste of RW", "at the lower levels completely different" - the
+    node / element / geometry structure maps from a `.dff`, the PS2 mesh data has to be built anew. VCS's vehicle
+    reflections: an environment map rendered from the camera with coronas, alpha blended (LCS adds it).
 - **`tools/rwinfo.py`** reads PC RenderWare files on the host (stdlib only; `--self-test` writes and reads a small
   clump and texture dictionary): a `.dff`'s frames with their names and parents, geometries (vertices, triangles,
   materials and texture names; PS2-native flagged), atomics; a `.txd`'s textures (name, size, D3D8 DXT / palette /
