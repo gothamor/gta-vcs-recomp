@@ -39,3 +39,6 @@ __pycache__/
 # --- This fork: the PC mods kept for reference and texture packs are third-party: never commit (docs/FORK.md) ---
 /Mods/
 /textures/
+# the mod loader's folder: the player's mods, never committed - but its README
+/modloader/*
+!/modloader/README.md

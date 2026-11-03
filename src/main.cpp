@@ -28,6 +28,7 @@
 #include "game/vcs_input.h"
 #include "game/vcs_volume.h"
 #include "game/vcs_fog.h"
+#include "mods/modloader.h"
 #include "platform/platform.h"
 #include "render/presenter.h"
 #include "rhi/rhi.h"
@@ -635,20 +636,6 @@ namespace
         s.onChange = [](int v) { setEnv("PS2X_HW_ANISO", std::to_string(v)); };
         settings::add(s);
 
-        s = {};
-        s.key = "graphics.texture_replacements";
-        s.page = "Graphics";
-        s.section = "Image quality";
-        s.label = "Texture replacements";
-        s.help = "Use a PCSX2 texture pack (DDS or PNG files) from textures/SLUS-21590/replacements, or the folder "
-                 "graphics.texture_pack names in vcs.ini. Missing textures use the originals.";
-        s.type = Type::Toggle;
-        s.defaultValue = 0;
-        s.apply = Apply::Restart;
-        s.env = "VCS_TEXTURE_REPLACEMENTS";
-        s.onChange = [](int v) { setEnv("VCS_TEXTURE_REPLACEMENTS", std::to_string(v)); };
-        settings::add(s);
-
         // Post-processing (native equivalent of shader/enhancement mods such as ProperShaders):
         // opt-in, authentic default (off). Applied by the presenter as a full-screen pass.
         s = {};
@@ -707,6 +694,7 @@ namespace
             settings::add(s);
 
         vcs::input::registerSettings(); // the Keyboard & mouse and Gamepad pages (game/vcs_input.h)
+        vcs::mods::registerSettings(exeDirectory()); // the Mods page: modloader/ and texture packs (mods/modloader.h)
 
         s = {};
         s.key = "graphics.perf_overlay";
@@ -841,28 +829,6 @@ int main(int argc, char *argv[])
         if (ps2control::hiddenMode())
             settings::keepFile(); // a test run never changes the player's settings
         settings::applyAll();
-        // A pack path can be set in vcs.ini or overridden for one run. Resolve relative ini paths beside the exe;
-        // also find the source checkout's pack when the executable is in its default build/ directory.
-        if (const char *pack = std::getenv("VCS_TEXTURE_PACK"); !pack || !*pack)
-        {
-            fs::path path = fs::u8path(settings::state("graphics.texture_pack"));
-            if (!path.empty() && path.is_relative()) path = exeDirectory() / path;
-            if (path.empty())
-            {
-                for (const auto &candidate : {exeDirectory() / "textures" / "SLUS-21590",
-                                             exeDirectory().parent_path() / "textures" / "SLUS-21590",
-                                             exeDirectory() / "SLUS-21590", exeDirectory().parent_path() / "SLUS-21590"})
-                {
-                    std::error_code ec;
-                    if (fs::is_directory(candidate / "replacements", ec)) { path = candidate; break; }
-                }
-            }
-            if (!path.empty())
-            {
-                const auto utf8 = path.u8string();
-                setEnv("VCS_TEXTURE_PACK", std::string(utf8.begin(), utf8.end()));
-            }
-        }
         restoreWindowPlacement();
         const fs::path isoPath = locateIso(argc, argv);
         if (isoPath.empty())
@@ -924,6 +890,7 @@ int main(int argc, char *argv[])
                                         ps2control::setGameInputBlocked(ui::settingsMenuBlocksInput() || ui::trainerMenuBlocksInput());
                                         vcs::input::onHostFrame(ui::settingsMenuOpen() || ui::trainerMenuBlocksInput());
                                         vcs::volume::onHostFrame();
+                                        vcs::mods::onHostFrame(); // mod / texture switches, live (mods/modloader.h)
                                         drawFrameRateCounter();
                                     },
                                     nullptr, nullptr);

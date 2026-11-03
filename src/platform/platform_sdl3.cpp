@@ -707,6 +707,17 @@ namespace platform
         return g_window && !g_hiddenWindow && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS) != 0;
     }
 
+    bool openFolder(const std::string &utf8Path)
+    {
+        std::string url = utf8Path.rfind('/', 0) == 0 ? "file://" : "file:///"; // /home/... or D:/...
+        for (const char c : utf8Path)
+            url += c == '\\' ? '/' : c;
+        if (SDL_OpenURL(url.c_str()))
+            return true;
+        std::fprintf(stderr, "[platform] could not open %s: %s\n", utf8Path.c_str(), SDL_GetError());
+        return false;
+    }
+
     bool keyDown(int key) { return key >= 0 && key < KEY_COUNT && g_keys[key].load(std::memory_order_relaxed); }
     bool keyPressed(int key) { return key >= 0 && key < KEY_COUNT && g_keysPressed[key]; }
     bool mouseDown(MouseButton button) { return g_mouse[button].load(std::memory_order_relaxed); }

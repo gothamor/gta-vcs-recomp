@@ -49,6 +49,7 @@ choices).
 | `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders (HLSL; DXBC by fxc, SPIR-V by `tools/hlsl_spirv.py`), the RHI (backends `d3d11/`, `vulkan/`, `null/`; only they see a graphics API), SDL3 platform layer |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
 | `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2), the trainer menu (F5) |
+| `src/mods/` | The mod loader: `modloader/` folders as mods (Mod Loader's `modloader.ini`), F2 > Mods, live switches (docs/MODS.md) |
 | `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch, the F3 game-state panel (`game_info.cpp`, also `gamectl.py gameinfo`) |
 | `third_party/PS2Recomp/ps2xRuntime` | The runtime (EE, VIF, VU1, GS HW backend, IOP host, stubs); our changes marked `[gta-recomp]` |
 | `game/vcs/` | Recompiler config, function map, VU1 upload list |
@@ -104,6 +105,7 @@ python tools/controls_check.py [OUT]                          # bindings, preset
 python tools/hud_check.py [OUT]                               # HUD at the screen edges: radar left, centred text in the middle
 python tools/fog_check.py [OUT] [--save DIR]                  # Graphics > Fog: the game's fog range scaled, untouched at 100 %
 python tools/texture_check.py [OUT] [--pack DIR] [--loader-only] [--validate-pack] [--dump-check]   # texture packs (DDS / PNG)
+python tools/mods_check.py [OUT] --pack DIR                    # the mod loader: modloader.ini, priorities, F2 > Mods switched live
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```

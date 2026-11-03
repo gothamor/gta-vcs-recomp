@@ -31,6 +31,8 @@ One task at a time, in this order. T3 is the base for T4-T7.
 | # | Task | Depends on | Status | Issue |
 |---|---|---|---|---|
 | T1 | Texture replacement: PCSX2-compatible packs, **DDS** first-class, PNG kept | - | **Done** (Vulkan compiled, not run) | [#1](https://github.com/willzmkv/gta-vcs-recomp/issues/1) |
+| T1b | Mod loader (PC Mod Loader's way): `modloader/` folders as mods, `modloader.ini`, F2 > Mods switched live; texture packs as its first content | T1 | **Done** (core) | [#10](https://github.com/willzmkv/gta-vcs-recomp/issues/10) |
+| T1c | Mod loader: VCS's own game files from mods (archive entries `.mdl` / `.xtx` / ..., `MAIN.SCM`, `.GXT`) - the `std.stream` of PC Mod Loader | T1b | Planned (research first) | [#11](https://github.com/willzmkv/gta-vcs-recomp/issues/11) |
 | T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Next (research first) | [#2](https://github.com/willzmkv/gta-vcs-recomp/issues/2) |
 | T3 | Pre-HUD post-processing pass (colour + depth before the 2D) | - | Planned | [#3](https://github.com/willzmkv/gta-vcs-recomp/issues/3) |
 | T4 | Volumetric height fog (Proper Shaders `[VolumetricFog]`) | T3 | Planned | [#4](https://github.com/willzmkv/gta-vcs-recomp/issues/4) |
@@ -38,6 +40,7 @@ One task at a time, in this order. T3 is the base for T4-T7.
 | T6 | Simulated HDR: tone mapping, exposure, bloom (replaces the interim Exposure) | T3 | Planned | [#6](https://github.com/willzmkv/gta-vcs-recomp/issues/6) |
 | T7 | Sun rays | T3 | Planned | [#7](https://github.com/willzmkv/gta-vcs-recomp/issues/7) |
 | T8 | Presets and player docs (Authentic / Enhanced), release notes | T1-T7 | Planned | [#8](https://github.com/willzmkv/gta-vcs-recomp/issues/8) |
+| T9 | PC `.dff` / `.txd` in mods: convert RW 3 clumps / TXDs to VCS's formats, or draw them natively (research) | T1c, RSL submission | Research | [#12](https://github.com/willzmkv/gta-vcs-recomp/issues/12) |
 
 Backlog (not scheduled): SkyGFX's Xbox rim light / gloss / screen water drops, YCbCr correction, a larger reflection
 map, shadow maps, deferred lights, PBR sky, volumetric clouds, car paint reflections, rain on cars, ragdolls.
@@ -77,6 +80,31 @@ replacements off = the original picture; the GPU budget holds; the check passes.
 trip brings back 753 / 753 dumped textures, and 742 of those names are in the HD pack (PCSX2's identities). PNG packs:
 PR #8's loader checks still pass. Open: running the Vulkan backend with a pack (it compiles; this PC has no
 glslangValidator for a Vulkan build) - on Linux, `tools/texture_check.py --pack DIR`.
+
+### T1b - Mod loader
+
+**Done (core, 2026-11-02)**: `src/mods/modloader.cpp`, docs/MODS.md "The mod loader". `modloader/<mod>/` folders,
+Mod Loader's `modloader.ini` (priorities, ignore lists), F2 > Mods (Load mods, Replace textures, a switch per mod,
+Rescan, Open folder), switches applied while the game runs (`gsHwSetTextureReplacements`), test runs authentic.
+Checked by `tools/mods_check.py`. Content read so far: texture packs.
+
+### T1c - Game files from mods (VCS's formats)
+
+**Goal.** A file in a mod named as one of the game's - an entry of `GTA3PS2.IMG` / the world's `.IMG` (models `.mdl`,
+textures `.xtx`, ...) or a loose file (`MAIN.SCM`, `.GXT`) - is read in place of the disc's, as PC Mod Loader's
+`std.stream` / `std.scm` / `std.text` do. **Not** PC `.dff` / `.txd` (VCS has neither; T9).
+
+**Steps.** Research first: the archives' directories (names, offsets, sizes; where VCS keeps them), how the native
+streaming (`src/game/vcs_stream.cpp`) reads an entry and what the game assumes about its size; then an override table
+built from the enabled mods (priority as for textures), served by the stream layer; loose files at their open. A
+check: a mod replacing one model / one text, seen in game.
+
+### T9 - PC `.dff` / `.txd` (research)
+
+Whether, and how, PC RenderWare 3 models and texture dictionaries can stand in for VCS's: converted ahead of time to
+RSL structures with PS2 geometry (and XTX), or loaded on the host and drawn by the native renderer in place of a
+model the game submits (draws at the RSL level, docs/RSL_SUBMISSION.md). Outcome: a written answer with a prototype or
+the reasons against. (A `.txd`'s textures can already be used today as a texture pack.)
 
 ### T2 - Draw distance (Project2DFX)
 

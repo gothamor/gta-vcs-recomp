@@ -189,6 +189,8 @@ namespace platform
 
     void windowSize(int &width, int &height); // drawable pixels
     bool windowFocused(); // the window has the keyboard focus (main thread; false for a hidden window)
+    // Shows a folder in the system's file manager (Explorer; the desktop's default on Linux). `utf8Path`: absolute.
+    bool openFolder(const std::string &utf8Path);
 
     // Input (any thread; snapshot from the last pumpEvents).
     bool keyDown(int key);

@@ -1045,3 +1045,22 @@ own code (a header and a copy of the levels: no new library), BC1-BC5 / BC7 and 
 are sampled as stored, like PNG values (PCSX2 does the same). A block-compressed DDS on a GPU without BC sampling
 keeps the original texture. A dump (`VCS_TEXTURE_DUMP=1`) writes uncompressed DDS rather than PNG: lossless, no PNG
 encoder to vendor, and texconv / Compressonator take it straight to BC7.
+
+## 2026-11-02 - A mod loader, PC Mod Loader's way (FORK.md T1b)
+
+The user asked for texture packs switchable in F2 and then for "a mod structure like Mod Loader" (the PC plugin; a copy
+is in `Mods/ModLoader/`). Both are one feature: a texture pack is the first kind of mod content. Choices:
+
+- `modloader/`, not `mods/`: on Windows `mods/` is the existing `Mods/` (PC mods kept for reference); and the name is
+  the one GTA players know. Beside vcs.exe, or the checkout's root when vcs.exe is in `build/`.
+- Mod Loader's own `modloader.ini` format (priorities 1-100 with 50 the default and 0 off, ignore wildcards,
+  IgnoreAllMods, the profile name) rather than one of our own: what players already know, and the PC docs apply.
+  The per-mod on / off switches live in vcs.ini (`mods.<name>`) like every other setting, so the menu is the registry's.
+- Load mods and Replace textures default on: installing a mod is the opt-in, and with no mods nothing changes (the
+  authentic default holds). Test runs are the exception - hidden runs load nothing unless asked (`VCS_MODS`,
+  `VCS_TEXTURE_REPLACEMENTS`, `VCS_TEST_MODS`), so reference captures never pick up a player's mods.
+- Live: indexing a pack takes ~20 ms, so a switch re-indexes on the main thread and the GS stage swaps the pack at its
+  next frame (GPU textures of the old pack dropped there). New mod folders need a restart: the settings registry is
+  built at start-up, and a menu row per mod is worth that.
+- PC `.dff` / `.txd`: VCS has neither format (RSL models, XTX textures); the mod loader will take VCS's own files
+  next (T1c), and importing PC formats is a research task of its own (T9; docs/MODS.md).

@@ -1,9 +1,12 @@
 # PCSX2 texture packs
 
-Texture replacements are optional. In F2 > Graphics > Image quality, enable **Texture replacements**, then restart.
-The original disc textures remain the default and the fallback for every missing or unreadable replacement.
+Texture packs are mods: put a pack in a folder of its own inside `modloader/` (docs/MODS.md "The mod loader") and
+switch it in **F2 > Mods** - each mod on or off, and **Replace textures** for all of them - while the game runs: a
+change shows at the next frame. The original disc textures remain the fallback for every missing or unreadable
+replacement, and what the game shows with Replace textures off. When two mods have the same texture, the higher
+priority in `modloader/modloader.ini` wins.
 
-Put an unpacked pack in one of these locations:
+A pack is also read from these places (upstream PR #8's; switched by Replace textures alone):
 
 - `textures/SLUS-21590/replacements/` beside `vcs.exe`.
 - For the source checkout's default `build/vcs.exe`, `textures/SLUS-21590/replacements/` in the checkout root.
