@@ -92,7 +92,7 @@ the camera, not the player. The guest has the PS2's 32 MB.
    draw distances come from (the "LOD / sprite scales 70 / FOV" readers of `0x487484`), the population and car
    spawn / removal radii (`CPopulation::Update` `FUN_00430148`, `CCarCtrl::RemoveDistantCars` `FUN_00433008`).
    Written into game-internals.md before code.
-2. View distance: the far plane (and with it the fog's end, T-fog scales relative to it) as a setting.
+2. View distance: the far plane as a setting (the fog's end moves with it: the fog settings are relative to it).
 3. Object distance: the entities' draw distances times a factor (Project2DFX's DrawDistance / DetailDistance).
 4. HD world further: more detailed cells around the camera. Two routes, chosen from step 1: a larger streaming pool in
    guest memory (a runtime change past the PS2's 32 MB, full rebuild), or cells loaded and drawn by the host (the native
