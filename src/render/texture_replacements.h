@@ -1,5 +1,7 @@
-// PCSX2-named PNG packs. Index and requests: GS stage; decoding: one worker; GPU upload: main thread.
+// PCSX2-named texture packs (DDS and PNG). Index and requests: GS stage; loading: one worker; GPU upload: main thread.
 #pragma once
+
+#include "rhi/rhi.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -14,7 +16,14 @@ namespace render
     struct ReplacementImage
     {
         uint32_t id = 0, width = 0, height = 0;
-        std::vector<uint32_t> pixels; // unmodified RGBA8: PCSX2 packs keep GS alpha (128 = opaque)
+        std::vector<uint32_t> pixels; // PNG: level 0, unmodified RGBA8 (PCSX2 packs keep GS alpha: 128 = opaque)
+        // DDS: the file's levels as stored (RGBA8, BGRA8 or block-compressed), level 0 first, nothing decoded
+        rhi::Format format = rhi::Format::RGBA8;
+        std::vector<uint8_t> levels;
+        std::vector<size_t> levelOffsets; // into `levels`, one per level
+        bool dds() const { return !levelOffsets.empty(); }
+        // its texture's size on the GPU: a DDS's own levels (level 0 alone without a chain), a PNG's chain made by the GPU
+        size_t gpuBytes(bool mipChain) const;
     };
 
     class TextureReplacements
@@ -30,6 +39,9 @@ namespace render
         void request(uint32_t id);
         std::vector<std::shared_ptr<const ReplacementImage>> takeReady();
         size_t budget() const;
+        // Whether the device can make block-compressed textures (rhi::Device::blockCompression): set before the first
+        // request; without it a block-compressed DDS keeps the original texture.
+        void setBlockCompression(bool supported);
         static constexpr uint64_t key(uint32_t id) { return 0xFFFF545800000000ull | id; }
 
     private:

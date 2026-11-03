@@ -9,6 +9,7 @@
 #include "../../third_party/stb/stb_image.h"
 
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <cctype>
 #include <condition_variable>
@@ -59,14 +60,101 @@ namespace render
             const char *e = std::getenv("VCS_TEXTURE_CACHE_MB");
             return size_t(e ? std::clamp(std::atoi(e), 64, 4096) : 512) * 1024 * 1024;
         }
-        std::shared_ptr<ReplacementImage> load(const std::filesystem::path &path, uint32_t id)
+        uint32_t le32(const std::vector<uint8_t> &b, size_t at)
         {
-            std::ifstream f(path, std::ios::binary | std::ios::ate);
-            const auto bytes = f ? f.tellg() : std::streampos(-1);
-            if (bytes <= 0 || bytes > 128 * 1024 * 1024) return {};
-            std::vector<uint8_t> encoded(static_cast<size_t>(bytes));
-            f.seekg(0);
-            if (!f.read(reinterpret_cast<char *>(encoded.data()), encoded.size())) return {};
+            uint32_t v;
+            std::memcpy(&v, b.data() + at, 4);
+            return v;
+        }
+
+        // A DDS (DDS_HEADER, + DDS_HEADER_DXT10 for "DX10"): a 2D texture's levels copied as stored. The sRGB variants
+        // are read as unorm - the values are used as they are, as a PNG's are (PCSX2 does the same). `why`: the reason
+        // a file is refused.
+        std::shared_ptr<ReplacementImage> loadDds(const std::vector<uint8_t> &file, uint32_t id, const char *&why)
+        {
+            using rhi::Format;
+            why = "not a DDS";
+            if (file.size() < 128 || le32(file, 0) != 0x20534444u || le32(file, 4) != 124u) return {};
+            const uint32_t flags = le32(file, 8), height = le32(file, 12), width = le32(file, 16);
+            const uint32_t mipCount = le32(file, 28), pfFlags = le32(file, 80), fourCC = le32(file, 84);
+            const uint32_t rgbBits = le32(file, 88), rMask = le32(file, 92), gMask = le32(file, 96), bMask = le32(file, 100);
+            const uint32_t aMask = le32(file, 104), caps2 = le32(file, 112);
+            auto cc = [](const char *s) { return uint32_t(uint8_t(s[0])) | uint32_t(uint8_t(s[1])) << 8 | uint32_t(uint8_t(s[2])) << 16 | uint32_t(uint8_t(s[3])) << 24; };
+            size_t data = 128;
+            Format format = Format::Unknown;
+            why = "an unsupported DDS format (BC1-BC5, BC7, RGBA8 or BGRA8 with alpha)";
+            if ((pfFlags & 0x4u) && fourCC == cc("DX10"))
+            {
+                if (file.size() < 148) return {};
+                data = 148;
+                if (le32(file, 132) != 3u || le32(file, 140) > 1u || (le32(file, 136) & 0x4u))
+                {
+                    why = "not a single 2D texture (an array, cube map or volume)";
+                    return {};
+                }
+                switch (le32(file, 128)) // DXGI_FORMAT
+                {
+                case 28: case 29: format = Format::RGBA8; break;
+                case 87: case 91: format = Format::BGRA8; break;
+                case 71: case 72: format = Format::BC1; break;
+                case 74: case 75: format = Format::BC2; break;
+                case 77: case 78: format = Format::BC3; break;
+                case 80: format = Format::BC4; break;
+                case 83: format = Format::BC5; break;
+                case 98: case 99: format = Format::BC7; break;
+                default: return {};
+                }
+            }
+            else if (pfFlags & 0x4u)
+            {
+                if (fourCC == cc("DXT1")) format = Format::BC1;
+                else if (fourCC == cc("DXT2") || fourCC == cc("DXT3")) format = Format::BC2;
+                else if (fourCC == cc("DXT4") || fourCC == cc("DXT5")) format = Format::BC3;
+                else if (fourCC == cc("ATI1") || fourCC == cc("BC4U")) format = Format::BC4;
+                else if (fourCC == cc("ATI2") || fourCC == cc("BC5U")) format = Format::BC5;
+                else return {};
+            }
+            else if ((pfFlags & 0x40u) && (pfFlags & 0x1u) && rgbBits == 32 && aMask == 0xFF000000u)
+            {
+                if (rMask == 0xFFu && gMask == 0xFF00u && bMask == 0xFF0000u) format = Format::RGBA8;
+                else if (rMask == 0xFF0000u && gMask == 0xFF00u && bMask == 0xFFu) format = Format::BGRA8;
+                else return {};
+            }
+            else
+                return {};
+            if (caps2 & 0x200200u) // DDSCAPS2_CUBEMAP, DDSCAPS2_VOLUME
+            {
+                why = "not a single 2D texture (an array, cube map or volume)";
+                return {};
+            }
+            why = "a size the GPU can't take (1-8192 texels; a multiple of 4 for block compression)";
+            if (width == 0 || height == 0 || width > 8192 || height > 8192) return {};
+            if (rhi::blockCompressed(format) && ((width | height) & 3u)) return {}; // D3D11's rule for level 0
+            uint32_t chain = 1;
+            for (uint32_t s = std::max(width, height); s > 1; s >>= 1) ++chain;
+            const uint32_t wanted = std::min({(flags & 0x20000u) && mipCount ? mipCount : 1u, chain, 16u});
+            auto image = std::make_shared<ReplacementImage>();
+            image->id = id;
+            image->width = width;
+            image->height = height;
+            image->format = format;
+            size_t at = data;
+            for (uint32_t i = 0; i < wanted; ++i) // the levels the file really holds
+            {
+                const uint32_t w = std::max(1u, width >> i), h = std::max(1u, height >> i);
+                const size_t bytes = size_t(rhi::rowBytes(format, w)) * rhi::rowCount(format, h);
+                if (at + bytes > file.size()) break;
+                image->levelOffsets.push_back(at - data);
+                at += bytes;
+            }
+            why = "shorter than its first level";
+            if (image->levelOffsets.empty()) return {};
+            image->levels.assign(file.begin() + std::ptrdiff_t(data), file.begin() + std::ptrdiff_t(at));
+            return image;
+        }
+
+        std::shared_ptr<ReplacementImage> loadPng(const std::vector<uint8_t> &encoded, uint32_t id)
+        {
             int w = 0, h = 0, channels = 0;
             if (!stbi_info_from_memory(encoded.data(), int(encoded.size()), &w, &h, &channels) ||
                 w <= 0 || h <= 0 || w > 8192 || h > 8192 || uint64_t(w) * h > 64 * 1024 * 1024) return {};
@@ -81,6 +169,42 @@ namespace render
             stbi_image_free(rgba);
             return image;
         }
+
+        bool isDds(const std::filesystem::path &path)
+        {
+            auto ext = path.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+            return ext == ".dds";
+        }
+
+        std::shared_ptr<ReplacementImage> load(const std::filesystem::path &path, uint32_t id, bool blockCompression)
+        {
+            std::ifstream f(path, std::ios::binary | std::ios::ate);
+            const auto bytes = f ? f.tellg() : std::streampos(-1);
+            if (bytes <= 0 || bytes > 256 * 1024 * 1024) return {};
+            std::vector<uint8_t> file(static_cast<size_t>(bytes));
+            f.seekg(0);
+            if (!f.read(reinterpret_cast<char *>(file.data()), file.size())) return {};
+            if (!isDds(path))
+                return loadPng(file, id);
+            const char *why = nullptr;
+            auto image = loadDds(file, id, why);
+            if (image && rhi::blockCompressed(image->format) && !blockCompression)
+            {
+                why = "block-compressed, which this GPU / driver can't sample (Vulkan: no textureCompressionBC)";
+                image.reset();
+            }
+            if (!image)
+                std::fprintf(stderr, "[textures] %s: %s\n", path.filename().string().c_str(), why);
+            return image;
+        }
+    }
+
+    size_t ReplacementImage::gpuBytes(bool mipChain) const
+    {
+        if (dds())
+            return mipChain || levelOffsets.size() < 2 ? levels.size() : levelOffsets[1];
+        return pixels.size() * 4 * (mipChain ? 4u : 3u) / 3u;
     }
 
     struct TextureReplacements::Impl
@@ -96,6 +220,7 @@ namespace render
         std::vector<std::shared_ptr<const ReplacementImage>> ready;
         std::thread worker;
         bool stopping = false;
+        std::atomic<bool> blockCompression{true}; // the device's (setBlockCompression)
         uint32_t matched = 0, loaded = 0;
 
         void run()
@@ -109,7 +234,7 @@ namespace render
                     if (stopping) return;
                     id = queue.front(); queue.pop_front();
                 }
-                auto image = load(files[id].path, id);
+                auto image = load(files[id].path, id, blockCompression.load(std::memory_order_relaxed));
                 std::unique_lock lock(mutex);
                 if (!image)
                 {
@@ -118,14 +243,16 @@ namespace render
                     std::fprintf(stderr, "[textures] failed to load %s; keeping original\n", files[id].path.string().c_str());
                     continue;
                 }
-                // Bound decoded images waiting for the GS stage. One large image may exceed 128 MiB on its own.
-                const size_t bytes = image->pixels.size() * 4;
+                // Bound loaded images waiting for the GS stage. One large image may exceed 128 MiB on its own.
+                const size_t bytes = image->pixels.size() * 4 + image->levels.size();
                 cv.wait(lock, [&] { return stopping || ready.empty() || readyBytes + bytes <= 128 * 1024 * 1024; });
                 if (stopping) return;
                 readyBytes += bytes;
                 ++loaded;
-                std::fprintf(stderr, "[textures] loaded %s (%ux%u, %.1f MiB)\n", files[id].path.filename().string().c_str(),
-                             image->width, image->height, bytes / 1048576.0);
+                static const char *const formats[] = {"?", "RGBA8", "R32F", "D32F", "BGRA8", "BC1", "BC2", "BC3", "BC4", "BC5", "BC7"};
+                std::fprintf(stderr, "[textures] loaded %s (%ux%u %s, %zu levels, %.2f MiB)\n", files[id].path.filename().string().c_str(),
+                             image->width, image->height, image->dds() ? formats[size_t(image->format)] : "PNG",
+                             image->dds() ? image->levelOffsets.size() : size_t(1), bytes / 1048576.0);
                 ready.push_back(std::move(image));
             }
         }
@@ -152,20 +279,29 @@ namespace render
             if (it->is_regular_file(ec)) paths.push_back(it->path());
         }
         std::sort(paths.begin(), paths.end()); // deterministic duplicate handling
-        uint32_t rejected = 0, duplicates = 0;
+        uint32_t rejected = 0, duplicates = 0, dds = 0;
         for (const auto &path : paths)
         {
             auto ext = path.extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-            if (ext != ".png") continue;
+            if (ext != ".png" && ext != ".dds") continue;
             Name n;
             if (!parseName(path.stem().string(), n)) { ++rejected; continue; }
-            if (!m->names.emplace(n, uint32_t(m->files.size())).second) { ++duplicates; continue; }
+            const auto [it, added] = m->names.emplace(n, uint32_t(m->files.size()));
+            if (!added)
+            {
+                ++duplicates;
+                // one name as both: the DDS (the GPU's own format, nothing to decode)
+                if (ext == ".dds" && !isDds(m->files[it->second].path)) { m->files[it->second].path = path; ++dds; }
+                continue;
+            }
+            dds += ext == ".dds";
             m->files.push_back({path});
             m->shapes.insert(n.bits & 0x3FFFu);
         }
-        std::fprintf(stderr, "[textures] indexed %zu PNG replacements in %s (%u unsupported names, %u duplicates); cache %zu MiB%s\n",
-                     m->names.size(), root.string().c_str(), rejected, duplicates, m->gpuBudget >> 20, ec ? "; directory scan failed" : "");
+        std::fprintf(stderr, "[textures] indexed %zu replacements (%u DDS, %zu PNG) in %s (%u unsupported names, %u duplicates); cache %zu MiB%s\n",
+                     m->names.size(), dds, m->names.size() - dds, root.string().c_str(), rejected, duplicates, m->gpuBudget >> 20,
+                     ec ? "; directory scan failed" : "");
         if (!m->names.empty()) m->worker = std::thread([this] { m->run(); });
     }
     TextureReplacements::~TextureReplacements()
@@ -217,4 +353,5 @@ namespace render
         return result;
     }
     size_t TextureReplacements::budget() const { return m->gpuBudget; }
+    void TextureReplacements::setBlockCompression(bool supported) { m->blockCompression.store(supported, std::memory_order_relaxed); }
 }

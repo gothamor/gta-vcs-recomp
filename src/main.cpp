@@ -640,7 +640,8 @@ namespace
         s.page = "Graphics";
         s.section = "Image quality";
         s.label = "Texture replacements";
-        s.help = "Use your PCSX2 PNG texture pack from textures/SLUS-21590/replacements. Missing textures use the originals.";
+        s.help = "Use a PCSX2 texture pack (DDS or PNG files) from textures/SLUS-21590/replacements, or the folder "
+                 "graphics.texture_pack names in vcs.ini. Missing textures use the originals.";
         s.type = Type::Toggle;
         s.defaultValue = 0;
         s.apply = Apply::Restart;

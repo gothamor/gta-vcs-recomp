@@ -895,8 +895,9 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `PS2X_HW_WIDE_SCALE=0` | integer scales in widescreen: the picture 640 x scale wide, stretched (as before 2026-10-27) |
 | `PS2X_HW_MSAA=2/4/8` | MSAA for the picture's targets (menu: Anti-aliasing) |
 | `PS2X_HW_ANISO=2..16`, `PS2X_HW_ANISO_LOG=1` | anisotropic filtering of the game's textures (menu: Texture filtering); count the draws per sampling path |
-| `VCS_TEXTURE_REPLACEMENTS=0|1`, `VCS_TEXTURE_PACK=DIR` | optional PCSX2 PNG pack; path to SLUS-21590 or its replacements directory (`graphics.texture_replacements`, `graphics.texture_pack` in vcs.ini) |
+| `VCS_TEXTURE_REPLACEMENTS=0|1`, `VCS_TEXTURE_PACK=DIR` | optional PCSX2 DDS / PNG pack; path to SLUS-21590 or its replacements directory (`graphics.texture_replacements`, `graphics.texture_pack` in vcs.ini) |
 | `VCS_TEXTURE_CACHE_MB=64..4096`, `VCS_TEXTURE_TRACE=1` | replacement GPU cache budget (512 MiB default; active textures protected for two frames); log computed PCSX2 identities |
+| `VCS_TEXTURE_DUMP=1`, `VCS_TEXTURE_DUMP_DIR=DIR` | every decoded texture once as an uncompressed DDS under its PCSX2 name (default `textures/SLUS-21590/dumps`): what a pack is made from (docs/TEXTURE_PACKS.md) |
 | `PS2X_HW_GATHER=0` / `verify` | bilinear game textures through four loads with the wrap per tap (before 2026-10-30) / both paths, a pixel whose texels differ drawn magenta |
 | `PS2X_GPU_TIMING=1` | GPU time per frame by marker (D3D11 timestamp queries; a marker per draw, named by kind, target and texture), every 5 s |
 | `PS2X_RHI_LOG_CREATES=1` | each texture of 256x256 or more as it is created (a target re-created every frame shows as a stream) |

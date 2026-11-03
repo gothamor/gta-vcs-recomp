@@ -17,6 +17,7 @@ draws as on the PS2), a switch back to the reference for every hook, game knowle
 | Exposure on the shown picture | A brightness pass in the presenter (`present.hlsl`, `presenter.cpp`) on the finished picture, HUD included. Interim: T6 replaces it with tone mapping before the HUD | Graphics > Image quality: `graphics.post_process` (off), `graphics.exposure` (100 %) | - |
 | Fog: the game's own fog range as settings | `src/game/vcs_fog.cpp` wraps `FUN_002F6008(start, end)`, the RSL fog-range setter, and scales its arguments. The fog stays the game's: per vertex from the depth, in the time cycle's colour and weather, in every renderer path (VU1, CPU HLE, native shaders, clipper), at no cost | Graphics > Fog: `fog.distance` (10-100 %), `fog.start` (0-300 %); 100 % = the game's own values, untouched. `VCS_FOG_HOOK=0` = reference, `VCS_TRACE_FOG=1`, command `fogstate` | `tools/fog_check.py` (passes) |
 | Fork documentation | This file, MODS.md, README's note, `.gitignore` for `Mods/` and texture packs | - | - |
+| Texture packs (T1): upstream PR #8 + DDS | PR #8's PCSX2 PNG packs (its commits and author, merged onto 0.2.0's helper-thread textures), then DDS read as stored - BC1-BC5 / BC7, RGBA8 / BGRA8, the file's mips - through new block formats in the RHI (D3D11, Vulkan), a DDS winning over a PNG of the same name, and `VCS_TEXTURE_DUMP` to make packs (docs/TEXTURE_PACKS.md) | Graphics > Image quality: `graphics.texture_replacements` (off, restart), `graphics.texture_pack` (vcs.ini); `VCS_TEXTURE_PACK`, `VCS_TEXTURE_DUMP=1` | `tools/texture_check.py` loader / `--validate-pack` / game / `--dump-check` (all pass) |
 
 What was learned on the way is in game-internals.md 6l (the fog setters, the camera's begin-update `FUN_0018EE48`,
 camera +0x78 near / +0x7C far / +0x80 fog plane, FOGCOL from `0x4E1B30`; measured: far plane 2000 everywhere, fog start
@@ -29,8 +30,8 @@ One task at a time, in this order. T3 is the base for T4-T7.
 
 | # | Task | Depends on | Status | Issue |
 |---|---|---|---|---|
-| T1 | Texture replacement: PCSX2-compatible packs, **DDS** first-class, PNG kept | - | Next | [#1](https://github.com/willzmkv/gta-vcs-recomp/issues/1) |
-| T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Planned (research first) | [#2](https://github.com/willzmkv/gta-vcs-recomp/issues/2) |
+| T1 | Texture replacement: PCSX2-compatible packs, **DDS** first-class, PNG kept | - | **Done** (Vulkan compiled, not run) | [#1](https://github.com/willzmkv/gta-vcs-recomp/issues/1) |
+| T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Next (research first) | [#2](https://github.com/willzmkv/gta-vcs-recomp/issues/2) |
 | T3 | Pre-HUD post-processing pass (colour + depth before the 2D) | - | Planned | [#3](https://github.com/willzmkv/gta-vcs-recomp/issues/3) |
 | T4 | Volumetric height fog (Proper Shaders `[VolumetricFog]`) | T3 | Planned | [#4](https://github.com/willzmkv/gta-vcs-recomp/issues/4) |
 | T5 | SMAA 1x | T3 | Planned | [#5](https://github.com/willzmkv/gta-vcs-recomp/issues/5) |
@@ -70,6 +71,12 @@ is based on `9b9211d` (0.1.0); its first three commits are toolchain fixes that 
 
 **Done when.** A pack of `.dds` files replaces textures in game on D3D11 and Vulkan builds; PNG packs still work;
 replacements off = the original picture; the GPU budget holds; the check passes. Packs stay out of git.
+
+**Result (2026-11-02).** Steps 1-6 done. With the user's HD pack (6279 BC7 DDS, full mips, 851 MiB): all 6279 load;
+1095 matched and shown across Fort Baxter and four city spots, each loaded once (119 MiB), 30 fps held; the dump round
+trip brings back 753 / 753 dumped textures, and 742 of those names are in the HD pack (PCSX2's identities). PNG packs:
+PR #8's loader checks still pass. Open: running the Vulkan backend with a pack (it compiles; this PC has no
+glslangValidator for a Vulkan build) - on Linux, `tools/texture_check.py --pack DIR`.
 
 ### T2 - Draw distance (Project2DFX)
 

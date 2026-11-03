@@ -103,6 +103,7 @@ python tools/finale_check.py [OUT] [--story] [--full]         # Last Stand's end
 python tools/controls_check.py [OUT]                          # bindings, presets, reset, vibration, volume levels; menu screenshots
 python tools/hud_check.py [OUT]                               # HUD at the screen edges: radar left, centred text in the middle
 python tools/fog_check.py [OUT] [--save DIR]                  # Graphics > Fog: the game's fog range scaled, untouched at 100 %
+python tools/texture_check.py [OUT] [--pack DIR] [--loader-only] [--validate-pack] [--dump-check]   # texture packs (DDS / PNG)
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```

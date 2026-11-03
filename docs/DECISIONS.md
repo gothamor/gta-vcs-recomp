@@ -1032,3 +1032,16 @@ The pack remains external, ignored by git and rejected by the release guard. See
 The user subsequently requested `textures/SLUS-21590/`: automatic discovery checks `textures/` beside the exe and,
 for the default source build, in the checkout root before the older bare serial folders. The pack-check tool uses
 this layout by default too. Tests were skipped at the user's request for this folder-discovery change.
+
+## 2026-11-02 - Texture packs: DDS first, on upstream PR #8 (FORK.md T1)
+
+Upstream PR #8 (rofhima13) reads PCSX2 PNG packs: PCSX2's names and hashes, an async loader, a GPU budget. The user
+wanted DDS instead, believing the PS2's own files are DDS; they are not (the GS's paletted formats in `.XTX` / TXD),
+but DDS is still the better pack format, for other reasons: block-compressed and mip-mapped as the GPU samples it,
+nothing decoded on load, 4-8x less GPU memory than a PNG, and PCSX2 reads it under the same names - the user's HD
+pack is 6279 BC7 DDS files. So the PR was taken as it is (its commits, its author) and DDS added beside PNG rather
+than replacing it: existing PNG packs keep working, a name in both formats takes the DDS. DDS headers are read by our
+own code (a header and a copy of the levels: no new library), BC1-BC5 / BC7 and 32-bit RGBA / BGRA; sRGB variants
+are sampled as stored, like PNG values (PCSX2 does the same). A block-compressed DDS on a GPU without BC sampling
+keeps the original texture. A dump (`VCS_TEXTURE_DUMP=1`) writes uncompressed DDS rather than PNG: lossless, no PNG
+encoder to vendor, and texconv / Compressonator take it straight to BC7.
