@@ -84,8 +84,9 @@ glslangValidator for a Vulkan build) - on Linux, `tools/texture_check.py --pack 
 ### T1b - Mod loader
 
 **Done (core, 2026-11-02)**: `src/mods/modloader.cpp`, docs/MODS.md "The mod loader". `modloader/<mod>/` folders,
-Mod Loader's `modloader.ini` (priorities, ignore lists), F2 > Mods (Load mods, Replace textures, a switch per mod,
-Rescan, Open folder), switches applied while the game runs (`gsHwSetTextureReplacements`), test runs authentic.
+Mod Loader's `modloader.ini` (made by the game in `modloader/`; priorities, ignore lists), F2 > Mods (Load mods,
+Replace textures, a switch and a priority slider 1-100 per mod - the slider writes modloader.ini -, Rescan, Open
+folder), switches applied while the game runs (`gsHwSetTextureReplacements`), test runs authentic.
 Checked by `tools/mods_check.py`. Content read so far: texture packs.
 
 ### T1c - Game files from mods (VCS's formats)

@@ -53,6 +53,9 @@ namespace settings
         std::string env;               // an environment variable that overrides it (testing), shown as such
         std::function<void(int)> onChange; // the new value; also called once by applyAll()
         std::function<int()> read;     // optional: the live value, when something else changes it too (a hotkey)
+        // false: not in vcs.ini - the value lives elsewhere (a mod's priority in modloader.ini): `read` gives it at load
+        // and refresh, onChange stores it
+        bool saved = true;
 
         // Key: 0 (unbound) is a valid value. A control binding; the menu clears one with a right click.
         bool optional = false;
@@ -60,6 +63,7 @@ namespace settings
         // setting when that one is optional, and is refused otherwise (e.g. the menu key).
         std::string group;
         // Key: a second binding of the same action, drawn in this row beside the first (its own Spec, `hidden`).
+        // Toggle: an Integer drawn as a slider beside the switch (a mod's priority), its own Spec, `hidden`.
         std::string partner;
         bool hidden = false; // no row of its own (a partner); still saved, reset with its page
         // Action: the button's text, and whether it asks for a second click first.

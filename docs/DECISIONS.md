@@ -1064,3 +1064,13 @@ is in `Mods/ModLoader/`). Both are one feature: a texture pack is the first kind
   built at start-up, and a menu row per mod is worth that.
 - PC `.dff` / `.txd`: VCS has neither format (RSL models, XTX textures); the mod loader will take VCS's own files
   next (T1c), and importing PC formats is a research task of its own (T9; docs/MODS.md).
+
+## 2026-11-02 - Mod priorities: sliders in F2, kept in modloader.ini
+
+Two mods with the same textures (the user's HUD Remastered and HD Texture Pack share 152) need the player to say which
+wins, in the game. A slider (1-100) beside each mod's switch; the value stays in `modloader.ini` - Mod Loader's file,
+which the game now makes in `modloader/` when it is missing, visible and editable - rather than vcs.ini, so there is
+one source: the menu writes the file, Rescan reads an edited one. The settings registry got two small things for it:
+`Spec::saved = false` (a value kept elsewhere: `read` gives it, onChange stores it) and a Toggle's `partner` Integer
+drawn as a slider in the same row. At equal priority a DDS still beats a PNG, so a PNG mod has to be set above a DDS
+pack it shares textures with.

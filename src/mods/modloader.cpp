@@ -46,6 +46,7 @@ namespace vcs::mods
 
         fs::path g_root, g_exeDir;
         std::vector<Mod> g_mods;
+        std::string g_profileName = "Default"; // modloader.ini's profile, as written
         bool g_dirty = true;
 
         std::string lower(std::string s)
@@ -90,7 +91,8 @@ namespace vcs::mods
 
         struct Config
         {
-            std::string profile = "default";
+            std::string profile = "default";      // lower case, for matching
+            std::string profileName = "Default";  // as written, for new sections
             std::map<std::string, int> priority; // lower-case mod name -> 0..100
             std::vector<std::string> ignore;     // wildcards
             bool ignoreAll = false;
@@ -100,6 +102,8 @@ namespace vcs::mods
         {
             Config c;
             std::ifstream in(ini);
+            if (!in)
+                c.ignore = {"_ignore"}; // no file yet: Mod Loader's shipped default
             std::vector<std::pair<std::string, std::string>> lines; // (section, line)
             std::string section, line;
             while (std::getline(in, line))
@@ -119,8 +123,11 @@ namespace vcs::mods
                 return eq == std::string::npos ? (value ? std::string() : trim(l)) : trim(value ? l.substr(eq + 1) : l.substr(0, eq));
             };
             for (const auto &[s, l] : lines)
-                if (s == "folder.config" && lower(field(l, false)) == "profile")
-                    c.profile = lower(field(l, true));
+                if (s == "folder.config" && lower(field(l, false)) == "profile" && !field(l, true).empty())
+                {
+                    c.profileName = field(l, true);
+                    c.profile = lower(c.profileName);
+                }
             const std::string p = "profiles." + c.profile + ".";
             for (const auto &[s, l] : lines)
             {
@@ -132,6 +139,127 @@ namespace vcs::mods
                     c.ignoreAll = lower(field(l, true)) == "true" || field(l, true) == "1";
             }
             return c;
+        }
+
+        fs::path iniPath() { return g_root / "modloader.ini"; }
+
+        // A test run writes nothing into the player's modloader/ - only into a folder of its own (VCS_MODLOADER_DIR)
+        bool mayWrite()
+        {
+            const char *dir = std::getenv("VCS_MODLOADER_DIR");
+            return !ps2control::hiddenMode() || (dir && *dir);
+        }
+
+        // modloader.ini as PC Mod Loader ships it (the parts this port reads), with the installed mods' priorities listed,
+        // when the folder has none.
+        void ensureIni()
+        {
+            std::error_code ec;
+            if (!mayWrite() || fs::exists(iniPath(), ec))
+                return;
+            fs::create_directories(g_root, ec);
+            std::ofstream out(iniPath());
+            out << ";\n"
+                   ";           Mod Loader Folder Config File - GTA: Vice City Stories (native port)\n"
+                   ";           PC GTA's Mod Loader format. F2 > Mods changes the priorities here; this file can be edited too\n"
+                   ";           (F2 > Mods > Rescan reads it again).\n"
+                   ";\n"
+                   "[Folder.Config]\n"
+                   "Profile = Default                 ; Profile to be used to configure mods\n"
+                   "\n"
+                   "[Profiles.Default.Config]\n"
+                   "IgnoreAllMods  = false            ; Ignores all mods. This essentially disables mods loading.\n"
+                   "\n"
+                   "[Profiles.Default.Priority]\n"
+                   "; Defines mods priority (which mod goes into effect when two replace the same file).\n"
+                   "; The priority is between 1 and 100, where higher values override lower ones.\n"
+                   "; Priority 0 makes the mod be ignored (just like IgnoreMods). The default priority is 50.\n";
+            for (const Mod &m : g_mods)
+                out << m.name << "=" << m.priority << "\n";
+            out << "\n"
+                   "[Profiles.Default.IgnoreMods]\n"
+                   "; Wildcards of mods to be ignored\n"
+                   "_ignore\n";
+            std::fprintf(stderr, "[mods] made %s\n", utf8(iniPath()).c_str());
+        }
+
+        // `name=value` in [Profiles.<profile>.Priority]: its line replaced, or added at the section's end (the section
+        // made if missing); every other line kept as it was
+        void writePriority(const std::string &name, int value)
+        {
+            if (!mayWrite())
+                return;
+            ensureIni();
+            std::vector<std::string> lines;
+            {
+                std::ifstream in(iniPath());
+                std::string line;
+                while (std::getline(in, line))
+                    lines.push_back(line.size() && line.back() == '\r' ? line.substr(0, line.size() - 1) : line);
+            }
+            auto content = [](const std::string &l) { return trim(l.substr(0, l.find(';'))); };
+            const std::string wanted = lower("profiles." + g_profileName + ".priority");
+            size_t section = std::string::npos, end = lines.size();
+            for (size_t i = 0; i < lines.size(); ++i)
+            {
+                const std::string t = content(lines[i]);
+                if (t.size() < 2 || t.front() != '[' || t.back() != ']')
+                    continue;
+                if (section != std::string::npos && end == lines.size())
+                    end = i;
+                if (section == std::string::npos && lower(trim(t.substr(1, t.size() - 2))) == wanted)
+                    section = i;
+            }
+            const std::string entry = name + "=" + std::to_string(value);
+            bool written = false;
+            if (section == std::string::npos)
+            {
+                lines.push_back("");
+                lines.push_back("[Profiles." + g_profileName + ".Priority]");
+                lines.push_back(entry);
+                written = true;
+            }
+            for (size_t i = section + 1; !written && i < end; ++i)
+            {
+                const std::string t = content(lines[i]);
+                const size_t eq = t.find('=');
+                if (eq != std::string::npos && lower(trim(t.substr(0, eq))) == lower(name))
+                {
+                    lines[i] = entry;
+                    written = true;
+                }
+            }
+            if (!written)
+            {
+                size_t at = end;
+                while (at > section + 1 && trim(lines[at - 1]).empty())
+                    --at;
+                lines.insert(lines.begin() + std::ptrdiff_t(at), entry);
+            }
+            const fs::path tmp = iniPath().string() + ".tmp";
+            {
+                std::ofstream out(tmp, std::ios::trunc);
+                for (const std::string &l : lines)
+                    out << l << "\n";
+                if (!out)
+                    return;
+            }
+            std::error_code ec;
+            fs::rename(tmp, iniPath(), ec);
+            if (ec)
+                std::fprintf(stderr, "[mods] could not write %s\n", utf8(iniPath()).c_str());
+        }
+
+        // F2 > Mods > Rescan: modloader.ini's priorities again (an edited file), for the known mods
+        void reloadPriorities()
+        {
+            const Config config = readConfig(iniPath());
+            g_profileName = config.profileName;
+            for (Mod &m : g_mods)
+            {
+                const auto set = config.priority.find(lower(m.name));
+                m.priority = set == config.priority.end() ? 50 : std::clamp(set->second, 1, 100);
+            }
         }
 
         size_t countTextures(const fs::path &folder)
@@ -217,7 +345,8 @@ namespace vcs::mods
     {
         g_exeDir = exeDir;
         g_root = findRoot(exeDir);
-        const Config config = readConfig(g_root / "modloader.ini");
+        const Config config = readConfig(iniPath());
+        g_profileName = config.profileName;
         std::vector<fs::path> folders;
         std::error_code ec;
         for (const auto &entry : fs::directory_iterator(g_root, ec))
@@ -246,6 +375,7 @@ namespace vcs::mods
             g_mods.push_back({name, key, folder, priority, countTextures(folder)});
         }
         std::fprintf(stderr, "[mods] %zu mod(s) in %s\n", g_mods.size(), utf8(g_root).c_str());
+        ensureIni();
 
         using settings::Type;
         settings::Spec s;
@@ -274,22 +404,49 @@ namespace vcs::mods
         s.onChange = [](int) { g_dirty = true; };
         settings::add(s);
 
-        for (const Mod &m : g_mods)
+        for (size_t i = 0; i < g_mods.size(); ++i)
         {
+            const Mod &m = g_mods[i];
             s = {};
             s.key = m.key;
             s.page = "Mods";
             s.section = "Installed mods";
             s.label = m.name;
-            char what[160];
+            char what[200];
             if (m.textures)
-                std::snprintf(what, sizeof(what), "%zu texture files (DDS / PNG), priority %d (modloader.ini). ", m.textures, m.priority);
+                std::snprintf(what, sizeof(what), "%zu texture files (DDS / PNG). The slider is its priority, 1-100: when two mods "
+                                                  "have the same texture, the higher one wins (kept in modloader.ini). ", m.textures);
             else
                 std::snprintf(what, sizeof(what), "Nothing in it this version reads yet (texture packs so far). ");
             s.help = what + utf8(m.path);
             s.type = Type::Toggle;
             s.defaultValue = 1;
+            s.partner = m.key + ".priority";
             s.onChange = [](int) { g_dirty = true; };
+            settings::add(s);
+
+            // its priority: the slider beside the switch; the value lives in modloader.ini, not vcs.ini
+            s = {};
+            s.key = m.key + ".priority";
+            s.page = "Mods";
+            s.section = "Installed mods";
+            s.label = m.name + " priority";
+            s.type = Type::Integer;
+            s.min = 1;
+            s.max = 100;
+            s.format = "Priority %d";
+            s.defaultValue = 50; // Mod Loader's
+            s.hidden = true;
+            s.saved = false;
+            s.read = [i] { return g_mods[i].priority; };
+            s.onChange = [i](int v) {
+                Mod &mod = g_mods[i];
+                if (mod.priority == v)
+                    return;
+                mod.priority = v;
+                writePriority(mod.name, v);
+                g_dirty = true;
+            };
             settings::add(s);
         }
 
@@ -298,10 +455,15 @@ namespace vcs::mods
         s.page = "Mods";
         s.section = "Folder";
         s.label = "Read the mods again";
-        s.help = "After adding or changing files in a mod. A new mod folder shows here after a restart.";
+        s.help = "After adding or changing files in a mod, or editing modloader.ini's priorities. A new mod folder shows here "
+                 "after a restart.";
         s.type = Type::Action;
         s.button = "Rescan";
-        s.onChange = [](int) { g_dirty = true; };
+        s.onChange = [](int) {
+            reloadPriorities();
+            settings::refresh(); // the sliders follow the file
+            g_dirty = true;
+        };
         settings::add(s);
 
         s = {};

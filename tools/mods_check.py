@@ -4,12 +4,13 @@ modloader.ini says, and F2 > Mods' switches applied while the game runs.
 
     python tools/mods_check.py [OUT] --pack DIR [--port 47666]
 
-Builds a modloader/ under OUT: "HD" (a link to the texture pack DIR, priority 50), "Tinted" (half the textures the game
-dumps at a city spot, painted magenta, priority 60 in modloader.ini), "_old" (ignored by modloader.ini) and ".hidden"
-(not a mod). Then one hidden run (VCS_TEST_MODS=1) at that spot, switching with the `setting` command as F2 does:
-everything on (magenta: Tinted beats HD), Tinted off (no magenta, HD stays), Replace textures off (the game's own),
-on again, Load mods off. Each step: a screenshot, the magenta share, the mean difference from the game's own picture,
-the [textures] / [mods] log. Results: OUT/result.json. Exit code 0 = pass.
+Builds a modloader/ under OUT with no modloader.ini: "HD" (a link to the texture pack DIR), "Tinted" (half the textures
+the game dumps at a city spot, painted magenta), "_ignore" (Mod Loader's default ignore entry) and ".hidden" (not a
+mod). Then one hidden run (VCS_TEST_MODS=1) at that spot. The game makes modloader.ini in the folder (both mods at 50,
+_ignore ignored); the steps switch with the `setting` command as F2 does: both at 50 (HD wins the shared textures:
+little magenta), Tinted's priority slider to 60 (magenta; "Tinted=60" written into modloader.ini), Tinted off (no
+magenta, HD stays), Replace textures off (the game's own), on again, Load mods off. Each step: a screenshot, the
+magenta share, the mean difference from the game's own picture. Results: OUT/result.json. Exit code 0 = pass.
 """
 import argparse
 import json
@@ -38,8 +39,15 @@ def link(target, link_path):
 
 
 def unlink(path):
-    if path.is_symlink() or (tc.IS_WINDOWS and path.is_dir() and os.path.realpath(path) != str(path.resolve(strict=False))):
-        os.rmdir(path) if tc.IS_WINDOWS else os.unlink(path)
+    """Removes the link alone, never what it points to: rmdir takes a junction (and fails on a real folder with files
+    in it, which is then left alone); unlink takes a symlink."""
+    if tc.IS_WINDOWS:
+        try:
+            os.rmdir(path)
+        except OSError:
+            pass
+    elif path.is_symlink():
+        os.unlink(path)
 
 
 def picture_stats(path, reference=None):
@@ -74,9 +82,10 @@ def check(out, pack, port):
     out.mkdir(parents=True, exist_ok=True)
     mods = out / 'modloader'
     if mods.is_dir():
-        for child in mods.iterdir():
-            if child.name == 'HD':
-                unlink(child)
+        if (mods / 'HD').exists() or os.path.lexists(mods / 'HD'):
+            unlink(mods / 'HD')  # the link to the player's pack goes first, on its own
+        if os.path.lexists(mods / 'HD'):
+            raise RuntimeError('could not remove the link %s: remove it by hand (not the folder it points to)' % (mods / 'HD'))
         shutil.rmtree(mods, ignore_errors=True)
     dumps = out / 'dumps'
     if not any(dumps.glob('*.dds')):
@@ -92,17 +101,18 @@ def check(out, pack, port):
             data[i:i + 3] = b'\xff\x00\xff'
         (mods / 'Tinted' / name).write_bytes(bytes(data))
     link(Path(pack).resolve(), mods / 'HD')
-    (mods / '_old').mkdir()
-    shutil.copy(dumps / names[0], mods / '_old' / names[0])
+    (mods / '_ignore').mkdir()
+    shutil.copy(dumps / names[0], mods / '_ignore' / names[0])
     (mods / '.hidden').mkdir()
-    (mods / 'modloader.ini').write_text('[Profiles.Default.Priority]\nTinted=60\n[Profiles.Default.IgnoreMods]\n_old*\n',
-                                        encoding='ascii')
 
     env = {'VCS_TEST_MODS': '1', 'VCS_MODLOADER_DIR': str(mods)}
-    steps = [('all_on', None), ('tinted_off', 'mods.tinted 0'), ('textures_off', 'graphics.texture_replacements 0'),
-             ('textures_on', 'graphics.texture_replacements 1'), ('mods_off', 'mods.enabled 0')]
+    steps = [('tie', None), ('all_on', 'mods.tinted.priority 60'), ('tinted_off', 'mods.tinted 0'),
+             ('textures_off', 'graphics.texture_replacements 0'), ('textures_on', 'graphics.texture_replacements 1'),
+             ('mods_off', 'mods.enabled 0')]
     shots = {}
     g = start('mods_check', out, env, port)
+    ini = mods / 'modloader.ini'
+    ini_made = ini.read_text(encoding='utf-8', errors='replace') if ini.is_file() else ''
     try:
         for step, command in steps:
             if command:
@@ -121,11 +131,16 @@ def check(out, pack, port):
         result[step] = picture_stats(shots[step], shots['textures_off'])
     found = re.search(r'\[mods\] (\d+) mod\(s\)', log)
     result['mods_found'] = int(found.group(1)) if found else -1
-    result['ignored_old'] = '[mods] _old: ignored by modloader.ini' in log
+    result['ignored'] = '[mods] _ignore: ignored by modloader.ini' in log
     result['switches'] = len(re.findall(r'\[textures\] pack switched', log))
-    result['tinted_in_use'] = re.findall(r'\[textures\]   Tinted \(priority (\d+)\): (\d+) in use', log)[:1]
-    ok = (result['mods_found'] == 2 and result['ignored_old'] and result['switches'] >= 5 and
-          result['all_on']['magenta'] > 0.005 and result['tinted_off']['magenta'] < 0.005 and
+    result['tinted_in_use'] = re.findall(r'\[textures\]   Tinted \(priority (\d+)\): (\d+) in use', log)
+    ini_after = ini.read_text(encoding='utf-8', errors='replace') if ini.is_file() else ''
+    result['ini_made'] = all(t in ini_made for t in ('[Profiles.Default.Priority]', 'HD=50', 'Tinted=50', '_ignore'))
+    result['ini_slider'] = 'Tinted=60' in ini_after and 'Tinted=50' not in ini_after and 'HD=50' in ini_after
+    ok = (result['mods_found'] == 2 and result['ignored'] and result['ini_made'] and result['ini_slider'] and
+          result['switches'] >= 6 and
+          result['all_on']['magenta'] > max(0.005, 3 * result['tie']['magenta']) and
+          result['tinted_off']['magenta'] < 0.005 and
           result['textures_on']['magenta'] < 0.005 and
           result['tinted_off']['diff_from_original'] > 2 * max(result['mods_off']['diff_from_original'], 0.5) and
           '[crash]' not in log and '[textures] failed' not in log)

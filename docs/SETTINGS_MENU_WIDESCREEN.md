@@ -214,7 +214,7 @@ registration order; the vcs.ini keys did not change):
 | Display | Screen | Aspect ratio, HUD |
 | Display | Frame rate | Game timing, Frame rate cap |
 | Graphics | Image quality | Internal resolution, Anti-aliasing (MSAA), Texture filtering |
-| Mods | Mod loader, Installed mods, Folder | Load mods (`mods.enabled`), Replace textures (`graphics.texture_replacements`), one switch per mod (`mods.<name>`), Rescan, Open folder (docs/MODS.md) |
+| Mods | Mod loader, Installed mods, Folder | Load mods (`mods.enabled`), Replace textures (`graphics.texture_replacements`), one switch per mod (`mods.<name>`) with its priority slider beside it (`mods.<name>.priority`: a Toggle's `partner` Integer, kept in modloader.ini - `saved = false`), Rescan, Open folder (docs/MODS.md) |
 | Game | Start-up | Skip intro movies (`display.skip_intro`) |
 | Controls | Menu | Settings menu key |
 | Advanced | Diagnostics | Performance overlay (`graphics.perf_overlay`) |

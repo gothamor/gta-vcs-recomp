@@ -51,7 +51,13 @@ the game runs. `src/mods/modloader.cpp` does the same for this port:
 - **A mod** is any folder in it (a leading `.` hides one). `modloader/modloader.ini` is read in Mod Loader's own
   format, so a player's knowledge carries over: `[Folder.Config] Profile`, and the profile's `[...Priority]
   Mod=1..100` (50 by default, 0 ignores the mod; a higher one wins a file two mods have), `[...IgnoreMods]`
-  (wildcards) and `[...Config] IgnoreAllMods`. Profiles beyond that (parents, `UseIfModule`) are not read.
+  (wildcards; `_ignore` when there is no file yet, as Mod Loader ships it) and `[...Config] IgnoreAllMods`. Profiles
+  beyond that (parents, `UseIfModule`) are not read. The game **makes the file** in `modloader/` when it is missing
+  (Mod Loader's template, every installed mod listed at 50), so it is there to see and edit.
+- **Priorities in F2**: a slider (1-100) beside each mod's switch. It writes `modloader.ini` (its line replaced, or
+  added to the profile's Priority section; the rest of the file kept), so the file stays the one source: the
+  priorities are not in vcs.ini (`settings::Spec::saved = false`, read back with `read`), and Rescan reads an edited
+  file again. Reset page to defaults puts every mod back on, at 50.
 - **F2 > Mods**: Load mods (`mods.enabled`), Replace textures (`graphics.texture_replacements`, which also governs the
   packs outside `modloader/`: `VCS_TEXTURE_PACK`, `graphics.texture_pack` in vcs.ini, `textures/SLUS-21590`), one
   switch per mod (`mods.<name>`, with its file count and priority as help), Rescan (files read again) and Open folder.
@@ -62,12 +68,15 @@ the game runs. `src/mods/modloader.cpp` does the same for this port:
 - **What a mod can hold**: texture packs so far (PCSX2-named `.dds` / `.png` anywhere in it, `dumps/` aside;
   docs/TEXTURE_PACKS.md). Game files are next (T1c).
 - **Test runs stay authentic**: a hidden run loads mods only with `VCS_MODS=1`, the other packs only with
-  `VCS_TEXTURE_REPLACEMENTS=1`, or both with `VCS_TEST_MODS=1` (switches left free for the `setting` command).
-- **Checked** (`tools/mods_check.py`, 2026-11-02): a `modloader/` of "HD" (the HD pack, linked), "Tinted" (half of a
-  city spot's dumped textures painted magenta, priority 60), `_old` (ignored by the ini) and `.hidden`: 2 mods found,
-  `_old` ignored, Tinted wins its 377 textures over HD; switched live with `setting` - everything on (magenta), Tinted
-  off (no magenta, HD stays: 4.7 from the game's own picture), Replace textures off (the game's own), on again (HD
-  back), Load mods off (0.7: walking peds) - 5 swaps, no failure.
+  `VCS_TEXTURE_REPLACEMENTS=1`, or both with `VCS_TEST_MODS=1` (switches left free for the `setting` command), and
+  writes nothing into the player's `modloader/` - only into a folder of its own given by `VCS_MODLOADER_DIR`.
+- **Checked** (`tools/mods_check.py`, 2026-11-02): a `modloader/` with no ini of "HD" (the HD pack, linked), "Tinted"
+  (half of a city spot's dumped textures painted magenta), `_ignore` and `.hidden`: the game makes `modloader.ini` (HD
+  and Tinted at 50, `_ignore` ignored); at 50 / 50 HD wins the shared textures (Tinted supplies its 7 own, no magenta);
+  Tinted's slider to 60 (`setting mods.tinted.priority 60`) - Tinted supplies 377, magenta, `Tinted=60` in the ini;
+  then Tinted off (no magenta, HD stays), Replace textures off (the game's own), on again (HD back), Load mods off -
+  6 swaps, pass. With the player's own two mods linked in: "HUD Remastered" (160 PNG, 152 of them in the HD pack too)
+  supplies 8 textures at 50 / 50 (the DDS wins a tie) and all 160 at 60, the HD pack ceding its 152.
 
 ### `.dff` / `.txd`: what PC mods replace, and what VCS has
 
