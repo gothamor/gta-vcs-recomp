@@ -9,6 +9,7 @@
 // Here they are replaced: reads are queued for a host thread that copies from the disc image into EE RAM; a poll
 // says busy until the copy is done. The game never touches a buffer before its poll says done, as with the IOP.
 #include "game/vcs_stream.h"
+#include "mods/rwconv.h"
 
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -24,7 +25,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -125,6 +128,63 @@ namespace vcs
             return c;
         }
 
+        std::vector<uint8_t> readWhole(const std::string &path)
+        {
+            std::ifstream in(std::filesystem::u8path(path), std::ios::binary);
+            return in ? std::vector<uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()) : std::vector<uint8_t>();
+        }
+
+        // A PC file converted (src/mods/rwconv.h) - kept while the files (and the entry it goes onto) stay the same.
+        struct Converted
+        {
+            std::string stamp;
+            std::vector<uint8_t> data;
+        };
+        std::map<std::string, Converted> g_converted;
+
+        std::string stampOf(const std::string &path)
+        {
+            std::error_code ec;
+            const auto p = std::filesystem::u8path(path);
+            const auto size = std::filesystem::file_size(p, ec);
+            const auto time = std::filesystem::last_write_time(p, ec).time_since_epoch().count();
+            return path + "|" + std::to_string(size) + "|" + std::to_string(static_cast<long long>(time));
+        }
+
+        // The bytes a mod's file gives its entry: the file itself, or a PC file converted (a .dff onto the disc's own
+        // entry, read from `templateLsn`). Empty when it cannot be used.
+        std::vector<uint8_t> entryBytes(const StreamFile &f, uint32_t index, uint32_t templateLsn, uint32_t templateSectors)
+        {
+            if (f.format == StreamFile::Format::Vcs)
+                return readWhole(f.path);
+            const std::string stamp = stampOf(f.path) + "|" + (f.companion.empty() ? "" : stampOf(f.companion)) + "|" + std::to_string(index);
+            const auto cached = g_converted.find(f.path);
+            if (cached != g_converted.end() && cached->second.stamp == stamp)
+                return cached->second.data;
+            const auto start = std::chrono::steady_clock::now();
+            std::vector<uint8_t> out;
+            std::string report;
+            bool ok = false;
+            if (f.format == StreamFile::Format::PcTxd)
+                ok = rwconv::txdToXtx(readWhole(f.path), 128, out, report);
+            else
+            {
+                std::vector<uint8_t> templ(size_t(templateSectors) * 2048u);
+                IPS2DiscImage *disc = ps2_disc::image();
+                const std::vector<uint8_t> txd = f.companion.empty() ? std::vector<uint8_t>() : readWhole(f.companion);
+                if (!disc || !disc->readBytes(uint64_t(templateLsn) * 2048u, static_cast<uint32_t>(templ.size()), templ.data()))
+                    report = "the disc's entry could not be read";
+                else
+                    ok = rwconv::dffToMdl(readWhole(f.path), templ, f.companion.empty() ? nullptr : &txd, out, report);
+            }
+            std::fprintf(stderr, "[mods] %s: %s converted%s in %.0f ms: %s\n", f.mod.c_str(), f.path.c_str(), ok ? "" : " - FAILED, not used",
+                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), report.c_str());
+            if (!ok)
+                out.clear();
+            g_converted[f.path] = {stamp, out};
+            return out;
+        }
+
         // Stream thread, before a read, when the list changed: each file to its entry's sectors (the game's tables are
         // read once they exist). False while the game has not built them yet.
         bool resolveFiles(uint8_t *rdram)
@@ -216,7 +276,7 @@ namespace vcs
                 uint32_t index = kResources;
                 if (!f.name.empty() && f.name[0] == '#')
                     index = static_cast<uint32_t>(std::strtoul(f.name.c_str() + 1, nullptr, 10));
-                else if (f.textures)
+                else if (f.textures || f.format == StreamFile::Format::PcTxd)
                 {
                     const uint32_t pool = rd32(rdram, kTxdPool), base = rd32(rdram, streamingOwner + 8u);
                     const uint32_t items = pool ? rd32(rdram, pool) : 0u, size = pool ? rd32(rdram, pool + 8u) : 0u;
@@ -250,8 +310,8 @@ namespace vcs
                 }
                 if (std::find(taken.begin(), taken.end(), index) != taken.end())
                     continue; // a mod with a higher priority has it
-                std::ifstream in(f.path, std::ios::binary | std::ios::ate);
-                const auto size = in ? static_cast<uint64_t>(in.tellg()) : 0u;
+                std::vector<uint8_t> bytes = entryBytes(f, index, imgLsn + offset, sectors);
+                const auto size = static_cast<uint64_t>(bytes.size());
                 if (!size)
                     continue;
                 uint32_t first = imgLsn + offset, span = sectors;
@@ -264,9 +324,7 @@ namespace vcs
                     patch(at + 0x14u, span);
                     imgMoved = true;
                 }
-                Overlay o{first, span, std::vector<uint8_t>(static_cast<size_t>(size))};
-                in.seekg(0);
-                in.read(reinterpret_cast<char *>(o.data.data()), static_cast<std::streamsize>(size));
+                Overlay o{first, span, std::move(bytes)};
                 taken.push_back(index);
                 std::fprintf(stderr, "[mods] %s: %s -> GTA3PS2.IMG entry %u (LSN %u, %u sectors%s)\n", f.mod.c_str(), f.path.c_str(),
                              index, o.lsn, o.sectors, o.sectors > sectors ? ", larger than the disc's: moved" : "");

@@ -212,9 +212,18 @@ def apply(rot, pos, v):
             v[0] * rot[2] + v[1] * rot[5] + v[2] * rot[8] + pos[2])
 
 
+def naive_sum(values):
+    """Left to right in doubles: the same bits on every Python (3.12's sum() compensates) and in src/mods/rwconv.cpp."""
+    total = 0.0
+    for v in values:
+        total += v
+    return total
+
+
 def strip_of(tris):
     """Triangles -> one strip: greedy strips along shared edges, joined by degenerate triangles (PS2 GTA draws
-    without back-face culling, so the winding of each strip does not matter)."""
+    without back-face culling, so the winding of each strip does not matter). Degenerate input triangles are dropped."""
+    tris = [t for t in tris if t[0] != t[1] and t[1] != t[2] and t[0] != t[2]]
     by_edge = {}
     for t, (a, b, c) in enumerate(tris):
         for e in ((a, b), (b, c), (c, a)):
@@ -294,7 +303,7 @@ def build_geometry(m, template_geom, verts, normals, uvs, groups, material_ptrs)
                         (max(0, min(255, int(round(u[0] / uv_scale[0] * 127.5)))), max(0, min(255, int(round(u[1] / uv_scale[1] * 127.5))))),
                         tuple(max(-127, min(127, int(round(c * 127)))) for c in n)))
         packet = encode(raw)
-        mc = tuple(sum(v[k] for v in sv) / len(sv) for k in range(3))
+        mc = tuple(naive_sum(v[k] for v in sv) / len(sv) for k in range(3))
         mr = max(((v[0] - mc[0]) ** 2 + (v[1] - mc[1]) ** 2 + (v[2] - mc[2]) ** 2) ** 0.5 for v in sv)
         meshes.append(struct.pack("<4f2fiIHh6H", *mc, mr, *uv_scale, 0, len(dma), len(strip) - 2, material, *([0] * 6)))
         dma += packet
@@ -449,7 +458,7 @@ def convert(dff_path, template_path, out_path, txd_path=None):
                     by_key[key] = (len(mats), [])
                     mats.append(material(mat))
                 by_key[key][1].extend(tris)
-            groups = [(k, strip_of(t)) for k, t in by_key.values()]
+            groups = [(k, s) for k, s in ((k, strip_of(t)) for k, t in by_key.values()) if s]
             if not groups:
                 continue
             put(element, verts, normals, g["uvs"], groups, mats)

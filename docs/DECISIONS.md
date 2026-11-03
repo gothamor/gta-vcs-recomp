@@ -1083,3 +1083,21 @@ stackable (priorities). GTA3PS2.IMG has no directory on the disc, so names go th
 the upper-case model name): `admiral.mdl` works without a name list; entries without a known name use their streaming
 index (`#1234.bin`, as `tools/img.py extract` writes them). Larger entries are refused for now: the game allocates the
 entry's recorded size.
+
+## 2026-11-03 - PC VC cars: converted to VCS's own formats, in the mod loader (FORK.md T9)
+
+The player wants VC PC car mods to work as they come (`.dff` + `.txd`). Of the routes (docs/MODS.md "T9 findings"),
+converting into VCS's `ldm` / `tex` resources was chosen over drawing PC models on the host: the game's own paths draw
+the car (paint, damage parts, reflection, LOD), nothing in the renderer changes, and T1c already carries the files.
+The conversion was written in Python first (`tools/dff2mdl.py`, `tools/txd2xtx.py`: easy to inspect, the reference),
+then ported to C++ (`src/mods/rwconv.cpp`) so the mod loader converts while the game loads - no step ahead of time, no
+Python needed to play. The two are kept byte for byte equal (`tools/rwconv_check.py`: 236 / 236 files of the player's
+mods), so either can be used to look into a result. Choices inside:
+- The VCS car of the same name is the template: handling, collision, wheels, sounds and model info stay VCS's (the
+  SA PS2 tutorial's advice too: keep the original collision).
+- A `.txd` is converted only when a `.dff` of its name is in the same mod: PC mods' other dictionaries (`hud`,
+  `generic`, `particle`) hold VC's textures under names VCS uses for its own.
+- Textures are halved to 128 pixels and quantised to 4 / 8 bit: the format every texture on the disc has (VCS's own
+  vehicle textures are 128 at most); unpaletted ones would weigh far more in the PS2's memory.
+- Python 3.12's `sum()` compensates rounding: the tool sums left to right itself, so its output does not depend on the
+  Python version, and the C++ matches it.

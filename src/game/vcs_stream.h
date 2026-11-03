@@ -1,6 +1,7 @@
 // VCS disc streaming without the IOP (docs/NATIVE_PORT_ROADMAP.md milestone 6 step 1).
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -14,11 +15,21 @@ namespace vcs
     // (`textures`: `<name>.xtx`, the game's TXD store keeps the names) or "#<streaming index>" (tools/img.py); with a dot,
     // a loose disc file (AMERICAN.GXT). A file larger than its entry is read from past the disc. Any thread; resolved
     // against the game's tables at the next read; entries already in memory change when the game streams them again.
+    // PC VC files are converted on the way (src/mods/rwconv.h): a `.dff` onto the disc's model of its name (with
+    // `companion`, its `.txd`, for the texture names), a `.txd` into the texture dictionary of its name.
     struct StreamFile
     {
+        enum class Format : uint8_t
+        {
+            Vcs,   // the game's own format, as it is
+            PcDff, // a PC VC car model
+            PcTxd, // a PC VC texture dictionary
+        };
         std::string name, path, mod;
         int priority = 50;
-        bool textures = false;
+        bool textures = false; // a texture dictionary (by the TXD store's names)
+        Format format = Format::Vcs;
+        std::string companion;
     };
     void setStreamFiles(std::vector<StreamFile> files);
 

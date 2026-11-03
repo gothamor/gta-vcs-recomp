@@ -168,8 +168,11 @@ built:
 
 ### PC VC cars in VCS: `tools/dff2mdl.py` and `tools/txd2xtx.py` (T9, 2026-11-03)
 
-A VC car's `.dff` and `.txd` become a VCS vehicle's two archive entries, `<vcs car>.mdl` and `<vcs car>.xtx`, which go
-into a mod folder like any game file:
+A VC car's `.dff` and `.txd` become a VCS vehicle's two archive entries, `<vcs car>.mdl` and `<vcs car>.xtx`. **The
+mod loader does it itself**: a VC car mod put into `modloader/` as it comes (`comet.dff` + `comet.txd`, in any
+subfolder - Mod Loader's `gta3.img/` layout too) replaces VCS's car of that name, converted while the game loads
+(`src/mods/rwconv.cpp`: the Comet in 21 + 55 ms; the 80 cars of `Fixed_Xbox_Vehs_1.3` in 4.1 s at boot). A `.txd` is
+taken only beside a `.dff` of its name. The same conversion as tools, to look at a result or make VCS files by hand:
 
 ```
 python tools/img.py extract                  # once: the disc's vehicles into build/img/GTA3PS2 (the templates)
@@ -201,8 +204,14 @@ python tools/carmod_check.py                 # the Comet from Mods/Fixed_Xbox_Ve
 - **Checked** (`tools/carmod_check.py`): the ADMIRAL with no mod, then the Comet in its place (both entries larger than
   the disc's: 292 KB model, 165 KB textures) - spawned in the street, the player in it, from behind: the VC Comet with
   its own textures, the game's paint, no crash.
-- **Not yet**: the template's `car_parts` element stays (the ADMIRAL's extras); VC's own extras (`extra1` ...) are not
-  converted; the converter is a host tool, run ahead of time (the mod loader does not convert `.dff` / `.txd` itself).
+- **In the game, as they come** (`carmod_check.py --direct`, `--folder`): the Comet's `.dff` / `.txd` named
+  `admiral.*` - converted, resolved, the same picture; the whole `Fixed Xbox Vehicles/gta3.img` folder as one mod
+  (160 files converted, none failed): the VC Xbox Comet, Cheetah, Taxi, Voodoo, Stinger, Mesa and PCJ-600 spawned,
+  each VC's model with its textures. The C++ and Python converters agree byte for byte on all 236 `.dff` / `.txd` of
+  the player's mods (`tools/rwconv_check.py`).
+- **Not yet**: the template's `car_parts` element stays (the VCS car's extras); VC's own extras (`extra1` ...) are not
+  converted; bikes, boats and aircraft get their chassis and dummies' parts only (other node sets); a VC car with no
+  VCS car of its name needs renaming to the one it should replace.
 
 ## The pre-HUD pass (the infrastructure T4-T7 need)
 

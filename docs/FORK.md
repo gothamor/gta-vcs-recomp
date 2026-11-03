@@ -47,7 +47,7 @@ One task at a time, in this order. T3 is the base for T4-T7.
 | T6 | Simulated HDR: tone mapping, exposure, bloom (replaces the interim Exposure) | T3 | Planned | [#6](https://github.com/willzmkv/gta-vcs-recomp/issues/6) |
 | T7 | Sun rays | T3 | Planned | [#7](https://github.com/willzmkv/gta-vcs-recomp/issues/7) |
 | T8 | Presets and player docs (Authentic / Enhanced), release notes | T1-T7 | Planned | [#8](https://github.com/willzmkv/gta-vcs-recomp/issues/8) |
-| T9 | PC `.dff` / `.txd` in mods: convert RW 3 clumps / TXDs to VCS's formats, or draw them natively (research) | T1c, RSL submission | Cars work (converted ahead of time: `dff2mdl` + `txd2xtx`); in-game conversion next | [#12](https://github.com/willzmkv/gta-vcs-recomp/issues/12) |
+| T9 | PC `.dff` / `.txd` in mods: convert RW 3 clumps / TXDs to VCS's formats, or draw them natively (research) | T1c, RSL submission | Cars work as they come: the mod loader converts `.dff` + `.txd` (C++ = the Python tools, byte for byte) | [#12](https://github.com/willzmkv/gta-vcs-recomp/issues/12) |
 
 Backlog (not scheduled): SkyGFX's Xbox rim light / gloss / screen water drops, YCbCr correction, a larger reflection
 map, shadow maps, deferred lights, PBR sky, volumetric clouds, car paint reflections, rain on cars, ragdolls.
@@ -109,10 +109,9 @@ check: a mod replacing one model / one text, seen in game.
 
 ### T9 - PC `.dff` / `.txd`
 
-**Status (2026-11-03)**: steps 1-5 done - the VC Comet (`Mods/Fixed_Xbox_Vehs_1.3`) drives in the game as the
-ADMIRAL with its own model and textures (docs/MODS.md "PC VC cars in VCS"). Next: the mod loader converting `.dff` /
-`.txd` in a mod folder itself (a C++ port of the two tools, or a launcher step), VC's extras, other vehicle kinds
-(bikes, boats, planes have other node sets).
+**Status (2026-11-03)**: done for cars - a VC car mod's `.dff` + `.txd` in `modloader/` replace VCS's car of that
+name, converted by the mod loader while the game loads (docs/MODS.md "PC VC cars in VCS"). Left: VC's extras, other
+vehicle kinds (bikes, boats, planes have other node sets), conversion off the stream thread for large mod sets.
 
 
 **Plan for route (a), the converter (2026-11-03)** - the player's test mod is `Mods/Fixed_Xbox_Vehs_1.3` (VC PC cars):
@@ -249,6 +248,10 @@ release notes for a fork build.
   `*(0x489ECC)`, slot i = streaming entry 7534 + i). `tools/carmod_check.py`: the Comet as the ADMIRAL in the street,
   with its own textures and the game's paint - pass. The rig's `dump` takes paths with spaces (one had written a RAM
   dump next to the project folder).
+- **2026-11-03 - T9, in the mod loader.** `src/mods/rwconv.cpp`: both converters in C++, kept byte for byte with the
+  Python (`tools/rwconv_check.py`, 236 / 236 files); the stream layer converts a mod's `.dff` onto the disc's model of
+  its name (and its `.txd` into that TXD) at resolve time, cached by file stamp. The whole `Fixed Xbox Vehicles` folder
+  as one mod: 160 files converted in 4.1 s at boot, seven VC cars spawned and drawn as VC's (`carmod_check.py --folder`).
 
 ## How the work is done
 

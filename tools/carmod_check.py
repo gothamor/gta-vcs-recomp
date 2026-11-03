@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""A PC VC car mod in the game (tools/dff2mdl.py, FORK.md T9): the .dff converted onto a VCS vehicle's model, loaded
-from a mod folder by the mod loader with its .txd as the vehicle's texture dictionary (tools/txd2xtx.py), spawned and
-photographed.
+"""PC VC car mods in the game (FORK.md T9, docs/MODS.md "PC VC cars in VCS"): spawned and photographed.
 
     python tools/carmod_check.py [OUT] [--dff FILE] [--txd FILE] [--vehicle admiral] [--model 171] [--save DIR]
+    python tools/carmod_check.py [OUT] --direct [...]               the .dff / .txd as they are: the game converts them
+    python tools/carmod_check.py [OUT] --folder DIR --models 266,172  a whole PC mod folder; those models spawned
 
-Needs the extracted vehicles (python tools/img.py extract). Two hidden runs from the card copy (default the rig's user
-copy) at a city street: the original vehicle, then the converted one (mod folder under OUT - game data: never in git),
-the player put in it and the picture taken from behind. Pass = the converted files resolved by the mod loader, the
-game alive, no crash, a different picture. Results: OUT/result.json. Exit code 0 = pass.
+Default: the .dff converted onto the VCS vehicle's model by tools/dff2mdl.py, its .txd by tools/txd2xtx.py, the results
+(`admiral.mdl`, `admiral.xtx`) in a mod. --direct: the PC files themselves, named as the vehicle (`admiral.dff`,
+`admiral.txd`) - the mod loader converts them (src/mods/rwconv.cpp). --folder: a copy of a PC mod folder as one mod
+(the mod loader takes each `.dff` named as a VCS vehicle, with its `.txd`).
+
+Needs the extracted vehicles for the default mode (python tools/img.py extract). Hidden runs from the card copy
+(default the rig's user copy) at a city street: the original vehicle (not with --folder), then the mod (mod folder
+under OUT - game data: never in git), the player put in each car spawned and the picture taken from behind. Pass =
+the files resolved (converted, for PC files) by the mod loader, the game alive, no crash, a different picture.
+Results: OUT/result.json. Exit code 0 = pass.
 """
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -20,23 +27,23 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dff2mdl  # noqa: E402
-import txd2xtx  # noqa: E402
 import gamefiles_check  # noqa: E402
 import mods_check  # noqa: E402
 import rig  # noqa: E402
 import toolchain as tc  # noqa: E402
+import txd2xtx  # noqa: E402
 
 DEFAULT_DFF = os.path.join(tc.ROOT, 'Mods', 'Fixed_Xbox_Vehs_1.3', 'Comet with PC style body and lights', 'comet.dff')
 DEFAULT_TXD = os.path.join(tc.ROOT, 'Mods', 'Fixed_Xbox_Vehs_1.3', 'Fixed Xbox Vehicles', 'gta3.img', 'comet.txd')
 
 
-def run(out, name, mods, save, model):
-    """One hidden run: the car spawned at gamefiles_check's street with the player in it, photographed from behind.
-    (picture, log, alive)"""
+def run(out, name, mods, save, models):
+    """One hidden run: each model spawned at gamefiles_check's street with the player in it, photographed from behind.
+    ([pictures], log, alive)"""
     env = {'VCS_TEST_MODS': '1', 'VCS_MODLOADER_DIR': str(mods)} if mods else {}
-    g = rig.Game.start(save=save, name='carmod_' + name, seconds=300, env=env)
+    g = rig.Game.start(save=save, name='carmod_' + name, seconds=120 + 30 * len(models), env=env)
     x, y, heading = gamefiles_check.STREET
-    shot = out / (name + '.png')
+    shots = []
     try:
         g.wait_ingame(timeout=180)
         g.set_time(12)
@@ -52,13 +59,16 @@ def run(out, name, mods, save, model):
                 there.append(abs(px - x) + abs(py - y) < 10.0)
             if all(there):
                 break
-        g.spawn_car(model, ahead=4.0)
-        time.sleep(5)
-        g.cmd('screenshot ' + str(shot))
+        for model in models:
+            g.spawn_car(model, ahead=4.0)
+            time.sleep(5)
+            shot = out / ('%s_%d.png' % (name, model) if len(models) > 1 else name + '.png')
+            g.cmd('screenshot ' + str(shot))
+            shots.append(shot)
         alive = g.alive()
     finally:
         g.quit()
-    return shot, Path(g.log_path).read_text(encoding='utf-8', errors='replace'), alive
+    return shots, Path(g.log_path).read_text(encoding='utf-8', errors='replace'), alive
 
 
 def main():
@@ -68,32 +78,49 @@ def main():
     ap.add_argument('--txd', default=DEFAULT_TXD, help="the car's textures ('' for none: the template's names stay)")
     ap.add_argument('--vehicle', default='admiral', help='the VCS vehicle replaced (its model is the template)')
     ap.add_argument('--model', type=int, default=171, help="the vehicle's model number (spawned)")
+    ap.add_argument('--direct', action='store_true', help='the PC files in the mod: the game converts them')
+    ap.add_argument('--folder', help='a whole PC mod folder as one mod')
+    ap.add_argument('--models', default='', help='with --folder: the model numbers spawned (comma separated)')
     ap.add_argument('--save', default=os.path.join(tc.ROOT, 'build', 'rig', 'saves', 'user'))
     ap.add_argument('--no-original', action='store_true', help='skip the run without the mod')
     a = ap.parse_args()
     out = Path(a.out or os.path.join(tc.ROOT, 'build', 'carmod_check', time.strftime('%Y%m%d-%H%M%S'))).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    template = os.path.join(tc.ROOT, 'build', 'img', 'GTA3PS2', a.vehicle + '.mdl')
     mods = out / 'modloader'
     if mods.is_dir():
         shutil.rmtree(mods)
-    folder = mods / ('Car ' + Path(a.dff).stem)
-    folder.mkdir(parents=True)
-    dff2mdl.convert(a.dff, template, str(folder / (a.vehicle + '.mdl')), a.txd or None)
-    if a.txd:
-        txd2xtx.convert(a.txd, str(folder / (a.vehicle + '.xtx')))
-    runs = {} if a.no_original else {'original': None}
+    models = [int(m) for m in a.models.split(',') if m] if a.folder else [a.model]
+    if a.folder:
+        shutil.copytree(a.folder, mods / Path(a.folder).name)
+    else:
+        folder = mods / ('Car ' + Path(a.dff).stem)
+        folder.mkdir(parents=True)
+        if a.direct:
+            shutil.copyfile(a.dff, folder / (a.vehicle + '.dff'))
+            if a.txd:
+                shutil.copyfile(a.txd, folder / (a.vehicle + '.txd'))
+        else:
+            template = os.path.join(tc.ROOT, 'build', 'img', 'GTA3PS2', a.vehicle + '.mdl')
+            dff2mdl.convert(a.dff, template, str(folder / (a.vehicle + '.mdl')), a.txd or None)
+            if a.txd:
+                txd2xtx.convert(a.txd, str(folder / (a.vehicle + '.xtx')))
+    runs = {} if (a.no_original or a.folder) else {'original': None}
     runs['converted'] = mods
     shots, logs, alive = {}, {}, {}
     for name, m in runs.items():
-        shots[name], logs[name], alive[name] = run(out, name, m, a.save, a.model)
-    resolved = '%s.mdl -> GTA3PS2.IMG entry %d' % (a.vehicle, a.model)
-    result = {'resolved': resolved in logs['converted'],
-              'textures': (a.vehicle + '.xtx -> GTA3PS2.IMG entry') in logs['converted'] if a.txd else None, 'alive': alive,
-              'crash': any('[crash]' in t for t in logs.values())}
+        shots[name], logs[name], alive[name] = run(out, name, m, a.save, models)
+    log = logs['converted']
+    result = {'alive': alive, 'crash': any('[crash]' in t for t in logs.values()),
+              'converted': len(re.findall(r'\] .* converted in ', log)), 'failed': re.findall(r'\[mods\] .* FAILED.*', log)[:10],
+              'entries': len(re.findall(r'-> GTA3PS2\.IMG entry', log))}
+    if not a.folder:
+        model_ext, tex_ext = ('.dff', '.txd') if a.direct else ('.mdl', '.xtx')
+        result['resolved'] = ('%s%s -> GTA3PS2.IMG entry %d' % (a.vehicle, model_ext, a.model)) in log
+        result['textures'] = ((a.vehicle + tex_ext + ' -> GTA3PS2.IMG entry') in log) if a.txd else None
     if 'original' in shots:
-        result['picture'] = mods_check.picture_stats(shots['converted'], shots['original'])
-    result['pass'] = (result['resolved'] and result['textures'] is not False and all(alive.values()) and not result['crash'] and
+        result['picture'] = mods_check.picture_stats(shots['converted'][0], shots['original'][0])
+    result['pass'] = (result.get('resolved', True) and result.get('textures') is not False and all(alive.values()) and
+                      not result['crash'] and not result['failed'] and
                       ('picture' not in result or result['picture']['diff_from_original'] > 1.0))
     (out / 'result.json').write_text(json.dumps(result, indent=1), encoding='utf-8')
     print(json.dumps(result, indent=1))
