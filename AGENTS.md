@@ -110,6 +110,9 @@ python tools/img.py table|list|extract [OUT] [names]          # GTA3PS2.IMG entr
 python tools/gamefiles_check.py [OUT]                         # a GTA3PS2.IMG entry replaced from a mod (admiral.mdl), in the game
 python tools/rwinfo.py FILE.dff|FILE.txd | --self-test         # what a PC RenderWare .dff / .txd holds (frames, geometry, textures)
 python tools/mdlinfo.py FILE.mdl [--obj F] [--png F] | --vehicles   # a VCS model (ldm): nodes, elements, PS2 meshes decoded
+python tools/dff2mdl.py convert CAR.dff TEMPLATE.mdl OUT.mdl [--txd CAR.txd] | --self-test   # a VC car onto a VCS vehicle
+python tools/txd2xtx.py convert CAR.txd OUT.xtx | info F.xtx [--png DIR]   # a VC .txd -> VCS texture dictionary (4/8 bit)
+python tools/carmod_check.py [OUT] [--dff F --txd F --vehicle admiral --model 171]   # a converted VC car in the game
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```

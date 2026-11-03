@@ -69,6 +69,9 @@ namespace vcs
         // sectors inside GTA3PS2.IMG, 0xFFFFFFFF = none), the model infos *(0x486518) (+0x8: ~CRC32 of the upper-case name).
         constexpr uint32_t kFileTable = 0x5038A8u, kFileCount = 0x486E8Cu, kStreaming = 0x489FF8u, kModelInfos = 0x486518u;
         constexpr uint32_t kResources = 8482u; // streaming info entries (measured; the array ends there)
+        // The TXD store's pool *(0x489ECC) {items, flags, size, ...}: 0x1C an item {texture list, refs, name[20]}; slot i is
+        // streaming entry *(*(0x489FF8) + 8) + i (7534 + i on this disc; docs/game-internals.md 9d)
+        constexpr uint32_t kTxdPool = 0x489ECCu, kTxdItem = 0x1Cu;
 
         struct Overlay
         {
@@ -213,6 +216,20 @@ namespace vcs
                 uint32_t index = kResources;
                 if (!f.name.empty() && f.name[0] == '#')
                     index = static_cast<uint32_t>(std::strtoul(f.name.c_str() + 1, nullptr, 10));
+                else if (f.textures)
+                {
+                    const uint32_t pool = rd32(rdram, kTxdPool), base = rd32(rdram, streamingOwner + 8u);
+                    const uint32_t items = pool ? rd32(rdram, pool) : 0u, size = pool ? rd32(rdram, pool + 8u) : 0u;
+                    for (uint32_t i = 0; items && i < size && i < 4096u && index == kResources; ++i)
+                    {
+                        char text[21] = {};
+                        std::memcpy(text, rdram + ((items + i * kTxdItem + 8u) & 0x01FFFFFFu), 20);
+                        const std::string txd = text;
+                        if (txd.size() == f.name.size() &&
+                            std::equal(txd.begin(), txd.end(), f.name.begin(), [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); }))
+                            index = base + i;
+                    }
+                }
                 else
                 {
                     const uint32_t key = keyOf(f.name);

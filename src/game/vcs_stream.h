@@ -10,13 +10,15 @@ namespace vcs
 {
     // Game files from mods (the mod loader, docs/MODS.md "Game files"): GTA3PS2.IMG entries read from a mod's file
     // instead of the disc, only that entry - the archive itself is never rebuilt. `name`: the entry's model name (the
-    // file's name without its extension; the game keeps ~CRC32 of it in upper case) or "#<streaming index>"
-    // (tools/img.py). A file larger than its entry is refused. Any thread; resolved against the game's tables at the
-    // next read; entries already in memory change when the game streams them again.
+    // file's name without its extension; the game keeps ~CRC32 of it in upper case), a texture dictionary's name
+    // (`textures`: `<name>.xtx`, the game's TXD store keeps the names) or "#<streaming index>" (tools/img.py); with a dot,
+    // a loose disc file (AMERICAN.GXT). A file larger than its entry is read from past the disc. Any thread; resolved
+    // against the game's tables at the next read; entries already in memory change when the game streams them again.
     struct StreamFile
     {
         std::string name, path, mod;
         int priority = 50;
+        bool textures = false;
     };
     void setStreamFiles(std::vector<StreamFile> files);
 

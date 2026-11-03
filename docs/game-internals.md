@@ -1494,6 +1494,32 @@ Found for the mod loader's game files (docs/MODS.md "Game files"), with the rig 
   `windscreen_dummy`, `wing_lf/rf_dummy`, `car_parts`; and its textures' names: `admiral868bit_sl` (the body),
   `xv_vehiclegeneric_sl`, `xv_vehiclegrunge_sl`, `xv_scratch_sl`, `xv_vcs_licenseplates_cs`, `xv_vc_crackedglassa_sl`,
   `xv_vehiclesteering_sl` (found 2026-11-03 with `tools/img.py extract admiral` and a strings pass).
+- **The `ldm` / `tex` resource layout** (2026-11-03, `tools/mdlinfo.py`, `tools/dff2mdl.py`, `tools/txd2xtx.py`;
+  aap's storiesconv as a reference): a 0x20 header `{ident, shrink, fileSize, dataSize, relocTab, numRelocs,
+  globalTab, u16 classes, u16 functions}`; pointers are file offsets, each listed in the relocation table. The game
+  keeps `[0, dataSize)`; what follows is the global table, the relocation table and - **after the relocation table** -
+  strings read once at load: the materials' texture names (`admiral868bit_sl` at 0x12084 of 0x12095). A rewritten file
+  has to move that tail as a whole and every pointer into it.
+- **A vehicle `ldm`**: at 0x20 `{element group, extras count, extras, paint}`: the **first-colour paint list** at 0x2C
+  (30 material pointers, null-ended when fewer) and the **second-colour list** at 0xA4 (25); the game colours those
+  materials with the car's colours (the ADMIRAL lists 14 materials, all first colour; the COMET 15 + 2). Paint
+  materials use `xv_vehiclegrunge_sl` / `xv_scratch_sl` (the dirt and scratches over the colour) or the car's own
+  texture. Node `RslNode`: modelling matrix +0x10, child +0x90, next +0x94, name +0xA8 (size 0xB0); element: node +4,
+  geometry +0x14, group link +0x1C; an intact and a damaged element per `X_dummy`. Geometry: a 32-byte RslGeometry
+  (materials list +0x0C, count +0x10), the 0x40 PS2 header, 0x30-byte meshes, the DMA data (section 6d's batches).
+  Material (16 bytes): `{texture name, RGBA, 2, matfx}` - a null name is drawn in its colour; matfx points at the
+  effect data (paint's reflection).
+- **Texture dictionaries** are archive entries too (ident `tex\0`, 823 of them): **TXD slot `i` is streaming entry
+  `*(*(0x489FF8) + 8) + i`** (7534 on this disc; then `+0xC` 8365, `+0x10` 8392, `+0x14` 8482 the total). A model
+  info's TXD slot is the halfword at +0x1E (ADMIRAL 167 -> entry 7701, COMET 262 -> 7796). The TXD store's pool is
+  `*(0x489ECC)` = `{items, flags, size 2000, ...}` with 0x1C-byte items `{RslTexList *, refs, name[20]}` - a vehicle's
+  TXD carries the vehicle's name (found in a RAM dump: the pool header holds the name "TexList"). The resource: at
+  0x20 the RslTexList `{object (type 6), texturesInDict {next, prev}, lInInstance}`; per texture `{raster, dict,
+  lInDictionary {next, prev}, name[32], mask[32]}`; the raster `{0, upload word, texels, flags}` with flags = log2 w |
+  log2 h << 6 | depth << 12 | levels << 20 | swizzle << 24 and the upload word `0x450000 | row bytes` (4 bit) or
+  `0x250000 | row bytes` (8 bit). The texels are linear, the palette after them (RGBA, alpha 0..0x80; 8 bit in CSM1
+  order: index bits 3 and 4 swapped). **Every texture on the disc is 4 or 8 bit, one level, unswizzled, 8..256
+  pixels** (a survey of all 823 dictionaries).
 
 ## 10. Memory card and saves
 

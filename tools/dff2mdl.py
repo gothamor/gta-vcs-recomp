@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""PC VC car (.dff) -> VCS vehicle model (`ldm`), FORK.md T9 step 3 - the encoder first.
+"""PC VC car (.dff) -> VCS vehicle model (`ldm`), FORK.md T9; docs/MODS.md "PC VC cars in VCS".
 
+    python tools/dff2mdl.py convert CAR.dff TEMPLATE.mdl OUT.mdl [--txd CAR.txd]
+                                                     the car's parts onto a VCS vehicle's model (the template, from
+                                                     tools/img.py extract; OUT replaces it: `admiral.mdl` in a mod).
+                                                     With the .txd, materials naming a texture it lacks map to VCS's
+                                                     shared ones or go; its textures: tools/txd2xtx.py
     python tools/dff2mdl.py --self-test [--img DIR]   every PS2 mesh of the extracted vehicles (tools/img.py extract)
                                                      decoded to its raw vertex values and encoded again: the bytes
                                                      must come out identical to the game's
@@ -11,6 +16,7 @@ n, n | 0x8000 (the program's header); STMASK 0x40404040, STROW 0, UNPACK V3-16 p
 STROW (0, 0, 0xFF, 0), UNPACK V2-8 unsigned UVs at 0x8D; UNPACK V3-8 normals at 0x47; MSCAL 0x06} padded with zeros to
 a qword.
 """
+import math
 import os
 import struct
 import sys
@@ -250,6 +256,12 @@ def strip_of(tris):
 
 # ---- the VCS model (template) ------------------------------------------------------------------------------------
 PRIMARY, SECONDARY = (0x3C, 0xFF, 0x00), (0xFF, 0x00, 0xAF)  # VC's paint colours in a .dff
+# The vehicle's paint lists (the data at 0x20: {element group, extras count, extras, paint}): materials the game colours
+# with the car's first colour at 0x2C (30, null-ended when fewer), its second at 0xA4 (25).
+PAINT_LISTS = ((0x2C, 30), (0xA4, 25))
+# VC's shared vehicle textures (generic.txd) -> VCS's own (their layouts differ: the closest, not the same picture)
+VC_GENERIC = {"vehiclegeneric256": "xv_vehiclegeneric_sl", "vehiclescratch64": "xv_scratch_sl",
+              "vehiclegrunge256": "xv_vehiclegrunge_sl", "vehiclesteering": "xv_vehiclesteering_sl"}
 
 
 def build_geometry(m, template_geom, verts, normals, uvs, groups, material_ptrs):
@@ -268,11 +280,15 @@ def build_geometry(m, template_geom, verts, normals, uvs, groups, material_ptrs)
     meshes, dma, total = [], b"", 0
     for material, strip in groups:
         sv = [verts[i] for i in strip]
+        # UVs are unsigned in the PS2 format (0 .. 2 * the mesh's scale): the mesh shifted by whole repeats of its
+        # texture so that none is negative
         su = [uvs[i] for i in strip]
-        uv_scale = (max(1.0, max(abs(u[0]) for u in su) / 2), max(1.0, max(abs(u[1]) for u in su) / 2))
+        off = (math.floor(min(u[0] for u in su)), math.floor(min(u[1] for u in su)))
+        su = [(u[0] - off[0], u[1] - off[1]) for u in su]
+        uv_scale = (max(1.0, max(u[0] for u in su) / 2), max(1.0, max(u[1] for u in su) / 2))
         raw = []
-        for i in strip:
-            v, u = verts[i], uvs[i]
+        for i, u in zip(strip, su):
+            v = verts[i]
             n = normals[i] if normals else (0.0, 0.0, 1.0)
             raw.append(((q16((v[0] - centre[0]) / scale[0]), q16((v[1] - centre[1]) / scale[1]), q16((v[2] - centre[2]) / scale[2])),
                         (max(0, min(255, int(round(u[0] / uv_scale[0] * 127.5)))), max(0, min(255, int(round(u[1] / uv_scale[1] * 127.5))))),
@@ -296,9 +312,16 @@ def build_geometry(m, template_geom, verts, normals, uvs, groups, material_ptrs)
     return block, [0x0C] + [list_at + 4 * i for i in range(len(material_ptrs))]
 
 
-def convert(dff_path, template_path, out_path):
+def convert(dff_path, template_path, out_path, txd_path=None):
+    """The .dff's parts onto the template's (a VCS vehicle .mdl); with the car's .txd, materials naming a texture it
+    lacks map to VCS's shared ones (VC_GENERIC) or lose their texture."""
     m = mdlinfo.Mdl(open(template_path, "rb").read())
     dff = read_dff(open(dff_path, "rb").read())
+    textures, texture_names = None, {}
+    if txd_path:
+        import rwinfo
+        texture_names = {t["name"].lower(): t["name"] for t in rwinfo.read_txd(open(txd_path, "rb").read())["textures"]}
+        textures = set(texture_names)
     frames = dff["frames"]
     by_name = {f["name"].lower(): i for i, f in enumerate(frames)}
     group = m.ptr(0x20)
@@ -320,19 +343,56 @@ def convert(dff_path, template_path, out_path):
         struct.pack_into("<3f", data, at + 48, *f["pos"])
         moved += 1
 
-    # the template's materials: paint (the vehicle's list at 0x2C) and a textured one for the rest
-    paint = []
-    for k in range(32):
-        if 0x2C + 4 * k not in m.relocs:
+    # the template's paint: its first-colour materials lend their effects (matfx: the reflection) to the new ones
+    paint_fx = 0
+    for k in range(PAINT_LISTS[0][1]):
+        mat = m.ptr(PAINT_LISTS[0][0] + 4 * k)
+        if not mat:
             break
-        paint.append(m.u32(0x2C + 4 * k))
-    textured = None
-    for e in m.elements(group):
-        g = m.ptr(e + 0x14)
-        for mat in (m.ptr(m.ptr(g + 0x0C) + 4 * i) for i in range(m.u32(g + 0x10))) if g else ():
-            if mat and "868bit" in m.cstr(m.ptr(mat)):
-                textured = textured or mat
-    textured = textured or (paint[0] if paint else 0)
+        if mat + 12 in m.relocs:
+            paint_fx = m.u32(mat + 12)
+            break
+    for at, count in PAINT_LISTS:  # emptied: the new materials go in
+        for k in range(count):
+            struct.pack_into("<I", data, at + 4 * k, 0)
+            relocs.discard(at + 4 * k)
+    paint_used = [0, 0]
+    names = {}
+
+    def string(text):
+        """A texture name in the data (the game keeps the materials' names: found at load)."""
+        if text not in names:
+            names[text] = len(data)
+            data.extend(text.encode("latin1")[:31] + b"\0")
+            data.extend(b"\0" * (-len(data) % 4))
+        return names[text]
+
+    def material(mat):
+        """A new material for a VC one: {texture name, colour, 2, effects}; paint goes into the paint lists."""
+        colour = tuple(mat["colour"][:3])
+        kind = 0 if colour == PRIMARY else 1 if colour == SECONDARY else None
+        tex = mat["texture"].lower()
+        if textures is not None and tex and tex not in textures:
+            tex = VC_GENERIC.get(tex, "")  # not the car's own: VCS's shared one, or none (drawn in its colour)
+        rgba = (255, 255, 255, 255) if kind is not None else tuple(mat["colour"])
+        name_at = string(texture_names.get(tex, tex)) if tex else 0
+        data.extend(b"\0" * (-len(data) % 4))
+        at = len(data)
+        data.extend(struct.pack("<I4BII", name_at, *rgba, 2, paint_fx if kind is not None else 0))
+        if name_at:
+            relocs.add(at)
+        if kind is not None and paint_fx:
+            relocs.add(at + 12)
+        if kind is not None:
+            base, count = PAINT_LISTS[kind]
+            if paint_used[kind] < count:
+                struct.pack_into("<I", data, base + 4 * paint_used[kind], at)
+                relocs.add(base + 4 * paint_used[kind])
+                paint_used[kind] += 1
+            else:
+                print("warning: more %s-colour materials than the list holds (%d): the rest stay white" % (
+                    ("first", "second")[kind], count))
+        return at
 
     # each VCS element by its node: chassis_hi / _vlo, and X_dummy's two (intact, damaged) from X_hi_ok / X_hi_dam
     by_node = {}
@@ -347,6 +407,7 @@ def convert(dff_path, template_path, out_path):
     def put(element, verts, normals, uvs, groups, mats):
         """A new geometry block at the end of the data, the element pointed at it."""
         block, inner = build_geometry(m, m.ptr(element + 0x14), verts, normals, uvs, groups, mats)
+        data.extend(b"\0" * (-len(data) % 16))  # the DMA data inside on qwords
         at = len(data)
         block = bytearray(block)
         struct.pack_into("<I", block, 0x0C, at + struct.unpack_from("<I", block, 0x0C)[0])
@@ -366,7 +427,8 @@ def convert(dff_path, template_path, out_path):
             atom = atoms.get(part)
             if not atom and node.endswith("_dummy") and node not in by_name:
                 # a part the mod's car does not have (the ADMIRAL's rear doors on a two-door): one degenerate triangle
-                put(element, [(0.0, 0.0, 0.0)] * 3, None, [(0.0, 0.0)] * 3, [(0, [0, 1, 2])], [textured])
+                blank = material({"colour": (0, 0, 0, 0), "texture": ""})
+                put(element, [(0.0, 0.0, 0.0)] * 3, None, [(0.0, 0.0)] * 3, [(0, [0, 1, 2])], [blank])
                 replaced.append("-" + node)
                 continue
             if not atom:
@@ -377,17 +439,17 @@ def convert(dff_path, template_path, out_path):
             to_dummy = f["parent"] >= 0 and frames[f["parent"]]["name"].lower() == node and part != node
             verts = [apply(f["rot"], f["pos"], v) for v in g["verts"]] if to_dummy else g["verts"]
             normals = [apply(f["rot"], (0, 0, 0), n) for n in g["normals"]] if (to_dummy and g["normals"]) else g["normals"]
-            mats, by_target = [], {}
+            mats, by_key = [], {}
             for mi, mat in enumerate(g["materials"]):
                 tris = [(a, b, c) for a, b, c, t in g["tris"] if t == mi]
                 if not tris:
                     continue
-                colour = tuple(mat["colour"][:3])
-                target = paint[0] if colour == PRIMARY and paint else paint[1] if colour == SECONDARY and len(paint) > 1 else textured
-                if target not in mats:
-                    mats.append(target)
-                by_target.setdefault(mats.index(target), []).extend(tris)  # one mesh per VCS material
-            groups = [(k, strip_of(t)) for k, t in sorted(by_target.items())]
+                key = (mat["texture"].lower(), tuple(mat["colour"]))  # one mesh per distinct material
+                if key not in by_key:
+                    by_key[key] = (len(mats), [])
+                    mats.append(material(mat))
+                by_key[key][1].extend(tris)
+            groups = [(k, strip_of(t)) for k, t in by_key.values()]
             if not groups:
                 continue
             put(element, verts, normals, g["uvs"], groups, mats)
@@ -429,7 +491,9 @@ def convert(dff_path, template_path, out_path):
 def main():
     args = sys.argv[1:]
     if len(args) >= 3 and args[0] == "convert":
-        convert(args[1], args[2], args[3] if len(args) > 3 else os.path.splitext(os.path.basename(args[2]))[0] + ".mdl")
+        txd = args[args.index("--txd") + 1] if "--txd" in args else None
+        pos = [a for i, a in enumerate(args) if a != "--txd" and (i == 0 or args[i - 1] != "--txd")]
+        convert(pos[1], pos[2], pos[3] if len(pos) > 3 else os.path.splitext(os.path.basename(pos[2]))[0] + ".mdl", txd)
         return 0
     if args[:1] == ["--self-test"]:
         import toolchain as tc

@@ -47,7 +47,7 @@ One task at a time, in this order. T3 is the base for T4-T7.
 | T6 | Simulated HDR: tone mapping, exposure, bloom (replaces the interim Exposure) | T3 | Planned | [#6](https://github.com/willzmkv/gta-vcs-recomp/issues/6) |
 | T7 | Sun rays | T3 | Planned | [#7](https://github.com/willzmkv/gta-vcs-recomp/issues/7) |
 | T8 | Presets and player docs (Authentic / Enhanced), release notes | T1-T7 | Planned | [#8](https://github.com/willzmkv/gta-vcs-recomp/issues/8) |
-| T9 | PC `.dff` / `.txd` in mods: convert RW 3 clumps / TXDs to VCS's formats, or draw them natively (research) | T1c, RSL submission | Research done: route (a), converter next | [#12](https://github.com/willzmkv/gta-vcs-recomp/issues/12) |
+| T9 | PC `.dff` / `.txd` in mods: convert RW 3 clumps / TXDs to VCS's formats, or draw them natively (research) | T1c, RSL submission | Cars work (converted ahead of time: `dff2mdl` + `txd2xtx`); in-game conversion next | [#12](https://github.com/willzmkv/gta-vcs-recomp/issues/12) |
 
 Backlog (not scheduled): SkyGFX's Xbox rim light / gloss / screen water drops, YCbCr correction, a larger reflection
 map, shadow maps, deferred lights, PBR sky, volumetric clouds, car paint reflections, rain on cars, ragdolls.
@@ -107,7 +107,13 @@ streaming (`src/game/vcs_stream.cpp`) reads an entry and what the game assumes a
 built from the enabled mods (priority as for textures), served by the stream layer; loose files at their open. A
 check: a mod replacing one model / one text, seen in game.
 
-### T9 - PC `.dff` / `.txd` (research)
+### T9 - PC `.dff` / `.txd`
+
+**Status (2026-11-03)**: steps 1-5 done - the VC Comet (`Mods/Fixed_Xbox_Vehs_1.3`) drives in the game as the
+ADMIRAL with its own model and textures (docs/MODS.md "PC VC cars in VCS"). Next: the mod loader converting `.dff` /
+`.txd` in a mod folder itself (a C++ port of the two tools, or a launcher step), VC's extras, other vehicle kinds
+(bikes, boats, planes have other node sets).
+
 
 **Plan for route (a), the converter (2026-11-03)** - the player's test mod is `Mods/Fixed_Xbox_Vehs_1.3` (VC PC cars):
 1. `tools/mdlinfo.py`: read a VCS `ldm` - its 0x20-byte chunk header (ident, shrink, file / data size, relocation
@@ -235,6 +241,14 @@ release notes for a fork build.
   batches (V3-16 positions with the geometry's scale / position, V2-8 UVs, V3-8 normals; strips sharing two vertices
   between batches) - every geometry of all 75 named vehicles decodes, with exactly the triangle counts the files state;
   `--png` draws the decoded wireframe (the Admiral's shape).
+- **2026-11-03 - T9 steps 3-5.** `tools/dff2mdl.py convert`: a VC car's `.dff` onto a VCS vehicle `.mdl` (nodes placed
+  from the frames, every part re-encoded as PS2 meshes in greedy tristrips, materials with VC's texture names, paint
+  into the vehicle's two paint lists, the resource's tail - global table, relocations, the strings after them - moved
+  as a whole). `tools/txd2xtx.py`: a VC `.txd` (DXT / palettes / RGB) into a VCS texture dictionary (4 / 8 bit, the
+  disc's format - found by surveying all 823). The mod loader takes `<txd>.xtx` by the TXD store's names (pool at
+  `*(0x489ECC)`, slot i = streaming entry 7534 + i). `tools/carmod_check.py`: the Comet as the ADMIRAL in the street,
+  with its own textures and the game's paint - pass. The rig's `dump` takes paths with spaces (one had written a RAM
+  dump next to the project folder).
 
 ## How the work is done
 

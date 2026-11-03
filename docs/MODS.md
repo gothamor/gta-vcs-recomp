@@ -84,8 +84,8 @@ As the player suggested: no archive is rebuilt or replaced - a mod holds only th
 those from the mod. VCS's model archive has no directory on the disc (game-internals.md 9d): the game's own table gives
 each entry its sectors, and its model infos keep each name's key, so a file named after a model finds its entry.
 
-- **In a mod**: `<model name>.mdl` (`admiral.mdl`) or `#<streaming index>.<anything>` (`#1234.bin`) for an archive
-  entry, and a loose disc file by its own name (`AMERICAN.GXT`, `ENGLISH.GXT`, `MAIN.SCM`), anywhere in the mod's folder. The priority slider decides between two mods with the same entry. **Any size**: a smaller file is
+- **In a mod**: `<model name>.mdl` (`admiral.mdl`), `<texture dictionary>.xtx` (`admiral.xtx`: the TXD store's
+  names) or `#<streaming index>.<anything>` (`#1234.bin`) for an archive entry, and a loose disc file by its own name (`AMERICAN.GXT`, `ENGLISH.GXT`, `MAIN.SCM`), anywhere in the mod's folder. The priority slider decides between two mods with the same entry. **Any size**: a smaller file is
   padded with zeros; a larger one has its record moved past the end of the disc (the streaming info's offset and
   size, LSN 0x180000 on, and the archive's size raised to reach it), where only the mod's bytes are served - the
   game allocates the mod's size and the entry touches no neighbour; the game's values come back when the mod goes.
@@ -164,10 +164,45 @@ built:
     shows the game takes another `ldm`). **Chosen**: self-contained, the game's own paths, and T1c already carries it.
   - (b) load the `.dff` on the host and draw it in place of the model's atomics: no PS2 limits, but it needs draws at
     the RSL level (docs/RSL_SUBMISSION.md) and the vehicle code's frame logic mirrored. Kept as the alternative.
-- **Next for (a)**: the `ldm` resource's layout (header, relocations; the clump / frames / atomics / geometry and its
-  PS2 mesh as the VU1 programs read it - game-internals.md 6d documents their input), a converter for one part
-  (`chassis_hi`) first, the textures into the resource's TXD (or the texture packs), and entries larger than the
-  original (T1c's next step: the streaming size raised before the game allocates).
+- **Route (a) done** for cars: below.
+
+### PC VC cars in VCS: `tools/dff2mdl.py` and `tools/txd2xtx.py` (T9, 2026-11-03)
+
+A VC car's `.dff` and `.txd` become a VCS vehicle's two archive entries, `<vcs car>.mdl` and `<vcs car>.xtx`, which go
+into a mod folder like any game file:
+
+```
+python tools/img.py extract                  # once: the disc's vehicles into build/img/GTA3PS2 (the templates)
+python tools/dff2mdl.py convert comet.dff build/img/GTA3PS2/admiral.mdl "modloader/VC Comet/admiral.mdl" --txd comet.txd
+python tools/txd2xtx.py convert comet.txd "modloader/VC Comet/admiral.xtx"
+python tools/carmod_check.py                 # the Comet from Mods/Fixed_Xbox_Vehs_1.3 as the ADMIRAL, in the game
+```
+
+- **The model** (`dff2mdl convert DFF TEMPLATE OUT [--txd TXD]`): the VCS car replaced is the template - its handling,
+  collision, wheels, sounds and model info stay (the tutorial's advice, by construction). The `.dff`'s frames place
+  the VCS nodes of the same name (`wheel_*_dummy`, `door_*_dummy`, ...); each part (`chassis_hi` / `_vlo`, and
+  `X_hi_ok` / `X_hi_dam` under `X_dummy` - VCS keeps an intact and a damaged element per dummy) becomes a new geometry:
+  the triangles from the bin mesh (exporters leave the triangles' own material numbers at 0), greedy tristrips along
+  shared edges joined by degenerate triangles (the Comet: 640 KB with a strip per triangle, 290 KB), one PS2 mesh per
+  material, encoded as the game's own meshes are (`--self-test`: 3466 / 3466 meshes byte for byte). UVs are unsigned
+  in the PS2 format: a mesh is shifted by whole texture repeats so none is negative. A part the VC car lacks (the
+  ADMIRAL's rear doors on the two-door Comet) gets one degenerate triangle.
+- **Materials**: one per VC material, with VC's texture name (found in the `.xtx` below) and colour; VC's paint colours
+  (`3CFF00` first, `FF00AF` second) put the material into the vehicle's paint lists - the game colours those with the
+  car's colours - and lend it the template's paint effects (the reflection). A texture the `.txd` lacks maps to VCS's
+  shared one where there is one (`vehiclegeneric256` -> `xv_vehiclegeneric_sl`, ...) or goes (the material's colour
+  alone).
+- **The textures** (`txd2xtx convert TXD OUT [--max 128]`): D3D8 textures (DXT1 / 3 / 5, 8-bit palettes, 8888 / 888 /
+  1555 / 565 / 4444 / LUM8) decoded, halved down to 128 pixels (VCS's own vehicle textures are 128 at most) and
+  quantised (median cut) to 4 bit when nothing is lost, else 8 bit - the format of every texture on the disc. `info
+  FILE.xtx --png DIR` shows a dictionary's textures (the disc's too).
+- **The mod loader** takes `<texture dictionary>.xtx` by the TXD's name (the game's TXD store keeps the names; a
+  vehicle's is the vehicle's name), as `<model>.mdl` by the model's.
+- **Checked** (`tools/carmod_check.py`): the ADMIRAL with no mod, then the Comet in its place (both entries larger than
+  the disc's: 292 KB model, 165 KB textures) - spawned in the street, the player in it, from behind: the VC Comet with
+  its own textures, the game's paint, no crash.
+- **Not yet**: the template's `car_parts` element stays (the ADMIRAL's extras); VC's own extras (`extra1` ...) are not
+  converted; the converter is a host tool, run ahead of time (the mod loader does not convert `.dff` / `.txd` itself).
 
 ## The pre-HUD pass (the infrastructure T4-T7 need)
 

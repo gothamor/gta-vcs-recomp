@@ -282,8 +282,9 @@ namespace vcs::mods
             return n;
         }
 
-        // Game files (vcs::setStreamFiles): GTA3PS2.IMG entries - `<model name>.mdl`, or `#<streaming index>.<any>` as
-        // tools/img.py extracts the entries it has no name for; anywhere in the mod (dumps/ aside)
+        // Game files (vcs::setStreamFiles): GTA3PS2.IMG entries - `<model name>.mdl`, `<texture dictionary>.xtx`, or
+        // `#<streaming index>.<any>` as tools/img.py extracts the entries it has no name for; loose disc files (.gxt,
+        // .scm); anywhere in the mod (dumps/ aside)
         std::vector<fs::path> gameFilesIn(const fs::path &folder)
         {
             std::vector<fs::path> out;
@@ -296,7 +297,7 @@ namespace vcs::mods
                 else if (it->is_regular_file(ec))
                 {
                     const std::string stem = utf8(it->path().stem()), ext = lower(it->path().extension().string());
-                    if (ext == ".mdl" || ext == ".gxt" || ext == ".scm" || (stem.size() > 1 && stem[0] == '#'))
+                    if (ext == ".mdl" || ext == ".xtx" || ext == ".gxt" || ext == ".scm" || (stem.size() > 1 && stem[0] == '#'))
                         out.push_back(it->path());
                 }
             }
@@ -363,7 +364,8 @@ namespace vcs::mods
                         {
                             const std::string ext = lower(file.extension().string());
                             const bool loose = ext == ".gxt" || ext == ".scm"; // a disc file, by its whole name
-                            files.push_back({utf8(loose ? file.filename() : file.stem()), utf8(file), m.name, m.priority});
+                            const bool txd = ext == ".xtx" && file.stem().string()[0] != '#';
+                            files.push_back({utf8(loose ? file.filename() : file.stem()), utf8(file), m.name, m.priority, txd});
                         }
             vcs::setStreamFiles(files);
             const auto start = std::chrono::steady_clock::now();

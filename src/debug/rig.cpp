@@ -240,13 +240,21 @@ namespace vcs::rig
             // dump <path> [addr len] -> RAM (all 32 MB by default) to a file, taken on the game thread between frames.
             // Game memory: keep dumps under build/analysis/ (never committed).
             ps2control::addCommand("dump", [](const std::string &args, ps2control::Reply reply) {
+                // the path is everything before an optional "addr len" pair: it may hold spaces
                 const auto w = words(args);
                 uint32_t addr = 0, len = kRamSize;
-                if (w.empty() || (w.size() >= 3 && (!parseU32(w[1], addr) || !parseU32(w[2], len))))
+                size_t pathWords = w.size();
+                if (w.size() >= 3 && parseU32(w[w.size() - 2], addr) && parseU32(w[w.size() - 1], len))
+                    pathWords -= 2;
+                else
+                    addr = 0, len = kRamSize;
+                if (pathWords == 0)
                     return reply("error usage: dump <path> [addr len]");
                 addr &= kRamMask;
                 len = std::min(len, kRamSize - addr);
-                const std::string path = w[0];
+                std::string path = w[0];
+                for (size_t i = 1; i < pathWords; ++i)
+                    path += " " + w[i];
                 runOnGameThread([path, addr, len, reply](uint8_t *rdram, R5900Context *, PS2Runtime *) {
                     FILE *f = std::fopen(path.c_str(), "wb");
                     if (!f)
