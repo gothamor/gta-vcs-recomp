@@ -1001,3 +1001,19 @@ distributions**, and **Linux released at the same time as Windows**.
   them on one GitHub release. A failing platform publishes nothing.
 - Tools pinned by version and SHA-256 (no "continuous" builds): appimagetool 1.9.1, the type 2 runtime 20251108,
   wayland-protocols 1.45.
+
+## 2026-11-02 - Fog: the game's own fog range as settings, not a screen-space overlay
+
+The PC mods in `Mods/` (Proper Shaders VC, SkyGFX) add fog / atmosphere. A first attempt drew a coloured gradient over
+the finished picture by screen height (presenter, `present.hlsl`): it fogged the sky, the HUD's band and the near ground
+alike whenever the camera looked down, ignored depth, and its density defaulted to 0, so switching it on did nothing.
+Removed.
+
+The game already fogs every surface per vertex from its depth (game-internals.md 6l). `FUN_002F6008(start, end)`, the
+RSL fog-range setter, is a leaf the camera calls once per frame; the fog settings scale its two arguments
+(`src/game/vcs_fog.cpp`). That moves the fog in every renderer path at once (VU1, CPU HLE, native shaders, clipper),
+keeps the time cycle's colour and weather (foggy weather starts the fog behind the camera), costs nothing, and at 100 %
+passes the game's values through untouched - the authentic default, with `VCS_FOG_HOOK=0` as the switch back.
+"Fog distance" stops at 100 %: the game's fog is total exactly at the far plane (2000), so going further would show
+the draw distance's pop-in. A height / volumetric fog like Proper Shaders' needs the depth buffer in a post pass; that
+is a separate step (docs/MODS.md).

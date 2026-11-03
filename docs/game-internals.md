@@ -1194,6 +1194,33 @@ planes leave in the sky (seen outside the Little Havana Empire site, 08:28, 16:9
   kicks showed PATH2 and no ADC; `VCS_TRACE_IMMEDIATE=1` (callers of the Im2D / Im3D entries, `vcs_overrides.cpp`)
   named `0x245904` in the trail renderer.
 
+### 6l. Distance fog: where its range and colour come from (2026-11-02)
+
+Found while giving the fog settings (`src/game/vcs_fog.cpp`) a home: read from the recompiled code's disassembly
+comments, then measured live with the rig (`fogstate`, `peekf 0x742B28 2`) and `VCS_TRACE_FOG=1`.
+
+- The fog itself is the GS's (6d): per vertex `F = clamp(53.z + 53.w * w, 0, 255)` from the camera-space depth w,
+  blended per pixel with FOGCOL. 53.z / 53.w live at **`0x742B28` / `0x742B2C`** (VU 49-53 are uploaded from
+  `0x742AE0`, so qword n is at `0x742AE0 + (n - 49) * 16`).
+- **`FUN_002F6008(start f12, end f13)`** - the RSL fog-range setter, a leaf: `d = end - start`, 53.w = `-255 / d`,
+  53.z = `(start / d + 1) * 255`, i.e. `F = 255 (end - w) / (end - start)`; sets dirty bit 0x8 when either changed.
+  Its only caller is the camera's begin-update **`FUN_0018EE48(camera)`**, which also stores the camera at
+  `0x486450`, clamps its near plane (+0x78) to >= 0.1, builds the projection (`FUN_0018F4D0`), queues FOGCOL
+  (`{colour, 0x3D}` into the GS register queue `0x729510`) from the word at **`0x4E1B30`** through `FUN_002F5FB8`
+  (bytes 0 and 2 swapped on the way), then calls `FUN_002F6008(camera +0x80 (fog plane, `FUN_0018F4B8`),
+  camera +0x7C (far plane))`.
+- The other setters next to it, all on the 0x742AE0 block and dirty bit 0x8: `FUN_002F5D90(on)` 52.y bit 0 (the
+  extra pass), `FUN_002F5F10(on)` 52.y bit 1 (**fog on / off**; it also calls `FUN_002F6268(.., 0x20, on)`),
+  `FUN_002F5EA0(rgba)` qword 51 (the default colour, one byte a lane, cached at `0x4882B4`), `FUN_002F5E00(f)`
+  52.w, `FUN_002F5E30(flag)` 52.x = the transform routine as a VU1 address, `(0x2AC878 or 0x2AC820 - 0x2AC130) / 8`
+  = 0x0E9 / 0x0DE (the microprogram's image starts at `0x2AC130`).
+- Measured (Vice Point, the user's card): the far plane is 2000 in every weather and hour tried, so the fog is total
+  exactly where the draw distance ends. The start is the time cycle's: ~55 at noon (it drifts by ~0.14 a second as
+  the hours blend), 22 at 22:00, **-28.6 in foggy weather** (fog already at the camera). Indoors (the Viceport
+  safehouse) 53 read 100 .. 1000. One camera calls it (no second range in the trace).
+- So scaling the setter's two arguments moves the fog in every renderer path at once (VU1, CPU HLE, the native
+  vertex shaders' `nativeFog`, the clipper), with the time cycle's colour; at 100 % the game's own values go in.
+
 ## 7. Textures: `.XTX`
 
 Confirmed from `LOADSC*.XTX` (263,372 bytes each, 512x512 8-bit):
