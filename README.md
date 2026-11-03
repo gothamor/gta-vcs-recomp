@@ -1,5 +1,10 @@
 # GTA: Vice City Stories — Native PC port (PS2 static recompilation)
 
+> **This is a fork** of [gothamor/gta-vcs-recomp](https://github.com/gothamor/gta-vcs-recomp) that brings the effects of
+> PC mods (Proper Shaders, SkyGFX, Project2DFX, texture packs) to the native port as settings, authentic by default.
+> Done so far: the game's distance fog as a setting (Graphics > Fog). What it changes and what comes next:
+> [docs/FORK.md](docs/FORK.md). Everything below is upstream's.
+
 A native **Windows and Linux** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
 recompiling the game's PS2 executable into C++. Both are built from the same source and run natively: Direct3D 11 on
 Windows, Vulkan on Linux.

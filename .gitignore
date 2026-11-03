@@ -33,3 +33,7 @@ __pycache__/
 .vcs-build-dir
 /VCSLauncher
 /VCSLauncher.old
+
+# --- This fork: the PC mods kept for reference and texture packs are third-party: never commit (docs/FORK.md) ---
+/Mods/
+/textures/

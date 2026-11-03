@@ -19,6 +19,8 @@ detailed knowledge lives in `docs/`:
 | [docs/TRAINER.md](docs/TRAINER.md) | The trainer (F5): what it does, how (the game's script commands), its check |
 | [docs/LINUX.md](docs/LINUX.md) | The Linux build: packages, flags, the Vulkan backend, what differs from Windows, the work list |
 | [docs/LAUNCHER.md](docs/LAUNCHER.md) | The launcher and releases: what a release holds, the player's flow, the tools behind each button, the `@vcs` events, what was checked |
+| [docs/FORK.md](docs/FORK.md) | This fork: what it changes from upstream, the work list (tasks T1-T8 with their steps and "done when"), how the work is done |
+| [docs/MODS.md](docs/MODS.md) | The PC mods in `Mods/` (Proper Shaders VC, SkyGFX, Project2DFX, Proper Ragdoll): each effect mapped to the game, done or which task |
 
 **When you learn something about the game, write it into docs/game-internals.md in the same change.**
 Record addresses and how you found them. When something is weird, use judgment, fix or work around it,
