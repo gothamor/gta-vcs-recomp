@@ -154,5 +154,8 @@ release notes for a fork build.
   pull request into the fork's `main`; game knowledge into game-internals.md, choices into DECISIONS.md, switches into
   PROGRESS.md's table, a check tool when a behaviour can regress.
 - Upstream: `git fetch upstream` and merge `upstream/main` into `main` (no rewriting of the fork's published history).
+  Never the launcher's "Update" for a fork checkout: it replaces the release's files with upstream's zip. A player
+  folder turned into a clone must lose its `RELEASE.json` (the release marker `tools/update.py` reads); without it the
+  launcher says "a git clone: update it with git pull".
   A finished task can be offered upstream as a pull request from a branch on `upstream/main`.
 - Before committing: `git status` shows no `Mods/`, packs, `generated/`, `build/`, disc images.
