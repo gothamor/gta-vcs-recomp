@@ -134,6 +134,12 @@ built:
     flicker. VCS's own are mostly PSMT4 + CLUT (game-internals.md 6e). For the converter: either quantise a `.txd`'s
     DXT textures to PAL4 / PAL8 rasters in the vehicle's TXD (authentic, lossy), or hand them to the renderer by name
     through the texture packs (no quantisation, no PS2 memory limits) - the second first.
+  - The tutorial itself (DanielSantos, pasted later; a local copy as `Mods/Tutorial_GTA-PS2_Veiculos.md`, not in git):
+    PC car -> SA PS2 is the `.txd` to PS2 format (Magic.TXD), the `.dff` through aap's RenderWare File Converter
+    (`convdff`, the original mesh or - better - tristrips), the collision rebuilt as COL1 and put back into the `.dff`
+    (COL Editor, HxD, RWAnalyze), and the files put into `gta3.img` / `gta3_1.img`; models over ~600 KB slow the game.
+    `convdff` writes RenderWare's PS2 geometry - SA's format, not VCS's RSL `ldm` - so its output does not load here;
+    the port's converter writes `ldm` (tristrips too), and the mod loader spares the collision and IMG steps.
   - aap: RSL is "at the high level a simplified copy & paste of RW", "at the lower levels completely different" - the
     node / element / geometry structure maps from a `.dff`, the PS2 mesh data has to be built anew. VCS's vehicle
     reflections: an environment map rendered from the camera with coronas, alpha blended (LCS adds it).
