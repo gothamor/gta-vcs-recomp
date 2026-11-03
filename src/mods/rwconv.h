@@ -11,11 +11,12 @@ namespace vcs::rwconv
 {
     // A VC car's .dff onto a VCS vehicle model (an `ldm` resource: the vehicle replaced, from the disc) - its handling,
     // collision and wheels stay - or a weapon's onto a VCS weapon's (a model of one element). `txd`: the .txd beside it
-    // (its texture names; may be null). `preserve`: a texture name VCS's dictionary keeps (a weapon's: its HUD icon,
-    // named like the model) - materials naming VC's texture of that name use it as `<name>_pc`, as txdToXtx writes it.
+    // (its texture names; may be null). `weapon`: the VCS weapon replaced (a weapon's model) - its parts move from VC's
+    // place in the hand to VCS's (tools/weaponfit.py), and its HUD icon (the texture of its name in VCS's dictionary)
+    // stays: materials naming VC's texture of that name use it as `<name>_pc`, as txdToXtx writes it.
     // False (and `report` says why) when either file is not what it should be.
     bool dffToMdl(const std::vector<uint8_t> &dff, const std::vector<uint8_t> &templateMdl, const std::vector<uint8_t> *txd,
-                  std::vector<uint8_t> &out, std::string &report, const std::string &preserve = {});
+                  std::vector<uint8_t> &out, std::string &report, const std::string &weapon = {});
 
     // A PC (D3D8) .txd into a VCS texture dictionary (a `tex` resource): each texture's top level, halved down to
     // `maxSize` pixels, quantised to 4 or 8 bit. `keep`: the VCS dictionary it replaces (may be null) - its textures
@@ -29,7 +30,7 @@ namespace vcs::rwconv
     // tools/dff2mdl.py VC_NAMES.
     std::string vcsName(const std::string &vcName);
 
-    // `vcs.exe --rwconv-dff DFF TEMPLATE OUT [TXD]` / `--rwconv-txd TXD OUT [VCS.xtx]`, either with `--preserve NAME`: the
+    // `vcs.exe --rwconv-dff DFF TEMPLATE OUT [TXD] [--weapon NAME]` / `--rwconv-txd TXD OUT [VCS.xtx] [--preserve NAME]`: the
     // conversions on their own (for tools/rwconv_check.py); returns the exit code, or -1 when argv is no such command.
     int commandLine(int argc, char *argv[]);
 }

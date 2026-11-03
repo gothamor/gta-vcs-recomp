@@ -27,6 +27,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -141,6 +142,7 @@ namespace vcs
             std::vector<uint8_t> data;
         };
         std::map<std::string, Converted> g_converted;
+        std::mutex g_convertedMutex; // conversions run on several threads at once (resolveFiles)
 
         std::string stampOf(const std::string &path)
         {
@@ -153,16 +155,20 @@ namespace vcs
 
         // The bytes a mod's file gives its entry: the file itself, or a PC file converted (a .dff onto the disc's own
         // entry, read from `templateLsn`). Empty when it cannot be used.
-        // `preserve`: a weapon's name - its dictionary's texture of that name (the HUD icon) stays VCS's (rwconv.h).
+        // `weapon`: a weapon's name - its model moves to VCS's place in the hand, its dictionary's texture of that name
+        // (the HUD icon) stays VCS's (rwconv.h).
         std::vector<uint8_t> entryBytes(const StreamFile &f, uint32_t index, uint32_t templateLsn, uint32_t templateSectors,
-                                        const std::string &preserve)
+                                        const std::string &weapon)
         {
             if (f.format == StreamFile::Format::Vcs)
                 return readWhole(f.path);
             const std::string stamp = stampOf(f.path) + "|" + (f.companion.empty() ? "" : stampOf(f.companion)) + "|" + std::to_string(index);
-            const auto cached = g_converted.find(f.path);
-            if (cached != g_converted.end() && cached->second.stamp == stamp)
-                return cached->second.data;
+            {
+                std::lock_guard<std::mutex> lock(g_convertedMutex);
+                const auto cached = g_converted.find(f.path);
+                if (cached != g_converted.end() && cached->second.stamp == stamp)
+                    return cached->second.data;
+            }
             const auto start = std::chrono::steady_clock::now();
             std::vector<uint8_t> out;
             std::string report;
@@ -173,16 +179,17 @@ namespace vcs
             if (!disc || !disc->readBytes(uint64_t(templateLsn) * 2048u, static_cast<uint32_t>(templ.size()), templ.data()))
                 report = "the disc's entry could not be read";
             else if (f.format == StreamFile::Format::PcTxd)
-                ok = rwconv::txdToXtx(readWhole(f.path), 128, &templ, out, report, preserve);
+                ok = rwconv::txdToXtx(readWhole(f.path), 128, &templ, out, report, weapon);
             else
             {
                 const std::vector<uint8_t> txd = f.companion.empty() ? std::vector<uint8_t>() : readWhole(f.companion);
-                ok = rwconv::dffToMdl(readWhole(f.path), templ, f.companion.empty() ? nullptr : &txd, out, report, preserve);
+                ok = rwconv::dffToMdl(readWhole(f.path), templ, f.companion.empty() ? nullptr : &txd, out, report, weapon);
             }
             std::fprintf(stderr, "[mods] %s: %s converted%s in %.0f ms: %s\n", f.mod.c_str(), f.path.c_str(), ok ? "" : " - FAILED, not used",
                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), report.c_str());
             if (!ok)
                 out.clear();
+            std::lock_guard<std::mutex> lock(g_convertedMutex);
             g_converted[f.path] = {stamp, out};
             return out;
         }
@@ -228,7 +235,8 @@ namespace vcs
             std::vector<Overlay> overlays;
             // PC files are converted for vehicles and weapons (the model info's type +0x10: 6, 4; FORK.md T9, T11). Other
             // models' resources are laid out otherwise (converted as a car one drew nothing): those names' .dff and .txd are
-            // left out. A weapon's dictionary holds its HUD icon, named like it: VCS's icon stays (`preserve`).
+            // left out. A weapon's model moves to VCS's place in the hand; its dictionary holds its HUD icon, named like it:
+            // VCS's icon stays (`weapon`).
             std::vector<std::string> notVehicles, weapons;
             for (const StreamFile &f : files)
                 if (f.format != StreamFile::Format::Vcs && std::find(notVehicles.begin(), notVehicles.end(), f.name) == notVehicles.end() &&
@@ -254,6 +262,75 @@ namespace vcs
                         }
                     }
                 }
+            // a file's archive entry: "#<index>", a texture dictionary by the TXD store's names, a model by its key
+            auto indexOf = [&](const StreamFile &f) {
+                uint32_t index = kResources;
+                if (!f.name.empty() && f.name[0] == '#')
+                    index = static_cast<uint32_t>(std::strtoul(f.name.c_str() + 1, nullptr, 10));
+                else if (f.textures || f.format == StreamFile::Format::PcTxd)
+                {
+                    const uint32_t pool = rd32(rdram, kTxdPool), base = rd32(rdram, streamingOwner + 8u);
+                    const uint32_t items = pool ? rd32(rdram, pool) : 0u, size = pool ? rd32(rdram, pool + 8u) : 0u;
+                    for (uint32_t i = 0; items && i < size && i < 4096u && index == kResources; ++i)
+                    {
+                        char text[21] = {};
+                        std::memcpy(text, rdram + ((items + i * kTxdItem + 8u) & PS2_RAM_MASK), 20);
+                        const std::string txd = text;
+                        if (txd.size() == f.name.size() &&
+                            std::equal(txd.begin(), txd.end(), f.name.begin(), [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); }))
+                            index = base + i;
+                    }
+                }
+                else
+                {
+                    const uint32_t key = keyOf(f.name);
+                    for (uint32_t i = 0; i < kResources && index == kResources; ++i)
+                    {
+                        const uint32_t info = rd32(rdram, modelInfos + i * 4u);
+                        if (info >= 0x100000u && info < PS2_RAM_SIZE && rd32(rdram, info + 8u) == key)
+                            index = i;
+                    }
+                }
+                return index;
+            };
+            // PC files are converted first, on every core at once (a car mod's 160 files took 4 s on this thread alone,
+            // while the game waited for its first read): the loop below then finds them in g_converted. The same entries
+            // as the loop takes - by priority, an entry once - from the records as the game has them (none patched yet).
+            {
+                std::vector<std::function<void()>> jobs;
+                std::vector<uint32_t> claimed;
+                for (const StreamFile &f : files)
+                {
+                    if (f.name.find('.') != std::string::npos ||
+                        (f.format != StreamFile::Format::Vcs && std::find(notVehicles.begin(), notVehicles.end(), f.name) != notVehicles.end()))
+                        continue;
+                    const uint32_t index = indexOf(f);
+                    if (index >= kResources || std::find(claimed.begin(), claimed.end(), index) != claimed.end())
+                        continue;
+                    claimed.push_back(index);
+                    const uint32_t offset = rd32(rdram, streaming + index * 0x18u + 0x10u), sectors = rd32(rdram, streaming + index * 0x18u + 0x14u);
+                    if (f.format == StreamFile::Format::Vcs || offset == 0xFFFFFFFFu || !sectors || offset + sectors > imgSectors)
+                        continue;
+                    const std::string weapon = std::find(weapons.begin(), weapons.end(), f.name) != weapons.end() ? f.name : std::string();
+                    jobs.push_back([&f, index, lsn = imgLsn + offset, sectors, weapon] { entryBytes(f, index, lsn, sectors, weapon); });
+                }
+                if (!jobs.empty())
+                {
+                    const auto start = std::chrono::steady_clock::now();
+                    const unsigned threads = std::max(1u, std::min<unsigned>(std::thread::hardware_concurrency(), static_cast<unsigned>(jobs.size())));
+                    std::atomic<size_t> next{0};
+                    std::vector<std::thread> pool;
+                    for (unsigned k = 0; k < threads; ++k)
+                        pool.emplace_back([&] {
+                            for (size_t i; (i = next.fetch_add(1)) < jobs.size();)
+                                jobs[i]();
+                        });
+                    for (std::thread &t : pool)
+                        t.join();
+                    std::fprintf(stderr, "[mods] %zu PC file(s) ready on %u thread(s) in %.0f ms\n", jobs.size(), threads,
+                                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+                }
+            }
             std::vector<uint32_t> taken;
             bool imgMoved = false;
             for (const StreamFile &f : files)
@@ -305,33 +382,7 @@ namespace vcs
                     overlays.push_back(std::move(o));
                     continue;
                 }
-                uint32_t index = kResources;
-                if (!f.name.empty() && f.name[0] == '#')
-                    index = static_cast<uint32_t>(std::strtoul(f.name.c_str() + 1, nullptr, 10));
-                else if (f.textures || f.format == StreamFile::Format::PcTxd)
-                {
-                    const uint32_t pool = rd32(rdram, kTxdPool), base = rd32(rdram, streamingOwner + 8u);
-                    const uint32_t items = pool ? rd32(rdram, pool) : 0u, size = pool ? rd32(rdram, pool + 8u) : 0u;
-                    for (uint32_t i = 0; items && i < size && i < 4096u && index == kResources; ++i)
-                    {
-                        char text[21] = {};
-                        std::memcpy(text, rdram + ((items + i * kTxdItem + 8u) & PS2_RAM_MASK), 20);
-                        const std::string txd = text;
-                        if (txd.size() == f.name.size() &&
-                            std::equal(txd.begin(), txd.end(), f.name.begin(), [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); }))
-                            index = base + i;
-                    }
-                }
-                else
-                {
-                    const uint32_t key = keyOf(f.name);
-                    for (uint32_t i = 0; i < kResources && index == kResources; ++i)
-                    {
-                        const uint32_t info = rd32(rdram, modelInfos + i * 4u);
-                        if (info >= 0x100000u && info < PS2_RAM_SIZE && rd32(rdram, info + 8u) == key)
-                            index = i;
-                    }
-                }
+                const uint32_t index = indexOf(f);
                 const uint32_t at = streaming + index * 0x18u;
                 const uint32_t offset = index < kResources ? rd32(rdram, at + 0x10u) : 0xFFFFFFFFu;
                 const uint32_t sectors = index < kResources ? rd32(rdram, at + 0x14u) : 0u;

@@ -6,7 +6,8 @@ they port (tools/dff2mdl.py, tools/txd2xtx.py): every .dff and .txd under a fold
 
 FOLDER: default Mods/ (the player's PC mods). A .dff goes onto the VCS vehicle or weapon of its name when there is one
 (else the ADMIRAL), with the .txd beside it when there is one; a .txd keeps the textures of the VCS dictionary of its
-name; a weapon's (a model of one element) both with --preserve <its name> (its HUD icon stays VCS's);
+name; a weapon's (a model of one element) with --weapon / --preserve <its name> (VCS's place in the hand, VCS's HUD
+icon);
 extracted vehicles and dictionaries needed (python tools/img.py extract build/img/GTA3PS2 "*"). Outputs
 under build/rwconv_check (game data: never in git). Exit code 0 = every file the same (files both refuse count as
 the same).
@@ -81,7 +82,7 @@ def main():
         py, cc = os.path.join(a.out, tag + '.py' + ext), os.path.join(a.out, tag + '.cc' + ext)
         vcs_name = dff2mdl.VC_NAMES.get(stem.lower(), stem.lower())
         preserve = weapon_name(vcs_name)
-        flags = ['--preserve', preserve] if preserve else []
+        flags = [('--weapon' if ext.lower() == '.dff' else '--preserve'), preserve] if preserve else []
         if ext.lower() == '.dff':
             template = os.path.join(VEHICLES, vcs_name + '.mdl')
             if not os.path.isfile(template):

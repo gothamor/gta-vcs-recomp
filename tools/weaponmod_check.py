@@ -7,13 +7,18 @@
 `.dff` named as a VCS weapon (or VC's name for it: colt45 is VCS's beretta) with its `.txd`. Two hidden runs from the
 card copy (default the rig's user copy) at gamefiles_check's street, noon: the original weapons, then the mod's. In
 each, every weapon type (default: the ones the folder replaces) is given to Vic (the trainer), photographed close up by
-the free camera (`<run>_<type>_hand.png`) and with the game's camera and HUD (`<run>_<type>_hud.png`).
+the free camera from the front (`<run>_<type>_hand.png`) and his right side (`<run>_<type>_side.png`), and with the
+game's camera and HUD (`<run>_<type>_hud.png`).
 
 Pass = each .dff converted and put in its entry, the game alive, the close-up different from the original's (the mod's
-model is drawn), and the HUD's weapon icon the same as the original's (VCS keeps its icon: the .txd's texture of the
-weapon's name is renamed, rwconv.h). Results: OUT/result.json. Exit code 0 = pass. Outputs are game pictures: build/.
+model is drawn), the HUD's weapon icon the same as the original's (VCS keeps its icon: the .txd's texture of the
+weapon's name is renamed, rwconv.h), and - before the runs, with tools/dff2mdl.py - each converted weapon's outlines
+covering VCS's model better with VCS's place in the hand (WEAPON_PLACES) than with VC's (`placed` against `vc_place`:
+tools/weaponfit.py's silhouette overlap, 0..1). Results: OUT/result.json. Exit code 0 = pass. Outputs are game pictures: build/.
 """
 import argparse
+import contextlib
+import io
 import json
 import math
 import os
@@ -28,6 +33,7 @@ import dff2mdl  # noqa: E402
 import gamefiles_check  # noqa: E402
 import rig  # noqa: E402
 import toolchain as tc  # noqa: E402
+import weaponfit  # noqa: E402
 
 # VCS's weapon models (game-internals.md 9g): name -> (model, weapon type the trainer gives)
 WEAPONS = {"machete": (339, 9), "chnsaw": (341, 11), "teargas": (343, 16), "molotov": (344, 17), "beretta": (346, 19),
@@ -110,7 +116,23 @@ def run(out, name, mods, save, types):
             time.sleep(1.5)
             hud = out / ('%s_%d_hud.png' % (name, t))
             g.cmd('screenshot ' + str(hud))
-            shots[t] = (hand, hud)
+            # from his right side, at his hand
+            ped, (px, py, pz), _ = g.player()
+            fx, fy = g.peekf(ped + 0x10, 2)
+            n = math.hypot(fx, fy) or 1.0
+            fx, fy = fx / n, fy / n
+            rx, ry = fy, -fx
+            cx, cy, cz = px + rx * 1.3 + fx * 0.2, py + ry * 1.3 + fy * 0.2, pz + 0.1
+            tx, ty, tz = px + rx * 0.3, py + ry * 0.3, pz - 0.1
+            yaw = math.degrees(math.atan2(ty - cy, tx - cx))
+            pitch = math.degrees(math.atan2(tz - cz, math.hypot(tx - cx, ty - cy)))
+            g.cmd('campose %.3f %.3f %.3f %.2f %.2f' % (cx, cy, cz, yaw, pitch))
+            time.sleep(1.0)
+            side = out / ('%s_%d_side.png' % (name, t))
+            g.cmd('screenshot ' + str(side))
+            g.cmd('campose off')
+            time.sleep(1.0)
+            shots[t] = (hand, hud, side)
         alive = g.alive()
     finally:
         g.quit()
@@ -138,6 +160,24 @@ def main():
         if ext.lower() == '.dff' and name in WEAPONS:
             replaced[name] = WEAPONS[name][1]
     types = [int(t) for t in a.types.split(',') if t] or sorted(replaced.values())
+    # where each converted weapon sits against VCS's model: with VC's place, and with VCS's (the mod loader's)
+    placed = {}
+    for f in sorted(os.listdir(a.folder)):
+        stem, ext = os.path.splitext(f)
+        name = dff2mdl.VC_NAMES.get(stem.lower(), stem.lower())
+        template = os.path.join(tc.ROOT, 'build', 'img', 'GTA3PS2', name + '.mdl')
+        if ext.lower() != '.dff' or name not in replaced or name not in dff2mdl.WEAPON_PLACES or not os.path.isfile(template):
+            continue
+        txd = os.path.join(a.folder, stem + '.txd')
+        txd = txd if os.path.isfile(txd) else None
+        dist = []
+        for weapon in (None, name):
+            path = str(out / ('%s_%s.mdl' % (name, 'placed' if weapon else 'vc')))
+            with contextlib.redirect_stdout(io.StringIO()):
+                dff2mdl.convert(os.path.join(a.folder, f), template, path, txd, weapon)
+            dist.append(weaponfit.placed_overlap(weaponfit.triangles(path), weaponfit.triangles(template)))
+        placed[name] = {'vc_place': round(dist[0], 3), 'placed': round(dist[1], 3)}
+        print('%-10s outlines over VCS\'s model: %.3f with VC\'s place, %.3f with VCS\'s' % (name, dist[0], dist[1]), flush=True)
     runs = {} if a.no_original else {'original': None}
     runs['mod'] = mods
     shots, logs, alive = {}, {}, {}
@@ -153,6 +193,10 @@ def main():
         if t not in types:
             continue
         w = {'type': t, 'model': WEAPONS[name][0]}
+        if name in placed:
+            w.update(placed[name])
+            w['placed_ok'] = placed[name]['placed'] > placed[name]['vc_place']
+            ok &= w['placed_ok']
         if 'original' in shots:
             w['hand_pixels'] = changed_pixels(shots['mod'][t][0], shots['original'][t][0])
             w['icon_diff'] = round(crop_diff(shots['mod'][t][1], shots['original'][t][1], ICON), 2)
@@ -164,9 +208,9 @@ def main():
     result['pass'] = ok
     (out / 'result.json').write_text(json.dumps(result, indent=1), encoding='utf-8')
     for name, w in result['weapons'].items():
-        print('%-10s type %2d  close-up pixels changed %6s  icon diff %6s  %s' % (name, w['type'], w.get('hand_pixels', '-'),
-                                                                          w.get('icon_diff', '-'),
-                                                                          'ok' if w.get('pass', True) else 'FAIL'))
+        print('%-10s type %2d  close-up pixels changed %6s  icon diff %6s  outlines %s -> %s  %s' % (
+            name, w['type'], w.get('hand_pixels', '-'), w.get('icon_diff', '-'), w.get('vc_place', '-'),
+            w.get('placed', '-'), 'ok' if w.get('pass', True) and w.get('placed_ok', True) else 'FAIL'))
     print('converted: %s' % (', '.join(sorted(set(result['converted']))) or 'none'))
     if result['failed']:
         print('failed:', result['failed'])

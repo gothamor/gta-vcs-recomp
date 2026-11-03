@@ -49,7 +49,7 @@ One task at a time, in this order. T3 is the base for T4-T7.
 | T8 | Presets and player docs (Authentic / Enhanced), release notes | T1-T7 | Planned | [#8](https://github.com/willzmkv/gta-vcs-recomp/issues/8) |
 | T9 | PC `.dff` / `.txd` in mods: convert RW 3 clumps / TXDs to VCS's formats, or draw them natively (research) | T1c, RSL submission | Cars, bikes, boats, helicopters work as they come (67 / 67 checked triangle by triangle); wheels need T10 | [#12](https://github.com/willzmkv/gta-vcs-recomp/issues/12) |
 | T10 | More streaming memory: a larger EE RAM for the port, VCS's streaming heap (5.4 MB) moved into it; then resident models (VC's `wheels.dff`) | - | Steps 1-3 done (Game > Memory: up to 30 MB; more car variety); step 4 left | [#15](https://github.com/willzmkv/gta-vcs-recomp/issues/15) |
-| T11 | PC weapon mods (`.dff` / `.txd`): a VC weapon onto VCS's (one element), VCS's HUD icon kept | T9 | **Done** (the 10 of `HD Weapons` in Vic's hand, VCS's icons) | [#16](https://github.com/willzmkv/gta-vcs-recomp/issues/16) |
+| T11 | PC weapon mods (`.dff` / `.txd`): a VC weapon onto VCS's (one element), where VCS holds it, VCS's HUD icon kept | T9 | **Done** (the 10 of `HD Weapons` in Vic's hand where VCS holds its own, VCS's icons) | [#16](https://github.com/willzmkv/gta-vcs-recomp/issues/16) |
 
 Backlog (not scheduled): SkyGFX's Xbox rim light / gloss / screen water drops, YCbCr correction, a larger reflection
 map, shadow maps, deferred lights, PBR sky, volumetric clouds, car paint reflections, rain on cars, ragdolls.
@@ -174,7 +174,14 @@ the element, no paint), the icon kept (`--preserve`: VC's texture of that name r
 weapon names mapped (`colt45` -> `beretta` ...), the weapon file tail's other order, textures with sides that are not
 powers of two; the mod loader takes models of type 4. Checks: `rwconv_check` (22 / 22 weapons, 239 / 239 cars),
 `weaponmod_check` (each weapon in the hand, the icon VCS's; `minigun2` is VCS's model 366 too). A VC weapon VCS has
-no model for is named in the log; a VC grenade sits in the palm where VC places it.
+no model for is named in the log.
+
+**Then the player saw every weapon wrong in the hand** (2026-11-03: grenades inside the hand, the chainsaw's handles
+beside his hands, the pistol in his palm): VCS holds each weapon elsewhere than VC does - its models are VC's meshes
+moved 2-14 cm and turned up to 30 degrees in the hand (game-internals.md 9g). Fixed: a per-weapon transform from VC's
+place to VCS's (`dff2mdl.WEAPON_PLACES`, `kWeaponPlaces`), fitted once from VC's originals (the player's VC PC
+`gta3.img`) onto VCS's models by their outlines (`tools/weaponfit.py`, 29 weapons); `weaponmod_check` now also checks
+that each converted weapon covers VCS's model better than at VC's place, and photographs the hand from the side.
 
 ### T2 - Draw distance (Project2DFX)
 
