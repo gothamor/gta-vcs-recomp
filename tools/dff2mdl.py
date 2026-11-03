@@ -351,7 +351,9 @@ PRIMARY, SECONDARY = (0x3C, 0xFF, 0x00), (0xFF, 0x00, 0xAF)  # VC's paint colour
 PAINT_LISTS = ((0x2C, 30), (0xA4, 25))
 # VC car names VCS shortened (its names are 8 letters at most): a VC mod's `police.dff` is VCS's `policem`
 VC_NAMES = {"boxville": "boxvil", "enforcer": "enforce", "fbiranch": "fbiran", "police": "policem", "sabretur": "sabretb",
-            "washing": "washin"}
+            "washing": "washin",
+            # and VC's weapons VCS has under its own names
+            "colt45": "beretta", "m4": "m16", "tec9": "skorpion", "mp5lng": "mplng", "m60": "m249", "ruger": "ak47"}
 # VC's shared vehicle textures (generic.txd) -> VCS's own (their layouts differ: the closest, not the same picture)
 VC_GENERIC = {"vehiclegeneric256": "xv_vehiclegeneric_sl", "vehiclescratch64": "xv_scratch_sl",
               "vehiclegrunge256": "xv_vehiclegrunge_sl", "vehiclesteering": "xv_vehiclesteering_sl"}
@@ -410,9 +412,11 @@ def build_geometry(m, template_geom, verts, normals, uvs, groups, material_ptrs)
     return block, [0x0C] + [list_at + 4 * i for i in range(len(material_ptrs))]
 
 
-def convert(dff_path, template_path, out_path, txd_path=None):
-    """The .dff's parts onto the template's (a VCS vehicle .mdl); with the car's .txd, materials naming a texture it
-    lacks map to VCS's shared ones (VC_GENERIC) or lose their texture."""
+def convert(dff_path, template_path, out_path, txd_path=None, preserve=None):
+    """The .dff's parts onto the template's: a VCS vehicle .mdl, or a model of one element (a weapon); with the .txd,
+    materials naming a texture it lacks map to VCS's shared ones (VC_GENERIC) or lose their texture. `preserve`: a name
+    whose VCS texture stays (a weapon's: its HUD icon) - VC's texture of that name is used as `<name>_pc`, as
+    txd2xtx --preserve writes it."""
     m = mdlinfo.Mdl(open(template_path, "rb").read())
     dff = read_dff(open(dff_path, "rb").read())
     textures, texture_names = None, {}
@@ -425,11 +429,15 @@ def convert(dff_path, template_path, out_path, txd_path=None):
     group = m.ptr(0x20)
     data = bytearray(m.d[:m.data_size])
     relocs = set(r for r in m.relocs if r < m.data_size)
+    # a vehicle's data starts with its element group (object type 2); a weapon's (or any simple model's) with its one
+    # element (type 1): no paint lists, no extras, every VC part into that element
+    single = m.d[group] == 1
+    preserve = (preserve or "").lower()
 
     root = m.ptr(group + 4)
     extra_list, extra_count = m.ptr(0x28), m.u32(0x24)
-    extra_elements = [m.ptr(extra_list + 4 * k) for k in range(extra_count)] if extra_list and extra_count <= 64 else []
-    group_elements = m.elements(group)
+    extra_elements = [m.ptr(extra_list + 4 * k) for k in range(extra_count)] if extra_list and extra_count <= 64 and not single else []
+    group_elements = [group] if single else m.elements(group)
     elements = group_elements + [e for e in extra_elements if e and e not in group_elements]
 
     def rr_vc(i):
@@ -475,14 +483,14 @@ def convert(dff_path, template_path, out_path, txd_path=None):
 
     # the template's paint: its first-colour materials lend their effects (matfx: the reflection) to the new ones
     paint_fx = 0
-    for k in range(PAINT_LISTS[0][1]):
+    for k in range(0 if single else PAINT_LISTS[0][1]):
         mat = m.ptr(PAINT_LISTS[0][0] + 4 * k)
         if not mat:
             break
         if mat + 12 in m.relocs:
             paint_fx = m.u32(mat + 12)
             break
-    for at, count in PAINT_LISTS:  # emptied: the new materials go in
+    for at, count in () if single else PAINT_LISTS:  # emptied: the new materials go in
         for k in range(count):
             struct.pack_into("<I", data, at + 4 * k, 0)
             relocs.discard(at + 4 * k)
@@ -500,10 +508,12 @@ def convert(dff_path, template_path, out_path, txd_path=None):
     def material(mat):
         """A new material for a VC one: {texture name, colour, 2, effects}; paint goes into the paint lists."""
         colour = tuple(mat["colour"][:3])
-        kind = 0 if colour == PRIMARY else 1 if colour == SECONDARY else None
+        kind = None if single else 0 if colour == PRIMARY else 1 if colour == SECONDARY else None
         tex = mat["texture"].lower()
         if textures is not None and tex and tex not in textures:
             tex = VC_GENERIC.get(tex, "")  # not the car's own: VCS's shared one, or none (drawn in its colour)
+        if preserve and tex == preserve:  # VCS's texture of that name stays (a weapon's HUD icon): VC's is renamed
+            tex = (texture_names.get(tex, tex) + "_pc")[:31]
         rgba = (255, 255, 255, 255) if kind is not None else tuple(mat["colour"])
         name_at = string(texture_names.get(tex, tex)) if tex else 0
         data.extend(b"\0" * (-len(data) % 4))
@@ -574,7 +584,7 @@ def convert(dff_path, template_path, out_path, txd_path=None):
                 k = take(name)
                 if k is not None:
                     assign[e] = [k]
-    host = next((e for name, els in by_node if name in ("chassis_hi", "boat_hi") for e in els), None)
+    host = group if single else next((e for name, els in by_node if name in ("chassis_hi", "boat_hi") for e in els), None)
     merged, dropped = [], []
     for k, n in enumerate(names_of):
         if k in used:
@@ -644,31 +654,56 @@ def convert(dff_path, template_path, out_path, txd_path=None):
         put(e, verts, normals if has_normals else None, uvs, groups, mats)
         replaced.append(m.cstr(m.ptr(node + 0xA8)) + "<" + "+".join(names_of[k] for k in parts))
 
-    # The file's tail moves as a whole: the global table (G .. R), the relocation table (R .. T) and the strings after
-    # it (T .. F: texture names, read at load, past the data the game keeps). Pointers into it and relocation entries in
-    # it shift with it.
-    G, R = m.global_tab, m.reloc_tab
-    T, F = R + 4 * m.num_relocs, m.file_size
+    # The file's tail (past the data: the global table, the relocation table and the strings - texture names, read at
+    # load, past the data the game keeps) is written anew as: the global table, the relocation table, the strings in
+    # their order. A vehicle's tail is already in that order (G = the data's end, R, then the strings); a weapon's has
+    # the relocation table first, the global table after it and strings on both sides. Pointers into it and relocation
+    # entries in it move with it.
+    G, R, F, D = m.global_tab, m.reloc_tab, m.file_size, m.data_size
+    R_end = R + 4 * m.num_relocs
+    G_end = R if G < R else G
+    if G >= R:  # the global table's end: its entries are pointers (relocated)
+        while G_end in m.relocs and G_end < F:
+            G_end += 4
+    others, at = [], D
+    for a, b in sorted(((G, G_end), (R, R_end))):
+        if a > at:
+            others.append((at, a))
+        at = max(at, b)
+    if at < F:
+        others.append((at, F))
     data_size = len(data)
-    shift_g = data_size - G  # the global table's new place
-    relocs.update(r + shift_g for r in m.relocs if G <= r < R)
-    tail_at = data_size + (R - G) + 4 * len(relocs)
-    shift_t = tail_at - T
+    relocs.update(r - G + data_size for r in m.relocs if G <= r < G_end)
+    tail_at = data_size + (G_end - G) + 4 * len(relocs)
+    place, pos = [], tail_at
+    for a, b in others:
+        place.append((a, b, pos))
+        pos += b - a
+
+    def moved_to(v):
+        if G <= v < G_end:
+            return v - G + data_size
+        for a, b, p in place:
+            if a <= v < b:
+                return v - a + p
+        return None
+
     for r in m.relocs:  # the template's own pointers into the tail (new geometry's pointers are already final)
-        if r < m.data_size and T <= m.u32(r) < F and m.u32(r) == struct.unpack_from("<I", data, r)[0]:
-            struct.pack_into("<I", data, r, m.u32(r) + shift_t)
-    gtab = bytearray(m.d[G:R])
-    for r in m.relocs:  # the global table's entries point into the data: unchanged; any into the tail: shifted
-        if G <= r < R:
+        if r < D and D <= m.u32(r) < F and m.u32(r) == struct.unpack_from("<I", data, r)[0] and moved_to(m.u32(r)) is not None:
+            struct.pack_into("<I", data, r, moved_to(m.u32(r)))
+    gtab = bytearray(m.d[G:G_end])
+    for r in m.relocs:  # the global table's entries point into the data: unchanged; any into the tail: moved
+        if G <= r < G_end:
             v = struct.unpack_from("<I", gtab, r - G)[0]
-            if v >= T:
-                struct.pack_into("<I", gtab, r - G, v + shift_t)
+            if D <= v < F and moved_to(v) is not None:
+                struct.pack_into("<I", gtab, r - G, moved_to(v))
     data += gtab
     reloc_tab = len(data)
     rel = sorted(relocs)
     data += struct.pack("<%dI" % len(rel), *rel)
     assert len(data) == tail_at
-    data += m.d[T:F]
+    for a, b in others:
+        data += m.d[a:b]
     struct.pack_into("<7I2H", data, 0, m.ident, m.shrink, len(data), data_size, reloc_tab, len(rel), data_size,
                      m.num_classes, m.num_funcs)
     open(out_path, "wb").write(bytes(data))
@@ -682,8 +717,9 @@ def main():
     args = sys.argv[1:]
     if len(args) >= 3 and args[0] == "convert":
         txd = args[args.index("--txd") + 1] if "--txd" in args else None
-        pos = [a for i, a in enumerate(args) if a != "--txd" and (i == 0 or args[i - 1] != "--txd")]
-        convert(pos[1], pos[2], pos[3] if len(pos) > 3 else os.path.splitext(os.path.basename(pos[2]))[0] + ".mdl", txd)
+        preserve = args[args.index("--preserve") + 1] if "--preserve" in args else None
+        pos = [a for i, a in enumerate(args) if a not in ("--txd", "--preserve") and (i == 0 or args[i - 1] not in ("--txd", "--preserve"))]
+        convert(pos[1], pos[2], pos[3] if len(pos) > 3 else os.path.splitext(os.path.basename(pos[2]))[0] + ".mdl", txd, preserve)
         return 0
     if args[:1] == ["--self-test"]:
         import toolchain as tc

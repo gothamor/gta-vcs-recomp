@@ -22,7 +22,7 @@ namespace vcs
         enum class Format : uint8_t
         {
             Vcs,   // the game's own format, as it is
-            PcDff, // a PC VC car model
+            PcDff, // a PC VC car or weapon model
             PcTxd, // a PC VC texture dictionary
         };
         std::string name, path, mod;

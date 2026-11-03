@@ -1121,3 +1121,13 @@ lossless (only shorter strips); textures stay 128 px, 4 or 8 bit like the disc's
 - CStreaming's cap of 51 resources is lifted only on the larger settings and only for the request's own check: with
   more room the cap, not the bytes, would decide what stays. The make-room loop (bytes) is the game's.
 - 30 MB at most: 64 MB minus the guest's 32 minus a 2 MB reserve. Restart to apply (the heap is built once at boot).
+
+## 2026-11-03 - PC weapon mods: VCS's HUD icons stay, VC's placement is kept (FORK.md T11)
+
+- A VC weapon's `.txd` carries VC's HUD icon under the weapon's name, drawn in VC's style; VCS's HUD is VCS's, so its
+  icon stays (authentic by default). VC's icon is kept in the dictionary as `<name>_pc` (a model that textures itself
+  with it still finds it); an option to show the mod's icons can come later.
+- The VC geometry goes in where VC has it relative to the hand: both games share the hand's axes, so the mod looks as
+  its author made it (a grenade in the palm included). No fitting to VCS's model's box.
+- A texture whose sides are not powers of two is resampled nearest to the powers of two below: the halving after it
+  averages, and the C++ and Python converters give the same bytes with integer maths.

@@ -111,6 +111,7 @@ python tools/img.py table|list|extract [OUT] [names]          # GTA3PS2.IMG entr
 python tools/gamefiles_check.py [OUT]                         # a GTA3PS2.IMG entry replaced from a mod (admiral.mdl), in the game
 python tools/rwinfo.py FILE.dff|FILE.txd | --self-test         # what a PC RenderWare .dff / .txd holds (frames, geometry, textures)
 python tools/mdlinfo.py FILE.mdl [--obj F] [--png F] | --vehicles   # a VCS model (ldm): nodes, elements, PS2 meshes decoded
+python tools/weaponmod_check.py [OUT] [--folder DIR]           # a PC weapon mod in the game: each weapon in Vic's hand, the HUD icon
 python tools/dff2mdl.py convert CAR.dff TEMPLATE.mdl OUT.mdl [--txd CAR.txd] | --self-test   # a VC car onto a VCS vehicle
 python tools/txd2xtx.py convert CAR.txd OUT.xtx | info F.xtx [--png DIR]   # a VC .txd -> VCS texture dictionary (4/8 bit)
 python tools/carmod_check.py [OUT] [--dff F --txd F --vehicle admiral --model 171] [--direct] [--folder DIR --models 266,172]

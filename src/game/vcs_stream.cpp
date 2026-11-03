@@ -153,7 +153,9 @@ namespace vcs
 
         // The bytes a mod's file gives its entry: the file itself, or a PC file converted (a .dff onto the disc's own
         // entry, read from `templateLsn`). Empty when it cannot be used.
-        std::vector<uint8_t> entryBytes(const StreamFile &f, uint32_t index, uint32_t templateLsn, uint32_t templateSectors)
+        // `preserve`: a weapon's name - its dictionary's texture of that name (the HUD icon) stays VCS's (rwconv.h).
+        std::vector<uint8_t> entryBytes(const StreamFile &f, uint32_t index, uint32_t templateLsn, uint32_t templateSectors,
+                                        const std::string &preserve)
         {
             if (f.format == StreamFile::Format::Vcs)
                 return readWhole(f.path);
@@ -171,11 +173,11 @@ namespace vcs
             if (!disc || !disc->readBytes(uint64_t(templateLsn) * 2048u, static_cast<uint32_t>(templ.size()), templ.data()))
                 report = "the disc's entry could not be read";
             else if (f.format == StreamFile::Format::PcTxd)
-                ok = rwconv::txdToXtx(readWhole(f.path), 128, &templ, out, report);
+                ok = rwconv::txdToXtx(readWhole(f.path), 128, &templ, out, report, preserve);
             else
             {
                 const std::vector<uint8_t> txd = f.companion.empty() ? std::vector<uint8_t>() : readWhole(f.companion);
-                ok = rwconv::dffToMdl(readWhole(f.path), templ, f.companion.empty() ? nullptr : &txd, out, report);
+                ok = rwconv::dffToMdl(readWhole(f.path), templ, f.companion.empty() ? nullptr : &txd, out, report, preserve);
             }
             std::fprintf(stderr, "[mods] %s: %s converted%s in %.0f ms: %s\n", f.mod.c_str(), f.path.c_str(), ok ? "" : " - FAILED, not used",
                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(), report.c_str());
@@ -224,12 +226,13 @@ namespace vcs
             }
             std::stable_sort(files.begin(), files.end(), [](const StreamFile &a, const StreamFile &b) { return a.priority > b.priority; });
             std::vector<Overlay> overlays;
-            // PC files are converted as vehicles only (the model info's type +0x10 = 6): a weapon's or an object's resource
-            // is laid out otherwise - converted as a car it drew nothing, and its dictionary (a weapon's holds its HUD
-            // icon) lost its textures. Those names' .dff and .txd are left out (FORK.md T9).
-            std::vector<std::string> notVehicles;
+            // PC files are converted for vehicles and weapons (the model info's type +0x10: 6, 4; FORK.md T9, T11). Other
+            // models' resources are laid out otherwise (converted as a car one drew nothing): those names' .dff and .txd are
+            // left out. A weapon's dictionary holds its HUD icon, named like it: VCS's icon stays (`preserve`).
+            std::vector<std::string> notVehicles, weapons;
             for (const StreamFile &f : files)
-                if (f.format == StreamFile::Format::PcDff)
+                if (f.format != StreamFile::Format::Vcs && std::find(notVehicles.begin(), notVehicles.end(), f.name) == notVehicles.end() &&
+                    std::find(weapons.begin(), weapons.end(), f.name) == weapons.end())
                 {
                     const uint32_t key = keyOf(f.name);
                     for (uint32_t i = 0; i < kResources; ++i)
@@ -237,12 +240,15 @@ namespace vcs
                         const uint32_t info = rd32(rdram, modelInfos + i * 4u);
                         if (info >= 0x100000u && info < PS2_RAM_SIZE && rd32(rdram, info + 8u) == key)
                         {
-                            if (rdram[(info + 0x10u) & PS2_RAM_MASK] != 6u)
+                            const uint8_t type = rdram[(info + 0x10u) & PS2_RAM_MASK];
+                            if (type == 4u)
+                                weapons.push_back(f.name);
+                            else if (type != 6u)
                             {
                                 notVehicles.push_back(f.name);
-                                std::fprintf(stderr, "[mods] %s: %s - \"%s\" is no vehicle in VCS (a weapon or an object): PC "
+                                std::fprintf(stderr, "[mods] %s: %s - \"%s\" is no vehicle or weapon in VCS (model type %u): PC "
                                                      "models of those are not supported yet; its .dff and .txd not used\n",
-                                             f.mod.c_str(), f.path.c_str(), f.name.c_str());
+                                             f.mod.c_str(), f.path.c_str(), f.name.c_str(), type);
                             }
                             break;
                         }
@@ -337,13 +343,14 @@ namespace vcs
                         std::fprintf(stderr, "[mods] %s: %s - VCS keeps its wheels in memory from the start, not in GTA3PS2.IMG: "
                                              "not supported yet (FORK.md T10); not used\n", f.mod.c_str(), f.path.c_str());
                     else
-                        std::fprintf(stderr, "[mods] %s: %s - VCS has no vehicle \"%s\" (rename the files as the one it should "
-                                             "replace); not used\n", f.mod.c_str(), f.path.c_str(), f.name.c_str());
+                        std::fprintf(stderr, "[mods] %s: %s - VCS has no vehicle or weapon \"%s\" (rename the files as the one it "
+                                             "should replace); not used\n", f.mod.c_str(), f.path.c_str(), f.name.c_str());
                     continue;
                 }
                 if (std::find(taken.begin(), taken.end(), index) != taken.end())
                     continue; // a mod with a higher priority has it
-                std::vector<uint8_t> bytes = entryBytes(f, index, imgLsn + offset, sectors);
+                const bool weapon = std::find(weapons.begin(), weapons.end(), f.name) != weapons.end();
+                std::vector<uint8_t> bytes = entryBytes(f, index, imgLsn + offset, sectors, weapon ? f.name : std::string());
                 const auto size = static_cast<uint64_t>(bytes.size());
                 if (!size)
                     continue;

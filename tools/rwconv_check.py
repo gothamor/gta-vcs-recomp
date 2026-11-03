@@ -4,8 +4,9 @@ they port (tools/dff2mdl.py, tools/txd2xtx.py): every .dff and .txd under a fold
 
     python tools/rwconv_check.py [FOLDER] [--out DIR] [--limit N]
 
-FOLDER: default Mods/ (the player's PC mods). A .dff goes onto the VCS vehicle of its name when there is one (else the
-ADMIRAL), with the .txd beside it when there is one; a .txd keeps the textures of the VCS dictionary of its name;
+FOLDER: default Mods/ (the player's PC mods). A .dff goes onto the VCS vehicle or weapon of its name when there is one
+(else the ADMIRAL), with the .txd beside it when there is one; a .txd keeps the textures of the VCS dictionary of its
+name; a weapon's (a model of one element) both with --preserve <its name> (its HUD icon stays VCS's);
 extracted vehicles and dictionaries needed (python tools/img.py extract build/img/GTA3PS2 "*"). Outputs
 under build/rwconv_check (game data: never in git). Exit code 0 = every file the same (files both refuse count as
 the same).
@@ -40,6 +41,16 @@ def native_side(exe, *args):
     return r.returncode == 0, (r.stdout or r.stderr).strip()
 
 
+def weapon_name(name):
+    """The VCS name when that model is a weapon's (one element at 0x20: object type 1), else None."""
+    import mdlinfo
+    path = os.path.join(VEHICLES, name + '.mdl')
+    if not os.path.isfile(path):
+        return None
+    m = mdlinfo.Mdl(open(path, 'rb').read())
+    return name if m.d[m.ptr(0x20)] == 1 else None
+
+
 def same(a, b):
     try:
         return open(a, 'rb').read() == open(b, 'rb').read()
@@ -68,19 +79,22 @@ def main():
         stem, ext = os.path.splitext(os.path.basename(path))
         tag = '%04d_%s' % (i, stem)
         py, cc = os.path.join(a.out, tag + '.py' + ext), os.path.join(a.out, tag + '.cc' + ext)
+        vcs_name = dff2mdl.VC_NAMES.get(stem.lower(), stem.lower())
+        preserve = weapon_name(vcs_name)
+        flags = ['--preserve', preserve] if preserve else []
         if ext.lower() == '.dff':
-            template = os.path.join(VEHICLES, dff2mdl.VC_NAMES.get(stem.lower(), stem.lower()) + '.mdl')
+            template = os.path.join(VEHICLES, vcs_name + '.mdl')
             if not os.path.isfile(template):
                 template = os.path.join(VEHICLES, 'admiral.mdl')
             txd = os.path.join(os.path.dirname(path), stem + '.txd')
             txd = txd if os.path.isfile(txd) else None
-            p = python_side(dff2mdl.convert, path, template, py, txd)
-            ok, msg = native_side(exe, '--rwconv-dff', path, template, cc, *([txd] if txd else []))
+            p = python_side(dff2mdl.convert, path, template, py, txd, preserve)
+            ok, msg = native_side(exe, '--rwconv-dff', path, template, cc, *([txd] if txd else []), *flags)
         else:  # with the VCS dictionary of its name, when there is one: its other textures are kept
-            keep = os.path.join(VEHICLES, dff2mdl.VC_NAMES.get(stem.lower(), stem.lower()) + '.xtx')
+            keep = os.path.join(VEHICLES, vcs_name + '.xtx')
             keep = keep if os.path.isfile(keep) else None
-            p = python_side(txd2xtx.convert, path, py, 128, None, keep)
-            ok, msg = native_side(exe, '--rwconv-txd', path, cc, *([keep] if keep else []))
+            p = python_side(txd2xtx.convert, path, py, 128, None, keep, preserve)
+            ok, msg = native_side(exe, '--rwconv-txd', path, cc, *([keep] if keep else []), *flags)
         if p is not True and not ok:
             results['refused_both'] += 1
             continue
