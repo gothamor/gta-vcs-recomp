@@ -48,8 +48,10 @@ RADV (`libvulkan_radeon.ps5.a`), the app start-up code, the clean-room `libc.prx
 
 ## Building
 
-On the build machine (Ubuntu 24.04 or WSL 2: the payload SDK's tools run there), with Python 3, Git, clang 19+ and
-lld, CMake 3.21+, Ninja and glslang:
+On the build machine (Ubuntu 24.04, WSL 2 or Fedora 41+: the payload SDK's tools run there), with Python 3, Git, clang
+19+, lld and llvm-config (the payload SDK's make asks it where clang is: `llvm-20` on Ubuntu, `llvm-devel` on Fedora;
+`tools/ps5.py setup` passes the one next to the build's clang as `LLVM_CONFIG`), CMake 3.21+, Ninja and glslang
+(`tools/ps5.py setup` lists the full package line for both when something is missing):
 
 1. **The game's code from your disc**, once: `python3 tools/recompile.py "<your>.iso"` builds the recompiler and turns
    the disc's executable into C++ (`generated/`, about 200 MB), which the PS5 build compiles.

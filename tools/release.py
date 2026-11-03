@@ -96,10 +96,11 @@ PS5_README = """{title}
 
 For jailbroken PS5 consoles that run homebrew from /data/homebrew/. This zip is the port's source: no game code or
 data is in it, and none ever is. You build the game from your own disc (USA, SLUS-21590) on a build machine with
-Ubuntu 24.04 or WSL 2, and the result - an app folder - goes to your PS5.
+Ubuntu 24.04, WSL 2 or Fedora 41+, and the result - an app folder - goes to your PS5.
 
-0. The packages, once:
-       sudo apt install python3 git clang-20 lld-20 cmake ninja-build glslang-tools
+0. The packages, once (Ubuntu / WSL 2, or Fedora):
+       sudo apt install python3 git make wget unzip xz-utils rsync meson ninja-build glslang-tools bison flex gcc g++ curl clang-20 lld-20 llvm-20 cmake python3-mako python3-ply python3-yaml
+       sudo dnf install python3 git make wget unzip xz tar rsync meson ninja-build glslang bison flex gcc gcc-c++ curl clang lld llvm llvm-devel cmake python3-mako python3-ply python3-pyyaml
 1. The game's code from your disc:
        python3 tools/recompile.py "Grand Theft Auto - Vice City Stories (USA).iso"
 2. The PS5 toolchain, once (ps5-plume-triangle: the PS5 payload SDK, its Vulkan driver RADV, the eboot tools):

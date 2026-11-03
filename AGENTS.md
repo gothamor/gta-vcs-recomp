@@ -66,7 +66,7 @@ python3 tools/ps5.py ffmpeg                                   # FFmpeg for the P
 python3 tools/ps5.py compile-check --sdk DIR [--triangle T]   # the PS5 build against stand-in code (no disc; CI)
 python3 tools/ps5.py padtest                                  # the DualSense -> DualShock 2 path, console functions mocked (71 checks)
 python3 tools/release.py [--ref vX | --worktree]              # the release zip (build/dist): the source + PS5-README.txt;
-                                                              # refuses game files. The number is VERSION (root; 0.3.0):
+                                                              # refuses game files. The number is VERSION (root; 0.3.1):
                                                               # bump it before tagging - the tag must match
 python3 tools/gamectl.py ...                                  # the game's control channel (runtime/ps2_control.h)
 python3 tools/perf_report.py logs/perf_*.csv                  # a performance recording (Advanced > Record performance)

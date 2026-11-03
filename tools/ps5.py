@@ -53,6 +53,9 @@ GENERATED = os.path.join(tc.ROOT, "generated", "ee", "register_functions.cpp")
 # ps5-plume-triangle, pinned (tools/ps5.py setup): the commit this port was written and link-checked against
 TRIANGLE_REPO = "https://github.com/Nazky/ps5-plume-triangle"
 TRIANGLE_COMMIT = "d54d9adb084bc038023ec4d8bbd8a4ba23f5880d"
+# the whole build machine's packages, for the hints (Debian / Ubuntu, Fedora)
+APT_PACKAGES = "python3 git make wget unzip xz-utils rsync meson ninja-build glslang-tools bison flex gcc g++ curl clang-20 lld-20 llvm-20 cmake python3-mako python3-ply python3-yaml"
+DNF_PACKAGES = "python3 git make wget unzip xz tar rsync meson ninja-build glslang bison flex gcc gcc-c++ curl clang lld llvm llvm-devel cmake python3-mako python3-ply python3-pyyaml"
 # what its `make` needs (its README; the Debian / Ubuntu package for each)
 TRIANGLE_NEEDS = [("git", "git"), ("make", "make"), ("wget", "wget"), ("unzip", "unzip"), ("xz", "xz-utils"),
                   ("rsync", "rsync"), ("meson", "meson"), ("ninja", "ninja-build"), ("glslangValidator", "glslang-tools"),
@@ -110,6 +113,25 @@ def native_tool(triangle):
     return None
 
 
+def llvm_config(clang):
+    """The llvm-config for the PS5 SDK's make (its Makefile.inc takes clang, llvm-ar and ld.lld from `llvm-config
+    --bindir`): LLVM_CONFIG if set, else the one next to `clang` (the LLVM the build checked: Fedora's llvm-devel puts
+    it in /usr/lib64/llvm<N>/bin, Ubuntu's llvm-<N> in /usr/lib/llvm-<N>/bin), else one on the PATH (the SDK's own
+    search: llvm-config-<N>, llvm-config). None when there is none."""
+    if os.environ.get("LLVM_CONFIG"):
+        return os.environ["LLVM_CONFIG"]
+    if clang:
+        for folder in {os.path.dirname(clang), os.path.dirname(os.path.realpath(clang))}:
+            cand = os.path.join(folder, "llvm-config")
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                return cand
+    for name in ["llvm-config-%d" % v for v in range(30, 14, -1)] + ["llvm-config"]:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
 def ps5_clang(env):
     clang, clangxx = shutil.which("clang", path=env.get("PATH")), shutil.which("clang++", path=env.get("PATH"))
     if clang and clangxx and tc.clang_version(clang) >= tc.MIN_CLANG:
@@ -122,15 +144,20 @@ def cmd_setup(args):
     """ps5-plume-triangle at the pinned commit, next to this folder (or --triangle), and its `make` once: the PS5 payload
     SDK fork, RADV, the start-up code, libc.prx and ps5-native-tool (its tools/ scripts download and build them)."""
     if platform.system() != "Linux":
-        tc.fail("the PS5 build runs on Ubuntu 24.04 or WSL 2 (the payload SDK's tools run there)")
+        tc.fail("the PS5 build runs on Linux - Ubuntu 24.04, WSL 2, Fedora 41+ (the payload SDK's tools run there)")
     missing = [(tool, pkg) for tool, pkg in TRIANGLE_NEEDS if not shutil.which(tool)]
     try:
         import mako, ply, yaml  # noqa: F401 (Mesa's code generators; the triangle installs them with pip when missing)
     except ImportError:
         missing.append(("python3 mako / ply / yaml", "python3-mako python3-ply python3-yaml"))
+    clang = shutil.which("clang", path=tc.build_env().get("PATH"))
+    config = llvm_config(clang)
+    if not config:
+        missing.append(("llvm-config (the payload SDK's make asks it where clang is)", "llvm-20"))
     if missing:
         print("[ps5] missing: " + ", ".join(t for t, _ in missing))
-        print("[ps5] on Debian / Ubuntu: sudo apt install " + " ".join(sorted({p for _, p in missing})))
+        print("[ps5] the build machine's packages:\n    Debian / Ubuntu: sudo apt install %s\n    Fedora: sudo dnf install %s"
+              % (APT_PACKAGES, DNF_PACKAGES))
         tc.fail("install the packages above, then run setup again", "ps5_setup_packages")
     dest = os.path.abspath(args.triangle or os.path.join(os.path.dirname(tc.ROOT), "ps5-plume-triangle"))
     if not os.path.isdir(os.path.join(dest, ".git")):
@@ -150,9 +177,10 @@ def cmd_setup(args):
         print("[ps5] ok: %s (not built: --clone-only)" % dest)
         return
     env = dict(os.environ)
-    clang = shutil.which("clang", path=tc.build_env().get("PATH"))
     if clang:
         env.setdefault("PS5_CLANG", clang)  # (its scripts take clang from PATH otherwise)
+    env["LLVM_CONFIG"] = config  # the SDK's make: the same LLVM as the build's clang
+    print("[ps5] LLVM for the payload SDK: %s" % config)
     print("[ps5] building ps5-plume-triangle (make: the SDK, RADV, the start-up code; the first time takes a while)")
     log = os.path.join(PS5_BUILD, "triangle.log")
     os.makedirs(PS5_BUILD, exist_ok=True)
@@ -173,17 +201,17 @@ def check(args, quiet=False):
             print("[ps5] %-4s %-28s %s" % ("ok" if ok else "--", what, detail))
 
     if platform.system() != "Linux":
-        problems.append("the PS5 build runs on Ubuntu 24.04 or WSL 2: the payload SDK's tools run there")
+        problems.append("the PS5 build runs on Linux (Ubuntu 24.04, WSL 2, Fedora 41+): the payload SDK's tools run there")
     clang, clangxx = ps5_clang(env)
-    line(bool(clang), "clang %d+" % tc.MIN_CLANG, clang or "not found: sudo apt install clang-20 lld-20")
+    line(bool(clang), "clang %d+" % tc.MIN_CLANG, clang or "not found: sudo apt install clang-20 lld-20 llvm-20 / sudo dnf install clang lld llvm-devel")
     if not clang:
         problems.append("clang %d or newer (sudo apt install clang-20 lld-20)" % tc.MIN_CLANG)
     lld = shutil.which("ld.lld", path=env.get("PATH"))
-    line(bool(lld), "ld.lld", lld or "not found: the LLVM linker (sudo apt install lld-20)")
+    line(bool(lld), "ld.lld", lld or "not found: the LLVM linker (sudo apt install lld-20 / sudo dnf install lld)")
     if not lld:
         problems.append("ld.lld (lld)")
     glslang = shutil.which("glslangValidator", path=env.get("PATH"))
-    line(bool(glslang), "glslang", glslang or "not found: sudo apt install glslang-tools")
+    line(bool(glslang), "glslang", glslang or "not found: sudo apt install glslang-tools / sudo dnf install glslang")
     if not glslang:
         problems.append("glslangValidator (glslang-tools)")
     have_generated = os.path.isfile(GENERATED)

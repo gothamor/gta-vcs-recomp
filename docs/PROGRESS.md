@@ -684,6 +684,11 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
       chains, VU0 natives, CollectParameters, inflate, Vulkan state and constants only on change, depth as dynamic
       state, no shader depth); not what was stripped on 2026-10-31 (the list: DECISIONS.md). Checked:
       compile-check links, padtest 71 / 71 (9 new: free aim's hand-over), the recompiler builds; VERSION 0.3.0.
+- [x] Fedora as a build machine (2026-11-03, the user's first setup on Fedora, LLVM 22): `ps5.py setup` stopped in the
+      payload SDK's make (`--bindir: No such file or directory`, then `/clang`): its Makefile.inc takes clang's folder
+      from `llvm-config --bindir`, and Fedora has llvm-config only with llvm-devel, in /usr/lib64/llvm<N>/bin. setup
+      now passes the llvm-config next to the build's clang as `LLVM_CONFIG` (else one on the PATH; none: the package
+      lines for Ubuntu and Fedora), and README / PS5-README / PS5.md list both distributions' packages. VERSION 0.3.1.
 - [ ] The first run on a console (docs/PS5.md's checklist); FFmpeg for the PS5 built and the movies checked; frame
       rate there; ThinLTO; 120 Hz / VRR; DualSense extras; the control channel on the LAN; the debug switches below from a
       file in the app's folder (a homebrew app gets no environment).

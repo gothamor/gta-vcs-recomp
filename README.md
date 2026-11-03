@@ -15,8 +15,10 @@ checklist and how it works; [docs/PROGRESS.md](docs/PROGRESS.md) the state of ea
 - A jailbroken PS5 that runs homebrew apps from `/data/homebrew/`, and a payload loader with an FTP server (etaHEN,
   ftpsrv) or a USB drive to copy the app over.
 - Your own disc image of GTA: Vice City Stories, **USA release (SLUS-21590)**, as an `.iso`.
-- A build machine: Ubuntu 24.04 or WSL 2 (the PS5 SDK's tools run there), with Python 3, Git, clang 19+ and lld,
-  CMake 3.21+, Ninja and glslang (`sudo apt install python3 git clang-20 lld-20 cmake ninja-build glslang-tools`).
+- A build machine: Ubuntu 24.04, WSL 2 or Fedora 41+ (the PS5 SDK's tools run there), with Python 3, Git, clang 19+,
+  lld and llvm-config, CMake 3.21+, Ninja, glslang, and Meson / bison / flex for the console's Vulkan driver:
+  - Ubuntu / WSL 2: `sudo apt install python3 git make wget unzip xz-utils rsync meson ninja-build glslang-tools bison flex gcc g++ curl clang-20 lld-20 llvm-20 cmake python3-mako python3-ply python3-yaml`
+  - Fedora: `sudo dnf install python3 git make wget unzip xz tar rsync meson ninja-build glslang bison flex gcc gcc-c++ curl clang lld llvm llvm-devel cmake python3-mako python3-ply python3-pyyaml`
 
 ## Build
 
