@@ -248,6 +248,41 @@ def mat_apply(m, v, translate=True):
     return tuple(v[0] * r[j] + v[1] * r[3 + j] + v[2] * r[6 + j] + (p[j] if translate else 0.0) for j in range(3))
 
 
+# Where VCS holds each weapon against VC (tools/weaponfit.py, game-internals.md 9g): VCS's weapon models are mostly VC's,
+# each moved ~5-8 cm along the barrel and turned 2-30 degrees in the hand (VCS's animations hold them there). A VC weapon
+# mod sits where VC's own does: its parts go through the weapon's matrix (RW's row vectors) to sit where VCS's does.
+WEAPON_PLACES = {
+    "brassknuckle": ((0.9813, 0.17595, -0.07807, -0.17236, 0.98373, 0.0506, 0.0857, -0.03619, 0.99566), (0.044, -0.0101, 0.0293)),
+    "golfclub": ((0.93319, -0.14079, -0.33066, 0.10191, 0.98597, -0.13219, 0.34463, 0.08966, 0.93445), (0.0623, 0.0027, 0.0958)),
+    "nitestick": ((-0.85385, -0.51806, 0.05049, 0.51697, -0.85534, -0.0337, 0.06064, -0.00267, 0.99816), (0.179, 0.1029, 0.1433)),
+    "knifecur": ((-0.95642, -0.05523, 0.28671, 0.06682, -0.99729, 0.03079, 0.28424, 0.0486, 0.95752), (0.209, 0.072, 0.0123)),
+    "bat": ((0.94768, -0.04479, -0.31607, -0.0009, 0.98973, -0.14296, 0.31923, 0.13577, 0.9379), (0.0726, -0.0044, 0.1301)),
+    "machete": ((0.93837, 0.05883, -0.34059, -0.0713, 0.99716, -0.0242, 0.3382, 0.047, 0.9399), (0.0559, 0.0045, 0.0482)),
+    "katana": ((0.9437, -0.10628, -0.31325, 0.06772, 0.98899, -0.13155, 0.32378, 0.10293, 0.94052), (0.0603, 0.0103, 0.1143)),
+    "chnsaw": ((0.9426, 0.04396, -0.331, -0.052, 0.99853, -0.01548, 0.32984, 0.03181, 0.9435), (0.0798, -0.0177, 0.1003)),
+    "grenade": ((0.99613, 0.04887, 0.07307, -0.05643, 0.99285, 0.10516, -0.06741, -0.10888, 0.99177), (0.0735, -0.0053, 0.036)),
+    "teargas": ((0.8495, 0.47256, -0.23461, -0.46982, 0.87989, 0.07114, 0.24005, 0.04979, 0.96948), (0.0884, -0.0268, 0.0339)),
+    "molotov": ((0.9901, -0.05241, -0.13024, 0.03373, 0.98934, -0.14169, 0.13628, 0.1359, 0.9813), (0.074, 0.002, 0.1622)),
+    "beretta": ((0.99806, -0.03646, 0.05054, 0.03706, 0.99925, -0.01098, -0.0501, 0.01283, 0.99866), (0.0659, 0.0022, 0.0121)),
+    "python": ((0.99123, 0.09083, 0.09594, -0.09474, 0.99481, 0.03702, -0.09208, -0.04578, 0.9947), (0.0523, -0.0084, 0.0107)),
+    "ak47": ((0.99194, -0.01218, 0.12616, 0.00537, 0.99852, 0.05417, -0.12663, -0.05306, 0.99053), (0.1082, -0.0045, 0.0099)),
+    "chromegun": ((0.99905, 0.0, 0.04362, -0.00076, 0.99985, 0.01744, -0.04361, -0.01745, 0.9989), (0.0695, -0.0106, -0.004)),
+    "shotgspa": ((0.99863, -0.00223, 0.0523, -0.00348, 0.99407, 0.10868, -0.05224, -0.10871, 0.9927), (0.0571, -0.009, -0.0044)),
+    "buddyshot": ((0.99976, 0.00109, -0.02181, 0.00043, 0.99757, 0.06974, 0.02184, -0.06973, 0.99733), (0.0942, -0.004, 0.0213)),
+    "m16": ((0.98729, -0.03168, 0.15572, 0.02014, 0.99697, 0.07519, -0.15763, -0.0711, 0.98493), (0.0565, 0.0167, -0.0116)),
+    "skorpion": ((0.99528, 0.06955, 0.06769, -0.06859, 0.99751, -0.0163, -0.06866, 0.01158, 0.99757), (0.0595, -0.0165, 0.0465)),
+    "uzi": ((0.98588, 0.13665, 0.09683, -0.13288, 0.99014, -0.0444, -0.10195, 0.03091, 0.99431), (0.0565, 0.0002, 0.0203)),
+    "ingramsl": ((0.98463, 0.0999, 0.14327, -0.09211, 0.99394, -0.05998, -0.1484, 0.04586, 0.98786), (0.0406, -0.0227, 0.0139)),
+    "mplng": ((0.98335, 0.17483, 0.04963, -0.17475, 0.98459, -0.00613, -0.04994, -0.00265, 0.99875), (0.0551, -0.0073, -0.004)),
+    "sniper": ((0.99423, -0.01176, 0.10664, 0.01533, 0.99935, -0.03272, -0.10619, 0.03417, 0.99376), (0.1348, -0.0136, 0.0091)),
+    "laser": ((0.97627, 0.00777, 0.21643, -0.00612, 0.99995, -0.00831, -0.21648, 0.00679, 0.97626), (0.1027, 0.0066, -0.0451)),
+    "rocketla": ((0.98851, 0.04751, 0.14349, -0.02756, 0.99005, -0.13796, -0.14861, 0.13242, 0.97999), (0.0355, -0.0303, -0.0046)),
+    "flame": ((0.93937, 0.07882, -0.33373, -0.12057, 0.987, -0.10625, 0.32102, 0.14005, 0.93666), (0.0616, -0.0239, 0.0928)),
+    "m249": ((0.99726, -0.05204, 0.05249, 0.04857, 0.99668, 0.06531, -0.05571, -0.06258, 0.99648), (0.0376, 0.0159, -0.0141)),
+    "minigun": ((0.85471, 0.09521, -0.51031, -0.13979, 0.98894, -0.04962, 0.49994, 0.11374, 0.85856), (0.0355, -0.0364, 0.1903)),
+    "minigun2": ((0.99986, 0.00471, 0.01636, -0.01302, 0.8302, 0.55731, -0.01096, -0.55744, 0.83015), (-0.0698, 0.0021, 0.0011)),
+}
+
 # VCS helicopters' still rotors -> VC's rotors. The moving ones stay VCS's: a blur disc (texture `rotor`) the game fades
 # in with the rotor's speed - VC has none (its blades simply turn); the .xtx keeps the textures it needs (txd2xtx --keep).
 ALIASES = {"static_rotor": "toprotor", "static_rotor2": "rearrotor"}
@@ -351,7 +386,9 @@ PRIMARY, SECONDARY = (0x3C, 0xFF, 0x00), (0xFF, 0x00, 0xAF)  # VC's paint colour
 PAINT_LISTS = ((0x2C, 30), (0xA4, 25))
 # VC car names VCS shortened (its names are 8 letters at most): a VC mod's `police.dff` is VCS's `policem`
 VC_NAMES = {"boxville": "boxvil", "enforcer": "enforce", "fbiranch": "fbiran", "police": "policem", "sabretur": "sabretb",
-            "washing": "washin"}
+            "washing": "washin",
+            # and VC's weapons VCS has under its own names
+            "colt45": "beretta", "m4": "m16", "tec9": "skorpion", "mp5lng": "mplng", "m60": "m249", "ruger": "ak47"}
 # VC's shared vehicle textures (generic.txd) -> VCS's own (their layouts differ: the closest, not the same picture)
 VC_GENERIC = {"vehiclegeneric256": "xv_vehiclegeneric_sl", "vehiclescratch64": "xv_scratch_sl",
               "vehiclegrunge256": "xv_vehiclegrunge_sl", "vehiclesteering": "xv_vehiclesteering_sl"}
@@ -410,9 +447,11 @@ def build_geometry(m, template_geom, verts, normals, uvs, groups, material_ptrs)
     return block, [0x0C] + [list_at + 4 * i for i in range(len(material_ptrs))]
 
 
-def convert(dff_path, template_path, out_path, txd_path=None):
-    """The .dff's parts onto the template's (a VCS vehicle .mdl); with the car's .txd, materials naming a texture it
-    lacks map to VCS's shared ones (VC_GENERIC) or lose their texture."""
+def convert(dff_path, template_path, out_path, txd_path=None, weapon=None):
+    """The .dff's parts onto the template's: a VCS vehicle .mdl, or a model of one element (a weapon); with the .txd,
+    materials naming a texture it lacks map to VCS's shared ones (VC_GENERIC) or lose their texture. `weapon`: the VCS
+    weapon replaced - its parts move from VC's place in the hand to VCS's (WEAPON_PLACES), and its HUD icon (the texture
+    of its name) stays VCS's: VC's texture of that name is used as `<name>_pc`, as txd2xtx --preserve writes it."""
     m = mdlinfo.Mdl(open(template_path, "rb").read())
     dff = read_dff(open(dff_path, "rb").read())
     textures, texture_names = None, {}
@@ -425,11 +464,16 @@ def convert(dff_path, template_path, out_path, txd_path=None):
     group = m.ptr(0x20)
     data = bytearray(m.d[:m.data_size])
     relocs = set(r for r in m.relocs if r < m.data_size)
+    # a vehicle's data starts with its element group (object type 2); a weapon's (or any simple model's) with its one
+    # element (type 1): no paint lists, no extras, every VC part into that element
+    single = m.d[group] == 1
+    weapon = (weapon or "").lower()
+    place = WEAPON_PLACES.get(weapon) if single else None  # a weapon: from VC's place in the hand to VCS's
 
     root = m.ptr(group + 4)
     extra_list, extra_count = m.ptr(0x28), m.u32(0x24)
-    extra_elements = [m.ptr(extra_list + 4 * k) for k in range(extra_count)] if extra_list and extra_count <= 64 else []
-    group_elements = m.elements(group)
+    extra_elements = [m.ptr(extra_list + 4 * k) for k in range(extra_count)] if extra_list and extra_count <= 64 and not single else []
+    group_elements = [group] if single else m.elements(group)
     elements = group_elements + [e for e in extra_elements if e and e not in group_elements]
 
     def rr_vc(i):
@@ -475,14 +519,14 @@ def convert(dff_path, template_path, out_path, txd_path=None):
 
     # the template's paint: its first-colour materials lend their effects (matfx: the reflection) to the new ones
     paint_fx = 0
-    for k in range(PAINT_LISTS[0][1]):
+    for k in range(0 if single else PAINT_LISTS[0][1]):
         mat = m.ptr(PAINT_LISTS[0][0] + 4 * k)
         if not mat:
             break
         if mat + 12 in m.relocs:
             paint_fx = m.u32(mat + 12)
             break
-    for at, count in PAINT_LISTS:  # emptied: the new materials go in
+    for at, count in () if single else PAINT_LISTS:  # emptied: the new materials go in
         for k in range(count):
             struct.pack_into("<I", data, at + 4 * k, 0)
             relocs.discard(at + 4 * k)
@@ -500,10 +544,12 @@ def convert(dff_path, template_path, out_path, txd_path=None):
     def material(mat):
         """A new material for a VC one: {texture name, colour, 2, effects}; paint goes into the paint lists."""
         colour = tuple(mat["colour"][:3])
-        kind = 0 if colour == PRIMARY else 1 if colour == SECONDARY else None
+        kind = None if single else 0 if colour == PRIMARY else 1 if colour == SECONDARY else None
         tex = mat["texture"].lower()
         if textures is not None and tex and tex not in textures:
             tex = VC_GENERIC.get(tex, "")  # not the car's own: VCS's shared one, or none (drawn in its colour)
+        if weapon and tex == weapon:  # VCS's texture of that name stays (a weapon's HUD icon): VC's is renamed
+            tex = (texture_names.get(tex, tex) + "_pc")[:31]
         rgba = (255, 255, 255, 255) if kind is not None else tuple(mat["colour"])
         name_at = string(texture_names.get(tex, tex)) if tex else 0
         data.extend(b"\0" * (-len(data) % 4))
@@ -574,7 +620,7 @@ def convert(dff_path, template_path, out_path, txd_path=None):
                 k = take(name)
                 if k is not None:
                     assign[e] = [k]
-    host = next((e for name, els in by_node if name in ("chassis_hi", "boat_hi") for e in els), None)
+    host = group if single else next((e for name, els in by_node if name in ("chassis_hi", "boat_hi") for e in els), None)
     merged, dropped = [], []
     for k, n in enumerate(names_of):
         if k in used:
@@ -617,6 +663,8 @@ def convert(dff_path, template_path, out_path, txd_path=None):
         for k in parts:
             g = dff["geometries"][atoms[k]["geometry"]]
             to = mat_mul(rr_vc(atoms[k]["frame"]), to_node)  # the part's frame -> the element's node
+            if place:
+                to = mat_mul(to, place)
             base = len(verts)
             verts += [mat_apply(to, v) for v in g["verts"]]
             normals += [mat_apply(to, n, False) for n in g["normals"]] if g["normals"] else [(0.0, 0.0, 1.0)] * len(g["verts"])
@@ -644,31 +692,56 @@ def convert(dff_path, template_path, out_path, txd_path=None):
         put(e, verts, normals if has_normals else None, uvs, groups, mats)
         replaced.append(m.cstr(m.ptr(node + 0xA8)) + "<" + "+".join(names_of[k] for k in parts))
 
-    # The file's tail moves as a whole: the global table (G .. R), the relocation table (R .. T) and the strings after
-    # it (T .. F: texture names, read at load, past the data the game keeps). Pointers into it and relocation entries in
-    # it shift with it.
-    G, R = m.global_tab, m.reloc_tab
-    T, F = R + 4 * m.num_relocs, m.file_size
+    # The file's tail (past the data: the global table, the relocation table and the strings - texture names, read at
+    # load, past the data the game keeps) is written anew as: the global table, the relocation table, the strings in
+    # their order. A vehicle's tail is already in that order (G = the data's end, R, then the strings); a weapon's has
+    # the relocation table first, the global table after it and strings on both sides. Pointers into it and relocation
+    # entries in it move with it.
+    G, R, F, D = m.global_tab, m.reloc_tab, m.file_size, m.data_size
+    R_end = R + 4 * m.num_relocs
+    G_end = R if G < R else G
+    if G >= R:  # the global table's end: its entries are pointers (relocated)
+        while G_end in m.relocs and G_end < F:
+            G_end += 4
+    others, at = [], D
+    for a, b in sorted(((G, G_end), (R, R_end))):
+        if a > at:
+            others.append((at, a))
+        at = max(at, b)
+    if at < F:
+        others.append((at, F))
     data_size = len(data)
-    shift_g = data_size - G  # the global table's new place
-    relocs.update(r + shift_g for r in m.relocs if G <= r < R)
-    tail_at = data_size + (R - G) + 4 * len(relocs)
-    shift_t = tail_at - T
+    relocs.update(r - G + data_size for r in m.relocs if G <= r < G_end)
+    tail_at = data_size + (G_end - G) + 4 * len(relocs)
+    place, pos = [], tail_at
+    for a, b in others:
+        place.append((a, b, pos))
+        pos += b - a
+
+    def moved_to(v):
+        if G <= v < G_end:
+            return v - G + data_size
+        for a, b, p in place:
+            if a <= v < b:
+                return v - a + p
+        return None
+
     for r in m.relocs:  # the template's own pointers into the tail (new geometry's pointers are already final)
-        if r < m.data_size and T <= m.u32(r) < F and m.u32(r) == struct.unpack_from("<I", data, r)[0]:
-            struct.pack_into("<I", data, r, m.u32(r) + shift_t)
-    gtab = bytearray(m.d[G:R])
-    for r in m.relocs:  # the global table's entries point into the data: unchanged; any into the tail: shifted
-        if G <= r < R:
+        if r < D and D <= m.u32(r) < F and m.u32(r) == struct.unpack_from("<I", data, r)[0] and moved_to(m.u32(r)) is not None:
+            struct.pack_into("<I", data, r, moved_to(m.u32(r)))
+    gtab = bytearray(m.d[G:G_end])
+    for r in m.relocs:  # the global table's entries point into the data: unchanged; any into the tail: moved
+        if G <= r < G_end:
             v = struct.unpack_from("<I", gtab, r - G)[0]
-            if v >= T:
-                struct.pack_into("<I", gtab, r - G, v + shift_t)
+            if D <= v < F and moved_to(v) is not None:
+                struct.pack_into("<I", gtab, r - G, moved_to(v))
     data += gtab
     reloc_tab = len(data)
     rel = sorted(relocs)
     data += struct.pack("<%dI" % len(rel), *rel)
     assert len(data) == tail_at
-    data += m.d[T:F]
+    for a, b in others:
+        data += m.d[a:b]
     struct.pack_into("<7I2H", data, 0, m.ident, m.shrink, len(data), data_size, reloc_tab, len(rel), data_size,
                      m.num_classes, m.num_funcs)
     open(out_path, "wb").write(bytes(data))
@@ -682,8 +755,9 @@ def main():
     args = sys.argv[1:]
     if len(args) >= 3 and args[0] == "convert":
         txd = args[args.index("--txd") + 1] if "--txd" in args else None
-        pos = [a for i, a in enumerate(args) if a != "--txd" and (i == 0 or args[i - 1] != "--txd")]
-        convert(pos[1], pos[2], pos[3] if len(pos) > 3 else os.path.splitext(os.path.basename(pos[2]))[0] + ".mdl", txd)
+        weapon = args[args.index("--weapon") + 1] if "--weapon" in args else None
+        pos = [a for i, a in enumerate(args) if a not in ("--txd", "--weapon") and (i == 0 or args[i - 1] not in ("--txd", "--weapon"))]
+        convert(pos[1], pos[2], pos[3] if len(pos) > 3 else os.path.splitext(os.path.basename(pos[2]))[0] + ".mdl", txd, weapon)
         return 0
     if args[:1] == ["--self-test"]:
         import toolchain as tc

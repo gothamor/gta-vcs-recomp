@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PC VC texture dictionary (.txd) -> VCS texture dictionary (`.xtx`, the game's `tex` resource), FORK.md T9.
 
-    python tools/txd2xtx.py convert IN.txd OUT.xtx [--max 128] [--only name,name] [--keep VCS.xtx]
+    python tools/txd2xtx.py convert IN.txd OUT.xtx [--max 128] [--only name,name] [--keep VCS.xtx] [--preserve NAME]
     python tools/txd2xtx.py info FILE.xtx [--png DIR]      a VCS texture dictionary: its textures (PNG each with --png)
     python tools/txd2xtx.py --self-test
 
@@ -139,6 +139,16 @@ def read_pc_txd(data):
             raise ValueError("%s: raster format 0x%x not handled" % (name, raster))
         out.append({"name": name, "width": w, "height": h, "rows": rows})
     return out
+
+
+def power_of_two(rows):
+    """A texture whose sides are not powers of two (VCS's rasters are: their flags hold log2 of each) resampled, nearest,
+    to the powers of two below them (a weapon mod's 1048 x 1024)."""
+    h, w = len(rows), len(rows[0])
+    tw, th = 1 << (w.bit_length() - 1), 1 << (h.bit_length() - 1)
+    if (tw, th) == (w, h):
+        return rows
+    return [[rows[y * h // th][x * w // tw] for x in range(tw)] for y in range(th)]
 
 
 def halve(rows):
@@ -314,17 +324,21 @@ def png(path, rows):
                 chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
-def convert(txd_path, out_path, max_size=128, only=None, keep=None):
+def convert(txd_path, out_path, max_size=128, only=None, keep=None, preserve=None):
+    """`preserve`: a texture name VCS's dictionary keeps (a weapon's HUD icon): the .txd's texture of that name is
+    written as `<name>_pc` (dff2mdl.convert's `preserve` renames its materials the same way)."""
     textures = []
+    preserve = (preserve or "").lower()
     for t in read_pc_txd(open(txd_path, "rb").read()):
         if only is not None and t["name"].lower() not in only:
             continue
-        rows = t["rows"]
+        rows = power_of_two(t["rows"])
         while len(rows[0]) > max_size or len(rows) > max_size:
             rows = halve(rows)
         depth = 4 if len({p for row in rows for p in row}) <= 16 else 8  # 4 bit only when nothing is lost
         palette, indices = quantise(rows, 1 << depth)
-        textures.append({"name": t["name"], "width": len(rows[0]), "height": len(rows), "depth": depth,
+        name = (t["name"] + "_pc")[:31] if preserve and t["name"].lower() == preserve else t["name"]
+        textures.append({"name": name, "width": len(rows[0]), "height": len(rows), "depth": depth,
                          "palette": palette, "indices": indices})
     if keep:  # the VCS dictionary's own textures the .txd has no name for, after them
         have = {t["name"].lower() for t in textures}
@@ -366,7 +380,8 @@ def main():
         max_size = int(args[args.index("--max") + 1]) if "--max" in args else 128
         only = set(args[args.index("--only") + 1].lower().split(",")) if "--only" in args else None
         keep = args[args.index("--keep") + 1] if "--keep" in args else None
-        convert(args[1], args[2], max_size, only, keep)
+        preserve = args[args.index("--preserve") + 1] if "--preserve" in args else None
+        convert(args[1], args[2], max_size, only, keep, preserve)
         return 0
     if len(args) >= 2 and args[0] == "info":
         texs = read_xtx(open(args[1], "rb").read())

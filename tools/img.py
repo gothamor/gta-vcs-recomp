@@ -9,7 +9,8 @@
 The archive has no directory on the disc: the game keeps one in GAME.DTZ - the streaming info, one 0x18-byte record per
 resource (+0x10 offset, +0x14 size, in sectors). `table` reads it from the running game into build/img/streaming.json;
 the model infos give each model's key (~CRC32 of its upper-case name), and a vehicle's text key names it when its key
-matches (`admiral`). Names: a known name, `#<index>`, or wildcards over the known names (`a*`).
+matches (`admiral`); so does a texture dictionary's name (a weapon's model and dictionary share it: `uzi`). Names: a
+known name, `#<index>`, or wildcards over the known names (`a*`).
 
 Extracted entries are the game's data: they stay on this PC (build/ or a mod folder of yours), never in git. A file
 named like an entry in a mod folder (`modloader/<mod>/admiral.mdl`, `#1234.bin`) replaces that entry in the game.
@@ -101,7 +102,13 @@ def time_wait(g):
 def load_table():
     if not os.path.isfile(TABLE):
         raise SystemExit("no table yet: python tools/img.py table")
-    return json.load(open(TABLE))
+    t = json.load(open(TABLE))
+    # a model named like a texture dictionary (its key is that name's): weapons, many objects
+    by_key = {"%08x" % key_of(e["name"]): e["name"] for e in t["entries"] if e.get("kind") == "txd"}
+    for e in t["entries"]:
+        if "name" not in e and e.get("key") in by_key:
+            e["name"] = by_key[e["key"]]
+    return t
 
 
 def pick(entries, names):

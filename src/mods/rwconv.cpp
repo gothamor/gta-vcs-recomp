@@ -402,6 +402,45 @@ namespace vcs::rwconv
             return out;
         }
 
+        // Where VCS holds each weapon against VC (tools/weaponfit.py, dff2mdl.WEAPON_PLACES): VCS's weapon models are
+        // mostly VC's, moved along the barrel and turned in the hand; a VC weapon mod's parts go through its matrix from
+        // VC's place to VCS's
+        const std::map<std::string, Mat> &weaponPlaces()
+        {
+            static const std::map<std::string, Mat> kWeaponPlaces = {
+                {"brassknuckle", {{0.9813, 0.17595, -0.07807, -0.17236, 0.98373, 0.0506, 0.0857, -0.03619, 0.99566}, {0.044, -0.0101, 0.0293}}},
+                {"golfclub", {{0.93319, -0.14079, -0.33066, 0.10191, 0.98597, -0.13219, 0.34463, 0.08966, 0.93445}, {0.0623, 0.0027, 0.0958}}},
+                {"nitestick", {{-0.85385, -0.51806, 0.05049, 0.51697, -0.85534, -0.0337, 0.06064, -0.00267, 0.99816}, {0.179, 0.1029, 0.1433}}},
+                {"knifecur", {{-0.95642, -0.05523, 0.28671, 0.06682, -0.99729, 0.03079, 0.28424, 0.0486, 0.95752}, {0.209, 0.072, 0.0123}}},
+                {"bat", {{0.94768, -0.04479, -0.31607, -0.0009, 0.98973, -0.14296, 0.31923, 0.13577, 0.9379}, {0.0726, -0.0044, 0.1301}}},
+                {"machete", {{0.93837, 0.05883, -0.34059, -0.0713, 0.99716, -0.0242, 0.3382, 0.047, 0.9399}, {0.0559, 0.0045, 0.0482}}},
+                {"katana", {{0.9437, -0.10628, -0.31325, 0.06772, 0.98899, -0.13155, 0.32378, 0.10293, 0.94052}, {0.0603, 0.0103, 0.1143}}},
+                {"chnsaw", {{0.9426, 0.04396, -0.331, -0.052, 0.99853, -0.01548, 0.32984, 0.03181, 0.9435}, {0.0798, -0.0177, 0.1003}}},
+                {"grenade", {{0.99613, 0.04887, 0.07307, -0.05643, 0.99285, 0.10516, -0.06741, -0.10888, 0.99177}, {0.0735, -0.0053, 0.036}}},
+                {"teargas", {{0.8495, 0.47256, -0.23461, -0.46982, 0.87989, 0.07114, 0.24005, 0.04979, 0.96948}, {0.0884, -0.0268, 0.0339}}},
+                {"molotov", {{0.9901, -0.05241, -0.13024, 0.03373, 0.98934, -0.14169, 0.13628, 0.1359, 0.9813}, {0.074, 0.002, 0.1622}}},
+                {"beretta", {{0.99806, -0.03646, 0.05054, 0.03706, 0.99925, -0.01098, -0.0501, 0.01283, 0.99866}, {0.0659, 0.0022, 0.0121}}},
+                {"python", {{0.99123, 0.09083, 0.09594, -0.09474, 0.99481, 0.03702, -0.09208, -0.04578, 0.9947}, {0.0523, -0.0084, 0.0107}}},
+                {"ak47", {{0.99194, -0.01218, 0.12616, 0.00537, 0.99852, 0.05417, -0.12663, -0.05306, 0.99053}, {0.1082, -0.0045, 0.0099}}},
+                {"chromegun", {{0.99905, 0.0, 0.04362, -0.00076, 0.99985, 0.01744, -0.04361, -0.01745, 0.9989}, {0.0695, -0.0106, -0.004}}},
+                {"shotgspa", {{0.99863, -0.00223, 0.0523, -0.00348, 0.99407, 0.10868, -0.05224, -0.10871, 0.9927}, {0.0571, -0.009, -0.0044}}},
+                {"buddyshot", {{0.99976, 0.00109, -0.02181, 0.00043, 0.99757, 0.06974, 0.02184, -0.06973, 0.99733}, {0.0942, -0.004, 0.0213}}},
+                {"m16", {{0.98729, -0.03168, 0.15572, 0.02014, 0.99697, 0.07519, -0.15763, -0.0711, 0.98493}, {0.0565, 0.0167, -0.0116}}},
+                {"skorpion", {{0.99528, 0.06955, 0.06769, -0.06859, 0.99751, -0.0163, -0.06866, 0.01158, 0.99757}, {0.0595, -0.0165, 0.0465}}},
+                {"uzi", {{0.98588, 0.13665, 0.09683, -0.13288, 0.99014, -0.0444, -0.10195, 0.03091, 0.99431}, {0.0565, 0.0002, 0.0203}}},
+                {"ingramsl", {{0.98463, 0.0999, 0.14327, -0.09211, 0.99394, -0.05998, -0.1484, 0.04586, 0.98786}, {0.0406, -0.0227, 0.0139}}},
+                {"mplng", {{0.98335, 0.17483, 0.04963, -0.17475, 0.98459, -0.00613, -0.04994, -0.00265, 0.99875}, {0.0551, -0.0073, -0.004}}},
+                {"sniper", {{0.99423, -0.01176, 0.10664, 0.01533, 0.99935, -0.03272, -0.10619, 0.03417, 0.99376}, {0.1348, -0.0136, 0.0091}}},
+                {"laser", {{0.97627, 0.00777, 0.21643, -0.00612, 0.99995, -0.00831, -0.21648, 0.00679, 0.97626}, {0.1027, 0.0066, -0.0451}}},
+                {"rocketla", {{0.98851, 0.04751, 0.14349, -0.02756, 0.99005, -0.13796, -0.14861, 0.13242, 0.97999}, {0.0355, -0.0303, -0.0046}}},
+                {"flame", {{0.93937, 0.07882, -0.33373, -0.12057, 0.987, -0.10625, 0.32102, 0.14005, 0.93666}, {0.0616, -0.0239, 0.0928}}},
+                {"m249", {{0.99726, -0.05204, 0.05249, 0.04857, 0.99668, 0.06531, -0.05571, -0.06258, 0.99648}, {0.0376, 0.0159, -0.0141}}},
+                {"minigun", {{0.85471, 0.09521, -0.51031, -0.13979, 0.98894, -0.04962, 0.49994, 0.11374, 0.85856}, {0.0355, -0.0364, 0.1903}}},
+                {"minigun2", {{0.99986, 0.00471, 0.01636, -0.01302, 0.8302, 0.55731, -0.01096, -0.55744, 0.83015}, {-0.0698, 0.0021, 0.0011}}},
+            };
+            return kWeaponPlaces;
+        }
+
         Mat matInv(const Mat &m)
         {
             const double a = m.r[0], b = m.r[1], c = m.r[2], d = m.r[3], e = m.r[4], f = m.r[5], g = m.r[6], h = m.r[7], i = m.r[8];
@@ -636,7 +675,7 @@ namespace vcs::rwconv
                 numRelocs = u32(d, 20), globalTab = u32(d, 24), numClasses = u16(d, 28), numFuncs = u16(d, 30);
                 if (ident != 0x006D646Cu)
                     throw Bad("the template is not an ldm resource");
-                if (dataSize > d.size() || fileSize > d.size() || globalTab > relocTab)
+                if (dataSize > d.size() || fileSize > d.size() || globalTab < dataSize || relocTab < dataSize)
                     throw Bad("the template's header does not fit the file");
                 for (uint32_t i = 0; i < numRelocs; ++i)
                     relocs.insert(u32(d, relocTab + i * 4ull));
@@ -838,7 +877,7 @@ namespace vcs::rwconv
         }
 
         // dff2mdl.convert
-        Bytes convertDff(const Bytes &dffData, const Bytes &templ, const Bytes *txd, std::string &report)
+        Bytes convertDff(const Bytes &dffData, const Bytes &templ, const Bytes *txd, const std::string &weaponName, std::string &report)
         {
             const Mdl m(templ);
             const Dff dff = readDff(dffData);
@@ -864,11 +903,17 @@ namespace vcs::rwconv
                 }
             }
 
+            // a vehicle's data starts with its element group (object type 2); a weapon's (any simple model's) with its one
+            // element (type 1): no paint lists, no extras, every VC part into that element
+            const bool single = u8(templ, group) == 1;
+            const std::string weapon = lower(weaponName);
+            const auto weaponAt = single ? weaponPlaces().find(weapon) : weaponPlaces().end();
+            const Mat *weaponPlace = weaponAt != weaponPlaces().end() ? &weaponAt->second : nullptr; // VC's place -> VCS's
             const uint32_t root = m.ptr(group + 4);
             const uint32_t extraList = m.ptr(0x28), extraCount = u32(templ, 0x24);
-            const std::vector<uint32_t> groupElements = m.elements(group);
+            const std::vector<uint32_t> groupElements = single ? std::vector<uint32_t>{group} : m.elements(group);
             std::vector<uint32_t> elements = groupElements;
-            if (extraList && extraCount <= 64)
+            if (extraList && extraCount <= 64 && !single)
                 for (uint32_t k = 0; k < extraCount; ++k)
                 {
                     const uint32_t e = m.ptr(extraList + 4 * k);
@@ -938,7 +983,7 @@ namespace vcs::rwconv
             // the paint lists: emptied; the new paint materials go in, with the template's paint effects
             constexpr uint32_t kLists[2][2] = {{0x2C, 30}, {0xA4, 25}};
             uint32_t paintFx = 0;
-            for (uint32_t k = 0; k < kLists[0][1]; ++k)
+            for (uint32_t k = 0; k < (single ? 0u : kLists[0][1]); ++k)
             {
                 const uint32_t mat = m.ptr(kLists[0][0] + 4 * k);
                 if (!mat)
@@ -950,7 +995,7 @@ namespace vcs::rwconv
                 }
             }
             for (const auto &list : kLists)
-                for (uint32_t k = 0; k < list[1]; ++k)
+                for (uint32_t k = 0; k < (single ? 0u : list[1]); ++k)
                 {
                     put32(data, list[0] + 4 * k, 0);
                     relocs.erase(list[0] + 4 * k);
@@ -971,12 +1016,17 @@ namespace vcs::rwconv
             auto material = [&](const Material &mat) {
                 const bool primary = mat.rgba[0] == 0x3C && mat.rgba[1] == 0xFF && mat.rgba[2] == 0x00;
                 const bool secondary = mat.rgba[0] == 0xFF && mat.rgba[1] == 0x00 && mat.rgba[2] == 0xAF;
-                const int kind = primary ? 0 : secondary ? 1 : -1;
+                const int kind = single ? -1 : primary ? 0 : secondary ? 1 : -1;
                 std::string tex = lower(mat.texture);
                 if (textures && !tex.empty() && !textures->count(tex))
                 {
                     const auto g = vcGeneric().find(tex);
                     tex = g != vcGeneric().end() ? g->second : std::string();
+                }
+                if (!weapon.empty() && tex == weapon) // VCS's texture of that name stays (a weapon's HUD icon): VC's renamed
+                {
+                    const auto named = textureNames.find(tex);
+                    tex = ((named != textureNames.end() ? named->second : tex) + "_pc").substr(0, 31);
                 }
                 uint32_t nameAt = 0;
                 if (!tex.empty())
@@ -1078,9 +1128,9 @@ namespace vcs::rwconv
                             assign[e] = {k};
                     }
             }
-            uint32_t host = 0;
+            uint32_t host = single ? group : 0;
             for (const auto &[name, els] : byNode)
-                if (name == "chassis_hi" || name == "boat_hi")
+                if (!single && (name == "chassis_hi" || name == "boat_hi"))
                 {
                     host = els[0];
                     break;
@@ -1150,7 +1200,9 @@ namespace vcs::rwconv
                 for (const int k : parts)
                 {
                     const Geometry &g = dff.geometries.at(dff.atomics[k].geometry);
-                    const Mat to = matMul(rrVc(dff.atomics[k].frame), toNode); // the part's frame -> the element's node
+                    Mat to = matMul(rrVc(dff.atomics[k].frame), toNode); // the part's frame -> the element's node
+                    if (weaponPlace)
+                        to = matMul(to, *weaponPlace);
                     const auto base = static_cast<uint32_t>(verts.size());
                     for (const V3 &v : g.verts)
                         verts.push_back(matApply(to, v));
@@ -1198,31 +1250,60 @@ namespace vcs::rwconv
                 replaced.push_back(m.cstr(m.ptr(node + 0xA8)) + "<" + list);
             }
 
-            // the file's tail moves as a whole: global table, relocation table, the strings after it
-            const uint64_t G = m.globalTab, R = m.relocTab, T = R + 4ull * m.numRelocs, F = m.fileSize;
-            if (T > F || F > templ.size())
+            // The file's tail (dff2mdl.convert): written anew as the global table, the relocation table, the strings in
+            // their order - a vehicle's is already so; a weapon's has the relocation table first, strings on both sides.
+            const uint64_t G = m.globalTab, R = m.relocTab, Rend = R + 4ull * m.numRelocs, F = m.fileSize, D = m.dataSize;
+            if (Rend > F || G > F || F > templ.size())
                 throw Bad("the template's tables do not fit the file");
+            uint64_t Gend = G < R ? R : G;
+            if (G >= R) // the global table's end: its entries are pointers (relocated)
+                while (Gend < F && m.relocs.count(static_cast<uint32_t>(Gend)))
+                    Gend += 4;
+            std::vector<std::pair<uint64_t, uint64_t>> cuts = {{G, Gend}, {R, Rend}}, others;
+            std::sort(cuts.begin(), cuts.end());
+            uint64_t at = D;
+            for (const auto &[a, b] : cuts)
+            {
+                if (a > at)
+                    others.push_back({at, a});
+                at = std::max(at, b);
+            }
+            if (at < F)
+                others.push_back({at, F});
             const uint64_t dataSize = data.size();
-            const int64_t shiftG = int64_t(dataSize) - int64_t(G);
             for (const uint32_t r : m.relocs)
-                if (r >= G && r < R)
-                    relocs.insert(static_cast<uint32_t>(int64_t(r) + shiftG));
-            const uint64_t tailAt = dataSize + (R - G) + 4ull * relocs.size();
-            const int64_t shiftT = int64_t(tailAt) - int64_t(T);
+                if (r >= G && r < Gend)
+                    relocs.insert(static_cast<uint32_t>(r - G + dataSize));
+            const uint64_t tailAt = dataSize + (Gend - G) + 4ull * relocs.size();
+            std::vector<uint64_t> placeAt;
+            uint64_t pos = tailAt;
+            for (const auto &[a, b] : others)
+            {
+                placeAt.push_back(pos);
+                pos += b - a;
+            }
+            auto movedTo = [&](uint64_t v) -> int64_t {
+                if (v >= G && v < Gend)
+                    return int64_t(v - G + dataSize);
+                for (size_t k = 0; k < others.size(); ++k)
+                    if (v >= others[k].first && v < others[k].second)
+                        return int64_t(v - others[k].first + placeAt[k]);
+                return -1;
+            };
             for (const uint32_t r : m.relocs) // the template's own pointers into the tail
-                if (r < m.dataSize)
+                if (r < D)
                 {
                     const uint32_t v = u32(templ, r);
-                    if (v >= T && v < F && v == u32(data, r))
-                        put32(data, r, static_cast<uint32_t>(int64_t(v) + shiftT));
+                    if (v >= D && v < F && v == u32(data, r) && movedTo(v) >= 0)
+                        put32(data, r, static_cast<uint32_t>(movedTo(v)));
                 }
-            Bytes gtab(templ.begin() + static_cast<ptrdiff_t>(G), templ.begin() + static_cast<ptrdiff_t>(R));
+            Bytes gtab(templ.begin() + static_cast<ptrdiff_t>(G), templ.begin() + static_cast<ptrdiff_t>(Gend));
             for (const uint32_t r : m.relocs)
-                if (r >= G && r < R)
+                if (r >= G && r < Gend)
                 {
                     const uint32_t v = u32(gtab, r - G);
-                    if (v >= T)
-                        put32(gtab, r - G, static_cast<uint32_t>(int64_t(v) + shiftT));
+                    if (v >= D && v < F && movedTo(v) >= 0)
+                        put32(gtab, r - G, static_cast<uint32_t>(movedTo(v)));
                 }
             data.insert(data.end(), gtab.begin(), gtab.end());
             const auto relocTab = static_cast<uint32_t>(data.size());
@@ -1230,7 +1311,8 @@ namespace vcs::rwconv
                 add32(data, r);
             if (data.size() != tailAt)
                 throw Bad("the tail's place came out wrong");
-            data.insert(data.end(), templ.begin() + static_cast<ptrdiff_t>(T), templ.begin() + static_cast<ptrdiff_t>(F));
+            for (const auto &[a, b] : others)
+                data.insert(data.end(), templ.begin() + static_cast<ptrdiff_t>(a), templ.begin() + static_cast<ptrdiff_t>(b));
             put32(data, 0, m.ident);
             put32(data, 4, m.shrink);
             put32(data, 8, static_cast<uint32_t>(data.size()));
@@ -1454,6 +1536,25 @@ namespace vcs::rwconv
                     throw Bad(t.name + ": a raster format not handled");
                 out.push_back(std::move(t));
             }
+            return out;
+        }
+
+        // sides that are not powers of two (VCS's rasters hold log2 of each) resampled, nearest, to the powers of two below
+        // them (txd2xtx.power_of_two)
+        Image powerOfTwo(const Image &rows)
+        {
+            const size_t h = rows.size(), w = rows[0].size();
+            size_t tw = 1, th = 1;
+            while (tw * 2 <= w)
+                tw *= 2;
+            while (th * 2 <= h)
+                th *= 2;
+            if (tw == w && th == h)
+                return rows;
+            Image out(th, std::vector<RGBA>(tw));
+            for (size_t y = 0; y < th; ++y)
+                for (size_t x = 0; x < tw; ++x)
+                    out[y][x] = rows[y * h / th][x * w / tw];
             return out;
         }
 
@@ -1730,19 +1831,22 @@ namespace vcs::rwconv
     {
         static const std::map<std::string, std::string> kNames = {{"boxville", "boxvil"}, {"enforcer", "enforce"},
                                                                   {"fbiranch", "fbiran"}, {"police", "policem"},
-                                                                  {"sabretur", "sabretb"}, {"washing", "washin"}};
+                                                                  {"sabretur", "sabretb"}, {"washing", "washin"},
+                                                                  // and VC's weapons VCS has under its own names
+                                                                  {"colt45", "beretta"}, {"m4", "m16"}, {"tec9", "skorpion"},
+                                                                  {"mp5lng", "mplng"}, {"m60", "m249"}, {"ruger", "ak47"}};
         const std::string name = lower(vcName);
         const auto it = kNames.find(name);
         return it != kNames.end() ? it->second : name;
     }
 
     bool dffToMdl(const std::vector<uint8_t> &dff, const std::vector<uint8_t> &templateMdl, const std::vector<uint8_t> *txd,
-                  std::vector<uint8_t> &out, std::string &report)
+                  std::vector<uint8_t> &out, std::string &report, const std::string &weapon)
     {
         report.clear();
         try
         {
-            out = convertDff(dff, templateMdl, txd, report);
+            out = convertDff(dff, templateMdl, txd, weapon, report);
             return true;
         }
         catch (const std::exception &e)
@@ -1753,21 +1857,23 @@ namespace vcs::rwconv
     }
 
     bool txdToXtx(const std::vector<uint8_t> &txd, int maxSize, const std::vector<uint8_t> *keep, std::vector<uint8_t> &out,
-                  std::string &report)
+                  std::string &report, const std::string &preserve)
     {
         report.clear();
         try
         {
+            const std::string preserved = lower(preserve);
             std::vector<VcsTexture> textures;
             for (PcTexture &t : readPcTxd(txd))
             {
-                Image rows = std::move(t.rows);
+                Image rows = powerOfTwo(t.rows);
                 while (rows[0].size() > static_cast<size_t>(maxSize) || rows.size() > static_cast<size_t>(maxSize))
                     rows = halve(rows);
                 std::unordered_set<RGBA, RgbaHash> distinct;
                 for (const auto &row : rows)
                     distinct.insert(row.begin(), row.end());
-                VcsTexture v{t.name, rows[0].size(), rows.size(), distinct.size() <= 16 ? 4 : 8, {}, {}, {}};
+                const std::string name = !preserved.empty() && lower(t.name) == preserved ? (t.name + "_pc").substr(0, 31) : t.name;
+                VcsTexture v{name, rows[0].size(), rows.size(), distinct.size() <= 16 ? 4 : 8, {}, {}, {}};
                 quantise(rows, size_t(1) << v.depth, v.palette, v.indices);
                 char line[96];
                 std::snprintf(line, sizeof(line), "%s%s %zux%zu %d bit", report.empty() ? "" : ", ", v.name.c_str(), v.width, v.height, v.depth);
@@ -1805,15 +1911,25 @@ namespace vcs::rwconv
         const std::string command = argv[1];
         if (command != "--rwconv-dff" && command != "--rwconv-txd")
             return -1;
+        std::vector<const char *> args; // argv[0], the command, its files; `--weapon` / `--preserve NAME` after the command
+        std::string preserve;
+        for (int i = 0; i < argc; ++i)
+        {
+            if (i >= 2 && (std::string(argv[i]) == "--preserve" || std::string(argv[i]) == "--weapon") && i + 1 < argc)
+                preserve = argv[++i];
+            else
+                args.push_back(argv[i]);
+        }
+        const int n = static_cast<int>(args.size());
         Bytes a, b, c, out;
         std::string report;
         bool ok = false;
-        if (command == "--rwconv-dff" && argc >= 5 && readFile(argv[2], a) && readFile(argv[3], b) && (argc < 6 || readFile(argv[5], c)))
-            ok = dffToMdl(a, b, argc >= 6 ? &c : nullptr, out, report) && writeFile(argv[4], out);
-        else if (command == "--rwconv-txd" && argc >= 4 && readFile(argv[2], a) && (argc < 5 || readFile(argv[4], b)))
-            ok = txdToXtx(a, 128, argc >= 5 ? &b : nullptr, out, report) && writeFile(argv[3], out);
+        if (command == "--rwconv-dff" && n >= 5 && readFile(args[2], a) && readFile(args[3], b) && (n < 6 || readFile(args[5], c)))
+            ok = dffToMdl(a, b, n >= 6 ? &c : nullptr, out, report, preserve) && writeFile(args[4], out);
+        else if (command == "--rwconv-txd" && n >= 4 && readFile(args[2], a) && (n < 5 || readFile(args[4], b)))
+            ok = txdToXtx(a, 128, n >= 5 ? &b : nullptr, out, report, preserve) && writeFile(args[3], out);
         else
-            report = "usage: --rwconv-dff DFF TEMPLATE OUT [TXD] | --rwconv-txd TXD OUT [VCS.xtx]";
+            report = "usage: --rwconv-dff DFF TEMPLATE OUT [TXD] [--weapon NAME] | --rwconv-txd TXD OUT [VCS.xtx] [--preserve NAME]";
         std::printf("%s: %s (%zu bytes)\n", ok ? "ok" : "failed", report.c_str(), out.size());
         return ok ? 0 : 1;
     }

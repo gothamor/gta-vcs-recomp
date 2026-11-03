@@ -1601,6 +1601,37 @@ the pop-in while driving (FORK.md T2).
   the chooser) or another source of detail (FORK.md T2). The trace's own logging costs frames (~160 lines a second):
   not for timing runs.
 
+### 9g. Weapon models and dictionaries (2026-11-03)
+
+Read from the extracted entries (`tools/mdlinfo.py`, `tools/txd2xtx.py info`) for PC weapon mods (FORK.md T11).
+
+- **Weapon model infos** are type 4 (byte `+0x10`; vehicles 6), models 330-369 (339 machete, 341 chnsaw, 343 teargas,
+  344 molotov, 346 beretta, 347 python, 348 ak47, 349 chromegun, 350 shotgspa, 351 buddyshot, 352 m16, 353 skorpion,
+  354 uzi, 355 ingramsl, 356 mplng, 357 sniper, 358 laser, 359 rocketla, 360 flame, 361 m249, 362 minigun). The
+  trainer gives them as weapon types (src/game/vcs_trainer.cpp; type 25 holds model 354 `uzi`, 24 model 353).
+- **The model** (`ldm`): at 0x20 one element (object type 1, flags `0x0004AA01`), not a vehicle's element group (type
+  2); its node has no name, parent or child. One geometry, 140-593 triangles, one or two materials (`gun_uzi3`,
+  `iz_gun_beretta`). Its file's tail is not a vehicle's order: the relocation table comes right after the data, the
+  global table (one entry) after it, strings on both sides (`molotov`: `xv_chromenv` before the relocation table,
+  `iz_gun_molotov` after the global table); the header's `globalTab` > `relocTab`.
+- **The dictionary** (the TXD of the model's name) holds the weapon's textures and its **HUD icon**, the texture named
+  like the model (`uzi`: `uzi` 64 x 64 4-bit + `gun_uzi3` 32 x 32): the HUD finds the icon by the model's name in its
+  dictionary, as VC does - with VC's `.txd` converted as it came, VC's icon (and its look) replaced VCS's. Shown by
+  the conversion: VC's texture renamed (`uzi_pc`) and VCS's kept, the HUD draws VCS's icon.
+- **VCS holds its weapons elsewhere than VC** (found when the player saw VC mods misplaced in Vic's hand). VCS's
+  weapon models are VC's own meshes (VC's `gun_uzi2` / `gun_chainsaw2` textures are VCS's `gun_uzi3` /
+  `iz_gun_chainsaw2`; VC's originals fitted onto VCS's leave 2-6 mm), each moved in the hand's space and turned:
+  4-14 cm along the barrel (+x) and up to 16 cm along z, 2-10 degrees for guns, 15-30 for melee weapons, the
+  chainsaw and the minigun. VCS's animations hold the moved models, so a VC model (or a VC mod, made to sit where
+  VC's own does) is drawn into Vic's palm, a chainsaw's handles miss his hands. `tools/weaponfit.py` fits VC's
+  originals (read from a VC PC's `models/gta3.img`) onto VCS's models into the converters' table
+  (dff2mdl.WEAPON_PLACES): by their outlines (side, top and front silhouettes, intersection over union), not nearest
+  points - where VCS's model is another mesh (VC's M4 onto VCS's M16, VC's rocket launcher with its rocket) a
+  nearest-point fit (ICP) slid along the barrels and left the grips 10 cm apart, or turned the launcher over. Some are
+  other meshes: ak47 (VC's ruger), m16 (m4), m249 (m60), rocketla, minigun - fitted by grip and magazine.
+
+## 10. Memory card and saves
+
 ## 10. Memory card and saves
 
 libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`); files live in `%LOCALAPPDATA%/VCSRecomp/mc0`

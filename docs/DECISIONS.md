@@ -1121,3 +1121,19 @@ lossless (only shorter strips); textures stay 128 px, 4 or 8 bit like the disc's
 - CStreaming's cap of 51 resources is lifted only on the larger settings and only for the request's own check: with
   more room the cap, not the bytes, would decide what stays. The make-room loop (bytes) is the game's.
 - 30 MB at most: 64 MB minus the guest's 32 minus a 2 MB reserve. Restart to apply (the heap is built once at boot).
+
+## 2026-11-03 - PC weapon mods: VCS's HUD icons stay, VCS's place in the hand (FORK.md T11)
+
+- A VC weapon's `.txd` carries VC's HUD icon under the weapon's name, drawn in VC's style; VCS's HUD is VCS's, so its
+  icon stays (authentic by default). VC's icon is kept in the dictionary as `<name>_pc` (a model that textures itself
+  with it still finds it); an option to show the mod's icons can come later.
+- A VC weapon goes where VCS holds its own: first it went in where VC has it, and the player saw every weapon wrong in
+  Vic's hand (2026-11-03: grenades inside the hand, the chainsaw's handles beside his hands, the pistol into his
+  palm). VCS's weapon models are VC's own meshes moved and turned in the hand, and VCS's animations hold them there.
+  So each weapon has a transform from VC's place to VCS's, fitted once from VC's original models onto VCS's
+  (tools/weaponfit.py, from the player's own VC PC files), carried as a table (dff2mdl.WEAPON_PLACES,
+  rwconv.cpp kWeaponPlaces) and applied to any mod of that weapon: VC mods sit where VC's originals do. The
+  alternative, fitting each mod onto VCS's model, was tried and rejected: different shapes (an M4 onto VCS's longer
+  M16) have several equally good fits 13 cm apart. The table holds numbers, not game data.
+- A texture whose sides are not powers of two is resampled nearest to the powers of two below: the halving after it
+  averages, and the C++ and Python converters give the same bytes with integer maths.

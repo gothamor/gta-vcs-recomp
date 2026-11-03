@@ -163,17 +163,19 @@ class Mdl:
 
 
 def vehicle(m):
+    """A vehicle's element group (object type 2 at 0x20), or a simple model's one element (type 1: a weapon's)."""
     group = m.ptr(0x20)
-    if not group or m.d[group] != 2:
-        raise ValueError("no element group at the vehicle data (0x20)")
+    if not group or m.d[group] not in (1, 2):
+        raise ValueError("no element group or element at the model data (0x20)")
+    single = m.d[group] == 1
     root = m.ptr(group + 4)
     nodes = m.node(root) if root else []
     by_at = {n["at"]: n["name"] for n in nodes}
     elements = []
-    for e in m.elements(group):
+    for e in [group] if single else m.elements(group):
         geom = m.ptr(e + 0x14)
         elements.append({"node": by_at.get(m.ptr(e + 4), "?"), "geometry": m.geometry(geom) if geom else None})
-    return {"nodes": nodes, "elements": elements, "extras": m.u32(0x24)}
+    return {"nodes": nodes, "elements": elements, "extras": 0 if single else m.u32(0x24)}
 
 
 def report(path, obj=None):

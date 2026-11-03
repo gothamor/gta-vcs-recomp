@@ -230,6 +230,41 @@ python tools/carmod_check.py                 # the Comet from Mods/Fixed_Xbox_Ve
   memory - a VC car with its textures is 4-5x a VCS car, and VCS streams into a fixed 5.4 MB heap (game-internals.md
   9e): loading many different VC cars at once can exhaust it. T10 (issue #15) gives the port more memory.
 
+### PC VC weapons in VCS (T11, 2026-11-03)
+
+A VC weapon mod's `.dff` + `.txd` (`uzi.dff`, `uzi.txd`) in `modloader/` replace VCS's weapon of that name, converted
+while the game loads like a car. VC's names VCS has under its own map to VCS's: `colt45`, `m4`, `tec9`, `mp5lng`,
+`m60`, `ruger` -> `beretta`, `m16`, `skorpion`, `mplng`, `m249`, `ak47`. The mod loader takes a `.dff` whose VCS model
+is a vehicle (model type 6) or a weapon (type 4); other models' (objects') files are named in the log and left out.
+
+- **The model**: a weapon's resource is one element (object type 1 at 0x20, its node unnamed: game-internals.md 9g),
+  so every VC atomic goes into it - no paint lists, no extras - **moved from VC's place in the hand to VCS's**: VCS
+  holds each weapon a few centimetres further along the barrel and turned (melee weapons up to 30 degrees), so a VC
+  weapon as it comes sat in Vic's palm. Each weapon's transform (`dff2mdl.WEAPON_PLACES`, `kWeaponPlaces` in
+  rwconv.cpp) was fitted from VC's original models onto VCS's (`tools/weaponfit.py --vc <VC>/models/gta3.img`);
+  a VC mod sits where VC's original does, so it lands where VCS's does.
+- **The HUD icon stays VCS's**: a weapon's dictionary holds its HUD icon, the texture named like the weapon, and VC's
+  `.txd` has its own (VC's style) under that name. `txd2xtx --preserve NAME` writes VC's texture of that name as
+  `NAME_pc`, `dff2mdl --weapon NAME` points the model's materials naming it there, and `--keep` adds VCS's icon.
+- **Textures** whose sides are not powers of two (a mod's 1048 x 1024) are resampled to the powers of two below
+  (nearest) before halving: VCS's rasters hold log2 of each side.
+- By hand, as for cars (`python tools/img.py extract build/img/GTA3PS2 uzi` names weapons by their dictionary):
+
+```
+python tools/dff2mdl.py convert uzi.dff build/img/GTA3PS2/uzi.mdl "modloader/HD Uzi/uzi.mdl" --txd uzi.txd --weapon uzi
+python tools/txd2xtx.py convert uzi.txd "modloader/HD Uzi/uzi.xtx" --keep build/img/GTA3PS2/uzi.xtx --preserve uzi
+python tools/weaponmod_check.py              # modloader/HD Weapons in the game: each weapon in Vic's hand, the HUD
+```
+
+- **Checked**: `tools/rwconv_check.py` - C++ and Python the same on the 22 files of the player's `HD Weapons` and the
+  239 of their car mods (with the placement table; the cars' output unchanged by the weapon path: 119 / 119 byte for
+  byte against the T9 converter); `tools/weaponmod_check.py` - the 10 weapons of `HD Weapons` converted, each drawn in
+  Vic's hand where VCS holds its own (the chainsaw's handles in his hands, the pistol's grip in his palm), each
+  covering VCS's model better than at VC's place (silhouette overlap, e.g. the pistol 0.50 -> 0.78, the molotov
+  0.14 -> 0.65), with VCS's HUD icon, no crash (`build/weaponmod_check/placed`).
+- **Cost**: an HD weapon in view costs 1-2 ms a frame in this build (PERFORMANCE.md 31): faceted HD meshes make one
+  draw per ~70 strip vertices. The conversion at boot runs on every core (194 files in 1.7 s).
+
 ## The pre-HUD pass (the infrastructure T4-T7 need)
 
 Most of Proper Shaders' post effects need the finished 3D picture **before the HUD and menus** are drawn over it, plus
