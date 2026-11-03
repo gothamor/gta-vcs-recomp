@@ -27,16 +27,16 @@ attempt painted a gradient over the picture by screen height and was removed).
 
 One task at a time, in this order. T3 is the base for T4-T7.
 
-| # | Task | Depends on | Status |
-|---|---|---|---|
-| T1 | Texture replacement: PCSX2-compatible packs, **DDS** first-class, PNG kept | - | Next |
-| T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Planned (research first) |
-| T3 | Pre-HUD post-processing pass (colour + depth before the 2D) | - | Planned |
-| T4 | Volumetric height fog (Proper Shaders `[VolumetricFog]`) | T3 | Planned |
-| T5 | SMAA 1x | T3 | Planned |
-| T6 | Simulated HDR: tone mapping, exposure, bloom (replaces the interim Exposure) | T3 | Planned |
-| T7 | Sun rays | T3 | Planned |
-| T8 | Presets and player docs (Authentic / Enhanced), release notes | T1-T7 | Planned |
+| # | Task | Depends on | Status | Issue |
+|---|---|---|---|---|
+| T1 | Texture replacement: PCSX2-compatible packs, **DDS** first-class, PNG kept | - | Next | [#1](https://github.com/willzmkv/gta-vcs-recomp/issues/1) |
+| T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Planned (research first) | [#2](https://github.com/willzmkv/gta-vcs-recomp/issues/2) |
+| T3 | Pre-HUD post-processing pass (colour + depth before the 2D) | - | Planned | [#3](https://github.com/willzmkv/gta-vcs-recomp/issues/3) |
+| T4 | Volumetric height fog (Proper Shaders `[VolumetricFog]`) | T3 | Planned | [#4](https://github.com/willzmkv/gta-vcs-recomp/issues/4) |
+| T5 | SMAA 1x | T3 | Planned | [#5](https://github.com/willzmkv/gta-vcs-recomp/issues/5) |
+| T6 | Simulated HDR: tone mapping, exposure, bloom (replaces the interim Exposure) | T3 | Planned | [#6](https://github.com/willzmkv/gta-vcs-recomp/issues/6) |
+| T7 | Sun rays | T3 | Planned | [#7](https://github.com/willzmkv/gta-vcs-recomp/issues/7) |
+| T8 | Presets and player docs (Authentic / Enhanced), release notes | T1-T7 | Planned | [#8](https://github.com/willzmkv/gta-vcs-recomp/issues/8) |
 
 Backlog (not scheduled): SkyGFX's Xbox rim light / gloss / screen water drops, YCbCr correction, a larger reflection
 map, shadow maps, deferred lights, PBR sky, volumetric clouds, car paint reflections, rain on cars, ragdolls.
