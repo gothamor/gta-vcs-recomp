@@ -47,7 +47,7 @@ One task at a time, in this order. T3 is the base for T4-T7.
 | T6 | Simulated HDR: tone mapping, exposure, bloom (replaces the interim Exposure) | T3 | Planned | [#6](https://github.com/willzmkv/gta-vcs-recomp/issues/6) |
 | T7 | Sun rays | T3 | Planned | [#7](https://github.com/willzmkv/gta-vcs-recomp/issues/7) |
 | T8 | Presets and player docs (Authentic / Enhanced), release notes | T1-T7 | Planned | [#8](https://github.com/willzmkv/gta-vcs-recomp/issues/8) |
-| T9 | PC `.dff` / `.txd` in mods: convert RW 3 clumps / TXDs to VCS's formats, or draw them natively (research) | T1c, RSL submission | Research | [#12](https://github.com/willzmkv/gta-vcs-recomp/issues/12) |
+| T9 | PC `.dff` / `.txd` in mods: convert RW 3 clumps / TXDs to VCS's formats, or draw them natively (research) | T1c, RSL submission | Research done: route (a), converter next | [#12](https://github.com/willzmkv/gta-vcs-recomp/issues/12) |
 
 Backlog (not scheduled): SkyGFX's Xbox rim light / gloss / screen water drops, YCbCr correction, a larger reflection
 map, shadow maps, deferred lights, PBR sky, volumetric clouds, car paint reflections, rain on cars, ragdolls.
@@ -207,6 +207,10 @@ release notes for a fork build.
   GAME.DTZ) gives each entry's sectors and the model infos keep ~CRC32 of each name (game-internals.md 9d). A mod's
   `admiral.mdl` / `#1234.bin` replaces just that entry, laid over the stream's reads; `tools/img.py` lists and extracts
   entries (75 vehicles named). Checked: the CHEETAH's entry as `admiral.mdl` draws a Cheetah as "Admiral".
+- **2026-11-03 - T9, research.** `tools/rwinfo.py` reads PC `.dff` / `.txd` (checked on the player's VC car mods).
+  A VCS vehicle `.mdl` (an `ldm` resource) has the very frame names of a VC car `.dff` and named textures: route (a),
+  converting `.dff` -> `ldm` and loading it through T1c's game files, chosen; (c) by-name skins only fit VCS's own
+  models; (b) host drawing kept as the alternative. The MixMods tutorial could not be fetched (Cloudflare check).
 
 ## How the work is done
 

@@ -120,6 +120,35 @@ built:
    project of its own; the texture half is already possible today as a texture pack (textures are matched by content,
    not by file).
 
+### T9 findings: PC VC car mods in VCS (2026-11-03)
+
+- **The tutorial** the player pointed to (MixMods, vehicles in GTA SA PS2:
+  https://forum.mixmods.com.br/f250-tutoriais/t1411-gta-ps2-veiculos) sits behind a Cloudflare JavaScript check:
+  neither the fetch tool nor a plain HTTP client gets the page. Its steps are to be added here from the text (pasted
+  or saved by the player).
+- **`tools/rwinfo.py`** reads PC RenderWare files on the host (stdlib only; `--self-test` writes and reads a small
+  clump and texture dictionary): a `.dff`'s frames with their names and parents, geometries (vertices, triangles,
+  materials and texture names; PS2-native flagged), atomics; a `.txd`'s textures (name, size, D3D8 DXT / palette /
+  D3D9 FourCC, levels). Checked on the player's VC mods (`Mods/Fixed_Xbox_Vehs_1.3`: `comet.dff`, 33 frames and 6
+  geometries; `comet.txd`, 256x256 DXT1 with 9 levels and 8-bit palettes) - read only.
+- **The match**: a VCS vehicle's `.mdl` (game-internals.md 9d) carries the very frame names of a VC car's `.dff`
+  (`chassis_dummy`, `chassis_hi` / `_vlo`, `wheel_*_dummy`, `door_*_dummy`, `bonnet` / `boot` / `bump_*` /
+  `windscreen` / `wing_*`), so a VC car's parts line up with what VCS's vehicle code looks for. Its textures have names
+  too, in the same style (`admiral868bit_sl` vs VC's `comet868bit128`). VC car mods also come in Mod Loader's folder
+  layout (`gta3.img/comet.dff`).
+- **The routes**:
+  - (c) a `.txd`'s textures by name over a VCS vehicle's: only for skins made for VCS's own models - VCS remodelled
+    its cars (other UV layouts), so a VC car's textures on a VCS model would map wrong. Not the way to reuse VC cars.
+  - (a) **convert a `.dff` (+ its `.txd`) into a VCS `ldm` vehicle resource** offline (a `tools/dff2mdl.py`): the
+    result goes through T1c's game files as `<car>.mdl`, and the game's own paths draw it (the CHEETAH-as-ADMIRAL swap
+    shows the game takes another `ldm`). **Chosen**: self-contained, the game's own paths, and T1c already carries it.
+  - (b) load the `.dff` on the host and draw it in place of the model's atomics: no PS2 limits, but it needs draws at
+    the RSL level (docs/RSL_SUBMISSION.md) and the vehicle code's frame logic mirrored. Kept as the alternative.
+- **Next for (a)**: the `ldm` resource's layout (header, relocations; the clump / frames / atomics / geometry and its
+  PS2 mesh as the VU1 programs read it - game-internals.md 6d documents their input), a converter for one part
+  (`chassis_hi`) first, the textures into the resource's TXD (or the texture packs), and entries larger than the
+  original (T1c's next step: the streaming size raised before the game allocates).
+
 ## The pre-HUD pass (the infrastructure T4-T7 need)
 
 Most of Proper Shaders' post effects need the finished 3D picture **before the HUD and menus** are drawn over it, plus

@@ -108,6 +108,7 @@ python tools/texture_check.py [OUT] [--pack DIR] [--loader-only] [--validate-pac
 python tools/mods_check.py [OUT] --pack DIR                    # the mod loader: modloader.ini, priorities, F2 > Mods switched live
 python tools/img.py table|list|extract [OUT] [names]          # GTA3PS2.IMG entry by entry (the game's directory; extracts stay in build/)
 python tools/gamefiles_check.py [OUT]                         # a GTA3PS2.IMG entry replaced from a mod (admiral.mdl), in the game
+python tools/rwinfo.py FILE.dff|FILE.txd | --self-test         # what a PC RenderWare .dff / .txd holds (frames, geometry, textures)
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```

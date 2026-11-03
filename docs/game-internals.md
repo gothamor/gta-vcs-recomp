@@ -1479,6 +1479,14 @@ Found for the mod loader's game files (docs/MODS.md "Game files"), with the rig 
   loads and draws a Cheetah under the name Admiral, no crash (`tools/gamefiles_check.py`) - a model resource carries
   what the game needs to place it anywhere in the streaming memory.
 
+- **A vehicle's entry** (`admiral.mdl`, 75,776 bytes): a relocatable resource - magic `ldm\0` ("mdl" reversed), then
+  sizes and the relocation table's offset (`0x12095`, `0x1182c`, `0x11880`, 0x1e2 ...: the LCS / VCS resource header,
+  to be mapped). Its strings are **the frame names of a PC VC `.dff`**: `chassis_dummy`, `chassis_hi`, `chassis_vlo`,
+  `wheel_lf/rf/lb/rb_dummy`, `door_lf/rf/lr/rr_dummy`, `bonnet_dummy`, `boot_dummy`, `bump_front/rear_dummy`,
+  `windscreen_dummy`, `wing_lf/rf_dummy`, `car_parts`; and its textures' names: `admiral868bit_sl` (the body),
+  `xv_vehiclegeneric_sl`, `xv_vehiclegrunge_sl`, `xv_scratch_sl`, `xv_vcs_licenseplates_cs`, `xv_vc_crackedglassa_sl`,
+  `xv_vehiclesteering_sl` (found 2026-11-03 with `tools/img.py extract admiral` and a strings pass).
+
 ## 10. Memory card and saves
 
 libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`); files live in `%LOCALAPPDATA%/VCSRecomp/mc0`
