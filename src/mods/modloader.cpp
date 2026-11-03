@@ -11,6 +11,7 @@
 // leaves the switches free for the `setting` command (an environment value fixes its setting).
 #include "mods/modloader.h"
 
+#include "game/vcs_stream.h"
 #include "platform/platform.h"
 #include "render/texture_replacements.h"
 #include "runtime/gs/gs_hw.h"
@@ -42,6 +43,7 @@ namespace vcs::mods
             fs::path path;
             int priority = 50;   // modloader.ini
             size_t textures = 0; // .dds / .png files in it at start (dumps/ aside)
+            size_t gameFiles = 0; // game files in it at start (gameFilesIn)
         };
 
         fs::path g_root, g_exeDir;
@@ -280,6 +282,28 @@ namespace vcs::mods
             return n;
         }
 
+        // Game files (vcs::setStreamFiles): GTA3PS2.IMG entries - `<model name>.mdl`, or `#<streaming index>.<any>` as
+        // tools/img.py extracts the entries it has no name for; anywhere in the mod (dumps/ aside)
+        std::vector<fs::path> gameFilesIn(const fs::path &folder)
+        {
+            std::vector<fs::path> out;
+            std::error_code ec;
+            for (fs::recursive_directory_iterator it(folder, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
+                 it.increment(ec))
+            {
+                if (it->is_directory(ec) && it->path().filename() == "dumps")
+                    it.disable_recursion_pending();
+                else if (it->is_regular_file(ec))
+                {
+                    const std::string stem = utf8(it->path().stem()), ext = lower(it->path().extension().string());
+                    if (ext == ".mdl" || ext == ".gxt" || ext == ".scm" || (stem.size() > 1 && stem[0] == '#'))
+                        out.push_back(it->path());
+                }
+            }
+            std::sort(out.begin(), out.end());
+            return out;
+        }
+
         fs::path findRoot(const fs::path &exeDir)
         {
             if (const char *dir = std::getenv("VCS_MODLOADER_DIR"); dir && *dir)
@@ -330,12 +354,24 @@ namespace vcs::mods
                         if (settings::value(m.key))
                             sources.push_back({m.path, m.priority, m.name});
             }
+            std::vector<vcs::StreamFile> files; // game files: Load mods alone governs them (VCS_MOD_FILES=0: none)
+            const char *filesOff = std::getenv("VCS_MOD_FILES");
+            if (mods && !(filesOff && *filesOff == '0'))
+                for (const Mod &m : g_mods)
+                    if (settings::value(m.key))
+                        for (const fs::path &file : gameFilesIn(m.path))
+                        {
+                            const std::string ext = lower(file.extension().string());
+                            const bool loose = ext == ".gxt" || ext == ".scm"; // a disc file, by its whole name
+                            files.push_back({utf8(loose ? file.filename() : file.stem()), utf8(file), m.name, m.priority});
+                        }
+            vcs::setStreamFiles(files);
             const auto start = std::chrono::steady_clock::now();
             std::shared_ptr<render::TextureReplacements> pack;
             if (!sources.empty())
                 pack = std::make_shared<render::TextureReplacements>(sources);
             gsHwSetTextureReplacements(pack);
-            std::fprintf(stderr, "[mods] textures from %zu source(s)%s, indexed in %.0f ms\n", sources.size(),
+            std::fprintf(stderr, "[mods] %zu game file(s); textures from %zu source(s)%s, indexed in %.0f ms\n", files.size(), sources.size(),
                          !textures ? " (Replace textures off)" : (!mods ? " (Load mods off)" : ""),
                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
         }
@@ -372,7 +408,7 @@ namespace vcs::mods
             std::string key = keyFor(name);
             while (std::any_of(g_mods.begin(), g_mods.end(), [&](const Mod &m) { return m.key == key; }))
                 key += '_';
-            g_mods.push_back({name, key, folder, priority, countTextures(folder)});
+            g_mods.push_back({name, key, folder, priority, countTextures(folder), gameFilesIn(folder).size()});
         }
         std::fprintf(stderr, "[mods] %zu mod(s) in %s\n", g_mods.size(), utf8(g_root).c_str());
         ensureIni();
@@ -412,12 +448,13 @@ namespace vcs::mods
             s.page = "Mods";
             s.section = "Installed mods";
             s.label = m.name;
-            char what[200];
-            if (m.textures)
-                std::snprintf(what, sizeof(what), "%zu texture files (DDS / PNG). The slider is its priority, 1-100: when two mods "
-                                                  "have the same texture, the higher one wins (kept in modloader.ini). ", m.textures);
+            char what[240];
+            if (m.textures || m.gameFiles)
+                std::snprintf(what, sizeof(what), "%zu texture files (DDS / PNG), %zu game files (GTA3PS2.IMG entries). The slider is "
+                                                  "its priority, 1-100: when two mods have the same file, the higher one wins (kept "
+                                                  "in modloader.ini). ", m.textures, m.gameFiles);
             else
-                std::snprintf(what, sizeof(what), "Nothing in it this version reads yet (texture packs so far). ");
+                std::snprintf(what, sizeof(what), "Nothing in it this version reads (texture packs, GTA3PS2.IMG entries). ");
             s.help = what + utf8(m.path);
             s.type = Type::Toggle;
             s.defaultValue = 1;

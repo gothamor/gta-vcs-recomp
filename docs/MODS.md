@@ -78,6 +78,30 @@ the game runs. `src/mods/modloader.cpp` does the same for this port:
   6 swaps, pass. With the player's own two mods linked in: "HUD Remastered" (160 PNG, 152 of them in the HD pack too)
   supplies 8 textures at 50 / 50 (the DDS wins a tie) and all 160 at 60, the HD pack ceding its 152.
 
+### Game files: GTA3PS2.IMG entry by entry (T1c, 2026-11-03)
+
+As the player suggested: no archive is rebuilt or replaced - a mod holds only the entries it changes, and the game reads
+those from the mod. VCS's model archive has no directory on the disc (game-internals.md 9d): the game's own table gives
+each entry its sectors, and its model infos keep each name's key, so a file named after a model finds its entry.
+
+- **In a mod**: `<model name>.mdl` (`admiral.mdl`) or `#<streaming index>.<anything>` (`#1234.bin`) for an archive
+  entry, and a loose disc file by its own name (`AMERICAN.GXT`, `ENGLISH.GXT`, `MAIN.SCM`), anywhere in the mod's folder. The priority slider decides between two mods with the same entry. **Any size**: a smaller file is
+  padded with zeros; a larger one has its record moved past the end of the disc (the streaming info's offset and
+  size, LSN 0x180000 on, and the archive's size raised to reach it), where only the mod's bytes are served - the
+  game allocates the mod's size and the entry touches no neighbour; the game's values come back when the mod goes.
+- **How**: the mod loader hands the list to the stream layer (`vcs::setStreamFiles`); at the next read the stream
+  thread resolves each name against the game's tables (the disc's file table for GTA3PS2.IMG's LSN, the model infos'
+  keys, the streaming info's offset / size) and lays the mod's bytes over every disc read that covers the entry. An
+  entry already in memory changes when the game streams it again. `VCS_MOD_FILES=0`: none.
+- **`tools/img.py`**: `table` (the directory from a hidden run into `build/img/streaming.json`), `list`, `extract`
+  (from the player's disc image into `build/img/GTA3PS2`, named `admiral.mdl` / `#1234.bin`): an extracted folder is a
+  mod as it is. The entries are the game's data - never in git.
+- **Checked** (`tools/gamefiles_check.py`): an ADMIRAL spawned in the street with no mod, with its own entry from a mod
+  (the same picture: 0.32) and with the CHEETAH's entry as `admiral.mdl` (a Cheetah drawn as "Admiral": 1.82); and the
+  text files from a mod with "Admiral" written "ADMIRAL" - the game's text for that key reads "ADMIRAL" - pass.
+  And the ADMIRAL's entry (37 sectors) as `cheetah.mdl` (30): a CHEETAH spawned draws the Admiral's body, read from
+  past the disc. A loose file larger than the disc's moves the same way (its file-table record).
+
 ### `.dff` / `.txd`: what PC mods replace, and what VCS has
 
 PC GTA III / VC / SA mods are RenderWare 3 files: `.dff` (a clump: frames, geometry, materials, skin) and `.txd` (a

@@ -17,11 +17,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
+#include <fstream>
 #include <mutex>
 #include <thread>
 
@@ -60,6 +63,230 @@ namespace vcs
             return *r;
         }
 
+        // ---- game files from mods (setStreamFiles) ----------------------------------------------------------------
+        // The tables (docs/game-internals.md 9d): the disc's file table at 0x5038A8 ({name ptr, 0, LSN, bytes}, count
+        // at 0x486E8C), the streaming info *(*(0x489FF8) + 200) (0x18 a resource: +0x10 offset and +0x14 size in
+        // sectors inside GTA3PS2.IMG, 0xFFFFFFFF = none), the model infos *(0x486518) (+0x8: ~CRC32 of the upper-case name).
+        constexpr uint32_t kFileTable = 0x5038A8u, kFileCount = 0x486E8Cu, kStreaming = 0x489FF8u, kModelInfos = 0x486518u;
+        constexpr uint32_t kResources = 8482u; // streaming info entries (measured; the array ends there)
+
+        struct Overlay
+        {
+            uint32_t lsn, sectors;
+            std::vector<uint8_t> data; // the mod's file (the rest of the entry's sectors read as zeros)
+        };
+        std::mutex g_filesMutex;
+        std::vector<StreamFile> g_files;
+        uint64_t g_filesGeneration = 0, g_resolvedGeneration = 0;
+        std::vector<Overlay> g_overlays;
+
+        // A file larger than the disc's: its record (streaming info, or the disc's file table) is pointed at sectors past
+        // the end of the disc (kVirtualLsn on), where only the mod's bytes are served, so the game allocates and reads the
+        // mod's size and the entry touches no neighbour. The game reads GTA3PS2.IMG as an open file (FUN_00220EC8: the
+        // open-file records at 0x5058A8, 0x14 bytes {?, LSN, bytes, position, ?}) whose position is held to its size, so the
+        // archive's size is raised to reach there too (file table and open records). The game's values come back at the
+        // next resolve. 0x180000 sectors = 3 GB: past this disc (~2.1 GB), and its distance from the archive still fits a
+        // 32-bit byte count.
+        constexpr uint32_t kVirtualLsn = 0x00180000u;
+        constexpr uint32_t kOpenFiles = 0x5058A8u, kOpenFileCount = 64u;
+        struct Patched
+        {
+            uint32_t at, old; // a guest word and the game's value
+        };
+        std::vector<Patched> g_patched;
+
+        void wr32(uint8_t *rdram, uint32_t addr, uint32_t v) { std::memcpy(rdram + (addr & 0x01FFFFFCu), &v, 4); }
+
+        uint32_t rd32(const uint8_t *rdram, uint32_t addr)
+        {
+            uint32_t v;
+            std::memcpy(&v, rdram + (addr & 0x01FFFFFCu), 4);
+            return v;
+        }
+
+        // CKeyGen's key: CRC32 of the upper-case name without the final inversion
+        uint32_t keyOf(const std::string &name)
+        {
+            static uint32_t table[256] = {};
+            if (!table[1])
+                for (uint32_t i = 0; i < 256; ++i)
+                {
+                    uint32_t c = i;
+                    for (int k = 0; k < 8; ++k)
+                        c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+                    table[i] = c;
+                }
+            uint32_t c = 0xFFFFFFFFu;
+            for (const char ch : name)
+                c = table[(c ^ static_cast<uint8_t>(std::toupper(static_cast<unsigned char>(ch)))) & 0xFFu] ^ (c >> 8);
+            return c;
+        }
+
+        // Stream thread, before a read, when the list changed: each file to its entry's sectors (the game's tables are
+        // read once they exist). False while the game has not built them yet.
+        bool resolveFiles(uint8_t *rdram)
+        {
+            const uint32_t streamingOwner = rd32(rdram, kStreaming), modelInfos = rd32(rdram, kModelInfos);
+            const uint32_t count = rd32(rdram, kFileCount);
+            if (!streamingOwner || !modelInfos || !count || count > 4096u)
+                return false;
+            for (auto p = g_patched.rbegin(); p != g_patched.rend(); ++p) // the game's own records first
+                wr32(rdram, p->at, p->old);
+            g_patched.clear();
+            auto patch = [&](uint32_t at, uint32_t value) {
+                g_patched.push_back({at, rd32(rdram, at)});
+                wr32(rdram, at, value);
+            };
+            uint32_t virtualLsn = kVirtualLsn;
+            uint32_t imgLsn = 0, imgSectors = 0;
+            for (uint32_t i = 0; i < count && !imgLsn; ++i)
+            {
+                const uint32_t entry = kFileTable + i * 16u, name = rd32(rdram, entry);
+                char text[48] = {};
+                std::memcpy(text, rdram + (name & 0x01FFFFFFu), sizeof(text) - 1);
+                if (std::strstr(text, "GTA3PS2.IMG"))
+                {
+                    imgLsn = rd32(rdram, entry + 8u);
+                    imgSectors = (rd32(rdram, entry + 12u) + 2047u) / 2048u;
+                }
+            }
+            const uint32_t streaming = rd32(rdram, streamingOwner + 200u);
+            if (!imgLsn || !streaming)
+                return false;
+            std::vector<StreamFile> files;
+            {
+                std::lock_guard<std::mutex> lock(g_filesMutex);
+                files = g_files;
+                g_resolvedGeneration = g_filesGeneration;
+            }
+            std::stable_sort(files.begin(), files.end(), [](const StreamFile &a, const StreamFile &b) { return a.priority > b.priority; });
+            std::vector<Overlay> overlays;
+            std::vector<uint32_t> taken;
+            bool imgMoved = false;
+            for (const StreamFile &f : files)
+            {
+                if (f.name.find('.') != std::string::npos) // a loose file (MAIN.SCM, AMERICAN.GXT): the disc file of that name
+                {
+                    uint32_t lsn = 0, bytes = 0, record = 0;
+                    for (uint32_t i = 0; i < count && !lsn; ++i)
+                    {
+                        const uint32_t entry = kFileTable + i * 16u;
+                        char text[64] = {};
+                        std::memcpy(text, rdram + (rd32(rdram, entry) & 0x01FFFFFFu), sizeof(text) - 1);
+                        std::string disc = text;
+                        disc = disc.substr(disc.find_last_of('\\') + 1);
+                        disc = disc.substr(0, disc.find(';'));
+                        if (disc.size() == f.name.size() &&
+                            std::equal(disc.begin(), disc.end(), f.name.begin(), [](char a, char b) { return std::toupper(static_cast<unsigned char>(a)) == std::toupper(static_cast<unsigned char>(b)); }))
+                        {
+                            lsn = rd32(rdram, entry + 8u);
+                            bytes = rd32(rdram, entry + 12u);
+                            record = entry + 8u;
+                        }
+                    }
+                    if (!lsn || std::find_if(overlays.begin(), overlays.end(), [&](const Overlay &o) { return o.lsn == lsn; }) != overlays.end())
+                    {
+                        if (!lsn)
+                            std::fprintf(stderr, "[mods] %s: %s is no file on the disc; not used\n", f.mod.c_str(), f.path.c_str());
+                        continue;
+                    }
+                    std::ifstream in(f.path, std::ios::binary | std::ios::ate);
+                    const auto size = in ? static_cast<uint64_t>(in.tellg()) : 0u;
+                    if (!size)
+                        continue;
+                    if (size > bytes) // larger: the file table's record moved past the disc
+                    {
+                        lsn = virtualLsn;
+                        bytes = static_cast<uint32_t>(size);
+                        virtualLsn += (bytes + 2047u) / 2048u;
+                        patch(record, lsn);
+                        patch(record + 4u, bytes);
+                    }
+                    Overlay o{lsn, (bytes + 2047u) / 2048u, std::vector<uint8_t>(static_cast<size_t>(size))};
+                    in.seekg(0);
+                    in.read(reinterpret_cast<char *>(o.data.data()), static_cast<std::streamsize>(size));
+                    std::fprintf(stderr, "[mods] %s: %s -> disc file %s (LSN %u, %u bytes)\n", f.mod.c_str(), f.path.c_str(), f.name.c_str(),
+                                 lsn, bytes);
+                    overlays.push_back(std::move(o));
+                    continue;
+                }
+                uint32_t index = kResources;
+                if (!f.name.empty() && f.name[0] == '#')
+                    index = static_cast<uint32_t>(std::strtoul(f.name.c_str() + 1, nullptr, 10));
+                else
+                {
+                    const uint32_t key = keyOf(f.name);
+                    for (uint32_t i = 0; i < kResources && index == kResources; ++i)
+                    {
+                        const uint32_t info = rd32(rdram, modelInfos + i * 4u);
+                        if (info >= 0x100000u && info < 0x02000000u && rd32(rdram, info + 8u) == key)
+                            index = i;
+                    }
+                }
+                const uint32_t at = streaming + index * 0x18u;
+                const uint32_t offset = index < kResources ? rd32(rdram, at + 0x10u) : 0xFFFFFFFFu;
+                const uint32_t sectors = index < kResources ? rd32(rdram, at + 0x14u) : 0u;
+                if (offset == 0xFFFFFFFFu || !sectors || offset + sectors > imgSectors)
+                {
+                    std::fprintf(stderr, "[mods] %s: %s is no entry of GTA3PS2.IMG; not used\n", f.mod.c_str(), f.path.c_str());
+                    continue;
+                }
+                if (std::find(taken.begin(), taken.end(), index) != taken.end())
+                    continue; // a mod with a higher priority has it
+                std::ifstream in(f.path, std::ios::binary | std::ios::ate);
+                const auto size = in ? static_cast<uint64_t>(in.tellg()) : 0u;
+                if (!size)
+                    continue;
+                uint32_t first = imgLsn + offset, span = sectors;
+                if (size > uint64_t(sectors) * 2048u) // larger: the streaming record moved past the disc (offset and size)
+                {
+                    span = static_cast<uint32_t>((size + 2047u) / 2048u);
+                    first = virtualLsn;
+                    virtualLsn += span;
+                    patch(at + 0x10u, first - imgLsn);
+                    patch(at + 0x14u, span);
+                    imgMoved = true;
+                }
+                Overlay o{first, span, std::vector<uint8_t>(static_cast<size_t>(size))};
+                in.seekg(0);
+                in.read(reinterpret_cast<char *>(o.data.data()), static_cast<std::streamsize>(size));
+                taken.push_back(index);
+                std::fprintf(stderr, "[mods] %s: %s -> GTA3PS2.IMG entry %u (LSN %u, %u sectors%s)\n", f.mod.c_str(), f.path.c_str(),
+                             index, o.lsn, o.sectors, o.sectors > sectors ? ", larger than the disc's: moved" : "");
+                overlays.push_back(std::move(o));
+            }
+            if (imgMoved) // the archive reaches the moved entries: its size in the file table and in its open records
+            {
+                const uint32_t bytes = (virtualLsn - imgLsn) * 2048u;
+                for (uint32_t i = 0; i < count; ++i)
+                    if (rd32(rdram, kFileTable + i * 16u + 8u) == imgLsn)
+                        patch(kFileTable + i * 16u + 12u, bytes);
+                for (uint32_t i = 0; i < kOpenFileCount; ++i)
+                    if (rd32(rdram, kOpenFiles + i * 0x14u + 4u) == imgLsn)
+                        patch(kOpenFiles + i * 0x14u + 8u, bytes);
+            }
+            std::lock_guard<std::mutex> lock(g_filesMutex);
+            g_overlays = std::move(overlays);
+            return true;
+        }
+
+        // the mods' bytes over a disc read that covers their entries (whole or in part)
+        void overlay(uint32_t lsn, uint32_t bytes, uint8_t *dest)
+        {
+            std::lock_guard<std::mutex> lock(g_filesMutex);
+            const uint64_t start = uint64_t(lsn) * 2048u, end = start + bytes;
+            for (const Overlay &o : g_overlays)
+            {
+                const uint64_t from = std::max<uint64_t>(start, uint64_t(o.lsn) * 2048u);
+                const uint64_t to = std::min<uint64_t>(end, (uint64_t(o.lsn) + o.sectors) * 2048u);
+                for (uint64_t at = from; at < to; ++at)
+                {
+                    const uint64_t inEntry = at - uint64_t(o.lsn) * 2048u;
+                    dest[at - start] = inEntry < o.data.size() ? o.data[static_cast<size_t>(inEntry)] : 0u;
+                }
+            }
+        }
+
         void run()
         {
             Reader &r = reader();
@@ -76,8 +303,25 @@ namespace vcs
                 IPS2DiscImage *disc = ps2_disc::image();
                 const uint32_t dest = request.dest & 0x01FFFFFFu;
                 const uint32_t bytes = std::min<uint32_t>(request.bytes, 0x02000000u - dest);
-                if (!disc || !disc->readBytes(static_cast<uint64_t>(request.lsn) * 2048u, bytes, r.rdram + dest))
+                if (request.lsn >= kVirtualLsn) // a mod's larger file: nothing of the disc there
+                {
+                    static int logged = 0;
+                    if (logged++ < 8)
+                        std::fprintf(stderr, "[stream] read of a mod's moved file: LSN %u, %u bytes, channel %u\n", request.lsn, bytes,
+                                     request.channel);
+                }
+                if (request.lsn >= kVirtualLsn)
+                    std::memset(r.rdram + dest, 0, bytes);
+                else if (!disc || !disc->readBytes(static_cast<uint64_t>(request.lsn) * 2048u, bytes, r.rdram + dest))
                     std::fprintf(stderr, "[stream] read of %u bytes at LSN 0x%x failed\n", bytes, request.lsn);
+                bool resolve;
+                {
+                    std::lock_guard<std::mutex> lock(g_filesMutex);
+                    resolve = g_resolvedGeneration != g_filesGeneration;
+                }
+                if (resolve)
+                    resolveFiles(r.rdram);
+                overlay(request.lsn, bytes, r.rdram + dest);
                 r.reads.fetch_add(1, std::memory_order_relaxed);
                 r.bytes.fetch_add(bytes, std::memory_order_relaxed);
                 r.nanoseconds.fetch_add(static_cast<uint64_t>(
@@ -151,6 +395,13 @@ namespace vcs
             SET_GPR_U64(ctx, 2, 0);
             ctx->pc = GPR_U32(ctx, 31);
         }
+    }
+
+    void setStreamFiles(std::vector<StreamFile> files)
+    {
+        std::lock_guard<std::mutex> lock(g_filesMutex);
+        g_files = std::move(files);
+        ++g_filesGeneration; // resolved at the next read - also an empty list: the game's records put back
     }
 
     bool installStreamHooks(PS2Runtime &runtime)

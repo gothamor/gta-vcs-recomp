@@ -1458,6 +1458,35 @@ of every writer and caller.
   scream (speech sounds). A Voices volume that scaled those voices in the native driver was tried on 2026-10-28 and
   removed (DECISIONS.md).
 
+### 9d. GTA3PS2.IMG: the model archive and its directory (2026-11-03)
+
+Found for the mod loader's game files (docs/MODS.md "Game files"), with the rig reading the tables in a running game
+(`tools/img.py table`) and the disc image's own file list (`tools/vcs_disc.py ls`).
+
+- **The disc's file table** (built at boot, section 3): `0x5038A8`, 16 bytes a file - `{name ptr, 0, LSN, bytes}` -
+  count at `0x486E8C` (341 files). GTA3PS2.IMG is at LSN 870012, 54,030,336 bytes (26,382 sectors); BEACH / MAINLA /
+  MALL.IMG (the world, streamed by the level code, 6b) and MOCAPPS2.IMG (with its MOCAPPS2.DIR) are other files.
+- **No directory on the disc**: GTA3PS2.IMG's is CStreaming's info, from GAME.DTZ - `*(*(0x489FF8) + 200)`, **0x18
+  bytes a resource**, indexed like the model ids (`+0xC` byte: the load state, 1 = loaded; `+0x10` the offset and
+  `+0x14` the size **in sectors inside GTA3PS2.IMG**, `0xFFFFFFFF` = no data; links and `0xAAAA` fill elsewhere).
+  8482 records (the array ends there), 1580 with data. The game streams an entry with `FUN_00221818` at
+  `LSN = 870012 + offset`, `size` sectors - one read per entry, into a buffer of the entry's size.
+- **Names are keys**: a model info (`*(0x486518)[id]`) holds at **+0x8 the key of its name = ~CRC32 of the upper-case
+  name** (CKeyGen; `ADMIRAL` -> `0xAB691458`). The names themselves are not kept; a vehicle's text key (+0x158) is its
+  model name when the keys match - 75 vehicles named that way (`admiral` 171: offset 7242, 37 sectors; `cheetah` 172:
+  7284, 30).
+- **Entries are relocatable**: the CHEETAH's entry served as the ADMIRAL's (smaller: the rest of the buffer zeros)
+  loads and draws a Cheetah under the name Admiral, no crash (`tools/gamefiles_check.py`) - a model resource carries
+  what the game needs to place it anywhere in the streaming memory.
+- **GTA3PS2.IMG is read as an open file**: `FUN_00220EC8(file, ?, bytes)` reads from the open-file records at
+  `0x5058A8` (0x14 bytes: {?, LSN, bytes, position, ?}) at `LSN + position / 2048` and moves the position on, held to
+  the file's size - so an entry's offset past the archive's end is cut back to it (found when a larger mod entry,
+  moved past the disc, was never read: 2026-11-03). Raising the archive's size there (and in the file table) lets
+  the game read it.
+- **Loose files go through the same stream**: `AMERICAN.GXT` / `ENGLISH.GXT` (and `MAIN.SCM`) are read by
+  `FUN_00221818` at their file-table LSN, `bytes` long - a mod's copy laid over those sectors is what the game loads
+  (a GXT with "Admiral" written "ADMIRAL" made the game's text for the key ADMIRAL read "ADMIRAL", 2026-11-03).
+
 ## 10. Memory card and saves
 
 libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`); files live in `%LOCALAPPDATA%/VCSRecomp/mc0`
@@ -1881,8 +1910,8 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   and diffing RAM); `0x4CD104` CTimer's milliseconds - it stands still while the game is paused (the pause menu, the
   save screen; found by diffing RAM in play and in the pause menu), so it tells running frames from paused ones.
   The player's money: `0x4E49CC` (in CPlayerInfo).
-- **Names**: the text (GXT) table is `**(0x48A2A0)` = {entries, count, data, size}; an entry is 12 bytes {u32 UTF-16
-  text, char key[8]}, sorted by key. Vehicle models are ids 171..280 in `CModelInfo::ms_modelInfoPtrs`
+- **Names**: the text (GXT) table is `*(0x48A2A0)` = {entries, count, data, size} (2553 entries); an entry is 12
+  bytes {UTF-16 text pointer (absolute), char key[8]}, sorted by key (corrected 2026-11-03: one dereference, not two). Vehicle models are ids 171..280 in `CModelInfo::ms_modelInfoPtrs`
   (`*(0x486518)`); a vehicle model info's game name (its text key, e.g. `SENTINL`) is at +0x158. Zones: 56-byte
   records {name[8], min xyz, max xyz, ...} around `0x1a6e3e0`; the main districts' names are text keys (`A_PORT`
   Escobar International, `ARMYB`, `BEACH1..3`, `DOCKS`, `DTOWN`, `GOLFC`, `HAITI`, `HAVANA`, `PORNI`, `STARI`, `JUNKY`).

@@ -1,10 +1,25 @@
 // VCS disc streaming without the IOP (docs/NATIVE_PORT_ROADMAP.md milestone 6 step 1).
 #pragma once
 
+#include <string>
+#include <vector>
+
 class PS2Runtime;
 
 namespace vcs
 {
+    // Game files from mods (the mod loader, docs/MODS.md "Game files"): GTA3PS2.IMG entries read from a mod's file
+    // instead of the disc, only that entry - the archive itself is never rebuilt. `name`: the entry's model name (the
+    // file's name without its extension; the game keeps ~CRC32 of it in upper case) or "#<streaming index>"
+    // (tools/img.py). A file larger than its entry is refused. Any thread; resolved against the game's tables at the
+    // next read; entries already in memory change when the game streams them again.
+    struct StreamFile
+    {
+        std::string name, path, mod;
+        int priority = 50;
+    };
+    void setStreamFiles(std::vector<StreamFile> files);
+
     // The EE side of CDSTREAM.IRX's stream server (SIF RPC 0x65686577): read / poll / fn 5 replaced by reads from the
     // disc image on a host thread straight into EE RAM, the server's init call answered on the host. False with
     // VCS_NATIVE_STREAM=0, which keeps the IOP's (the reference).
