@@ -17,11 +17,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
+#include <fstream>
 #include <mutex>
 #include <thread>
 
@@ -60,6 +63,143 @@ namespace vcs
             return *r;
         }
 
+        // ---- game files from mods (setStreamFiles) ----------------------------------------------------------------
+        // The tables (docs/game-internals.md 9d): the disc's file table at 0x5038A8 ({name ptr, 0, LSN, bytes}, count
+        // at 0x486E8C), the streaming info *(*(0x489FF8) + 200) (0x18 a resource: +0x10 offset and +0x14 size in
+        // sectors inside GTA3PS2.IMG, 0xFFFFFFFF = none), the model infos *(0x486518) (+0x8: ~CRC32 of the upper-case name).
+        constexpr uint32_t kFileTable = 0x5038A8u, kFileCount = 0x486E8Cu, kStreaming = 0x489FF8u, kModelInfos = 0x486518u;
+        constexpr uint32_t kResources = 8482u; // streaming info entries (measured; the array ends there)
+
+        struct Overlay
+        {
+            uint32_t lsn, sectors;
+            std::vector<uint8_t> data; // the mod's file (the rest of the entry's sectors read as zeros)
+        };
+        std::mutex g_filesMutex;
+        std::vector<StreamFile> g_files;
+        uint64_t g_filesGeneration = 0, g_resolvedGeneration = 0;
+        std::vector<Overlay> g_overlays;
+
+        uint32_t rd32(const uint8_t *rdram, uint32_t addr)
+        {
+            uint32_t v;
+            std::memcpy(&v, rdram + (addr & 0x01FFFFFCu), 4);
+            return v;
+        }
+
+        // CKeyGen's key: CRC32 of the upper-case name without the final inversion
+        uint32_t keyOf(const std::string &name)
+        {
+            static uint32_t table[256] = {};
+            if (!table[1])
+                for (uint32_t i = 0; i < 256; ++i)
+                {
+                    uint32_t c = i;
+                    for (int k = 0; k < 8; ++k)
+                        c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+                    table[i] = c;
+                }
+            uint32_t c = 0xFFFFFFFFu;
+            for (const char ch : name)
+                c = table[(c ^ static_cast<uint8_t>(std::toupper(static_cast<unsigned char>(ch)))) & 0xFFu] ^ (c >> 8);
+            return c;
+        }
+
+        // Stream thread, before a read, when the list changed: each file to its entry's sectors (the game's tables are
+        // read once they exist). False while the game has not built them yet.
+        bool resolveFiles(const uint8_t *rdram)
+        {
+            const uint32_t streamingOwner = rd32(rdram, kStreaming), modelInfos = rd32(rdram, kModelInfos);
+            const uint32_t count = rd32(rdram, kFileCount);
+            if (!streamingOwner || !modelInfos || !count || count > 4096u)
+                return false;
+            uint32_t imgLsn = 0, imgSectors = 0;
+            for (uint32_t i = 0; i < count && !imgLsn; ++i)
+            {
+                const uint32_t entry = kFileTable + i * 16u, name = rd32(rdram, entry);
+                char text[48] = {};
+                std::memcpy(text, rdram + (name & 0x01FFFFFFu), sizeof(text) - 1);
+                if (std::strstr(text, "GTA3PS2.IMG"))
+                {
+                    imgLsn = rd32(rdram, entry + 8u);
+                    imgSectors = (rd32(rdram, entry + 12u) + 2047u) / 2048u;
+                }
+            }
+            const uint32_t streaming = rd32(rdram, streamingOwner + 200u);
+            if (!imgLsn || !streaming)
+                return false;
+            std::vector<StreamFile> files;
+            {
+                std::lock_guard<std::mutex> lock(g_filesMutex);
+                files = g_files;
+                g_resolvedGeneration = g_filesGeneration;
+            }
+            std::stable_sort(files.begin(), files.end(), [](const StreamFile &a, const StreamFile &b) { return a.priority > b.priority; });
+            std::vector<Overlay> overlays;
+            std::vector<uint32_t> taken;
+            for (const StreamFile &f : files)
+            {
+                uint32_t index = kResources;
+                if (!f.name.empty() && f.name[0] == '#')
+                    index = static_cast<uint32_t>(std::strtoul(f.name.c_str() + 1, nullptr, 10));
+                else
+                {
+                    const uint32_t key = keyOf(f.name);
+                    for (uint32_t i = 0; i < kResources && index == kResources; ++i)
+                    {
+                        const uint32_t info = rd32(rdram, modelInfos + i * 4u);
+                        if (info >= 0x100000u && info < 0x02000000u && rd32(rdram, info + 8u) == key)
+                            index = i;
+                    }
+                }
+                const uint32_t at = streaming + index * 0x18u;
+                const uint32_t offset = index < kResources ? rd32(rdram, at + 0x10u) : 0xFFFFFFFFu;
+                const uint32_t sectors = index < kResources ? rd32(rdram, at + 0x14u) : 0u;
+                if (offset == 0xFFFFFFFFu || !sectors || offset + sectors > imgSectors)
+                {
+                    std::fprintf(stderr, "[mods] %s: %s is no entry of GTA3PS2.IMG; not used\n", f.mod.c_str(), f.path.c_str());
+                    continue;
+                }
+                if (std::find(taken.begin(), taken.end(), index) != taken.end())
+                    continue; // a mod with a higher priority has it
+                std::ifstream in(f.path, std::ios::binary | std::ios::ate);
+                const auto size = in ? static_cast<uint64_t>(in.tellg()) : 0u;
+                if (!size || size > uint64_t(sectors) * 2048u)
+                {
+                    std::fprintf(stderr, "[mods] %s: %s is %llu bytes, its entry %u holds %u: not used (the game's buffer is the "
+                                         "entry's size)\n", f.mod.c_str(), f.path.c_str(), (unsigned long long)size, index, sectors * 2048u);
+                    continue;
+                }
+                Overlay o{imgLsn + offset, sectors, std::vector<uint8_t>(static_cast<size_t>(size))};
+                in.seekg(0);
+                in.read(reinterpret_cast<char *>(o.data.data()), static_cast<std::streamsize>(size));
+                taken.push_back(index);
+                std::fprintf(stderr, "[mods] %s: %s -> GTA3PS2.IMG entry %u (LSN %u, %u sectors)\n", f.mod.c_str(), f.path.c_str(),
+                             index, o.lsn, sectors);
+                overlays.push_back(std::move(o));
+            }
+            std::lock_guard<std::mutex> lock(g_filesMutex);
+            g_overlays = std::move(overlays);
+            return true;
+        }
+
+        // the mods' bytes over a disc read that covers their entries (whole or in part)
+        void overlay(uint32_t lsn, uint32_t bytes, uint8_t *dest)
+        {
+            std::lock_guard<std::mutex> lock(g_filesMutex);
+            const uint64_t start = uint64_t(lsn) * 2048u, end = start + bytes;
+            for (const Overlay &o : g_overlays)
+            {
+                const uint64_t from = std::max<uint64_t>(start, uint64_t(o.lsn) * 2048u);
+                const uint64_t to = std::min<uint64_t>(end, (uint64_t(o.lsn) + o.sectors) * 2048u);
+                for (uint64_t at = from; at < to; ++at)
+                {
+                    const uint64_t inEntry = at - uint64_t(o.lsn) * 2048u;
+                    dest[at - start] = inEntry < o.data.size() ? o.data[static_cast<size_t>(inEntry)] : 0u;
+                }
+            }
+        }
+
         void run()
         {
             Reader &r = reader();
@@ -78,6 +218,14 @@ namespace vcs
                 const uint32_t bytes = std::min<uint32_t>(request.bytes, 0x02000000u - dest);
                 if (!disc || !disc->readBytes(static_cast<uint64_t>(request.lsn) * 2048u, bytes, r.rdram + dest))
                     std::fprintf(stderr, "[stream] read of %u bytes at LSN 0x%x failed\n", bytes, request.lsn);
+                bool resolve;
+                {
+                    std::lock_guard<std::mutex> lock(g_filesMutex);
+                    resolve = g_resolvedGeneration != g_filesGeneration;
+                }
+                if (resolve)
+                    resolveFiles(r.rdram);
+                overlay(request.lsn, bytes, r.rdram + dest);
                 r.reads.fetch_add(1, std::memory_order_relaxed);
                 r.bytes.fetch_add(bytes, std::memory_order_relaxed);
                 r.nanoseconds.fetch_add(static_cast<uint64_t>(
@@ -150,6 +298,18 @@ namespace vcs
         {
             SET_GPR_U64(ctx, 2, 0);
             ctx->pc = GPR_U32(ctx, 31);
+        }
+    }
+
+    void setStreamFiles(std::vector<StreamFile> files)
+    {
+        std::lock_guard<std::mutex> lock(g_filesMutex);
+        g_files = std::move(files);
+        ++g_filesGeneration;
+        if (g_files.empty())
+        {
+            g_overlays.clear(); // nothing to resolve: the disc's own from the next read on
+            g_resolvedGeneration = g_filesGeneration;
         }
     }
 

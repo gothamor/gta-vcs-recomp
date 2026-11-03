@@ -1458,6 +1458,27 @@ of every writer and caller.
   scream (speech sounds). A Voices volume that scaled those voices in the native driver was tried on 2026-10-28 and
   removed (DECISIONS.md).
 
+### 9d. GTA3PS2.IMG: the model archive and its directory (2026-11-03)
+
+Found for the mod loader's game files (docs/MODS.md "Game files"), with the rig reading the tables in a running game
+(`tools/img.py table`) and the disc image's own file list (`tools/vcs_disc.py ls`).
+
+- **The disc's file table** (built at boot, section 3): `0x5038A8`, 16 bytes a file - `{name ptr, 0, LSN, bytes}` -
+  count at `0x486E8C` (341 files). GTA3PS2.IMG is at LSN 870012, 54,030,336 bytes (26,382 sectors); BEACH / MAINLA /
+  MALL.IMG (the world, streamed by the level code, 6b) and MOCAPPS2.IMG (with its MOCAPPS2.DIR) are other files.
+- **No directory on the disc**: GTA3PS2.IMG's is CStreaming's info, from GAME.DTZ - `*(*(0x489FF8) + 200)`, **0x18
+  bytes a resource**, indexed like the model ids (`+0xC` byte: the load state, 1 = loaded; `+0x10` the offset and
+  `+0x14` the size **in sectors inside GTA3PS2.IMG**, `0xFFFFFFFF` = no data; links and `0xAAAA` fill elsewhere).
+  8482 records (the array ends there), 1580 with data. The game streams an entry with `FUN_00221818` at
+  `LSN = 870012 + offset`, `size` sectors - one read per entry, into a buffer of the entry's size.
+- **Names are keys**: a model info (`*(0x486518)[id]`) holds at **+0x8 the key of its name = ~CRC32 of the upper-case
+  name** (CKeyGen; `ADMIRAL` -> `0xAB691458`). The names themselves are not kept; a vehicle's text key (+0x158) is its
+  model name when the keys match - 75 vehicles named that way (`admiral` 171: offset 7242, 37 sectors; `cheetah` 172:
+  7284, 30).
+- **Entries are relocatable**: the CHEETAH's entry served as the ADMIRAL's (smaller: the rest of the buffer zeros)
+  loads and draws a Cheetah under the name Admiral, no crash (`tools/gamefiles_check.py`) - a model resource carries
+  what the game needs to place it anywhere in the streaming memory.
+
 ## 10. Memory card and saves
 
 libmc calls are HLE (`Kernel/Stubs/MemoryCard.cpp`); files live in `%LOCALAPPDATA%/VCSRecomp/mc0`

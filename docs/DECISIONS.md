@@ -1074,3 +1074,12 @@ one source: the menu writes the file, Rescan reads an edited one. The settings r
 `Spec::saved = false` (a value kept elsewhere: `read` gives it, onChange stores it) and a Toggle's `partner` Integer
 drawn as a slider in the same row. At equal priority a DDS still beats a PNG, so a PNG mod has to be set above a DDS
 pack it shares textures with.
+
+## 2026-11-03 - Game files from mods: entries over the stream, not rebuilt archives (FORK.md T1c)
+
+The player's idea - change only the parts of an IMG, from folders - is how it is done: the stream layer, already native,
+lays a mod's bytes over each disc read that covers the entry, so no archive is rebuilt and mods stay small and
+stackable (priorities). GTA3PS2.IMG has no directory on the disc, so names go through the game's own keys (~CRC32 of
+the upper-case model name): `admiral.mdl` works without a name list; entries without a known name use their streaming
+index (`#1234.bin`, as `tools/img.py extract` writes them). Larger entries are refused for now: the game allocates the
+entry's recorded size.

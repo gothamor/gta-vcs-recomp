@@ -39,7 +39,7 @@ One task at a time, in this order. T3 is the base for T4-T7.
 |---|---|---|---|---|
 | T1 | Texture replacement: PCSX2-compatible packs, **DDS** first-class, PNG kept | - | **Done** (Vulkan compiled, not run) | [#1](https://github.com/willzmkv/gta-vcs-recomp/issues/1) |
 | T1b | Mod loader (PC Mod Loader's way): `modloader/` folders as mods, `modloader.ini`, F2 > Mods switched live with priority sliders; texture packs as its first content | T1 | **Done** | [#10](https://github.com/willzmkv/gta-vcs-recomp/issues/10) |
-| T1c | Mod loader: VCS's own game files from mods (archive entries `.mdl` / `.xtx` / ..., `MAIN.SCM`, `.GXT`) - the `std.stream` of PC Mod Loader | T1b | Planned (research first) | [#11](https://github.com/willzmkv/gta-vcs-recomp/issues/11) |
+| T1c | Mod loader: VCS's own game files from mods (archive entries `.mdl` / `.xtx` / ..., `MAIN.SCM`, `.GXT`) - the `std.stream` of PC Mod Loader | T1b | **GTA3PS2.IMG entries done**; loose files next | [#11](https://github.com/willzmkv/gta-vcs-recomp/issues/11) |
 | T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Next (research first) | [#2](https://github.com/willzmkv/gta-vcs-recomp/issues/2) |
 | T3 | Pre-HUD post-processing pass (colour + depth before the 2D) | - | Planned | [#3](https://github.com/willzmkv/gta-vcs-recomp/issues/3) |
 | T4 | Volumetric height fog (Proper Shaders `[VolumetricFog]`) | T3 | Planned | [#4](https://github.com/willzmkv/gta-vcs-recomp/issues/4) |
@@ -203,6 +203,10 @@ release notes for a fork build.
   (switches, priority sliders, Rescan, Open folder), all applied while the game runs. With the user's two mods: HUD
   Remastered (160 PNG, 152 shared with the HD pack) supplies 8 textures at 50 / 50 and all 160 at 60. PC `.dff` / `.txd`
   analysed: VCS has neither format; its own files from mods are T1c, PC formats research (T9).
+- **2026-11-03 - T1c, game files.** GTA3PS2.IMG has no directory on the disc: the game's streaming info (from
+  GAME.DTZ) gives each entry's sectors and the model infos keep ~CRC32 of each name (game-internals.md 9d). A mod's
+  `admiral.mdl` / `#1234.bin` replaces just that entry, laid over the stream's reads; `tools/img.py` lists and extracts
+  entries (75 vehicles named). Checked: the CHEETAH's entry as `admiral.mdl` draws a Cheetah as "Admiral".
 
 ## How the work is done
 
