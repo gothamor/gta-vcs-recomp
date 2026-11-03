@@ -139,6 +139,46 @@ namespace vcs
             std::vector<uint32_t> taken;
             for (const StreamFile &f : files)
             {
+                if (f.name.find('.') != std::string::npos) // a loose file (MAIN.SCM, AMERICAN.GXT): the disc file of that name
+                {
+                    uint32_t lsn = 0, bytes = 0;
+                    for (uint32_t i = 0; i < count && !lsn; ++i)
+                    {
+                        const uint32_t entry = kFileTable + i * 16u;
+                        char text[64] = {};
+                        std::memcpy(text, rdram + (rd32(rdram, entry) & 0x01FFFFFFu), sizeof(text) - 1);
+                        std::string disc = text;
+                        disc = disc.substr(disc.find_last_of('\\') + 1);
+                        disc = disc.substr(0, disc.find(';'));
+                        if (disc.size() == f.name.size() &&
+                            std::equal(disc.begin(), disc.end(), f.name.begin(), [](char a, char b) { return std::toupper(static_cast<unsigned char>(a)) == std::toupper(static_cast<unsigned char>(b)); }))
+                        {
+                            lsn = rd32(rdram, entry + 8u);
+                            bytes = rd32(rdram, entry + 12u);
+                        }
+                    }
+                    if (!lsn || std::find_if(overlays.begin(), overlays.end(), [&](const Overlay &o) { return o.lsn == lsn; }) != overlays.end())
+                    {
+                        if (!lsn)
+                            std::fprintf(stderr, "[mods] %s: %s is no file on the disc; not used\n", f.mod.c_str(), f.path.c_str());
+                        continue;
+                    }
+                    std::ifstream in(f.path, std::ios::binary | std::ios::ate);
+                    const auto size = in ? static_cast<uint64_t>(in.tellg()) : 0u;
+                    if (!size || size > bytes)
+                    {
+                        std::fprintf(stderr, "[mods] %s: %s is %llu bytes, the disc's file %u: not used (the game reads the disc's "
+                                             "size)\n", f.mod.c_str(), f.path.c_str(), (unsigned long long)size, bytes);
+                        continue;
+                    }
+                    Overlay o{lsn, (bytes + 2047u) / 2048u, std::vector<uint8_t>(static_cast<size_t>(size))};
+                    in.seekg(0);
+                    in.read(reinterpret_cast<char *>(o.data.data()), static_cast<std::streamsize>(size));
+                    std::fprintf(stderr, "[mods] %s: %s -> disc file %s (LSN %u, %u bytes)\n", f.mod.c_str(), f.path.c_str(), f.name.c_str(),
+                                 lsn, bytes);
+                    overlays.push_back(std::move(o));
+                    continue;
+                }
                 uint32_t index = kResources;
                 if (!f.name.empty() && f.name[0] == '#')
                     index = static_cast<uint32_t>(std::strtoul(f.name.c_str() + 1, nullptr, 10));

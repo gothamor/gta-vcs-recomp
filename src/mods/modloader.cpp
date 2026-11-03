@@ -295,8 +295,8 @@ namespace vcs::mods
                     it.disable_recursion_pending();
                 else if (it->is_regular_file(ec))
                 {
-                    const std::string stem = utf8(it->path().stem());
-                    if (lower(it->path().extension().string()) == ".mdl" || (stem.size() > 1 && stem[0] == '#'))
+                    const std::string stem = utf8(it->path().stem()), ext = lower(it->path().extension().string());
+                    if (ext == ".mdl" || ext == ".gxt" || ext == ".scm" || (stem.size() > 1 && stem[0] == '#'))
                         out.push_back(it->path());
                 }
             }
@@ -360,7 +360,11 @@ namespace vcs::mods
                 for (const Mod &m : g_mods)
                     if (settings::value(m.key))
                         for (const fs::path &file : gameFilesIn(m.path))
-                            files.push_back({utf8(file.stem()), utf8(file), m.name, m.priority});
+                        {
+                            const std::string ext = lower(file.extension().string());
+                            const bool loose = ext == ".gxt" || ext == ".scm"; // a disc file, by its whole name
+                            files.push_back({utf8(loose ? file.filename() : file.stem()), utf8(file), m.name, m.priority});
+                        }
             vcs::setStreamFiles(files);
             const auto start = std::chrono::steady_clock::now();
             std::shared_ptr<render::TextureReplacements> pack;

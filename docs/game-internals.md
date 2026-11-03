@@ -1478,6 +1478,9 @@ Found for the mod loader's game files (docs/MODS.md "Game files"), with the rig 
 - **Entries are relocatable**: the CHEETAH's entry served as the ADMIRAL's (smaller: the rest of the buffer zeros)
   loads and draws a Cheetah under the name Admiral, no crash (`tools/gamefiles_check.py`) - a model resource carries
   what the game needs to place it anywhere in the streaming memory.
+- **Loose files go through the same stream**: `AMERICAN.GXT` / `ENGLISH.GXT` (and `MAIN.SCM`) are read by
+  `FUN_00221818` at their file-table LSN, `bytes` long - a mod's copy laid over those sectors is what the game loads
+  (a GXT with "Admiral" written "ADMIRAL" made the game's text for the key ADMIRAL read "ADMIRAL", 2026-11-03).
 
 ## 10. Memory card and saves
 
@@ -1902,8 +1905,8 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
   and diffing RAM); `0x4CD104` CTimer's milliseconds - it stands still while the game is paused (the pause menu, the
   save screen; found by diffing RAM in play and in the pause menu), so it tells running frames from paused ones.
   The player's money: `0x4E49CC` (in CPlayerInfo).
-- **Names**: the text (GXT) table is `**(0x48A2A0)` = {entries, count, data, size}; an entry is 12 bytes {u32 UTF-16
-  text, char key[8]}, sorted by key. Vehicle models are ids 171..280 in `CModelInfo::ms_modelInfoPtrs`
+- **Names**: the text (GXT) table is `*(0x48A2A0)` = {entries, count, data, size} (2553 entries); an entry is 12
+  bytes {UTF-16 text pointer (absolute), char key[8]}, sorted by key (corrected 2026-11-03: one dereference, not two). Vehicle models are ids 171..280 in `CModelInfo::ms_modelInfoPtrs`
   (`*(0x486518)`); a vehicle model info's game name (its text key, e.g. `SENTINL`) is at +0x158. Zones: 56-byte
   records {name[8], min xyz, max xyz, ...} around `0x1a6e3e0`; the main districts' names are text keys (`A_PORT`
   Escobar International, `ARMYB`, `BEACH1..3`, `DOCKS`, `DTOWN`, `GOLFC`, `HAITI`, `HAVANA`, `PORNI`, `STARI`, `JUNKY`).
