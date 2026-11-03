@@ -20,13 +20,14 @@ RADV (`libvulkan_radeon.ps5.a`), the app start-up code, the clean-room `libc.prx
 | The link: the ps5-plume-triangle recipe in Python (`tools/ps5_link.py`) | done: the whole game links into a PIE with the fork's libps5platform, libc++ and the system stubs (2026-10-31, stand-in generated code and an empty RADV archive: no disc or RADV build where it was written) |
 | Packaging (`tools/ps5.py package`): eboot.bin, sce_module/libc.prx, sce_sys/param.json + icon0.png, disc/ | done; checked with a stand-in for ps5-native-tool (the real one was not run where it was written), including the RELRO padding fallback |
 | Platform layer (`src/platform/platform_ps5.cpp`): the TV (VK_KHR_display), the DualSense (scePad), sound (sceAudioOut), TSC frame pacing, Dear ImGui from the pad, notifications | written and compiled; not run on a console yet |
-| The DualSense as the DualShock 2 (`tools/ps5.py padtest`, `ps5/tests/`) | done: 62 checks pass - the real platform layer with the console's pad functions mocked, through the real bindings to the report the game reads (every button, both sticks, the triggers, Select tap / hold, the menu chords kept from the game, a controller gone and back, the motors, the Controller page, the menus' gamepad keys). Built on its own for the build machine (no game build). The pad's button bits are ps5-plume-triangle's, verified on a console |
+| The DualSense as the DualShock 2 (`tools/ps5.py padtest`, `ps5/tests/`) | done: 71 checks pass - the real platform layer with the console's pad functions mocked, through the real bindings to the report the game reads (every button, both sticks, the triggers, Select tap / hold, the menu chords kept from the game, free aim's hand-over, a controller gone and back, the motors, the Controller page, the menus' gamepad keys). Built on its own for the build machine (no game build). The pad's button bits are ps5-plume-triangle's, verified on a console |
 | Vulkan: RADV's entry point instead of a loader (`volkInitializeCustom`) | written; not run on a console yet |
 | The disc read with `pread`, not mapped (`src/disc/iso_image.cpp`) | done: byte-identical to mapped reads on a test image (every file, past-the-end reads; ASan / UBSan clean); `pread` is the only way now |
 | Paths (`/app0`), the log file, start-up errors as notifications, the FP state, crash reports | written and compiled; not run on a console yet |
 | FFmpeg for the movies (`tools/ps5.py ffmpeg`) | written, not run (FFmpeg's configure was not run where it was written): without it the movies are skipped |
 | `tools/ps5.py compile-check` + `padtest` in CI (`.github/workflows/ps5.yml`): the PS5 build compiled without a disc | done |
 | The PC code stripped (SDL3 layer, D3D11, the launcher, keyboard / mouse, window settings, PC tools; 2026-10-31) | done: compile-check links, padtest 62 / 62, the recompiler builds for the build machine |
+| main merged (the game / runtime fixes of 0.0.3 - 0.2.0: free aim, above-50-fps fixes, save names and card backups, the stutter work; DECISIONS.md 2026-11-03) | done: compile-check links, padtest 71 / 71, the recompiler builds |
 | `tools/ps5.py setup` (ps5-plume-triangle fetched at its pinned commit and built), `build --zip`, `release.py` (the build kit) | done; setup's clone checked, its `make` not run where it was written |
 | **First run on a console** | **to do** - the checklist below |
 
@@ -74,7 +75,7 @@ console, which CI runs with the upstream SDK release. With a built triangle (`--
 `ps5/tests/padtest.cpp` with the real `platform_ps5.cpp` (the console's pad, user and TSC functions mocked), the real
 bindings (`vcs_input.cpp`), settings and the runtime's pad backend and control channel - nothing of the game - in
 `build/ps5-padtest`, then feeds DualSense states through the bindings and checks the DualShock 2 report the game reads
-(62 checks).
+(71 checks; free aim's `aim::update` is a stand-in there that records what the bindings hand over).
 
 The build machine never builds the game: `tools/recompile.py` builds only the recompiler there (`build/release`, the
 top-level CMakeLists.txt without the PS5 toolchain file). `python3 tools/clean.py [--apply]` deletes what the build

@@ -255,15 +255,54 @@ class Progress:
 
 
 def run_with_progress(cmd, log, label, cwd=ROOT, env=None):
-    """Runs `cmd` with its output to `log` under an elapsed-time line; returns the exit code."""
+    """Runs `cmd` with its output to `log` under an elapsed-time line; returns the exit code. A failure ends the log
+    with how the program ended (describe_exit): a crash leaves nothing else there."""
     cmd = resolve(cmd, env)
+    os.makedirs(os.path.dirname(os.path.abspath(log)), exist_ok=True)  # a fresh checkout has no build/ yet
     with open(log, "w", encoding="utf-8") as f, Progress(label) as progress:
         try:
             code = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
         except OSError as e:
             fail("could not start %s: %s" % (cmd[0], e))
+        if code != 0:
+            f.write("\n[%s] %s ended after %s: %s\n" % (os.path.basename(sys.argv[0]) or "tools",
+                                                       os.path.basename(cmd[0]), _duration(time.time() - progress.start),
+                                                       describe_exit(code)))
     print(progress.summary())
     return code
+
+
+def describe_exit(code):
+    """A line saying how a program ended: "exit code 1", or "killed by SIGILL (...)" - a crash prints nothing itself
+    (a recompiler built for a newer CPU stopped at its first instruction, with an empty log)."""
+    if code is None:
+        return "no exit code"
+    if code < 0:  # killed by a signal
+        import signal
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = "signal %d" % -code
+        hint = {"SIGILL": "an instruction this CPU doesn't have", "SIGSEGV": "the program crashed",
+                "SIGKILL": "killed (out of memory?)", "SIGABRT": "the program stopped itself"}.get(name, "")
+        return "killed by %s%s" % (name, " (%s)" % hint if hint else "")
+    return "exit code %d" % code
+
+
+# ---- Ghidra (the analysis tools: ghidra_analyze.py, eedecomp.py, irxdis.py) ---------------------------------------
+GHIDRA_VERSION = "12.1.4"  # the analysed EE project and the ghidra-emotionengine-reloaded extension are for this one
+
+
+def ghidra_home(env_var="GHIDRA_HOME"):
+    """The Ghidra install the analysis tools use: `env_var`, else GHIDRA_VERSION's release folder as its zip unpacks
+    (ghidra_<version>_PUBLIC) in the home folder or /opt. A newer Ghidra wants a newer JDK (12.2: JDK 25)."""
+    if os.environ.get(env_var):
+        return os.environ[env_var]
+    for base in (os.path.expanduser("~"), "/opt"):
+        found = sorted(d for d in glob.glob(os.path.join(base, "ghidra_%s*" % GHIDRA_VERSION)) if os.path.isdir(d))
+        if found:
+            return found[-1]
+    return os.path.join(os.path.expanduser("~"), "ghidra_%s_PUBLIC" % GHIDRA_VERSION)
 
 
 # ---- compiler environment ---------------------------------------------------------------------------------------

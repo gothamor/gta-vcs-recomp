@@ -37,13 +37,16 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -62,6 +65,71 @@ namespace rhi
         constexpr VkPipelineStageFlags2 kBufferReaders = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
                                                          VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
         constexpr VkAccessFlags2 kBufferReads = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT;
+
+        // PS2X_RHI_LOG_MEMORY=1: every device memory allocation / free VMA makes, with its size and the time it took
+        // (block churn while driving: a new block is a driver buffer made, cleared and mapped on the calling thread)
+        bool logMemory()
+        {
+            static const bool on = std::getenv("PS2X_RHI_LOG_MEMORY") != nullptr;
+            return on;
+        }
+        PFN_vkAllocateMemory g_realAllocateMemory = nullptr;
+        PFN_vkFreeMemory g_realFreeMemory = nullptr;
+        double nowSeconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+        VKAPI_ATTR VkResult VKAPI_CALL loggedAllocateMemory(VkDevice device, const VkMemoryAllocateInfo *info, const VkAllocationCallbacks *cb,
+                                                            VkDeviceMemory *memory)
+        {
+            const double t0 = nowSeconds();
+            const VkResult r = g_realAllocateMemory(device, info, cb, memory);
+            std::fprintf(stderr, "[vk-mem] t=%.3f allocate %.1f MB type %u: %.2f ms\n", t0, info->allocationSize / 1048576.0,
+                         info->memoryTypeIndex, (nowSeconds() - t0) * 1e3);
+            return r;
+        }
+        VKAPI_ATTR void VKAPI_CALL loggedFreeMemory(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks *cb)
+        {
+            const double t0 = nowSeconds();
+            g_realFreeMemory(device, memory, cb);
+            std::fprintf(stderr, "[vk-mem] t=%.3f free: %.2f ms\n", t0, (nowSeconds() - t0) * 1e3);
+        }
+
+        // PS2X_HOST_SPIKES: a clock for the per-draw timers, 0 when off (no clock reads then)
+        int64_t spikeClock()
+        {
+            static const bool on = std::getenv("PS2X_HOST_SPIKES") != nullptr;
+            return on ? std::chrono::steady_clock::now().time_since_epoch().count() : 0;
+        }
+
+        // Depth test / write / compare as dynamic state (core Vulkan 1.3): pipelines that differ only there are one
+        // VkPipeline, so a depth change is no pipeline bind - two thirds of the binds while driving were only that
+        // (PERFORMANCE.md 27). PS2X_RHI_STATIC_DEPTH=1: the depth state in each pipeline, as before.
+        bool dynamicDepth()
+        {
+            static const bool on = [] {
+                const char *e = std::getenv("PS2X_RHI_STATIC_DEPTH");
+                return !(e && *e && *e != '0');
+            }();
+            return on;
+        }
+
+        // PS2X_RHI_FULL_COPY=1: a dynamic vertex / index buffer's whole capacity copied into the frame's ring, as before
+        bool fullCopy()
+        {
+            static const bool on = [] {
+                const char *e = std::getenv("PS2X_RHI_FULL_COPY");
+                return e && *e && *e != '0';
+            }();
+            return on;
+        }
+
+        // PS2X_RHI_REDUNDANT=1: viewport, scissor and buffers recorded at every draw that set them, as before
+        bool redundantState()
+        {
+            static const bool on = [] {
+                const char *e = std::getenv("PS2X_RHI_REDUNDANT");
+                return e && *e && *e != '0';
+            }();
+            return on;
+        }
 
         bool statsOn()
         {
@@ -191,19 +259,40 @@ namespace rhi
             // the device's bindings forget an object being destroyed (a bound object is referenced; the
             // renderer replaces buffers and textures that are still bound)
             std::function<void(const void *)> unbind;
+            // The thread that records (set at each beginFrame). Textures may also be made on other threads
+            // (freeThreadedCreation: the GS stage's texture makers); one released there was never bound, and its frees
+            // wait in `orphans` until the owner's next submit puts them into that frame's queue.
+            std::atomic<std::thread::id> owner{};
+            std::mutex orphanMutex;
+            std::vector<std::function<void()>> orphans;
+
+            bool onOwner() const { return owner.load(std::memory_order_relaxed) == std::this_thread::get_id(); }
 
             void forget(const void *object)
             {
-                if (alive && unbind)
+                if (alive && unbind && onOwner())
                     unbind(object);
             }
 
             void defer(std::function<void()> free)
             {
-                if (alive)
+                if (!onOwner())
+                {
+                    std::lock_guard<std::mutex> lock(orphanMutex);
+                    orphans.push_back(std::move(free));
+                }
+                else if (alive)
                     garbage[frame].push_back(std::move(free));
                 else
                     free();
+            }
+
+            std::vector<std::function<void()>> takeOrphans()
+            {
+                std::lock_guard<std::mutex> lock(orphanMutex);
+                std::vector<std::function<void()>> out;
+                out.swap(orphans);
+                return out;
             }
 
             void collect(uint32_t slot)
@@ -220,6 +309,8 @@ namespace rhi
                     vkDeviceWaitIdle(device);
                 for (uint32_t i = 0; i < kFrames; ++i)
                     collect(i);
+                for (auto &f : takeOrphans())
+                    f();
                 if (allocator)
                     vmaDestroyAllocator(allocator);
                 if (device)
@@ -286,6 +377,7 @@ namespace rhi
             VmaAllocation allocation = VK_NULL_HANDLE;
             // dynamic buffers: the latest contents and where the current frame has them in its ring
             std::vector<uint8_t> shadow;
+            size_t used = 0; // vertex / index buffers: the bytes the last update wrote (the rest is undefined: WRITE_DISCARD)
             VkBuffer sliceBuffer = VK_NULL_HANDLE;
             VkDeviceSize sliceOffset = 0;
             uint64_t sliceFrame = 0; // the frame serial the slice belongs to (0: none yet)
@@ -313,6 +405,8 @@ namespace rhi
             ~VkPipe() override
             {
                 core->forget(this);
+                if (sharedVariants) // the device's shared pipelines (dynamic depth): destroyed with the device
+                    return;
                 Core *c = core.get();
                 std::vector<VkPipeline> all;
                 for (auto &[key, p] : variants)
@@ -327,6 +421,7 @@ namespace rhi
             std::string name;
             VkShaderModule vs = VK_NULL_HANDLE, ps = VK_NULL_HANDLE; // owned by the device's module cache
             std::unordered_map<uint64_t, VkPipeline> variants;     // by target formats / samples
+            bool sharedVariants = false;                            // variants from the device's shared cache (dynamicDepth)
         };
 
         // A frame's upload memory: host-visible chunks, reset when the frame slot comes round again
@@ -394,6 +489,7 @@ namespace rhi
                     return false;
                 }
                 m_offscreen = desc.offscreen || !desc.vulkan.createSurface;
+                m_core->owner.store(std::this_thread::get_id(), std::memory_order_relaxed); // beginFrame keeps it current
                 if (!createInstance(desc, error) || !pickDevice(desc, error) || !createDevice(error))
                     return false;
                 m_core->alive = true;
@@ -425,6 +521,14 @@ namespace rhi
                 vkDeviceWaitIdle(m_core->device);
                 for (uint32_t i = 0; i < kFrames; ++i)
                     m_core->collect(i);
+                for (auto &f : m_core->takeOrphans())
+                    f();
+                {
+                    std::lock_guard<std::mutex> lock(m_stagedMutex); // made, never recorded: only their staging memory
+                    for (Staged &st : m_staged)
+                        vmaDestroyBuffer(m_core->allocator, st.buffer, st.allocation);
+                    m_staged.clear();
+                }
                 m_dummyTexture.reset();
                 m_offscreenBack.reset();
                 m_defaultSampler.reset();
@@ -459,6 +563,9 @@ namespace rhi
                     vkDestroyPipelineLayout(d, m_pipelineLayout, nullptr);
                 if (m_setLayout)
                     vkDestroyDescriptorSetLayout(d, m_setLayout, nullptr);
+                for (auto &[key, pipeline] : m_sharedPipelines)
+                    if (pipeline)
+                        vkDestroyPipeline(d, pipeline, nullptr);
                 if (m_pipelineCache)
                     vkDestroyPipelineCache(d, m_pipelineCache, nullptr);
             }
@@ -467,7 +574,8 @@ namespace rhi
             const std::string &adapterName() const override { return m_adapterName; }
 
             // ---- resources ----------------------------------------------------------------------------------------
-            std::unique_ptr<Texture> createTexture(const TextureDesc &desc, const void *data, uint32_t rowPitch) override
+            // The image and its views, no contents yet (layout undefined). Thread-safe: only device calls and VMA.
+            std::unique_ptr<VkTexture> makeImage(const TextureDesc &desc)
             {
                 TextureDesc sized = desc;
                 sized.width = std::max(1u, desc.width);
@@ -519,7 +627,7 @@ namespace rhi
                 static const bool logCreates = std::getenv("PS2X_RHI_LOG_CREATES") != nullptr;
                 if (logCreates && w * h >= 256u * 256u)
                 {
-                    static uint64_t created = 0;
+                    static std::atomic<uint64_t> created{0}; // helper threads make textures too
                     if (++created <= 2000u)
                         std::fprintf(stderr, "[rhi] create %ux%u x%u '%s'\n", w, h, desc.samples, desc.name ? desc.name : "");
                 }
@@ -541,6 +649,29 @@ namespace rhi
                              : (desc.usage & UsageRenderTarget) ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                              : (desc.usage & UsageDepth)        ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
                                                                 : VK_IMAGE_LAYOUT_GENERAL;
+                return t;
+            }
+
+            bool freeThreadedCreation() const override { return true; } // off the owner thread: stage() (PERFORMANCE.md 25)
+
+            std::unique_ptr<Texture> createTexture(const TextureDesc &desc, const void *data, uint32_t rowPitch) override
+            {
+                auto t = makeImage(desc);
+                if (!t)
+                    return nullptr;
+                const uint32_t w = t->desc().width, h = t->desc().height;
+                const bool depth = desc.format == Format::D32F;
+                if (!m_core->onOwner()) // a helper thread (freeThreadedCreation): one level with data, sampled, no target
+                {
+                    const void *levels[1] = {data};
+                    const uint32_t pitches[1] = {rowPitch ? rowPitch : w * 4u};
+                    if (!data || t->mips > 1u || (desc.usage & (UsageRenderTarget | UsageDepth)) || !stage(*t, levels, pitches, 1u))
+                    {
+                        std::fprintf(stderr, "[rhi] createTexture %ux%u off the render thread: not a sampled texture with data\n", w, h);
+                        return nullptr;
+                    }
+                    return t;
+                }
 
                 // first contents, in the frame's set-up commands (before anything recorded so far can use it): the data,
                 // or zeros for targets
@@ -673,6 +804,40 @@ namespace rhi
                 barrier(m_cmd, t, homeLayout(t));
             }
 
+            std::unique_ptr<Texture> createTextureLevels(const TextureDesc &desc, const void *const *levels, uint32_t levelCount) override
+            {
+                // the image with its chain (created empty, then every level from the data in the set-up commands)
+                TextureDesc d = desc;
+                d.usage = UsageSampled;
+                d.mipLevels = std::max(1u, levelCount);
+                if (!m_core->onOwner()) // a helper thread (freeThreadedCreation): every level staged
+                {
+                    auto t = makeImage(d);
+                    if (!t)
+                        return nullptr;
+                    uint32_t pitches[16];
+                    const uint32_t n = std::min({t->mips, levelCount, 16u});
+                    for (uint32_t i = 0; i < n; ++i)
+                        pitches[i] = std::max(1u, t->desc().width >> i) * 4u;
+                    if (!stage(*t, levels, pitches, n))
+                        return nullptr;
+                    return t;
+                }
+                auto base = createTexture(d, nullptr, 0);
+                if (!base)
+                    return nullptr;
+                auto &t = static_cast<VkTexture &>(*base);
+                VkCommandBuffer cmd = initCmd();
+                barrier(cmd, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                for (uint32_t i = 0; i < t.mips && i < levelCount; ++i)
+                {
+                    const uint32_t w = std::max(1u, t.desc().width >> i), h = std::max(1u, t.desc().height >> i);
+                    uploadRegion(cmd, t, 0, 0, w, h, levels[i], w * 4u, i);
+                }
+                barrier(cmd, t, t.resting);
+                return base;
+            }
+
             std::unique_ptr<Buffer> createBuffer(const BufferDesc &desc, const void *data) override
             {
                 auto b = std::make_unique<VkBuf>(m_core, desc);
@@ -680,6 +845,7 @@ namespace rhi
                 if (desc.dynamic)
                 {
                     b->shadow.assign(size, 0);
+                    b->used = size;
                     if (data)
                         std::memcpy(b->shadow.data(), data, desc.size);
                     return b;
@@ -715,8 +881,12 @@ namespace rhi
                     return;
                 if (b.desc().dynamic)
                 {
-                    // WRITE_DISCARD-style: the rest of the buffer keeps the old bytes
+                    // WRITE_DISCARD-style: the rest of the buffer keeps the old bytes. A vertex / index buffer's slice
+                    // holds only what was written: the renderer's are sized for the largest frame seen and each frame
+                    // copied all of it (~1 ms a frame where it was measured, PERFORMANCE.md 27; PS2X_RHI_FULL_COPY=1); a
+                    // constant buffer's descriptor covers the whole buffer, so it is copied whole
                     std::memcpy(b.shadow.data(), data, size);
+                    b.used = (b.desc().usage == BufferUsage::Constant || fullCopy()) ? b.shadow.size() : std::max<size_t>(size, 4);
                     b.sliceFrame = 0; // a new slice at the next use
                     if (&b == m_vertexBuffer || &b == m_indexBuffer)
                         m_buffersDirty = true;
@@ -889,10 +1059,18 @@ namespace rhi
 
             void draw(uint32_t vertexCount, uint32_t firstVertex) override
             {
+                const int64_t t0 = spikeClock();
                 if (!vertexCount || !prepareDraw(false))
                     return;
+                const int64_t t1 = spikeClock();
                 vkCmdDraw(m_cmd, vertexCount, 1, firstVertex, 0);
                 ++m_stats.draws;
+                if (t0)
+                {
+                    const int64_t t2 = spikeClock();
+                    m_stats.prepareNs += t1 - t0;
+                    m_stats.drawNs += t2 - t1;
+                }
             }
 
             void drawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t baseVertex) override
@@ -994,9 +1172,41 @@ namespace rhi
                     m_presentMode = mode;
                     m_swapchainDirty = !m_offscreen;
                 }
+                // PS2X_HOST_SPIKES=<ms>: a frame whose span (the end of the last one to this present) or waits went over
+                // it, with its own counts (the runtime's [host-spike] line gives the main loop's phases)
+                static const double spikeMs = std::getenv("PS2X_HOST_SPIKES") ? std::atof(std::getenv("PS2X_HOST_SPIKES")) : 0.0;
+                const auto spikeNow = std::chrono::steady_clock::now();
+                const Stats &n = m_stats, &o = m_spikePrev;
+                const double span = std::chrono::duration<double, std::milli>(spikeNow - m_spikeFrameEnd).count();
+                const double waited = (n.acquireMs - o.acquireMs) + (n.submitMs - o.submitMs) + (n.presentMs - o.presentMs) +
+                                      (n.pipelineMs - o.pipelineMs);
+                char spikeLine[512] = "";
+                if (spikeMs > 0.0 && m_spikeFrameEnd.time_since_epoch().count() && (span > spikeMs || waited > spikeMs * 0.5))
+                    std::snprintf(spikeLine, sizeof(spikeLine),
+                                  "[rhi-spike] t=%.3f span %.1f ms: acquire %.1f, submit %.1f, present %.1f, new pipelines %llu (%.1f ms); "
+                                  "%llu draws (prepare %.1f ms, vkCmdDraw %.1f), %llu pipeline binds (%.1f ms), %llu pushes (%.1f ms), "
+                                  "%llu passes, %llu suspended, %llu barriers, %llu waits, %llu descriptor writes, %.0f KB up",
+                                  std::chrono::duration<double>(spikeNow.time_since_epoch()).count(), span, n.acquireMs - o.acquireMs,
+                                  n.submitMs - o.submitMs, n.presentMs - o.presentMs,
+                                  static_cast<unsigned long long>(n.pipelines - o.pipelines), n.pipelineMs - o.pipelineMs,
+                                  static_cast<unsigned long long>(n.draws - o.draws), (n.prepareNs - o.prepareNs) / 1e6,
+                                  (n.drawNs - o.drawNs) / 1e6, static_cast<unsigned long long>(n.pipelineBinds - o.pipelineBinds),
+                                  (n.bindNs - o.bindNs) / 1e6, static_cast<unsigned long long>(n.pushes - o.pushes), (n.pushNs - o.pushNs) / 1e6,
+                                  static_cast<unsigned long long>(n.passes - o.passes),
+                                  static_cast<unsigned long long>(n.suspends - o.suspends),
+                                  static_cast<unsigned long long>(n.barriers - o.barriers), static_cast<unsigned long long>(n.waits - o.waits),
+                                  static_cast<unsigned long long>(n.descriptorWrites - o.descriptorWrites), (n.uploaded - o.uploaded) / 1024.0);
                 if (statsOn())
                     reportStats();
+                const double fence0 = m_stats.fenceMs;
                 beginFrame();
+                const double fence = m_stats.fenceMs - fence0;
+                if (spikeLine[0] || (spikeMs > 0.0 && fence > spikeMs * 0.5))
+                    std::fprintf(stderr, "%s%sfence after it %.1f ms\n", spikeLine[0] ? spikeLine : "[rhi-spike]", spikeLine[0] ? "; " : " ",
+                                 fence);
+                m_spikePrev = m_stats;
+                m_spikePrev.inputDelays.clear();
+                m_spikeFrameEnd = std::chrono::steady_clock::now();
             }
 
             void setFrameInputTime(int64_t steadyNs) override { m_pendingInputNs = steadyNs; }
@@ -1260,6 +1470,13 @@ namespace rhi
                 VmaVulkanFunctions fns{};
                 fns.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
                 fns.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+                if (logMemory())
+                {
+                    g_realAllocateMemory = vkAllocateMemory;
+                    g_realFreeMemory = vkFreeMemory;
+                    fns.vkAllocateMemory = loggedAllocateMemory;
+                    fns.vkFreeMemory = loggedFreeMemory;
+                }
                 VmaAllocatorCreateInfo ai{};
                 ai.vulkanApiVersion = VK_API_VERSION_1_3;
                 ai.physicalDevice = m_core->physical;
@@ -1575,6 +1792,7 @@ namespace rhi
                 // a new command buffer has no state: everything is set again at the next draw
                 m_boundPipeline = VK_NULL_HANDLE;
                 m_pushed.valid = false;
+                m_emitted = {};
                 m_pipelineDirty = m_descriptorsDirty = m_buffersDirty = true;
                 m_viewportDirty = m_scissorDirty = m_blendDirty = true;
                 m_markerDepth = 0;
@@ -1589,6 +1807,7 @@ namespace rhi
 
             void beginFrame()
             {
+                m_core->owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
                 m_core->frame = (m_core->frame + 1) % kFrames;
                 FrameSlot &f = frame();
                 if (f.submitted)
@@ -1625,6 +1844,7 @@ namespace rhi
                 }
                 for (; m_markerDepth > 0; --m_markerDepth) // debug labels end with their command buffer; GPU timer spans go on
                     vkCmdEndDebugUtilsLabelEXT(m_cmd);
+                drainStaged();
                 VkCommandBuffer cbs[2];
                 uint32_t n = 0;
                 if (m_init)
@@ -1703,6 +1923,8 @@ namespace rhi
                     m_pipeline = nullptr;
                     m_boundPipeline = VK_NULL_HANDLE;
                 }
+                if (object == m_boundPipe)
+                    m_boundPipe = nullptr;
                 if (m_inPass && (object == m_passColor || object == m_passDepth))
                 {
                     // a target destroyed inside its pass: the pass ends here
@@ -1842,8 +2064,9 @@ namespace rhi
             {
                 if (b.sliceFrame == m_frameSerial)
                     return;
-                const Slice s = ringAlloc(b.shadow.size());
-                std::memcpy(s.data, b.shadow.data(), b.shadow.size());
+                const size_t n = std::min(b.used, b.shadow.size());
+                const Slice s = ringAlloc(n);
+                std::memcpy(s.data, b.shadow.data(), n);
                 b.sliceBuffer = s.buffer;
                 b.sliceOffset = s.offset;
                 b.sliceFrame = m_frameSerial;
@@ -1902,13 +2125,56 @@ namespace rhi
                     return false;
                 if (pipeline != m_boundPipeline)
                 {
+                    const int64_t t0 = spikeClock();
                     vkCmdBindPipeline(m_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
                     m_boundPipeline = pipeline;
+                    ++m_stats.pipelineBinds;
+                    if (statsOn() && m_boundPipe) // what changed: the shaders / vertex layout, or only fixed-function state
+                    {
+                        const PipelineDesc &a = m_boundPipe->desc, &b = m_pipeline->desc;
+                        if (m_boundPipe->vs != m_pipeline->vs || m_boundPipe->ps != m_pipeline->ps)
+                            ++m_stats.bindsShader;
+                        else if (a.stride != b.stride || a.topology != b.topology || a.attributes.size() != b.attributes.size())
+                            ++m_stats.bindsLayout;
+                        else
+                        {
+                            ++m_stats.bindsState;
+                            m_stats.bindsBlend += std::memcmp(&a.blend, &b.blend, sizeof(a.blend)) != 0;
+                            m_stats.bindsDepth += a.depth.test != b.depth.test || a.depth.write != b.depth.write || a.depth.func != b.depth.func;
+                        }
+                    }
+                    m_boundPipe = m_pipeline;
+                    if (t0)
+                        m_stats.bindNs += spikeClock() - t0;
                 }
                 m_pipelineDirty = false;
+                if (dynamicDepth()) // the pipeline's depth state, set only when it differs from what the command buffer has
+                {
+                    const DepthState &ds = m_pipeline->desc.depth;
+                    const VkBool32 test = (ds.test || ds.write) ? VK_TRUE : VK_FALSE, write = ds.write ? VK_TRUE : VK_FALSE;
+                    const VkCompareOp op = ds.test ? compare(ds.func) : VK_COMPARE_OP_ALWAYS;
+                    if (!m_emitted.depthValid || test != m_emitted.depthTest)
+                        vkCmdSetDepthTestEnable(m_cmd, test);
+                    if (!m_emitted.depthValid || write != m_emitted.depthWrite)
+                        vkCmdSetDepthWriteEnable(m_cmd, write);
+                    if (!m_emitted.depthValid || op != m_emitted.depthOp)
+                        vkCmdSetDepthCompareOp(m_cmd, op);
+                    m_emitted.depthTest = test;
+                    m_emitted.depthWrite = write;
+                    m_emitted.depthOp = op;
+                    m_emitted.depthValid = true;
+                }
+                // [redundant state] viewport, scissor and buffers are recorded only when they differ from what this
+                // command buffer has: the renderer sets them before every draw, and each one recorded made the driver
+                // send that state again at the draw (~5 us a draw on the GPU it was measured on, PERFORMANCE.md 26)
                 if (m_viewportDirty)
                 {
-                    vkCmdSetViewport(m_cmd, 0, 1, &m_viewport);
+                    if (redundantState() || !m_emitted.viewportValid || std::memcmp(&m_emitted.viewport, &m_viewport, sizeof(m_viewport)) != 0)
+                    {
+                        vkCmdSetViewport(m_cmd, 0, 1, &m_viewport);
+                        m_emitted.viewport = m_viewport;
+                        m_emitted.viewportValid = true;
+                    }
                     m_viewportDirty = false;
                 }
                 if (m_scissorDirty)
@@ -1916,12 +2182,22 @@ namespace rhi
                     VkRect2D r = m_scissor;
                     r.extent.width = std::min<uint32_t>(r.extent.width, r.offset.x < static_cast<int32_t>(m_passWidth) ? m_passWidth - r.offset.x : 0);
                     r.extent.height = std::min<uint32_t>(r.extent.height, r.offset.y < static_cast<int32_t>(m_passHeight) ? m_passHeight - r.offset.y : 0);
-                    vkCmdSetScissor(m_cmd, 0, 1, &r);
+                    if (redundantState() || !m_emitted.scissorValid || std::memcmp(&m_emitted.scissor, &r, sizeof(r)) != 0)
+                    {
+                        vkCmdSetScissor(m_cmd, 0, 1, &r);
+                        m_emitted.scissor = r;
+                        m_emitted.scissorValid = true;
+                    }
                     m_scissorDirty = false;
                 }
                 if (m_blendDirty)
                 {
-                    vkCmdSetBlendConstants(m_cmd, m_blendConstant);
+                    if (redundantState() || !m_emitted.blendValid || std::memcmp(m_emitted.blend, m_blendConstant, sizeof(m_blendConstant)) != 0)
+                    {
+                        vkCmdSetBlendConstants(m_cmd, m_blendConstant);
+                        std::memcpy(m_emitted.blend, m_blendConstant, sizeof(m_blendConstant));
+                        m_emitted.blendValid = true;
+                    }
                     m_blendDirty = false;
                 }
                 if (m_descriptorsDirty)
@@ -1950,6 +2226,7 @@ namespace rhi
                         {
                             was = ubo[i];
                             write(i, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &ubo[i], nullptr);
+                            ++m_stats.writesUbo;
                         }
                     }
                     for (uint32_t i = 0; i < kTextureSlots; ++i)
@@ -1959,6 +2236,7 @@ namespace rhi
                         {
                             m_pushed.view[i] = images[i].imageView;
                             write(kTextureBinding + i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, nullptr, &images[i]);
+                            ++m_stats.writesTexture;
                         }
                         samplers[i] = {(m_samplers[i] ? m_samplers[i] : m_defaultSampler.get())->sampler, VK_NULL_HANDLE,
                                        VK_IMAGE_LAYOUT_UNDEFINED};
@@ -1966,10 +2244,17 @@ namespace rhi
                         {
                             m_pushed.sampler[i] = samplers[i].sampler;
                             write(kSamplerBinding + i, VK_DESCRIPTOR_TYPE_SAMPLER, nullptr, &samplers[i]);
+                            ++m_stats.writesSampler;
                         }
                     }
                     if (n)
+                    {
+                        const int64_t t0 = spikeClock();
                         vkCmdPushDescriptorSetKHR(m_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, n, writes);
+                        ++m_stats.pushes;
+                        if (t0)
+                            m_stats.pushNs += spikeClock() - t0;
+                    }
                     m_pushed.valid = true;
                     m_stats.descriptorWrites += n;
                     m_descriptorsDirty = false;
@@ -1981,13 +2266,25 @@ namespace rhi
                         VkDeviceSize offset = 0;
                         VkBuffer vb = bufferOf(*m_vertexBuffer, offset);
                         offset += m_vertexOffset;
-                        vkCmdBindVertexBuffers(m_cmd, 0, 1, &vb, &offset);
+                        if (redundantState() || vb != m_emitted.vertexBuffer || offset != m_emitted.vertexOffset)
+                        {
+                            vkCmdBindVertexBuffers(m_cmd, 0, 1, &vb, &offset);
+                            m_emitted.vertexBuffer = vb;
+                            m_emitted.vertexOffset = offset;
+                        }
                     }
                     if (m_indexBuffer)
                     {
                         VkDeviceSize offset = 0;
                         VkBuffer ib = bufferOf(*m_indexBuffer, offset);
-                        vkCmdBindIndexBuffer(m_cmd, ib, offset, m_index32 ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16);
+                        const VkIndexType type = m_index32 ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+                        if (redundantState() || ib != m_emitted.indexBuffer || offset != m_emitted.indexOffset || type != m_emitted.indexType)
+                        {
+                            vkCmdBindIndexBuffer(m_cmd, ib, offset, type);
+                            m_emitted.indexBuffer = ib;
+                            m_emitted.indexOffset = offset;
+                            m_emitted.indexType = type;
+                        }
                     }
                     m_buffersDirty = false;
                 }
@@ -2020,6 +2317,34 @@ namespace rhi
                 if (it != p.variants.end())
                     return it->second;
                 const PipelineDesc &d = p.desc;
+                // dynamic depth: everything the VkPipeline holds but the depth state, as a key into the shared cache
+                std::string shared;
+                if (dynamicDepth())
+                {
+                    auto put = [&shared](const void *v, size_t n) { shared.append(static_cast<const char *>(v), n); };
+                    put(&p.vs, sizeof(p.vs));
+                    put(&p.ps, sizeof(p.ps));
+                    put(&d.stride, sizeof(d.stride));
+                    put(&d.topology, sizeof(d.topology));
+                    for (const VertexAttribute &a : d.attributes)
+                    {
+                        put(&a.format, sizeof(a.format));
+                        put(&a.offset, sizeof(a.offset));
+                    }
+                    const uint8_t blend[] = {d.blend.enable, static_cast<uint8_t>(d.blend.srcColor), static_cast<uint8_t>(d.blend.dstColor),
+                                             static_cast<uint8_t>(d.blend.colorOp), static_cast<uint8_t>(d.blend.srcAlpha),
+                                             static_cast<uint8_t>(d.blend.dstAlpha), static_cast<uint8_t>(d.blend.alphaOp), d.blend.writeMask,
+                                             d.scissor, d.depthClip};
+                    put(blend, sizeof(blend));
+                    put(&key, sizeof(key));
+                    p.sharedVariants = true;
+                    auto found = m_sharedPipelines.find(shared);
+                    if (found != m_sharedPipelines.end())
+                    {
+                        p.variants[key] = found->second;
+                        return found->second;
+                    }
+                }
                 VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
                                                              {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
                 stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -2069,9 +2394,11 @@ namespace rhi
                 VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
                 cb.attachmentCount = color != VK_FORMAT_UNDEFINED ? 1u : 0u;
                 cb.pAttachments = &att;
-                const VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS};
+                const VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT,           VK_DYNAMIC_STATE_SCISSOR,
+                                              VK_DYNAMIC_STATE_BLEND_CONSTANTS,    VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+                                              VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP};
                 VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-                dy.dynamicStateCount = 3;
+                dy.dynamicStateCount = dynamicDepth() ? 6u : 3u;
                 dy.pDynamicStates = dyn;
                 VkPipelineRenderingCreateInfo ri{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
                 ri.colorAttachmentCount = cb.attachmentCount;
@@ -2099,13 +2426,98 @@ namespace rhi
                     made = VK_NULL_HANDLE;
                 }
                 p.variants[key] = made;
+                if (!shared.empty() && made)
+                    m_sharedPipelines[shared] = made;
                 ++m_stats.pipelines;
                 m_stats.pipelineMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
                 return made;
             }
 
+            // ---- textures made on other threads (freeThreadedCreation) ---------------------------------------------
+            // A new texture's first contents off the owner thread: copied there into a staging buffer of their own; the
+            // copies go into the set-up commands at the owner's next submit (drainStaged). The texture counts as resting
+            // from now on: the owner gets it only after this returns, so anything it records with it comes after the
+            // drain's copies in the same submit (the set-up commands run first) or in a later one.
+            bool stage(VkTexture &t, const void *const *levels, const uint32_t *pitches, uint32_t count)
+            {
+                Staged st;
+                st.image = t.image;
+                st.aspect = t.aspect;
+                st.mips = t.mips;
+                st.resting = t.resting;
+                VkDeviceSize size = 0;
+                for (uint32_t i = 0; i < count; ++i)
+                {
+                    const uint32_t w = std::max(1u, t.desc().width >> i), h = std::max(1u, t.desc().height >> i);
+                    VkBufferImageCopy &c = st.regions[st.count++];
+                    c = {};
+                    c.bufferOffset = size;
+                    c.imageSubresource = {t.aspect, i, 0, 1};
+                    c.imageExtent = {w, h, 1};
+                    size += (static_cast<VkDeviceSize>(w) * h * 4u + 15u) & ~VkDeviceSize(15);
+                }
+                VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+                bi.size = std::max<VkDeviceSize>(size, 16);
+                bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+                VmaAllocationCreateInfo ai{};
+                ai.usage = VMA_MEMORY_USAGE_AUTO;
+                ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                ai.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT; // visible to the GPU at the submit
+                VmaAllocationInfo info{};
+                if (vmaCreateBuffer(m_core->allocator, &bi, &ai, &st.buffer, &st.allocation, &info) != VK_SUCCESS)
+                {
+                    std::fprintf(stderr, "[rhi] staging memory (%llu bytes) failed\n", static_cast<unsigned long long>(bi.size));
+                    return false;
+                }
+                for (uint32_t i = 0; i < st.count; ++i)
+                {
+                    const VkBufferImageCopy &c = st.regions[i];
+                    const uint32_t row = c.imageExtent.width * 4u;
+                    uint8_t *dst = static_cast<uint8_t *>(info.pMappedData) + c.bufferOffset;
+                    const auto *src = static_cast<const uint8_t *>(levels[i]);
+                    if (pitches[i] == row)
+                        std::memcpy(dst, src, static_cast<size_t>(row) * c.imageExtent.height);
+                    else
+                        for (uint32_t y = 0; y < c.imageExtent.height; ++y)
+                            std::memcpy(dst + static_cast<size_t>(y) * row, src + static_cast<size_t>(y) * pitches[i], row);
+                }
+                t.layout = t.resting;
+                std::lock_guard<std::mutex> lock(m_stagedMutex);
+                m_staged.push_back(st);
+                return true;
+            }
+
+            // The owner, at each submit: the staged textures' copies into the set-up commands; their staging buffers and
+            // the frees of textures released off this thread go with this frame (after its fence)
+            void drainStaged()
+            {
+                auto orphans = m_core->takeOrphans(); // first: an orphan's own copy is staged before it can be released
+                std::vector<Staged> staged;
+                {
+                    std::lock_guard<std::mutex> lock(m_stagedMutex);
+                    staged.swap(m_staged);
+                }
+                if (!staged.empty())
+                {
+                    VkCommandBuffer cmd = initCmd();
+                    for (const Staged &st : staged)
+                    {
+                        imageBarrier(cmd, st.image, st.aspect, 0, st.mips, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                        vkCmdCopyBufferToImage(cmd, st.buffer, st.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, st.count, st.regions);
+                        imageBarrier(cmd, st.image, st.aspect, 0, st.mips, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, st.resting);
+                        Core *c = m_core.get();
+                        const VkBuffer b = st.buffer;
+                        const VmaAllocation a = st.allocation;
+                        m_core->garbage[m_core->frame].push_back([c, b, a] { vmaDestroyBuffer(c->allocator, b, a); });
+                    }
+                }
+                for (auto &f : orphans)
+                    m_core->garbage[m_core->frame].push_back(std::move(f));
+            }
+
             // ---- copies -------------------------------------------------------------------------------------------
-            void uploadRegion(VkCommandBuffer cmd, VkTexture &t, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const void *data, uint32_t pitch)
+            void uploadRegion(VkCommandBuffer cmd, VkTexture &t, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const void *data, uint32_t pitch,
+                              uint32_t level = 0)
             {
                 const uint32_t row = w * 4u;
                 const Slice s = ringAlloc(static_cast<VkDeviceSize>(row) * h);
@@ -2113,7 +2525,7 @@ namespace rhi
                     std::memcpy(s.data + static_cast<size_t>(i) * row, static_cast<const uint8_t *>(data) + static_cast<size_t>(i) * pitch, row);
                 VkBufferImageCopy copy{};
                 copy.bufferOffset = s.offset;
-                copy.imageSubresource = {t.aspect, 0, 0, 1};
+                copy.imageSubresource = {t.aspect, level, 0, 1};
                 copy.imageOffset = {static_cast<int32_t>(x), static_cast<int32_t>(y), 0};
                 copy.imageExtent = {w, h, 1};
                 vkCmdCopyBufferToImage(cmd, s.buffer, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
@@ -2458,6 +2870,14 @@ namespace rhi
                              m_stats.draws / f, m_stats.descriptorWrites / f, m_stats.passes / f, m_stats.suspends / f, m_stats.barriers / f,
                              m_stats.waits / f, m_stats.uploaded / f / 1024.0, static_cast<unsigned long long>(m_stats.pipelines),
                              m_stats.pipelineMs, m_stats.fenceMs / f, m_stats.acquireMs / f, m_stats.submitMs / f, m_stats.presentMs / f);
+                std::fprintf(stderr,
+                             "[rhi] per frame: %.0f pipeline binds (%.0f shaders, %.0f vertex layout, %.0f state only: %.0f blend, %.0f "
+                             "depth); %.0f pushes (%.0f buffer, %.0f texture, %.0f sampler writes); CPU ms (PS2X_HOST_SPIKES): prepareDraw "
+                             "%.2f (binds %.2f, pushes %.2f), vkCmdDraw %.2f\n",
+                             m_stats.pipelineBinds / f, m_stats.bindsShader / f, m_stats.bindsLayout / f, m_stats.bindsState / f,
+                             m_stats.bindsBlend / f, m_stats.bindsDepth / f, m_stats.pushes / f, m_stats.writesUbo / f,
+                             m_stats.writesTexture / f, m_stats.writesSampler / f, m_stats.prepareNs / f / 1e6, m_stats.bindNs / f / 1e6,
+                             m_stats.pushNs / f / 1e6, m_stats.drawNs / f / 1e6);
                 if (!m_stats.inputDelays.empty())
                 {
                     std::vector<double> d = m_stats.inputDelays;
@@ -2498,6 +2918,18 @@ namespace rhi
 
             std::array<FrameSlot, kFrames> m_frames;
             VkFence m_waitFence = VK_NULL_HANDLE;
+            struct Staged // a texture made off the owner thread, its first contents waiting (stage / drainStaged)
+            {
+                VkImage image = VK_NULL_HANDLE;
+                VkImageAspectFlags aspect = 0;
+                uint32_t mips = 1, count = 0;
+                VkImageLayout resting = VK_IMAGE_LAYOUT_UNDEFINED;
+                VkBuffer buffer = VK_NULL_HANDLE;
+                VmaAllocation allocation = VK_NULL_HANDLE;
+                VkBufferImageCopy regions[16];
+            };
+            std::mutex m_stagedMutex;
+            std::vector<Staged> m_staged;
             uint64_t m_frameSerial = 0;
             VkCommandBuffer m_cmd = VK_NULL_HANDLE, m_init = VK_NULL_HANDLE;
             bool m_recording = false, m_rendering = false;
@@ -2527,6 +2959,8 @@ namespace rhi
             // bound state (kept across draws and passes)
             VkPipe *m_pipeline = nullptr;
             VkPipeline m_boundPipeline = VK_NULL_HANDLE;
+            VkPipe *m_boundPipe = nullptr; // PS2X_RHI_STATS: the RHI pipeline last bound (what a bind changes)
+            std::unordered_map<std::string, VkPipeline> m_sharedPipelines; // dynamicDepth: one VkPipeline per all-but-depth state
             VkBuf *m_vertexBuffer = nullptr, *m_indexBuffer = nullptr;
             uint32_t m_vertexOffset = 0;
             bool m_index32 = false;
@@ -2548,6 +2982,18 @@ namespace rhi
                 VkSampler sampler[kTextureSlots]{};
             } m_pushed;
             bool m_viewportDirty = true, m_scissorDirty = true, m_blendDirty = true;
+            struct Emitted // what the command buffer being recorded has (redundant state; reset by beginCommands)
+            {
+                VkViewport viewport{};
+                VkRect2D scissor{};
+                float blend[4] = {};
+                bool viewportValid = false, scissorValid = false, blendValid = false, depthValid = false;
+                VkBool32 depthTest = VK_FALSE, depthWrite = VK_FALSE;
+                VkCompareOp depthOp = VK_COMPARE_OP_ALWAYS;
+                VkBuffer vertexBuffer = VK_NULL_HANDLE, indexBuffer = VK_NULL_HANDLE;
+                VkDeviceSize vertexOffset = 0, indexOffset = 0;
+                VkIndexType indexType = VK_INDEX_TYPE_MAX_ENUM;
+            } m_emitted;
 
             // what unbound slots read
             std::unique_ptr<VkTexture> m_dummyTexture;
@@ -2559,9 +3005,15 @@ namespace rhi
             {
                 uint64_t frames = 0, draws = 0, passes = 0, suspends = 0, barriers = 0, waits = 0, uploaded = 0, pipelines = 0;
                 uint64_t descriptorWrites = 0;
+                uint64_t pipelineBinds = 0, pushes = 0;                          // PS2X_HOST_SPIKES
+                uint64_t bindsShader = 0, bindsLayout = 0, bindsState = 0, bindsBlend = 0, bindsDepth = 0; // PS2X_RHI_STATS
+                uint64_t writesUbo = 0, writesTexture = 0, writesSampler = 0;
+                int64_t prepareNs = 0, drawNs = 0, bindNs = 0, pushNs = 0; // ... the CPU time in prepareDraw / vkCmdDraw / binds / pushes
                 std::vector<double> inputDelays; // ms, input snapshot -> GPU done, per shown frame
                 double pipelineMs = 0.0, fenceMs = 0.0, acquireMs = 0.0, submitMs = 0.0, presentMs = 0.0;
             } m_stats;
+            Stats m_spikePrev;                                       // PS2X_HOST_SPIKES: m_stats at the last frame's end
+            std::chrono::steady_clock::time_point m_spikeFrameEnd{}; // ... and when it ended
             std::chrono::steady_clock::time_point m_statsStart = std::chrono::steady_clock::now();
         };
     }

@@ -1,6 +1,6 @@
 // [gta-recomp] Guest RAM write watch - see runtime/ps2_write_watch.h. The PS5 has no OS write watch: guest RAM is plain
-// memory, enabled() is false and every generation 0, so no block is ever told unchanged (they are copied, as before
-// the watch). The interface stays for the RSL path (docs/FULLY_NATIVE.md step 4).
+// memory, enabled() is false and the header's inline view empty (no pages), so no block is ever told unchanged (they are
+// copied, as before the watch). The interface stays for the RSL path (docs/FULLY_NATIVE.md step 4).
 #include "runtime/ps2_write_watch.h"
 
 #include <cstring>
@@ -20,7 +20,6 @@ namespace ps2writewatch
 
     uint32_t fold() { return 0u; }
 
-    uint32_t generation(uint32_t) { return 0u; }
-
-    bool unchangedSince(uint32_t, uint32_t) { return false; }
+    const uint32_t *g_generations = nullptr; // the header's inline generation() / unchangedSince(): 0 pages, never set
+    uint32_t g_generationPages = 0;
 }

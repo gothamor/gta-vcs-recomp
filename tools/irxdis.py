@@ -15,6 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mipsdis  # noqa: E402
+import toolchain as tc  # noqa: E402
 
 # Common IOP library export names by (library, ordinal). Partial; extend as needed.
 NAMES = {
@@ -211,13 +212,13 @@ def function_map(path):
 
 
 def decompile(path, out):
-    """Every function's C through headless Ghidra (GHIDRA_INSTALL_DIR, else scoop's ghidra), as a raw MIPS image at
+    """Every function's C through headless Ghidra (GHIDRA_INSTALL_DIR, else tc.ghidra_home's default), as a raw MIPS image at
     address 0 with the import stubs named imp_<lib>_<name> and the function starts of --map."""
     import subprocess
     import tempfile
     image, size, stubs = load(path)
-    ghidra = os.environ.get("GHIDRA_INSTALL_DIR") or os.path.expanduser("~/scoop/apps/ghidra/current")
-    headless = os.path.join(ghidra, "support", "analyzeHeadless.bat" if os.name == "nt" else "analyzeHeadless")
+    ghidra = tc.ghidra_home("GHIDRA_INSTALL_DIR")
+    headless = os.path.join(ghidra, "support", "analyzeHeadless")
     work = tempfile.mkdtemp(prefix="irxdis_")
     bin_path = os.path.join(work, os.path.basename(path) + ".bin")
     with open(bin_path, "wb") as f:

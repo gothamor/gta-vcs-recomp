@@ -1,6 +1,8 @@
-// The player's controls (docs/CONTROLS.md): the DualSense's button map, stick options and vibration - all turned into
-// the one DualShock 2 the game reads.
+// The player's controls (docs/CONTROLS.md): the DualSense's button map, stick options, free aim and vibration - all
+// turned into the one DualShock 2 the game reads.
 #pragma once
+
+#include <cstdint>
 
 namespace vcs::input
 {
@@ -8,8 +10,10 @@ namespace vcs::input
     void registerSettings();
 
     // Feeds the game's pad reads from the bindings (PSPadBackend::setReader) and its motor levels to the DualSense's
-    // vibration (setActuatorSink). VCS_INPUT_MAP=0 keeps the runtime's built-in fixed mapping (the reference).
-    void install();
+    // vibration (setActuatorSink). VCS_INPUT_MAP=0 keeps the runtime's built-in fixed mapping (the reference). `rdram`:
+    // the game's memory (its frame counter: free aim, game/vcs_aim.h, is worked out once per game frame); null in the
+    // controller test.
+    void install(uint8_t *rdram);
 
     // Stops any vibration now.
     void stopVibration();

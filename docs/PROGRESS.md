@@ -176,6 +176,13 @@ dropped on uploads (lazy render-target patching).
   - [x] **Per-element anchoring**: HUD "Screen edges" (`VCS_HUD=2`) - each HUD element squeezed towards the edge it
         sits near (radar left; clock / weapon / money / zone name right; help text left), the elements found from the
         frame's Im2D calls (game-internals.md 6f, DECISIONS.md).
+  - [x] **Screen edges: text and radar jumping** (reported by the user, 2026-11-01): subtitles, mission text and the
+        stunt results at the bottom switched between the left, middle and right, the radar sometimes going to the
+        middle with them. The radar's map tiles reach far past its circle, so text near it was grouped with the radar
+        and the pair's anchor flipped as the map turned. The radar and centred lines are now known by who draws them
+        (game-internals.md 6f "Radar and text"): the radar always left, centred lines always in the middle (the stunt
+        results' right-shifted rect moved there too). Checked with `VCS_TRACE_HUDANCHOR` (airport jumps at 16:9): 1240 frames, radar
+        always left, centred lines in 426 frames, all centred on x 320.
   - [x] **Native HUD layer**: the HUD's primitives kept out of the PS2 frame buffer and drawn over the shown picture
         at the output's size (NATIVE_RENDERER.md "HUD layer"); on by default, `VCS_HUD_NATIVE=0` = into the frame
         buffer. Textures from the GS backend's decoded cache, not a RenderWare raster decoder (DECISIONS.md).
@@ -417,6 +424,18 @@ dropped on uploads (lazy render-target patching).
       brake's constants patched to load from guest RAM 0x7FF00..), and CBike's lean `max(step, 0.5)` patched like the
       ped one (a gentle turn leant 22 degrees at 144 fps against 30). After: coasting 3.45 / 3.45 / 3.45 m/s^2 at 1/30
       / 60 / 144, the run-over pitch rate 0.042 / 0.043 / 0.041, the bike past a body upright at all three.
+- [x] Ferris wheel and escalators above 50 fps (2026-10-31, GitHub issue 10: Vic fell out of the ferris wheel at 60
+      fps). The wheel (FUN_00175620) and the escalators (FUN_002469A0) give their objects the move speed `displacement /
+      max(step, 1.0)`, step times too small above 50 fps (0.35 at 144); a ped on them moves with that speed, so he
+      slid off - out of a carriage within 2 s at 144 fps. Patched to max(step, 0.001) (overrides.toml; steps >= 1
+      unchanged). `framerate_audit.py` scenario `ferris` (seconds he keeps his place in a carriage, of 10): 10 / 10 / 10
+      at 1/30 / 60 / 144, 1.3 at 144 unpatched (11 m off). An escalator step's move speed at 144 equals 30's (0.0147 /
+      0.0148). game-internals.md 4.
+- [x] Follow cameras above 50 fps (2026-10-31, found with the ferris wheel's `max(step, 1.0)`): the on-foot camera
+      (FUN_0029DAB0) and the vehicle / boat camera (FUN_0029FAF0) turned themselves behind the player step times too
+      slowly (the stick's turning was right). Patched the same way. `framerate_audit.py` carcam (the car's lag after a
+      turn halving): 0.47 / 0.58 / 1.86 s at 1/30 / 60 / 144 before, 0.50 / 0.48 / 0.48 after; footcam (the camera
+      following a player running sideways): 96 / 82 / 35 degrees a second before, 97 / 99 / 100 after.
       `framerate_audit.py` scenarios coast, runover, bikebody, bikecoast, bikelean; game-internals.md 4. Found with the
       rig's new `trace` (a vehicle's state every frame) and write watches attributing its speed changes to callers.
       Then the same `max(step, 0.5)` in vehicles and bikes in water and a boat's rudder, patched: at 144 fps a car kept
@@ -504,6 +523,15 @@ dropped on uploads (lazy render-target patching).
       it after the points before it, in every configuration; a fresh teleport there from Fort Baxter lands (z 14.5).
       Collision streaming order / timing at that spot needs a look.
 ## Phase 5 - stability
+- [x] Saves lost when saving (players' reports: "crashed and destroyed my savegame", "deletes the save
+      file when I save at Phil's safehouse") - **fixed 2026-11-01** in the card layer (game-internals.md 10f; merged
+      2026-11-03). The slot file is named after the last mission; "Kill Phil: Part 2" on a file system without colons
+      put the save in an NTFS stream of an empty `1 Kill Phil` after the game had deleted the old slot, so the save was
+      never found again. Names are now stored as `%XX` where FAT / NTFS can't take them (the same on every file system:
+      a card folder copied to exFAT keeps its saves), and both cards are zipped into `userdata/backups/auto-*.zip`
+      before the game deletes or overwrites anything (it deletes the whole save folder after a failed write). Checked
+      on main through the game's menus: save, load, delete, backup - ok. The crash itself was not reproduced. On the
+      console: not run yet.
 - [x] Shakedown (MAR_A1): characters floating over / sunk into the ground in the opening cutscene, and the game stuck on
       "Loading..." when entering the shop (user report 2026-10-25) - **fixed 2026-10-25**, two separate bugs
       (game-internals.md 4 and 12). The cutscene: CCutsceneObject::ProcessControl's dead `step < 0.5` branch (only
@@ -551,6 +579,22 @@ dropped on uploads (lazy render-target patching).
   sync; a frame-rate counter; presets (Authentic, Enhanced, Widescreen light) and Reset all settings
   (docs/CONTROLS.md, SETTINGS_MENU_WIDESCREEN.md "Player settings"). Defaults unchanged (the old fixed mapping,
   vibration as on the PS2).
+- **Free aim** (2026-10-31 - 2026-11-01 on main, the user's request; merged 2026-11-03): Controller > Free aim (off
+  by default): with a gun, holding R1's button aims where the right stick points with the game's own circle, shots go
+  through it, Vic moves as he does locked on with that gun; fists / melee / thrown / scoped weapons keep the lock-on.
+  It is the game's own free aim (a lock-on to a dummy object), entered in one pad report, the dummy turned by the host,
+  the world run with the free-aim bit cleared and the camera / HUD with it set, the player's shot line taken from the
+  camera (src/game/vcs_aim.cpp; game-internals.md 12c, DECISIONS.md). The camera blends into the aim in 0.1 s and out
+  in 0.2 s with every gun, keeps the aim's heading when it ends; a gun running dry holds R1 up until it is let go.
+  Checked on main by its controls check in the game (a man on the aim line hit and one 2 m beside it not, strafing
+  while aiming, the right stick, the camera kept on release; SMG, assault rifle and M249 shots down the camera line).
+  The game's own free aim that **Jive Drive** (shooting from the passenger seat) and **Phil's shooting range** start is
+  turned by the right stick there, the left stick centred, the game's limits kept, and R1 fires (as Circle); checked
+  on main in both missions (the aim kept its world heading through Lance's driving, 62 shots down the camera line; 400
+  points at the range). On the PS5: the pad read hands R1 and the right stick to it once per game frame and puts its
+  answer in the report - `tools/ps5.py padtest` checks that (9 checks). Not done: aim assist; the shotguns fire
+  through another path, so their pellets still fly from the gun to the aim point - right at range, a little off up
+  close; the flame-thrower not checked. On the console: not run yet.
 - **Music / sound effects volume** (2026-10-28, asked for by the user): Audio > Music and Sound effects are the game's
   own levels, in step with its pause menu both ways and kept across save loads (game-internals.md 9c). controls_check
   checks that the levels reach the game and its prefs, a save load keeps them, and the pause menu's slider changes the
@@ -634,6 +678,12 @@ reference. docs/PS5.md has the whole of it; DECISIONS.md 2026-10-31 the choices.
       and clean.py kept. The controller test builds on its own (`ps5/tests/CMakeLists.txt`, in CI); the control channel
       injects DualShock 2 buttons; Advanced > Record performance. Checked: compile-check links, padtest 62 / 62, the
       recompiler builds; VERSION 0.0.4.
+- [x] main merged (2026-11-03, DECISIONS.md): the game and runtime fixes of main's 0.0.3 - 0.2.0 - the ferris
+      wheel / escalators and the follow cameras above 50 fps, free aim on the DualSense, the HUD's screen edges, the
+      overlay's game-state panel, the save names and card backups, the stutter work (music stop, palette table, CPU mip
+      chains, VU0 natives, CollectParameters, inflate, Vulkan state and constants only on change, depth as dynamic
+      state, no shader depth); not what was stripped on 2026-10-31 (the list: DECISIONS.md). Checked:
+      compile-check links, padtest 71 / 71 (9 new: free aim's hand-over), the recompiler builds; VERSION 0.3.0.
 - [ ] The first run on a console (docs/PS5.md's checklist); FFmpeg for the PS5 built and the movies checked; frame
       rate there; ThinLTO; 120 Hz / VRR; DualSense extras; the control channel on the LAN; the debug switches below from a
       file in the app's folder (a homebrew app gets no environment).
@@ -651,6 +701,7 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 | `VCS_TIMING=0\|1`, `VCS_FPS=30\|60\|120\|144\|-1\|0` | game timing original / frame-rate independent; frame rate cap (-1 display refresh, 0 unlimited) |
 | `VCS_TIMESTEP=N` | independent timing: exactly 1/N s per game frame, unpaced (frame-dependence tests) |
 | `VCS_SKIP_MOVIES=0\|1` | play / skip the intro movies (Display > Skip intro movies); test tools default to 1 |
+| `PS2X_MC_BACKUP=0` | no automatic card backup (`userdata/backups/auto-*.zip`, newest 10) before the game deletes or overwrites a card file |
 | `VCS_MOVIE_LOG=1` | movie playback: sound pushed / queued / played vs the pictures, every second |
 | `VCS_NATIVE_STREAM=0`, `VCS_STREAM_LOG=1` | disc streaming through the IOP (the reference); native read stats every 5 s |
 | `VCS_NATIVE_SOUND=0` | sound through the emulated IOP's CDSTREAM / LIBSD (the reference) |
@@ -663,6 +714,7 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 | `VCS_MIN_STEP=x` | independent timing's step floor (default 50/240: the 240 fps ceiling; lower makes an unlimited cap unlimited) |
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
 | `VCS_GAME_VOLUME=0` | Audio > Music / Sound effects leave the game's own levels alone (no setter hooks, no sync; the reference) |
+| `VCS_FREEAIM=0` | free aim's hooks not installed (CGame::Process, CCamera::Process, the weapons' line test): the game's aiming untouched, the setting does nothing |
 | `VCS_INPUT_MAP=0` | the runtime's fixed built-in mapping instead of the player's bindings (`ps2_pad.cpp`; the reference) |
 | `VCS_VSYNC=0\|1\|2` | Vertical sync for one run: off, on, off with tearing allowed |
 | `VCS_SCRIPT_TIMESTEP=0` | mission meters that count per frame stay on the frame rate (game-internals.md 11f; the reference) |
@@ -701,7 +753,7 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 | `VCS_DUMP_RAM=s,s,...` | write EE RAM to ram_<s>.bin at those seconds |
 | `PS2X_DMA_HIST=1` | VIF1 payload per MB of RAM every 5 s |
 | `VCS_TRACE_PACKETS=1` | peak use of the game's DMA packet buffer |
-| `PS2X_PERF_LOG=f.csv` | CSV recording of the perf numbers from boot (in the game: Advanced > Record performance, `logs/perf_*.csv`; the overlay: Advanced > Performance overlay); `python3 tools/perf_report.py f.csv` |
+| `PS2X_PERF_LOG=f.csv` | CSV recording of the perf numbers from boot (in the game: Advanced > Record performance, `logs/perf_*.csv`; the overlay: Advanced > Performance overlay, with the game-state panel under it); `python3 tools/perf_report.py f.csv`; since 2026-11-02 also `tex_create_us` (main thread making / releasing textures), `tex_kb`, `tex_decode_us` (the GS stage's decodes) and `host_max_ms` (the longest host frame within the game frame) |
 | `PS2X_HLE_CLIPPED=1` | draw world packets that cross the clip planes with GPU clipping (wrong in places, game-internals.md 6h) |
 | `PS2X_HLE_CLIPPER=0` | clipped world packets on the VU1 instead of the C++ clipper |
 | `PS2X_HLE_ENV=0` | the environment-map pass (stage table 0x13) on the VU1 |
@@ -754,6 +806,7 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 | `PS2X_HW_CLUT_FROM_UPLOAD=0`, `PS2X_HW_CLUT_VERIFY=1` | CLUT loads read emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] clut from upload`) |
 | `VCS_TRACE_IM2D_DELAY=s`, `VCS_TRACE_IM2D_STACK=1` | start the Im2D trace after s seconds (default 30); print the guest stack's return addresses per call |
 | `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier did not find (positions) |
+| `VCS_TRACE_HUDANCHOR=n` | log n frames of HUD elements (box, part: 1 radar / 2 centred text, anchor) and each text line's justify and rect, from `VCS_TRACE_IM2D_DELAY` on |
 | `PS2X_HW_OUTPUT=WxH` | the renderer's output size whatever the TV's (tests; with `PS2X_CAPTURE_SIZE`) |
 | `PS2X_HW_DUMP_TEX=<key hex>` | write that decoded texture (colour + alpha PPM, keys from the draw log) - analysis only, never commit |
 | `PS2X_HW_HUD_LOG=1` | the renderer's HUD layers (per frame buffer, stale or not) and the output size, every 2 s |
@@ -769,6 +822,16 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 | `VCS_NATIVE_MODEL_INDEX=0` | MAIN.SCM's model-id search (`FUN_00255188`) recompiled as before |
 | `PS2X_VAG_DECODE=1` | the upstream VAG-to-PCM decode of sound files read through fio (for an unused playback path) as before |
 | `PS2X_HW_DECODE_FAST=0` | textures decoded from their upload through the GS swizzle per texel even when the upload has the texture's own layout |
+| `PS2X_HW_PALETTE_TABLE=0` | paletted textures decoded with the CLUT lookup per texel instead of a 256-entry table (PERFORMANCE.md 21) |
+| `PS2X_HW_CPU_MIPS=0` | anisotropic filtering's mip chains by a render-target texture and `GenerateMips` on the main thread, as before 2026-11-02 |
+| `PS2X_HW_EARLY_TEXTURES=1` | new textures made by two helper threads after their decode instead of on the main thread at their `TexCreate` (off by default; PERFORMANCE.md 25) |
+| `VCS_NATIVE_INFLATE_FAST=0`, `VCS_NATIVE_INFLATE_FAST_VERIFY=1` | the native inflate's byte-wise bit reader (before 2026-11-02); both readers on every call, output and state compared (PERFORMANCE.md 24) |
+| `VCS_NATIVE_PARAMS=0`, `VCS_NATIVE_PARAMS_VERIFY=1` | the script VM's CollectParameters (FUN_00254B90) recompiled as before; the original runs and its words 1.. are compared with the native decode (PERFORMANCE.md 23) |
+| `VCS_MUSIC_LOG=1` | the native music driver's commands (stream open / stop / preload ...) with the state it found |
+| `PS2X_HW_LOG_PIPELINES=1` | each GS draw pipeline as it is made, with the time it took |
+| `VCS_MUSIC_STOP_WAIT=1` | a playing music stream's stop waits for the next refill IRQ, as on the IOP (the level swap stood up to 448 ms for it; game-internals.md 9a) |
+| `PS2X_WAIT_LOG_MAX=<n>` | with `PS2X_WAIT_LOG`: log up to n waits (300) |
+| `PS2X_FRAME_STATS=0` | the brightness probe off even with the control channel (its GPU read-back each host frame hides GPU-side hitches from the stutter rig) |
 | `VCS_RSL_NATIVE=0`, `VCS_RSL_NATIVE_VERIFY=1`, `VCS_RSL_NATIVE_LOG=1` | the original RSL state flush instead of the native one; the original runs and the native bytes are compared with it; counts every 10 s (`[rsl-native]`) |
 | `PS2X_HLE_PACKED=0`, `PS2X_HW_PACKED_VERIFY=1` | the C++ reproductions' strips / fans through the GS front end; check the packed recording against it per packet |
 | `PS2X_HLE_SETUP=0` | VU1 setup programs (matrices, slot routines, block copy) on the VU1 instead of natively |
@@ -788,8 +851,16 @@ so on the console they wait for a way in (docs/PS5.md's work list); the settings
 | `VCS_BUILD_DIR=dir` (or the path in `.vcs-build-dir`) | the build machine's tools: the build folder elsewhere |
 | `VCS_RHI=vulkan\|null` | the renderer for one run: Vulkan, or the null backend (no GPU work) |
 | `PS2X_RHI_DEBUG=1` | Vulkan's Khronos validation layer, where it is installed |
+| `python3 tools/gamectl.py gameinfo` | the overlay's game-state panel as text: player (position, heading, state, health), vehicle, camera, clock / area / pauses, pools, scripts |
 | `PS2X_RHI_STATS=1` | Vulkan: draws, descriptor writes, passes, suspended passes, barriers, uploads, CPU waits per frame, and input to GPU done (avg / p50 / p95) every 5 s; gs_hw: the input delay by stage |
 | `PS2X_RHI_GPU_TIME=1` | Vulkan: GPU time of the passes and the whole frame (`PS2X_GPU_TIMING=1`: per draw, breaking passes) |
+| `PS2X_HOST_SPIKES=<ms>` | main-loop frames whose work went over it, by phase (events, begin, frames, ui, window, present) with the main thread's CPU time; Vulkan: the frame's waits, draws with their CPU time in `prepareDraw` / `vkCmdDraw`, pipeline binds, descriptor pushes, passes, uploads, and the fence wait after it (PERFORMANCE.md 26) |
+| `PS2X_RHI_LOG_MEMORY=1` | Vulkan: every device memory allocation / free VMA makes, with its size and time |
+| `PS2X_RHI_STATIC_DEPTH=1` | Vulkan: depth test / write / compare in each pipeline, as before 2026-11-02 (now dynamic state, pipelines differing only there shared: PERFORMANCE.md 27) |
+| `PS2X_RHI_FULL_COPY=1` | Vulkan: a dynamic vertex / index buffer's whole capacity copied into the frame's ring, as before 2026-11-02 (now the bytes last written) |
+| `PS2X_RHI_REDUNDANT=1` | Vulkan: viewport, scissor, blend constants and vertex / index buffers recorded at every draw that set them, as before 2026-11-02 (now only when they change) |
+| `PS2X_HW_CB_DEDUPE=0`, `PS2X_HW_CB_LOG=1` | the GS draw / native constants written at every draw, as before 2026-11-02 (now only when they change); writes and skips every 5 s |
+| `PS2X_HW_SHADER_DEPTH=1` | the GS pixel shader writes the depth, as before 2026-11-02 (the default: the rasterised depth, early depth rejection on; PERFORMANCE.md 26) |
 | `PS2X_RHI_FULL_BARRIERS=1` | Vulkan: whole-pipeline barriers, as before the layout-based ones |
 | `PS2X_HOST_PACED=0`, `PS2X_FRAME_LEAD=0`, `PS2X_FRAME_LEAD_MARGIN_US=<us>` | frame-rate independent timing: the game's own deadline instead of the host's frames; no frame lead; the lead's margin (1500) - PERFORMANCE.md 19 |
 | `PS2X_HW_SPECIALISE=0` | the GS pixel shader's full version for every draw (not one per texture read; PERFORMANCE.md 18) |

@@ -2,11 +2,14 @@
 // docs/PS5.md): the real platform_ps5.cpp with the console's pad / user / TSC functions mocked below, the real bindings
 // (src/game/vcs_input.cpp), settings and the runtime's pad backend and control channel. DualSense states in, the
 // DualShock 2 report the game reads out: every button and stick, the triggers, Select on the touchpad (tap and hold),
-// the menu chords kept from the game, a controller gone and back, the motors, the Controller page, and the pad as Dear
-// ImGui's gamepad keys. The DualSense's button bits and ScePadData's head are ps5-plume-triangle's, verified on a
+// the menu chords kept from the game, free aim's hand-over (R1 and the right stick to game/vcs_aim.cpp, its say back
+// in the report, once per game frame), a controller gone and back, the motors, the Controller page, and the pad as
+// Dear ImGui's gamepad keys. The DualSense's button bits and ScePadData's head are ps5-plume-triangle's, verified on a
 // console.
+#include "game/vcs_aim.h"
 #include "game/vcs_input.h"
 #include "platform/platform.h"
+#include "runtime/ps2_control.h"
 #include "runtime/ps2_pad.h"
 #include "settings/settings.h"
 #include "imgui.h"
@@ -16,6 +19,7 @@
 #include <cstring>
 #include <thread>
 #include <time.h>
+#include <vector>
 
 // ---- the console's functions, mocked ---------------------------------------------------------------------------
 struct PadData { uint32_t buttons; uint8_t lx, ly, rx, ry, l2, r2; uint8_t rest[246]; };
@@ -56,6 +60,25 @@ namespace ps2perf
 {
     std::string summaryLine() { return {}; } // ps2_perf.cpp (the control channel's "perf")
 }
+// game/vcs_aim.cpp (it drives the game's own free aim): what the bindings hand over is recorded, its answer set here
+static vcs::aim::Input g_aimIn;
+static vcs::aim::Output g_aimOut;
+static int g_aimCalls = 0;
+static bool g_aiming = false;
+namespace vcs::aim
+{
+    Output update(const Input &in) { g_aimIn = in; ++g_aimCalls; return g_aimOut; }
+    bool aiming() { return g_aiming; }
+}
+// the game's memory, as far as the bindings read it: CTimer::m_FrameCounter
+static std::vector<uint8_t> g_ram(0x500000);
+static void nextFrame()
+{
+    uint32_t f;
+    std::memcpy(&f, g_ram.data() + 0x4CD124, 4);
+    ++f;
+    std::memcpy(g_ram.data() + 0x4CD124, &f, 4);
+}
 
 // ---- the checks ------------------------------------------------------------------------------------------------
 static int g_fail = 0, g_pass = 0;
@@ -86,7 +109,7 @@ int main()
     CHECK(platform::init(), "init");
     CHECK(g_openedUser == g_initialUser, "the initial user's pad opened (got 0x%x)", g_openedUser);
     CHECK(g_vibMode == 2, "vibration mode 2 (got %d)", g_vibMode);
-    vcs::input::install();
+    vcs::input::install(g_ram.data());
     { // the font atlas the renderer's ImGui backend would build (no renderer in this test)
         unsigned char *pixels = nullptr;
         int fw = 0, fh = 0;
@@ -148,6 +171,42 @@ int main()
         pad(0); CHECK(report().pressed == 0, "chord let go: no Select tap");
         ms(130);
     }
+
+    // free aim (Controller > Free aim; game/vcs_aim.h). Off (the default): never asked, R1 is R1
+    nextFrame(); pad(0x0800); r = report();
+    CHECK(g_aimCalls == 0 && r.pressed == kR1, "free aim off: not asked, R1 passes (%d calls, %04x)", g_aimCalls, r.pressed);
+    settings::set("pad.free_aim", 1);
+    // on: R1 held and the right stick left / up handed over; its answer (it has R1 + L3 and the camera) is the report
+    g_aimOut = {}; g_aimOut.own = g_aimOut.camera = g_aimOut.r1 = g_aimOut.l3 = true;
+    nextFrame(); pad(0x0800 | 0x4000, 0x80, 0x80, 0x00, 0x00); r = report();
+    CHECK(g_aimCalls == 1 && g_aimIn.want && g_aimIn.on && g_aimIn.turnRate > 0.4f && g_aimIn.tiltRate > 0.4f,
+          "free aim: R1 + right stick handed over (calls %d, want %d, on %d, turn %.2f, tilt %.2f)", g_aimCalls, g_aimIn.want,
+          g_aimIn.on, g_aimIn.turnRate, g_aimIn.tiltRate);
+    CHECK(r.pressed == (kR1 | kL3 | kCross) && r.rx == 0x80 && r.ry == 0x80, "free aim's R1 + L3, the right stick its own: %04x rx %02x ry %02x",
+          r.pressed, r.rx, r.ry);
+    report(); report();
+    CHECK(g_aimCalls == 1, "the frame's other reads repeat it (%d calls)", g_aimCalls);
+    g_aimOut.l3 = false;
+    nextFrame(); r = report();
+    CHECK(g_aimCalls == 2 && r.pressed == (kR1 | kCross), "the next frame asks again: R1 held, L3 up (%04x)", r.pressed);
+    g_aimOut = {}; // a gun gone: R1 up while it is held
+    g_aimOut.own = true;
+    nextFrame(); r = report(); CHECK(r.pressed == kCross, "free aim holds R1 up: %04x", r.pressed);
+    // a script's free aim (a car's drive-by, the shooting range): the right stick aims, R1 fires (Circle), the left stick
+    // is centred
+    g_aimOut = {}; g_aimOut.camera = g_aimOut.leftStick = g_aimOut.padR1Fires = true; g_aiming = true;
+    nextFrame(); pad(0x0800, 0x00, 0x80, 0xFF, 0x80); r = report();
+    CHECK(r.pressed == kCircle && r.lx == 0x80 && r.rx == 0x80 && g_aimIn.turnRate < -0.4f,
+          "a script's free aim: R1 fires, sticks to it (%04x lx %02x rx %02x turn %.2f)", r.pressed, r.lx, r.rx, g_aimIn.turnRate);
+    // a menu has the input: nothing wanted, nothing turned
+    ps2control::setGameInputBlocked(true);
+    nextFrame(); r = report();
+    CHECK(!g_aimIn.want && g_aimIn.turnRate == 0.0f, "a menu open: free aim not wanted, not turned");
+    ps2control::setGameInputBlocked(false);
+    settings::set("pad.free_aim", 0); g_aimOut = {}; g_aiming = false;
+    nextFrame(); pad(0x0800); const int calls = g_aimCalls; r = report();
+    CHECK(g_aimCalls == calls && r.pressed == kR1, "free aim off again: R1 is R1 (%04x)", r.pressed);
+    pad(0);
 
     // the controller gone: all-zero reads, then a failed read (closed, opened again after a second)
     pad(0, 0, 0, 0, 0); r = report();

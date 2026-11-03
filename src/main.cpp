@@ -9,6 +9,7 @@
 #include "runtime/ps2_perf.h"
 
 #include "debug/crash.h"
+#include "debug/game_info.h"
 #include "debug/rig.h"
 #include "game/vcs_trainer.h"
 #include "debug/selftest.h"
@@ -783,8 +784,9 @@ int main(int argc, char *argv[])
 
         vcs::rig::install(runtime); // control-channel automation commands (debug/rig.h)
         vcs::trainer::install(runtime); // the trainer's control-channel command (game/vcs_trainer.h)
-        vcs::input::install();          // the player's bindings feed the pad (game/vcs_input.h)
+        vcs::input::install(runtime.memory().getRDRAM()); // the player's bindings feed the pad (game/vcs_input.h)
         vcs::volume::install(runtime);  // the game's music / effects levels follow the settings (game/vcs_volume.h)
+        vcs::gameinfo::install(runtime); // the overlay's game-state panel, the `gameinfo` command (debug/game_info.h)
         // setting <key> [value] -> ok <value>: a setting read or changed (a test run never writes vcs.ini)
         ps2control::addCommand("setting", [](const std::string &args, ps2control::Reply reply) {
             const size_t space = args.find(' ');

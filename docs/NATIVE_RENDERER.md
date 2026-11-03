@@ -264,7 +264,24 @@ target: it is drawn in the HUD layer. So the frame is not a multiple of 640x448:
   original bilinear): the game's textures get a mip chain, and bilinear-filtered draws with plain repeat / clamp
   wrapping (about 90% of textured draws outside the barracks) are sampled by the hardware - trilinear, anisotropic -
   instead of the GS's own bilinear (`linearIipFgeAte.x == 2`, `hwSampler`); region wraps, render targets and nearest
-  filtering keep the exact GS path. `PS2X_HW_ANISO_LOG=1` counts which path textured draws take.
+  filtering keep the exact GS path. `PS2X_HW_ANISO_LOG=1` counts which path textured draws take. The chain is built on
+  the CPU (2x2 box, rounded: `buildMipChain`) and the texture made in one plain creation with every level
+  (`rhi::Device::createTextureLevels`) - before 2026-11-02 each new texture was a render target with a `GenerateMips`
+  pass on the main thread, which made texture bursts hitch (PERFORMANCE.md 21; `PS2X_HW_CPU_MIPS=0` = before).
+- **New textures off the main thread** (opt-in, 2026-11-02, PERFORMANCE.md 21, 25): the GS stage decodes a texture (a
+  paletted one through a 256-entry table: `GSCpuBackend::paletteTable`) and can hand the pixels to two helper threads
+  that make it on the free-threaded device (`rhi::Device::freeThreadedCreation`, `HwBackend::makeTextureEarly`); the
+  executor takes the finished texture at its `TexCreate` (`EarlyTexture::done`). Vulkan makes the image there and stages
+  its first contents; the recording thread records the copies into the set-up commands at its next submit (`stage` /
+  `drainStaged`). Off by default (no gain measured on a 2-core CPU, PERFORMANCE.md 25; not measured on the PS5's 8
+  cores yet): `PS2X_HW_EARLY_TEXTURES=1` turns it on.
+- **No shader depth** (2026-11-02, PERFORMANCE.md 26): the GS pixel shader is built with and without its depth output
+  (SHADER_DEPTH); Vulkan uses the rasterised depth - the same value with a 0..1 depth range - so early depth rejection
+  works (`PS2X_HW_SHADER_DEPTH=1`: the shader's depth, as before). The draw constants are written only when they change
+  (`updateConstants`), and the Vulkan backend records viewport, scissor, blend constants and buffers only when they
+  differ from what the command buffer has. Depth test / write / compare are dynamic state: pipelines that differ only
+  there share one VkPipeline (`PS2X_RHI_STATIC_DEPTH=1` = baked in), and a dynamic vertex buffer's ring slice holds
+  only the bytes last written (`PS2X_RHI_FULL_COPY=1`; PERFORMANCE.md 27).
 - **The GS bilinear by Gather** (2026-10-30, PERFORMANCE.md section 15): with filtering off, the same draws
   (power-of-two textures without a mip chain) keep the GS's bilinear but fetch its 2x2 texels with `Gather` through a
   nearest sampler of their wrapping (`linearIipFgeAte.x == 3`, `m_gatherSampler`), drawn with a pixel shader built for

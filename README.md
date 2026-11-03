@@ -95,14 +95,15 @@ improvement is an option in the settings menu, and *Display > Presets > Authenti
   timing at 30 fps; things the PS2 game counted per frame (vehicle physics, mission meters and timers) put back on real
   time; a frame-rate counter and a performance overlay.
 - **Controls**: the DualShock 2's layout on the DualSense, every button rebindable, stick deadzones, camera speed,
-  trigger press point, swapped sticks, inverted camera axes, the game's rumble on the DualSense from 0% to 200%.
+  trigger press point, swapped sticks, inverted camera axes, the game's rumble on the DualSense from 0% to 200%;
+  free aim (off by default): with a gun, R1 aims where the right stick points, through the game's own aiming circle.
 - **Sound**: master, music, sound effects and movie volume; stereo, mono or swapped.
 - **Built-in trainer** (touchpad + R1), a list menu in the style of RDR2's Native Trainer
   ([docs/TRAINER.md](docs/TRAINER.md)): god mode, wanted level, money, any weapon, any of the 110 vehicles, teleports,
   any of the 59 story missions or a side job, time, weather, game speed - through the game's own script commands, and
   nothing of it is ever saved.
 - **Also**: skip the intro movies (off by default, as on the PS2); saves on a memory card written and read by the
-  game's own save code; every setting kept in `vcs.ini`.
+  game's own save code, zipped into `userdata/backups/` before every change; every setting kept in `vcs.ini`.
 
 ## Problems
 
@@ -127,7 +128,7 @@ The build's output is in `build/ps5/build.log` (`build/ps5/configure.log` for th
 | `python3 tools/ps5.py deploy --host IP [--iso F]` | the app folder to `/data/homebrew/<title id>` over FTP |
 | `python3 tools/ps5.py ffmpeg` | FFmpeg for the PS5 (the movies) |
 | `python3 tools/ps5.py compile-check --sdk DIR` | the PS5 build compiled against stand-in code: no disc needed (CI) |
-| `python3 tools/ps5.py padtest` | the DualSense → DualShock 2 path checked with the console's pad functions mocked (62 checks; built on its own) |
+| `python3 tools/ps5.py padtest` | the DualSense → DualShock 2 path checked with the console's pad functions mocked (71 checks; built on its own) |
 | `python3 tools/release.py` | the release zip: the source and `PS5-README.txt`, through a guard that refuses game files |
 | `python3 tools/clean.py [--apply]` | delete what the build folder holds besides the builds (scratch output, logs) |
 | `python3 tools/perf_report.py F.csv` | a performance recording (settings menu: Advanced > Record performance) |

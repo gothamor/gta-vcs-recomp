@@ -46,6 +46,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <sstream>
+#include <ctime> // [gta-recomp] clock_gettime (PS2X_HOST_SPIKES)
 
 namespace ps2_stubs
 {
@@ -567,8 +568,12 @@ namespace
     }
 }
 
+static uint32_t g_lastFramesTaken = 0; // [gta-recomp] PS2X_HOST_SPIKES (main thread)
+uint32_t ps2LastFramesTaken() { return g_lastFramesTaken; }
+
 void ps2NoteFramesTaken(uint32_t frames)
 {
+    g_lastFramesTaken = frames;
     g_framesTaken.fetch_add(frames, std::memory_order_relaxed);
     bool released = false;
     {
@@ -3191,17 +3196,41 @@ void PS2Runtime::run()
 
             }
         });
+        // [gta-recomp] PS2X_HOST_SPIKES=<ms>: a host frame whose work (not its sleep) took longer, with its phases
+        static const double spikeMs = std::getenv("PS2X_HOST_SPIKES") ? std::atof(std::getenv("PS2X_HOST_SPIKES")) : 0.0;
+        // (the clocks are read only when it is set: each read is a system call on the console)
+        using SpikeClock = std::chrono::steady_clock;
+        const auto spikeT0 = spikeMs > 0.0 ? SpikeClock::now() : SpikeClock::time_point{};
+        const auto threadCpuMs = []() -> double { // the main thread's own CPU time: wall minus this = blocked or preempted
+            timespec ts{};
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+            return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+        };
+        const double spikeCpu0 = spikeMs > 0.0 ? threadCpuMs() : 0.0;
+        double spikeCpuFrames = 0.0;
+        SpikeClock::time_point spikeT[6];
+        const auto mark = [&](int i) {
+            if (spikeMs > 0.0)
+                spikeT[i] = SpikeClock::now();
+        };
+        const bool spikeLead = platform::frameLeadRan();
         platform::pumpEvents(); // [gta-recomp]
         // [gta-recomp] host-paced game frames start on fresh input (ps2_present.h): here, unless the frame lead started
         // this one already, early enough to be ready now (below)
         if (!platform::frameLeadRan())
             ps2HostTick(false, platform::frameSlept());
+        mark(0);
         present::beginFrame();
         platform::beginFrame();
+        mark(1);
+        const double spikeCpu1 = spikeMs > 0.0 ? threadCpuMs() : 0.0;
         uint32_t presentWidth = FB_WIDTH;
         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
         const auto uploadStart = std::chrono::steady_clock::now();
         UploadFrame(frameTex, shownTex, this, presentWidth, presentHeight);
+        mark(2);
+        if (spikeMs > 0.0)
+            spikeCpuFrames = threadCpuMs() - spikeCpu1;
         ps2perf::hostFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - uploadStart).count()); // [gta-recomp]
 
         // [gta-recomp] display aspect: 4:3 (the PS2's TV), the widescreen ratio for 3D frames (render/presenter.h)
@@ -3238,8 +3267,12 @@ void PS2Runtime::run()
         const int srcHeight = static_cast<int>(std::max<uint32_t>(1u, presentHeight));
         // [gta-recomp] brightness probe (black-frame detector for the automation rig)
         static const bool frameStats = [] {
+            // PS2X_FRAME_STATS=0 turns it off with the control channel on: its read-back waits for the GPU every host
+            // frame, which hides GPU-side hitches from a stutter measurement (the rig's cruise, src/debug/rig.cpp)
             const char *a = std::getenv("PS2X_FRAME_STATS"), *b = std::getenv("PS2X_CONTROL");
-            return (a && *a && *a != '0') || (b && *b && *b != '0');
+            if (a && *a)
+                return *a != '0';
+            return b && *b && *b != '0';
         }();
         if (frameStats)
         {
@@ -3281,7 +3314,9 @@ void PS2Runtime::run()
         platform::endUiFrame();
         int outputWidth = 0, outputHeight = 0;
         platform::outputSize(outputWidth, outputHeight);
+        mark(3);
         present::drawOutput(shownTex, srcWidth, srcHeight, aspect, outputWidth, outputHeight, frameAspect);
+        mark(4);
 
         // [gta-recomp] control channel (runtime/ps2_control.h): screenshots render the same picture off-screen
         auto capturePng = [&](const std::string &path) -> std::string
@@ -3318,6 +3353,22 @@ void PS2Runtime::run()
         ps2control::pump(capturePng, [this] { requestStop(); });
         present::setFrameInputTime(gsHwShownInputNs()); // [gta-recomp] input-to-screen delay (PS2X_RHI_STATS)
         present::present();
+        mark(5);
+        if (spikeMs > 0.0)
+        {
+            const auto ms = [](SpikeClock::time_point a, SpikeClock::time_point b) {
+                return std::chrono::duration<double, std::milli>(b - a).count();
+            };
+            const double work = ms(spikeT0, spikeT[5]);
+            if (work > spikeMs)
+                std::fprintf(stderr,
+                             "[host-spike] t=%.3f work %.1f ms (cpu %.1f): events+tick %.1f, begin %.1f, frames %.1f (cpu %.1f), ui %.1f, "
+                             "output %.1f, present %.1f (lead %d, frames taken %u)\n",
+                             std::chrono::duration<double>(spikeT0.time_since_epoch()).count(), work, threadCpuMs() - spikeCpu0,
+                             ms(spikeT0, spikeT[0]), ms(spikeT[0], spikeT[1]), ms(spikeT[1], spikeT[2]), spikeCpuFrames,
+                             ms(spikeT[2], spikeT[3]), ms(spikeT[3], spikeT[4]), ms(spikeT[4], spikeT[5]), spikeLead ? 1 : 0,
+                             ps2LastFramesTaken());
+        }
         // [gta-recomp] frame lead (docs/PERFORMANCE.md 19): with host-paced game frames, the next one starts - on input
         // read then - as long before the next host frame as it takes to build (gsHwFrameBuildNs) plus a margin, so it is
         // ready just in time instead of a host frame late. PS2X_FRAME_LEAD=0: at the host frame's start (no lead);

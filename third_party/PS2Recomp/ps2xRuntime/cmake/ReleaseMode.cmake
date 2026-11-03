@@ -9,9 +9,10 @@ function(EnableFastReleaseMode TargetName)
     # of the 150 MB game re-codegens everything, which kills iteration time.
     # -ffp-contract=off: the PS2's FMACs (VU and EE FPU) round the product and the sum separately, so clang must not
     # fuse `a + b * c` into one rounding. -fno-strict-aliasing: the runtime and generated code read guest memory through
-    # casts. No stack protector / CET. -march: the PS5's Zen 2 (VCS_PS5), x86-64-v3 for the build machine's tools.
+    # casts. No stack protector / CET. -march: the PS5's Zen 2 (VCS_PS5); the build machine's own CPU for its tools,
+    # which run only there (a recompiler built for AVX2 stopped at its first instruction on a CPU without it).
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        set(_ps2x_march -march=x86-64-v3)
+        set(_ps2x_march -march=native)
         if(VCS_PS5)
             set(_ps2x_march -march=znver2)
         endif()

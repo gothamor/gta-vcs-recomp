@@ -2,7 +2,7 @@
 """Decompile game functions to C with headless Ghidra, from the analysed EE project (tools/ghidra_analyze.py).
 Analysis only: the output is derived from game code and stays under build/analysis/.
 
-    python tools/eedecomp.py ADDR [ADDR ...] [--out build/analysis/decomp/NAME.c]
+    python3 tools/eedecomp.py ADDR [ADDR ...] [--out build/analysis/decomp/NAME.c]
 
 ADDR: hex addresses (any address inside a function names that function). Needs Ghidra 12.1.4 + the EE extension and
 JDK 21 (GHIDRA_HOME / JAVA_HOME, defaults as in ghidra_analyze.py). The project is opened read-only (-readOnly).
@@ -22,16 +22,14 @@ def main():
     ap.add_argument("--out")
     a = ap.parse_args()
 
-    home = os.path.expanduser("~")
-    ghidra = os.environ.get("GHIDRA_HOME", os.path.join(home, "scoop", "apps", "ghidra", "current"))
-    env = dict(os.environ)
-    env.setdefault("JAVA_HOME", os.path.join(home, "scoop", "apps", "temurin21-jdk", "current"))
+    ghidra = tc.ghidra_home()
+    env = dict(os.environ)  # JAVA_HOME, else the java on the PATH
     headless = os.path.join(ghidra, "support", "analyzeHeadless")
     if not os.path.isfile(headless):
         tc.fail(f"{headless} not found: set GHIDRA_HOME")
     project = os.path.join(tc.ROOT, "ghidra", "project")
     if not os.path.isfile(os.path.join(project, "vcs.gpr")):
-        tc.fail("no EE project yet: python tools/ghidra_analyze.py")
+        tc.fail("no EE project yet: python3 tools/ghidra_analyze.py")
     out = os.path.abspath(a.out or os.path.join(tc.BUILD, "analysis", "decomp", "_".join(x.lower().replace("0x", "") for x in a.addrs[:4]) + ".c"))
     os.makedirs(os.path.dirname(out), exist_ok=True)
     scripts = os.path.join(tc.ROOT, "tools", "ghidra")

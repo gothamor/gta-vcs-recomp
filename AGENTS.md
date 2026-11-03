@@ -43,11 +43,11 @@ choices).
 | Path | What |
 |---|---|
 | `src/main.cpp` | The app's start: the disc, the log, settings registration, runtime start |
-| `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`), frame timing (`vcs_framerate.cpp`, per-frame mission meters `vcs_script_timing.cpp`), the player's controls (`vcs_input.cpp`), the game's music / effects levels as settings (`vcs_volume.cpp`) |
+| `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`), frame timing (`vcs_framerate.cpp`, per-frame mission meters `vcs_script_timing.cpp`), the player's controls (`vcs_input.cpp`; free aim `vcs_aim.cpp`), the game's music / effects levels as settings (`vcs_volume.cpp`) |
 | `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders (HLSL, compiled to SPIR-V by `tools/hlsl_spirv.py`), the RHI (`rhi.h`; the PS5 draws with `vulkan/`; only the backends see a graphics API), the PS5 platform layer (`platform_ps5.cpp`) |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
 | `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the settings menu (touchpad + Options), the trainer menu (touchpad + R1) |
-| `src/debug/` | Crash handler, watchdog, self-test, memory watch, the control channel's automation commands (`rig.cpp`) |
+| `src/debug/` | Crash handler, watchdog, self-test, memory watch, the overlay's game-state panel (`game_info.cpp`, also `gamectl.py gameinfo`), the control channel's automation commands (`rig.cpp`: the stutter rig's `cruise` among them) |
 | `third_party/PS2Recomp/ps2xRuntime` | The runtime (EE, VIF, VU1, GS HW backend, IOP host, stubs); our changes marked `[gta-recomp]` |
 | `game/vcs/` | Recompiler config, function map, VU1 upload list |
 | `ps5/` | The PS5 build's own pieces: the CMake toolchain file and link rule (`cmake/`), start-up code linked into the game (`runtime/`: emulated TLS, `stat` wrapper, RELRO padding), the controller test (`tests/`) |
@@ -64,9 +64,9 @@ python3 tools/ps5.py package [--zip]                          # the app folder a
 python3 tools/ps5.py deploy --host IP [--iso F]               # the app folder to /data/homebrew/<title id> over FTP
 python3 tools/ps5.py ffmpeg                                   # FFmpeg for the PS5 (the movies), then build again
 python3 tools/ps5.py compile-check --sdk DIR [--triangle T]   # the PS5 build against stand-in code (no disc; CI)
-python3 tools/ps5.py padtest                                  # the DualSense -> DualShock 2 path, console functions mocked (62 checks)
+python3 tools/ps5.py padtest                                  # the DualSense -> DualShock 2 path, console functions mocked (71 checks)
 python3 tools/release.py [--ref vX | --worktree]              # the release zip (build/dist): the source + PS5-README.txt;
-                                                              # refuses game files. The number is VERSION (root; 0.0.4):
+                                                              # refuses game files. The number is VERSION (root; 0.3.0):
                                                               # bump it before tagging - the tag must match
 python3 tools/gamectl.py ...                                  # the game's control channel (runtime/ps2_control.h)
 python3 tools/perf_report.py logs/perf_*.csv                  # a performance recording (Advanced > Record performance)
@@ -136,6 +136,9 @@ python3 tools/eedecomp.py 0x2f7d58 [...] [--out FILE]         # game functions a
   who is missing.
 - A failure on the console: start from docs/PS5.md's first-run checklist (`logs/vcs.log` in the app's folder); crash
   lines give offsets into `build/ps5/vcs.elf` and the `llvm-symbolizer` command for them.
+- A save gone after saving (an empty slot file, or the whole save folder deleted): a card name a file system could not
+  store, or a failed card write - the game deletes its save folder after one (game-internals.md 10f). The card is
+  zipped into `userdata/backups/auto-*.zip` before every change (`[MC] card backup` in the log).
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs

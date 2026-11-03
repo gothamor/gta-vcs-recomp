@@ -1,9 +1,11 @@
 // See vcs_input.h.
 //
-// The game reads the pad once per game frame (scePadRead, game thread). The bindings live in the settings registry
-// (main thread); every change rebuilds one Map, which the game thread copies under a mutex at each read.
+// The game reads the pad three times per game frame (scePadRead, game thread; game-internals.md 12a). The bindings live
+// in the settings registry (main thread); every change rebuilds one Map, which the game thread copies under a mutex at
+// each read.
 #include "game/vcs_input.h"
 
+#include "game/vcs_aim.h"
 #include "game/vcs_freecam.h"
 #include "platform/platform.h"
 #include "runtime/ps2_control.h"
@@ -67,6 +69,7 @@ namespace vcs::input
         struct Map
         {
             std::array<int, kControlCount> pad{};
+            bool freeAim = false; // free aim (game/vcs_aim.h)
             bool swapSticks = false, invertX = false, invertY = false;
             float deadzoneLeft = 0.12f, deadzoneRight = 0.12f, cameraScale = 1.0f, trigger = 0.3f;
             float vibration = 1.0f;
@@ -75,6 +78,8 @@ namespace vcs::input
         std::mutex g_mapMutex;
         Map g_map;
         bool g_enabled = true; // VCS_INPUT_MAP
+        uint8_t *g_rdram = nullptr; // the game's memory (install): its frame counter, for free aim
+        constexpr uint32_t kFrameCounter = 0x004CD124u; // CTimer::m_FrameCounter
         std::atomic<uint64_t> g_lastReport{0}; // buttons | rx << 16 | ry << 24 | lx << 32 | ly << 40 ("padstate")
         std::atomic<uint32_t> g_reads{0};      // pad reads so far ("padstate")
 
@@ -85,6 +90,7 @@ namespace vcs::input
             Map m;
             for (size_t i = 0; i < kControlCount; ++i)
                 m.pad[i] = settings::value(padId(kControls[i]));
+            m.freeAim = settings::value("pad.free_aim") != 0;
             m.swapSticks = settings::value("pad.swap_sticks") != 0;
             m.invertX = settings::value("pad.invert_x") != 0;
             m.invertY = settings::value("pad.invert_y") != 0;
@@ -170,6 +176,15 @@ namespace vcs::input
             return static_cast<uint8_t>(v < 0.0f ? 128.0f + v * 128.0f : 128.0f + v * 127.0f);
         }
 
+        // Free aim's say over R1 / L3 and the sticks (aim::update), worked out once per game frame - the frame's other
+        // pad reads repeat it (game thread).
+        struct AimFrame
+        {
+            Clock::time_point at{}; // when it was worked out (epoch: not yet)
+            uint32_t frame = 0;     // for this game frame (m_FrameCounter)
+            aim::Output out;
+        } g_aim;
+
         bool readPad(uint8_t *data)
         {
             Map m;
@@ -183,12 +198,16 @@ namespace vcs::input
             const bool freeCamera = freecam::flying();
             const auto now = Clock::now();
 
+            bool padR1 = false; // R1's button is down (free aim's target button)
             if (ps2control::physicalInputOn() && gamepadConnected() && !freeCamera)
             {
                 const auto pad = gameButtons(now);
                 for (size_t i = 0; i < kControlCount; ++i)
                     if (padSource(m.pad[i], m.trigger, pad))
+                    {
                         buttons |= kControls[i].mask;
+                        padR1 = padR1 || kControls[i].mask == kR1;
+                    }
                 lx = gamepadAxis(AXIS_LEFT_X);
                 ly = gamepadAxis(AXIS_LEFT_Y);
                 rx = gamepadAxis(AXIS_RIGHT_X);
@@ -203,8 +222,56 @@ namespace vcs::input
                 rx *= (m.invertX ? -1.0f : 1.0f) * m.cameraScale;
                 ry *= (m.invertY ? -1.0f : 1.0f) * m.cameraScale;
             }
-            // buttons held through the control channel (runtime/ps2_control.h), unless a menu has the input
-            if (!ps2control::gameInputBlocked() && !freeCamera)
+
+            // free aim (game/vcs_aim.h): R1's button with a gun aims where the right stick points (Controller > Free
+            // aim); a script's own free aim (Jive Drive, the shooting range) is turned by the right stick while it is on
+            const bool blocked = ps2control::gameInputBlocked() || freeCamera;
+            uint32_t frame = 0;
+            if (g_rdram)
+                std::memcpy(&frame, g_rdram + kFrameCounter, 4);
+            if (freeCamera)
+                g_aim = {};
+            else if (g_aim.at == Clock::time_point{} || frame != g_aim.frame || now - g_aim.at >= std::chrono::milliseconds(250))
+            {
+                g_aim.at = now;
+                g_aim.frame = frame;
+                g_aim.out = {};
+                if (m.freeAim || aim::aiming())
+                {
+                    aim::Input in;
+                    in.want = !blocked && m.freeAim && padR1;
+                    in.on = m.freeAim;
+                    if (!blocked)
+                    {
+                        // the stick on a curve (fine aim near the centre), left / up +
+                        in.turnRate = -rx * std::fabs(rx);
+                        in.tiltRate = -ry * std::fabs(ry);
+                    }
+                    g_aim.out = aim::update(in);
+                }
+            }
+            if (g_aim.out.own)
+            {
+                // free aim has the target button (R1 + L3 to enter the game's free aim, then R1 held; R1 up while the
+                // button is held after the gun ran dry) and, aiming, the right stick
+                buttons = static_cast<uint16_t>((buttons & ~(kR1 | kL3)) | (g_aim.out.r1 ? kR1 : 0) | (g_aim.out.l3 ? kL3 : 0));
+                if (g_aim.out.camera)
+                    rx = ry = 0.0f;
+            }
+            else if (g_aim.out.camera)
+            {
+                // the game's own free aim a script started (aim::update): the right stick turns it, not the left stick,
+                // and R1's button fires there (the right thumb is on the stick), not R1
+                rx = ry = 0.0f;
+                if (g_aim.out.leftStick)
+                    lx = ly = 0.0f;
+                if (g_aim.out.padR1Fires && padR1)
+                    buttons = static_cast<uint16_t>((buttons & ~kR1) | kCircle);
+            }
+
+            // buttons held through the control channel (runtime/ps2_control.h), unless a menu has the input: the PS2's
+            // buttons as they are, past the bindings and free aim
+            if (!blocked)
                 buttons |= ps2control::injectedButtons();
 
             const uint16_t word = static_cast<uint16_t>(~buttons);
@@ -341,6 +408,21 @@ namespace vcs::input
         }
 
         s = {};
+        s.key = "pad.free_aim";
+        s.page = kPage;
+        s.section = "Sticks and triggers";
+        s.label = "Free aim";
+        s.help = "With a gun, holding R1's button (R1 unless changed above; give R1 the L2 to aim with the trigger) aims "
+                 "where the right stick points, with the game's aiming circle, instead of locking on; shots go through "
+                 "the circle and you move as you do locked on. Fists, melee and scoped weapons lock on as on the PS2. In "
+                 "a mission's own free aim (shooting from a car, the shooting range) the right stick aims and R1 fires. "
+                 "No aim assist.";
+        s.type = Type::Toggle;
+        s.defaultValue = 0;
+        s.onChange = onChange;
+        settings::add(s);
+
+        s = {};
         s.key = "pad.vibration";
         s.page = kPage;
         s.section = "Vibration";
@@ -356,8 +438,9 @@ namespace vcs::input
         settings::add(s);
     }
 
-    void install()
+    void install(uint8_t *rdram)
     {
+        g_rdram = rdram;
         const char *env = std::getenv("VCS_INPUT_MAP");
         g_enabled = !(env && env[0] == '0');
         rebuild();

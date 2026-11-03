@@ -43,7 +43,7 @@ Newest at the bottom. Each entry: what, why, and what would change it.
 ## 2026-10-21 - Compiler: clang
 - clang handles the huge generated files well, and one compiler for every build keeps the generated code and its
   numerics the same (the PS5's build: the build machine's clang 19+, 2026-10-31).
-- Baseline CPU: AVX2 (x86-64-v3); the PS5's Zen 2 has more (`-march=znver2`).
+- CPU: the PS5's Zen 2 (`-march=znver2`); the build machine's tools for its own CPU (`-march=native`, 2026-11-03).
 
 ## 2026-10-21 - Graphics plan
 1. Bring-up: upstream CPU GS backend (slow, but no extra work).
@@ -633,3 +633,103 @@ recompiler (the top-level CMakeLists.txt without the PS5 toolchain file) and the
   game), since there is no PC build of the game to link against any more; it runs in CI after the compile check.
 - Checked: `compile-check` compiles and links the PS5 build, `padtest` 62 / 62, the recompiler configures and builds
   for the build machine from the new top-level CMakeLists.txt. VERSION 0.0.4.
+
+## 2026-10-31 - Free aim: the game's own, driven by the host (the user's request)
+The user asked for free aim with a reticle, selectable in the settings, on the controller with no aim assist. One rule
+from them: Vic moves while free aiming exactly when he can move locked on with that weapon - nothing new is added.
+(Made on main for the PC port with the mouse too, merged 2026-11-03; the DualSense's R1 and right stick are the PS5's
+part, below.)
+- **The game's free aim, not a new one.** VCS has free aim (R1, then L3; game-internals.md 12c): a lock-on to an
+  invisible dummy object with its own circle reticle, aim pose, camera and no random spread. Building on it keeps all of
+  that (the reticle is the game's, scaled with the HUD; peds react as to any aim) and replaces only what feels bad: the
+  pad read enters it in one report (R1 + L3), the right stick turns the dummy about Vic (writing it every frame, turning
+  the lock-on camera by the same amount first so it does not lag), and the world update runs with the free-aim bit
+  cleared, so the game treats it as a lock-on to an object: Vic moves as he does locked on with that gun (the game's
+  free aim makes him stand still and puts the left stick on the aim). The camera and the HUD run with the bit set again
+  (the centred free-aim camera and the circle, not the lock-on view and triangles). The dummy stays 12 m from Vic: the
+  lock drops past ~30.
+- **Shots through the circle**: the gun's line to the dummy and the camera's line through it cross only at the dummy,
+  so near targets would be missed by the gun's line. The player's free-aim shot tests the camera's line instead (the
+  line test's start redirected to a point of it level with the gun; GTA VC's own third-person aim on other platforms
+  does the same), and the shot's end is put on it so the tracer agrees. The gun's own start stays for the muzzle
+  effects.
+- **Not an ImGui reticle**: the game draws its own circle exactly where the shots go, in the HUD's style and scale; a
+  second one would only disagree with it.
+- **Melee, thrown and scoped weapons keep R1** (lock-on is how fists fight; scopes are already free aim). Off by
+  default: it changes how the game plays (easier than lock-on at range), so "authentic by default" holds it back.
+- `VCS_FREEAIM=0` installs none of the hooks (the reference). The guest scratch for the shot's start sits at 0x60000 in
+  the EE kernel's area, which nothing in the recompiled game uses.
+- (the user, later) The camera blends into and out of free aim (the game's 400 ms in, 350 ms out) are cut to 100 ms in
+  and 200 ms out, only those two: not an instant cut, which jumps the view by about 2 m; the game's other blends
+  (vehicles, cutscenes, the PS2 lock-on) stay. On release the follow camera's first update reset its heading for one
+  frame: that frame's view is turned back to the aim's heading in the hook after CCam::Process (the hand-back needs the
+  free camera's hook; `VCS_FREECAM=0` leaves it out). With guns that stand Vic still the game jump-cuts out of the aim
+  (FUN_001F1698's answer in CCamera::CamControl): free aim answers that one question with yes in the frames after the
+  aim ends, so every gun ends in the same blend.
+- (the user) A gun running dry in free aim switched to the lock-on and flicked in and out: the game puts the fists in
+  Vic's hand, which lock on. Now R1 stays up until the button is let go once the gun went (a gun back in hand aims
+  again); an entry the game answers with a ped lock is let go at once, and every retry waits 8 frames with R1 up.
+- (2026-11-01, the user) **Jive Drive** (shooting from the passenger seat, SET_PLAYER_DRIVEBY_MODE) and **Phil's
+  shooting range** (SET_PLAYER_FORCE_FREE_AIMING) start the game's own free aim themselves, aimed with the left stick;
+  our free aim's R1 + L3 ended the range's. A free aim a script starts is taken over (`scripted` in vcs_aim.cpp): with
+  free aim on the right stick turns it, no button, the left stick centred, the game's limits kept (the car: 20 deg up /
+  5 down; on foot 110 deg either side, 40 up, 20 down - the game applies them only while its own stick moves the dummy,
+  so the host clamps). There **R1 fires** (sent as Circle): the right thumb is on the stick and Circle out of reach.
+  Everywhere else R1 is the target button; free aim off is the PS2's left stick.
+- **On the PS5** (2026-11-03): the controller's part alone - Controller > Free aim, R1's button and the right stick
+  (Camera speed and Invert camera apply); the pad read hands them to `aim::update` once per game frame (the game reads
+  the pad three times a frame) and puts its answer in the report. `tools/ps5.py padtest` checks that hand-over.
+
+## 2026-11-01 - Card names a file system can't store are %XX; the card is zipped before every change
+
+Players of the PC port lost saves after saving (game-internals.md 10f): VCS names a slot file after the last mission,
+and "1 Kill Phil: Part 2" became an NTFS stream of an empty file after the game had deleted the old slot. And the game
+deletes a slot before writing it, and its whole save folder after a failed write, so any crash or host error mid-save
+loses saves. Merged for the PS5 (2026-11-03): the console's UFS takes colons, but a card folder copied to exFAT (a USB
+drive) or from another system must keep its names, and the crash case is the same.
+- **Names**: the characters FAT / NTFS refuse (`<>:"/\|?*`), control bytes, bytes >= 0x7F, `%` itself, trailing dots /
+  spaces and device names (CON, COM1...) are stored as `%XX`; the game sees the name it wrote. The same encoding on
+  every file system; a name the console stored before the encoding is still found. ASCII and reversible.
+- **Backups**: before the first delete / write to an existing file / rename / format in 10 s, both cards go into
+  `userdata/backups/auto-<date>.zip` (stored, with `backup.json`: the entries' creation and change times, so a restore
+  makes them in card order); newest 10 kept (a card is ~0.5-1 MB). In the card layer: only it knows when a change
+  comes. Saving into an empty slot changes nothing old and makes none. `PS2X_MC_BACKUP=0` turns it off. Restoring is
+  by hand for now (unzip over `userdata/` by FTP, the game closed).
+- Not merged: the NTFS stream recovery (Windows only: a card on the console never had streams).
+
+## 2026-11-02 - Stutter work: the music stop no longer holds the level swap; textures off the main thread on request
+
+The user asked for stutters first, the game to behave as the original (PERFORMANCE.md 21-28; merged 2026-11-03).
+- **The level swap's music stop happens at once.** Crossing between Beach and Mainland the game stops the radio stream
+  and waits until it says stopped; CDSTREAM's music thread only sees the stop at its next refill IRQ, up to 448 ms - the
+  PS2 stood just as long (game-internals.md 9a). Only that wait changes: the commands, their order and every reply the
+  game reads are the IOP's; the stream just ends that much sooner. Kept as `VCS_MUSIC_STOP_WAIT=1`; the sound replay
+  comparison keeps the IRQ timing, since it checks the driver against recorded IOP times.
+- **Mip chains built on the CPU** with anisotropic filtering, and textures made with every level in one creation: what
+  the GPU gets is the same (static reference scenes identical), only who does the work and when.
+- **Texture creation on helper threads is off by default with Vulkan** (`PS2X_HW_EARLY_TEXTURES=1`): Vulkan's main
+  thread only records a copy per new texture (~8 ms a 350-texture burst), and on a 2-core CPU the two helpers slowed
+  the GS stage's decode more than they saved. The PS5's 8 cores should decide the default (PERFORMANCE.md "On the
+  PS5").
+- **No shader depth**: the GS pixel shader's depth output dates from the GL renderer, where NDC lost precision; with
+  Vulkan's 0..1 depth the rasterised value is the same, and dropping it brings early depth rejection back (~1.5 ms of a
+  ~10.7 ms GPU frame where measured; reference scenes unchanged beyond run-to-run noise). `PS2X_HW_SHADER_DEPTH=1` puts
+  it back.
+- **The stutter rig flies over the roofs** rather than drives the roads: the AI drivers the rig can make stood more than
+  they drove, and the route has to be the same every run to compare builds.
+
+## 2026-11-03 - main merged into the PS5 tree: what came, what did not
+
+The user merged 73 commits onto main (the PC port's 0.0.3 - 0.2.0) and asked for them to be considered for this
+branch. Taken: everything in the game and the runtime - the ferris wheel / escalators and the follow cameras above 50
+fps, free aim (the controller's part), the HUD's screen edges (the radar always left, centred text in the middle), the
+F3 overlay's game-state panel (on the PS5: the performance overlay's second panel, settings > Advanced; the `gameinfo`
+command), the save names and card backups, the stutter work (music stop, palette table, CPU mip chains, VU0 natives,
+native CollectParameters, the inflate reader, constants and Vulkan state written only on change, depth as dynamic
+state, vertex uploads of the written bytes, no shader depth), the rig's `cruise`, `PS2X_HOST_SPIKES` (its clocks read
+only when set). Not taken, as in 2026-10-31's stripping: the launcher, the D3D11 renderer and its shaders, the mouse and
+keyboard (mouse look, the mouse in scopes, the wheel, free aim's mouse half), the screenshot key (F8: the Create button
+is the system's), the Windows manifest, Linux packaging and the AppImage, the PC CPU levels (`PS2X_CPU`: the PS5 is one
+CPU; the build machine's tools now build for its own CPU, `-march=native`), the test tools that start a local game
+(controls / HUD / saves checks, the cruise and framerate audits), the sampling profiler. VERSION 0.3.0: above main's
+0.2.0, whose fixes the PS5 kit now carries (0.0.3 / 0.0.4 of the kit were never tagged).

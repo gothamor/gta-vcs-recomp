@@ -8,7 +8,9 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <vector>
 
 namespace ps2perf
 {
@@ -44,6 +46,11 @@ namespace ps2perf
         PostDraws,
         PackedDraws,    // draws recorded from whole packets of the C++ VU1 reproductions (GS::submitPackedKick)
         PackedVertices, // ... and their vertices
+        // [gta-recomp] textures made on the GPU side: the main thread's time creating (and releasing) them, the
+        // kilobytes uploaded (issue #29: hitches after texture bursts)
+        TexCreateUs,
+        TexKBytes,
+        TexDecodeUs, // [gta-recomp] the GS stage decoding them (their mip chains; their creation too with PS2X_HW_EARLY_TEXTURES)
         Count
     };
 
@@ -91,6 +98,17 @@ namespace ps2perf
     // [gta-recomp] Recording samples to <dir>/perf_<date>_<time>.csv on / off (settings menu); whether one runs.
     void setRecording(bool on, const std::string &dir);
     bool recording();
+    // [gta-recomp] A second overlay panel under the perf numbers with the game's state (player, vehicle, camera, scripts):
+    // the game-specific code fills `lines` (main thread, each host frame while the overlay is on). `color` is an
+    // IM_COL32 value (0 = the panel's default); `header` lines start a section (drawn dim, a little apart).
+    struct InfoLine
+    {
+        std::string text;
+        uint32_t color = 0;
+        bool header = false;
+    };
+    using InfoProvider = std::function<void(std::vector<InfoLine> &lines)>;
+    void setInfoProvider(InfoProvider provider);
     // The overlay's numbers for the last second as one line (control channel "perf").
     std::string summaryLine();
     // Closes a running recording (end of run).

@@ -2,10 +2,10 @@
 """Headless Ghidra analysis of your SLUS_215.90, exporting the PS2Recomp function map
 (ghidra/export/ghidra_export.toml + functions.csv). Only needed to redo the analysis.
 
-    python tools/ghidra_analyze.py [build/elf/SLUS_215.90]
+    python3 tools/ghidra_analyze.py [build/elf/SLUS_215.90]
 
-Needs Ghidra 12.1.4 with the ghidra-emotionengine-reloaded extension and JDK 21: set GHIDRA_HOME and JAVA_HOME
-(defaults: the scoop install locations).
+Needs Ghidra 12.1.4 with the ghidra-emotionengine-reloaded extension and JDK 21: GHIDRA_HOME (default: Ghidra's
+ghidra_12.1.4_PUBLIC folder in the home folder or /opt) and JAVA_HOME (default: the java on the PATH).
 """
 import argparse
 import os
@@ -22,15 +22,13 @@ def main():
     ap.add_argument("--max-cpu", type=int, default=6)
     a = ap.parse_args()
 
-    home = os.path.expanduser("~")
-    ghidra = os.environ.get("GHIDRA_HOME", os.path.join(home, "scoop", "apps", "ghidra", "current"))
-    env = dict(os.environ)
-    env.setdefault("JAVA_HOME", os.path.join(home, "scoop", "apps", "temurin21-jdk", "current"))
+    ghidra = tc.ghidra_home()
+    env = dict(os.environ)  # JAVA_HOME, else the java on the PATH
     headless = os.path.join(ghidra, "support", "analyzeHeadless")
     if not os.path.isfile(headless):
         tc.fail(f"{headless} not found: set GHIDRA_HOME")
     if not os.path.isfile(a.elf):
-        tc.fail(f"{a.elf} not found: python tools/recompile.py extracts it from your disc")
+        tc.fail(f"{a.elf} not found: python3 tools/recompile.py extracts it from your disc")
     project = os.path.join(tc.ROOT, "ghidra", "project")
     out = os.path.join(tc.ROOT, "ghidra", "export")
     os.makedirs(project, exist_ok=True)

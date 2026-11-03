@@ -35,6 +35,8 @@ bounded by the world).
   the game thread's work per frame and the rest of the frame is waiting.
 - The world tour uncapped (perf per point), sampling profiles of the game thread and the render worker, and reference
   scenes compared picture by picture after each step.
+- Stutters: the stutter rig (the `cruise` command, src/debug/rig.cpp) - the car along a fixed route at 144 km/h,
+  every frame in the perf CSV, then a hitch report (section 21).
 
 On the PS5: the performance overlay (Advanced > Performance overlay: game fps, frame-time percentiles, EE thread time
 per phase, GS and DMA counters, the GPU) and the log.
@@ -420,12 +422,237 @@ Switches: `PS2X_HOST_PACED=0` (the game's own deadline), `PS2X_FRAME_LEAD=0`, `P
 Original timing is paced by the emulated VBlank and unchanged (49.8 ms at 30 fps). What is left at a cap: the frame's
 build (~10 ms) and the GPU (~11 ms + recording).
 
+### 21. Stutters while driving: the stutter rig, texture bursts, the level swap (2026-11-02)
+
+**The reports.** Hitches up to 150 ms driving fast through the city (a player's logs: every episode had a burst of
+texture uploads, 38-630 in a frame; `wait_ms` carried the time, the stall often a frame or two after the burst), and
+micro-stutter whatever the timing and cap.
+
+**The rig** (the user asked for one that travels through the city at driving speed): the rig's `cruise` command
+(src/debug/rig.cpp) puts the player's car, every game frame, at the point of a route `speed x step` further on, facing
+along it, with that move speed - streaming, the camera and the renderer get the same load every run. The route used is
+a low flight, 35 m over the roofs, through the busiest cells of the world tour on both sides of the bay: ~6 km at 40
+m/s (144 km/h), 140 s, seven Beach / Mainland swaps (routes from AI drives were the plan, but the AI cars the rig makes
+stood more than they drove). The game writes its per-frame CSV; the report counts hitches (a frame over twice the
+running median and 8 ms over it), frames over 25 / 33 / 50 / 100 ms, and gives each hitch's texture uploads, decode /
+create times and the main thread's longest host frame (new CSV columns `tex_create_us`, `tex_kb`, `tex_decode_us`,
+`host_max_ms`). The control channel's brightness probe is off for it (`PS2X_FRAME_STATS=0`): its read-back waits for
+the GPU every host frame.
+
+**What the hitches were** (the rig, then `VCS_PROFILE_SPIKES`, `PS2X_WAIT_LOG`, `VCS_TRACE_DELAY`):
+- **Texture bursts**: a new area brings 100-400 new textures in one frame. The GS stage decoded each - a paletted one
+  through the CLUT addressing and TEXA per texel - and the main thread made each one between its draws; with
+  anisotropic filtering each was a render-target texture with a `GenerateMips` pass. A 399-texture burst: 52 ms of
+  texture creation on the main thread, its longest host frame 77 ms, the game frame 144 ms.
+- **The level swap** (the largest, 150-450 ms, all of it the game thread idle): crossing between Beach and Mainland,
+  FUN_003C6D08 stops the music and waits in `DelayThread(1000)` steps until the stream says stopped - which the IOP's
+  music thread only sees at its next refill IRQ, up to 448 ms later (game-internals.md 9a). The PS2 stood just as long.
+
+**What was done** (each with a switch back):
+- Paletted textures decode through a 256-entry table of the converted texels (`GSCpuBackend::paletteTable`; the same
+  values - `PS2X_HW_PALETTE_TABLE=0`).
+- Anisotropic filtering's mip chain is built on the CPU and the texture made with all its levels in one creation
+  (`createTextureLevels`, immutable, no render target; `PS2X_HW_CPU_MIPS=0`).
+- New textures can be made by two helper threads on a free-threaded device, the mip chain with them; the main thread
+  takes each at its `TexCreate`. Off with Vulkan unless asked for (section 25; `PS2X_HW_EARLY_TEXTURES=1`).
+- The native music driver runs the music thread's step at once for a stop while the stream plays, so the level swap no
+  longer waits up to 448 ms for an IRQ (`VCS_MUSIC_STOP_WAIT=1`; the sound replay comparison keeps the IRQ timing).
+
+**Result** (the cruise, no LTO, frame-rate independent timing at the 60 cap; all four switches off vs on):
+
+| | fps | p99.9 ms | max ms | frames > 33 / 50 / 100 ms | hitch time lost a minute |
+|---|---|---|---|---|---|
+| 3x 16:9, MSAA 4x, AF 8x, before (two runs) | 59.1 / 59.2 | 68.3 / 67.3 | 400 / 365 | 27 / 11 / 5, 23 / 12 / 6 | 799 / 779 ms |
+| 3x 16:9, MSAA 4x, AF 8x, now | 59.9 / 59.9 | 33.4 / 33.0 | **46 / 48** | 9 / 0 / 0, 9 / 0 / 0 | **86 / 72 ms** |
+| defaults (1x 4:3), before | 59.4 | 35.8 | 448 | 15 / 4 / 4 | 567 ms |
+| defaults, now | 59.9 | 31.7 | **45** | 6 / 0 / 0 | **51 ms** |
+
+Pictures: reference scenes with the four switches off vs on - the static scenes identical (0.00), the moving ones
+within run-to-run noise; anisotropic 8x, mip chains by `GenerateMips` vs on the CPU: static scenes 0.00, the moving
+ones 0.00-0.5 apart from the flyover's tower (timing).
+
+**What is left on the route**: the level swap's own load, one game frame of ~36-46 ms (the .LVZ, its inflate and setup)
+per crossing; the largest texture bursts still cost the GS stage ~10-20 ms of decoding (the frame ~45 ms); the rest
+of the drive holds 16.7 ms.
+
+### 22. VU0 natives: what repeats out of the loops (2026-11-02)
+
+The uncapped cruise (`VCS_PROFILE=10`) puts the VU0 natives at ~9.4% of the game thread: `matrixTimes3From` 3.7%,
+`maddBc` 3.4% (called by both), `boxClip` 2.3%. Each multiply-add re-loaded and re-cleaned (VU operand rules) its
+matrix row, the broadcast input lane and ACC from memory. The 3x matrix product and the sector box clip now clean their
+constant inputs once per call and each matrix row once per matrix, and keep ACC in a register (stored once at the end);
+every operation is the same one, ACC still cleaned as an operand. `PS2X_VU0_VERIFY=1` over a whole cruise: 5.06 M
+matrix products and 5.56 M box clips, 0 differed. Game thread: 9.4% -> 7.9% for the three; the uncapped cruise 168.3 ->
+171.1 fps (no LTO).
+
+### 23. The script VM's CollectParameters natively; the RSL skip test's lookups (2026-11-02)
+
+The same uncapped profile, next items on the game thread:
+- **FUN_00254B90, CollectParameters** (game-internals.md 11c): the script VM decodes every command's typed arguments
+  through it (1,100 call sites; 1.4% of the game thread in guest code). Natively in `src/game/vcs_overrides.cpp`
+  (`collectParamsNative`): the same reads of ScriptSpace and the script's locals, FUN_00254FF8's variable rules (timers,
+  locals, local / global arrays with the dummy word for an index out of range), the same `*ip` and `$v0`; anything
+  outside main RAM runs the original. Check: `VCS_NATIVE_PARAMS_VERIFY=1` lets the original run and compares its words
+  with the native decode at the next call - words 1.. only, since a command often writes its result into word 0 (a new
+  handle) before the next call. A cruise: 24 M calls, the types checked there int8 3.3 M, int16 0.1 M, packed floats
+  2.2 M, zero 2.7 M, locals 1.7 M, globals 0.3 M, global arrays 2.4 M, strings and int32 a few hundred; 40 differed, all
+  early, two call sites whose command writes its outputs into the block (a float result, a counter). 1.4% -> 0.6%:
+  below what an A/B of the whole frame resolves (game thread 4.79 / 4.80 ms off vs 4.76 / 4.86 on), kept as measured
+  in the profile. `VCS_NATIVE_PARAMS=0` = the original.
+- **rslworld's `skippable`** (2.4%): per marked block (~2,000 a frame) two `std::unordered_map` lookups and an
+  out-of-line call into the runtime per page for its write-watch generation. Now an open-addressing table
+  (`FlatMap`: lookups and inserts only) and `ps2writewatch::generation` / `unchangedSince` inline over an exported view
+  of the generations: 2.4% -> 1.3%. `VCS_RSL_SKIP_VERIFY=1 VCS_RSL_WORLD_LOG=1` over a cruise: 2,163,873 skip decisions
+  would have replayed their recording rightly, 0 wrongly. (The PS5 has no write watch: the skip test does not run
+  there, FULLY_NATIVE.md 4a.)
+
+Uncapped cruise after 22 and 23: 182-185 fps (from 168), game thread p50 5.2 ms.
+
+**With ThinLTO** (sections 21-23 all off by their switches vs on, the 60 cap):
+
+| | max ms | frames > 33 / 50 / 100 ms | hitch time lost a minute |
+|---|---|---|---|
+| defaults, before / now | 370 / **45.6** | 17 / 4 / 4 -> 5 / 0 / 0 | 546 / **47 ms** |
+| 3x 16:9, MSAA 4x, AF 8x, before / now | 346 / **45.0** | 20 / 9 / 5 -> 7 / 0 / 0 | 666 / **58 ms** |
+
+Uncapped (defaults): 188 fps, frame p50 5.1 ms.
+
+### 24. The level swap's inflate: a 64-bit bit reader, short copies (2026-11-02)
+
+After sections 21-23 the cruise's only hitches on the ThinLTO build are the four Beach / Mainland swaps: one game frame
+of 36-41 ms each, about half of it zlib's `inflate_fast` (native since section 14): ~5 MB per swap in ~150 calls,
+~20 ms - 247 MB/s. Tried, each exact:
+- **A 64-bit bit buffer** refilled 8 bytes at a time at the top of each symbol (a symbol takes at most 48 bits), with
+  zlib's own `in` / `bits` still counted byte for byte as zlib pulls them - only counted. zlib's state after a call
+  (next_in, bits, the unconsumed bits in hold) follows from the bits consumed, and its loop test reads its own input
+  pointer, which is the counted one: so every call leaves zlib's state, not only the same output (`decodeT<Fast>` in
+  `src/game/vcs_inflate.cpp`). 247 -> 267 MB/s.
+- **Short copies** (most matches are 3-32 bytes) as two fixed-size moves of the first and last bytes instead of a
+  `memcpy` call; a repeat at distance 1 as a fill; at distance 8 or more in 8-byte steps (each reads bytes already
+  written). Exactly the bytes zlib's byte loops write. 267 -> 270 MB/s.
+
+Check: `VCS_NATIVE_INFLATE_FAST_VERIFY=1` decodes every call with both readers into their own copies of the output and
+compares the bytes and the whole state left: a cruise (boot, the swaps, streaming) 1,200+ calls, 0 differ.
+`VCS_NATIVE_INFLATE_FAST=0` = the byte-wise reader. The gain is small - about 2 ms of a swap's 40 ms frame: the time is
+in the per-symbol decode itself (a literal per iteration, the literal / match branch), where zlib's own bookkeeping has
+to run per symbol to stay exact. A bigger step would be multi-symbol tables (libdeflate's), checked the same way.
+
+### 25. Texture creation off the main thread with Vulkan (2026-11-02)
+
+Sections 21-24 are plain C++ (the palette table, the CPU mip chains - `createTextureLevels`, implemented for Vulkan in
+21 -, the level swap's music stop, the VU0 natives, CollectParameters, the inflate reader): the PS5 build has them.
+- **Free-threaded creation for Vulkan**: off the recording thread the image and its views are made and the pixels
+  copied into a staging buffer of their own (`stage`); the recording thread puts the copies into the set-up commands at
+  its next submit (`drainStaged`), before anything recorded can use the texture. A texture released off that thread is
+  never bound: its frees wait (`Core::orphans`) for the next submit and go with that frame. Three cruises with it on:
+  no Vulkan errors in the logs.
+- **Measured** (Mesa's Vulkan on a 2-core / 4-thread CPU with integrated graphics; defaults, three runs each,
+  alternated: hitch time 818-1,576 ms a minute either way). What holds in every run: in frames with 50+ new textures
+  the main thread's longest host frame is ~3 ms shorter with the helpers (27-29 vs 30-32 ms) - Vulkan's creation cost
+  was ~8 ms a 350-texture burst - while the GS stage's decode is ~2.5 ms longer (7.4-7.9 vs 3.9-6.0 ms: two helpers on
+  two cores take it from the game's threads), and such frames over 20 ms: 23-29 with vs 20-23 without. No gain there,
+  so the helpers are off unless asked for (`PS2X_HW_EARLY_TEXTURES=1`): to measure on the PS5's 8 cores.
+- On that machine the largest hitches were game-thread frames of 58-76 ms with nothing to upload - the level swaps on a
+  slower CPU - and frames held behind the GPU (`wait_ms` 30-60).
+
+### 26. Hitches driving in the city on a small GPU (2026-11-02)
+
+The user felt hitches driving around the city on the same 2-core machine with integrated graphics (the 60 cap with
+frame-rate independent timing, 1x, a 1920x993 output), apart from the level swaps. The cruise shows them: 120-230
+frames over 33 ms in 140 s.
+
+**What they are.** ~70% of the slow game frames are 33.3 ms (one 60 Hz slot missed) with the game thread only ~11 ms
+busy and ~20 ms waiting for its tick: the main thread's host frame ran over 16.7 ms. New: `PS2X_HOST_SPIKES=<ms>` (the
+main loop's phases and its CPU time per slow frame; Vulkan: the frame's waits, draws, binds, pushes, CPU time in
+`prepareDraw` / `vkCmdDraw`). In those frames the main thread either
+- spends 16-24 ms of its own CPU executing one game frame (`UploadFrame`: wall ~ CPU, so not blocked or preempted) -
+  dense views, 1,300-2,200 draws at ~4.5 us each, almost all of it in the driver (`vkCmdDraw` ~2 us, a pipeline bind
+  ~2.5 us; 40-60% of draws change pipeline), or
+- waits 10-20 ms for the GPU fence: the GPU's frame averaged 13-15 ms (`PS2X_RHI_GPU_TIME`), so heavier views pass
+  16.7. At 2x the game's frame takes 3.6x as long: the GPU is bound by pixels, not draws.
+Ruled out on the way: device memory churn (`PS2X_RHI_LOG_MEMORY=1`: 6 allocations a run, all at boot), new pipelines,
+readback waits, swapchain acquire, texture creation (section 25), the specialised shaders' pipeline count
+(`PS2X_HW_SPECIALISE=0`: the same binds per draw).
+
+**What was done** (each with a switch back):
+- **No shader depth.** The GS pixel shader wrote its depth (SV_Depth) for every draw - GL's fix for its NDC precision
+  (PS2RECOMP_PATCHES.md), not needed with Vulkan's 0..1 depth: the rasterised value is the same vertex depth
+  interpolated linearly in screen space. A shader depth turns early depth rejection off, so every hidden pixel of the
+  city's overdraw was shaded and textured. Pixel shaders without it (`drawPSNoDepth`, SHADER_DEPTH=0): the game's frame
+  10.7 -> 9.3 ms of GPU. Reference scenes: static ones as before (0.02, and the map's player arrow), moving ones within
+  run-to-run noise, the ground decals intact. `PS2X_HW_SHADER_DEPTH=1` = the shader's depth.
+- **Constants written only when they change** (`gs_hw` `updateConstants`): 45% of the draw constants' and 63% of the
+  native constants' writes were the same bytes as the draw before; each was a ring slice and a descriptor push.
+  Descriptor writes ~2,900 -> ~1,700 a frame. `PS2X_HW_CB_DEDUPE=0`.
+- **Redundant state not recorded** (Vulkan): viewport, scissor, blend constants and vertex / index buffers only when they
+  differ from what the command buffer has (the renderer sets them before every draw; each recorded one made the driver
+  send that state again). ~9% less CPU per draw in the slow frames. Static scenes identical (0.00). `PS2X_RHI_REDUNDANT=1`.
+
+**Result** (the same binary, all three off vs on, two runs each alternated): GPU frame 13.2 / 13.1 -> 11.9 / 11.9 ms;
+the main thread's frame execution (`gl_ms`) 9.1 / 9.7 -> 8.3 / 8.3 ms; frames over 33 ms 191 / 228 -> 189 / 172. Real,
+but the hitches remained there: in the dense views that machine's CPU and GPU were both at the 60 Hz budget.
+
+### 27. The main thread's Vulkan cost per draw (2026-11-02)
+
+After section 26 the main thread's slow host frames were mostly its own CPU in the driver (~4.5 us a draw). What
+changes between draws (`PS2X_RHI_STATS=1` now splits pipeline binds and descriptor writes): 450-650 pipeline binds a
+frame, two thirds of them only the depth state (test / write / compare), the rest shader changes (the vertex kinds and
+dual-source variants - `PS2X_HW_SPECIALISE=0` changes nothing); ~1,000 descriptor writes (two thirds constant buffers).
+
+- **Depth state as dynamic state** (core Vulkan 1.3): pipelines that differ only in depth share one VkPipeline (the
+  device's cache keyed by everything else), and the depth state is set per draw when it differs from what the command
+  buffer has. No change in gs_hw. Binds 450-650 -> 140-270 a frame, nearly all of them shader changes now.
+  `PS2X_RHI_STATIC_DEPTH=1` = the depth state in each pipeline.
+- **Vertex buffers copy what was written**: the renderer's dynamic vertex buffers are sized for the largest frame seen,
+  and each frame's ring slice copied the whole capacity. Now the bytes the last update wrote (the rest of the slice is
+  not read; constant buffers stay whole - their descriptors cover the buffer). Uploads 3.3-4.2 -> 1.4-2.9 MB a frame,
+  the binding step 1.0-1.5 -> 0.4-0.7 ms. `PS2X_RHI_FULL_COPY=1`.
+
+Checked: Vulkan validation over the reference scenes (no errors; the no-depth shaders' unread vertex output is a
+performance warning), scenes against section 26's: static ones and two of the three flyover shots identical (0.00).
+
+**Result** (the same binary, both off vs on, two runs each alternated): the main thread's frame execution (`gl_ms`)
+8.48 / 8.47 -> 7.09 / 7.49 ms; with `PS2X_HOST_SPIKES=20`: main-thread frames over 20 ms 61 -> 24 (its own CPU 39 -> 14,
+the GPU fence 12 -> 7). What remained of the ~70-90 frames over 33 ms there: frames where the game thread itself takes
+24-26 ms (guest code), texture bursts (~30: the GS stage's decode), and main-thread frames just over 16.7 ms.
+
+**Next here**: the per-draw map lookups (`RhiExecutor::draw`'s `m_meshes` / `m_textures`: node-based maps of thousands;
+a flat table, or the resolved pointer carried in the command), the constant buffers' descriptor pushes (dynamic offsets
+in a set of their own), and the game thread's own slow frames (`VCS_PROFILE_SPIKES`).
+
+### 28. The game thread's slow frames (2026-11-02)
+
+After section 27 the cruise's slow frames on that machine include 40-75 a run where the game thread itself takes
+24-26 ms (the CSV's `game_ms`, the host-tick wait not in it):
+- They are not waits for the render side: `PS2X_RENDER_THREAD_LOG=1` shows no fences and almost no full queues;
+  `PS2X_WAIT_LOG=5` shows no scheduler idling during the drive. Their samples are a flat spread of game code (streaming in
+  a new area, building texture uploads, game logic) with our host code on top - no single cause. Of the host code: the
+  VU0 natives `boxClip` / `matrixTimes3From` (~1,100 cycles a call, ~11 M calls each a run: ~0.8 ms a frame) and the RSL
+  observer (`closeBlock`, `observe`, `flattenBlock`, `settleRegion`, the page snapshots) about equal.
+- **Tried, not kept:** `FUN_003298D8` (texture upload REFs) natively while a material cache is filled (40-70k calls a
+  second, all going to the original): the same bytes (3.2 M calls compared as the original returned; game-internals.md
+  6i has what it writes) but the cruise hitched more - frames over 33 ms 97-126 against 52-76 in four runs each way,
+  both orders. Most likely the emulated EE clock: the recompiled code advances it as it runs, and ~200 guest
+  instructions 55k times a second no longer did, which moves timers / interrupts against the game's work. Average game
+  time did not drop either.
+
+**End to end, sections 26-27 together** (the same binary with all their switches back vs the defaults, two runs each
+alternated): GPU frame 13.7 / 13.4 -> 11.9 / 11.9 ms; the main thread's frame execution 7.3 / 7.3 vs 7.4 / 7.1 ms;
+frames over 33 ms 61 / 61 vs 66 / 65. So the GPU saving holds; the main-thread saving of 27 showed only when the CPU was
+the limit, and the hitch count followed the machine's state more than these changes.
+
+**Next here**: the VU0 natives' remaining cost (register copies in and out, the per-operation VU float rules), the RSL
+observer's per-block work, and natives that keep the guest clock's accounting (a native step must charge the cycles the
+original would have run, or the game's timing moves - worth checking for the natives already in).
+
 ## On the PS5
 
 To measure first (docs/PS5.md's work list): the game thread without `preserve_none` (every guest call saves registers
 again: section 8's 3-7% back), the frame pacing on the TSC, `steady_clock` (a system call there) in hot paths, the
 render worker and GS stage on Zen 2 cores, the GPU at 4K output with the internal resolution at 1x / 3x / the TV's
-own, no write watch (FULLY_NATIVE.md 4a: the RSL replay's skips are off), and ThinLTO (off by default).
+own, no write watch (FULLY_NATIVE.md 4a: the RSL replay's skips are off), ThinLTO (off by default), and the stutter
+work there: the cruise (section 21) at 60, texture creation on the helper threads (`PS2X_HW_EARLY_TEXTURES=1`, section
+25: off until the PS5's 8 cores show a gain).
 
 ## Next
 
@@ -439,5 +666,17 @@ own, no write watch (FULLY_NATIVE.md 4a: the RSL replay's skips are off), and Th
   registers across calls). The kick's item resolve copies (~2% driving) and the write-watch fold (~2%) are the largest
   host-side items.
 - GS stage: per-upload / per-CLUT-load bookkeeping; content-derived page generations (more texture-bind memo hits).
+- **Stutter, what the cruise still shows** (section 21): the level swap's one ~40 ms game frame, half of it zlib's
+  inflate of the new level (`src/game/vcs_inflate.cpp`, ~275 MB/s; a wider bit buffer would be faster, but must stop
+  each call at the same symbol as zlib's loop, or the outer inflate's state differs per call); a texture burst's frame
+  missing its 60 Hz slot (~33 ms) when the GS stage's decode (~3 ms for 140 textures) lands on an already full frame -
+  the palette mapping could move to the helper threads with the creation, leaving only the texel fetch on the stage.
+- **GPU at high resolutions** (`PS2X_GPU_TIMING=1`, 3x 16:9 MSAA 4x: ~8 ms a frame on the GPU it was measured on,
+  so one half as fast is near 16.7): the trails' blend back is two full-screen passes into the multisampled frame (1.2 ms), ~3 ms falls between
+  the markers (resolves of the frame for the effects that read it, copies). Changes there change pixels: a scenes
+  compare at 3x with MSAA for each.
+- The script VM's dispatch (`FUN_002560D8`, 1.7%): natively it would be a guest tail call into the handler, but the
+  original sign-extends the handler's byte result after `jalr` - the tail call skips that, so it needs a return through
+  the original's tail (0x256164) or proof that every handler returns a clean byte.
 - Playtest missions above 100 fps; sprint at 1/240 s (-11%).
 - The RSL recordings' memory (an LRU bound).

@@ -88,6 +88,59 @@ value = "0x3C013A83"
 address = "0x001A2468"
 value = "0x3C013A83"
 
+# Moving platforms: the ferris wheel (FUN_00175620, 12 carriages) and the escalators (FUN_002469A0, CEscalator::Update)
+# place their objects each frame and give them the move speed `(new position - old) * 1 / max(ms_fTimeStep, 1.0)`. Above
+# 50 fps (step < 1.0) that speed came out step times too small - 0.83 at 60 fps, 0.35 at 144 - and a ped standing on
+# the object, who moves with its move speed, slid off it: Vic fell out of a ferris wheel carriage within 2 s at 144 fps
+# (issue 10). The 1.0 register is also the numerator and is used elsewhere, so the max.s itself changes, using the two
+# hazard nops behind it: `lui $at, 0x3A83; mtc1 $at, $fK; max.s $fD, $fS, $fK` = max(step, 0.001), as the patches above.
+# $fK is written before any read after it ($f4 at 0x176144 in the wheel, $f3 at 0x246EC4 in the escalator); $at is
+# loaded again before its next use. Steps >= 1.0 run exactly as before. (game-internals.md 4)
+[[patches]]
+address = "0x00176078"
+value = "0x3C013A83"
+[[patches]]
+address = "0x00176080"
+value = "0x44812000"
+[[patches]]
+address = "0x00176084"
+value = "0x46040028"
+[[patches]]
+address = "0x00246EB4"
+value = "0x3C013A83"
+[[patches]]
+address = "0x00246EB8"
+value = "0x44811800"
+[[patches]]
+address = "0x00246EBC"
+value = "0x46030868"
+
+# The follow cameras: FUN_0029DAB0 (mode 4, on foot) and FUN_0029FAF0 (modes 18 / 22, behind a vehicle / a boat) turn
+# their heading toward where they want to be by a per-frame amount, then make it a speed: `(new beta - beta) / max(step,
+# 1.0)` (0x29EA50 / 0x2A0790), eased into the heading speed (+0x140) and added back times the step. Above 50 fps that
+# automatic turn came out step times too slow (0.35 at 144): the camera trailed further in turns and took longer to
+# get back behind the car. The stick's turning is added after it and was not affected. $f3 (1.0) is
+# read again two instructions later, so the 0.001 goes to $f5, which is not read before the call that follows (the
+# callee, FUN_0044A548, never touches it) and is written again after it before any read. As above.
+[[patches]]
+address = "0x0029EA50"
+value = "0x3C013A83"
+[[patches]]
+address = "0x0029EA54"
+value = "0x44812800"
+[[patches]]
+address = "0x0029EA58"
+value = "0x46050868"
+[[patches]]
+address = "0x002A0790"
+value = "0x3C013A83"
+[[patches]]
+address = "0x002A0794"
+value = "0x44812800"
+[[patches]]
+address = "0x002A0798"
+value = "0x46050868"
+
 # CVehicle::ProcessWheel (FUN_003E6C18 cars, FUN_003E7618 bikes): with neither gas nor brake the wheel's rolling
 # resistance is a brake of 0.9 / mass (0.09 under 500 kg, 0.18 for the RC Bandit, 0.54 / (mass + 200) for bikes; the
 # bike version uses 0.18 under 500 kg) - per frame, never multiplied by the time step (reVC: `brake *=
