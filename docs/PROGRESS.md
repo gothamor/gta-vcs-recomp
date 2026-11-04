@@ -865,7 +865,12 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `VCS_PROFILE_THREAD=RenderWorker` | `VCS_PROFILE` samples the render worker instead of the game thread |
 | `PS2X_FAST_DISPATCH=0` | guest calls / loop checkpoints always through the scheduler (no inline fast path) |
 | `VCS_EXE=path` | tools/run.py (and the rig, bench, scenes on top of it) run that build |
-| `VCS_WATCHDOG=s` | EE + IOP thread states |
+| `VCS_WATCHDOG=s` | EE + IOP thread states (pc, ra and sp of the running thread: a hang's frame can be read) |
+| `VCS_PROFILE_INCLUSIVE=1` | with `VCS_PROFILE`: every guest function on the sampled stack counts once per sample (a subsystem's whole cost) |
+| `VCS_VIEW_DISTANCE`, `VCS_DETAIL_DISTANCE`, `VCS_POPULATION_DISTANCE`, `VCS_VEHICLE_DENSITY`, `VCS_PEDESTRIAN_DENSITY` | Graphics > Distance and population for one run (0..100) |
+| `VCS_POOLS=peds,vehicles` | the ped / vehicle pool sizes for a test (default 280 / 200 with Streaming memory above PS2, else 70 / 40) |
+| `VCS_CROWD_LOD=0` | no crowd LOD (far random peds processed every frame; A / B measures) |
+| `VCS_NODE_OVERFLOW_TEST=1` | every new sector entry from the overflow pool (its path checked without a crowd) |
 | `VCS_WATCH=lo,hi[,val[,mask]]` | guest write watchpoint (rig `watch lo,hi[,val[,mask]]` arms it mid-run) |
 | `VCS_WATCH_STACK=1`, `VCS_WATCH_STRIDE=stride,offset` | watch hits also list s2-s7 and the code addresses on the guest stack (callers); only writes to one field of every pool entry (e.g. `d20,1c8`: the peds' flags) |
 | `VCS_TRACE_FILES=1` | game file API / inflate / GTAG relocation trace |

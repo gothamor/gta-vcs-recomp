@@ -1738,6 +1738,22 @@ its lists; `pokef` of the scale below with screenshots).
   never clears. The port gives that call (return `0x18F870`) an invalid handle for i >= 128 and builds 280 peds / 200
   vehicles. No vehicle-size reader calls GetAt with an index. Two checks of the index elsewhere: `FUN_0020c3c8` (< 71)
   and `FUN_0020c400` (< 70) answer false for higher slots.
+- **Sector entries** (found by an Open Limit Adjuster style audit, `build/analysis/t2_agents/limits.md`): two CPools
+  from the game image (GAME.DTZ, handed out by `FUN_003321f0`), not CPools::Initialise - **EntryInfoNode `*0x487A90`**
+  (5200 x 0x14 {list, ptr node, sector, prev, next}, chained at an entity's +0xE4; New `FUN_00478bf0`, Delete
+  `FUN_00478c88`) and **PtrNode `*0x487A8C`** (40000 x 0xC, New `FUN_004716a8`). The world grid is 50 x 50 cells of 80 m
+  (records of 0x38 at `*0x486464`); CWorld::Add `FUN_00347348`, Move `FUN_00347740`, Remove `FUN_00347660`; nobody checks a
+  full pool. Measured: the city takes ~4810 entries, the crowds at the maximums 5020 (PtrNodes 24.5 k). The port adds an
+  overflow pool of 8000 entries (vcs_distance.cpp).
+- **Peds** (`FUN_002afe80` CPopulation::Update): AddToPopulation **`FUN_002b17a8`(nearest, farthest in view, nearest,
+  farthest out of view)** places a ped (CPopulation::AddPed `FUN_002b2908`, the only creator of random peds; spot finder
+  `FUN_00268048`) - in view 35-60 x GenerationDistMultiplier x a factor (`FUN_002b44c8`), out of view factor x 20 - 10 ..
+  factor x 20 (a fixed 10-20 m). After a camera cut Update counts down `0x4CD3BA` and then `FUN_002b0070` calls it 100
+  times with 10 .. factor x 60 for both. UpdateAnim (`FUN_003c50a8`, CEntity's, vtable +0x48 for every moving entity)
+  always asks peds for the full animation update (`FUN_00154d10(step x 0.02, clump, 1)`); vehicles and objects out of
+  view get the root-only one (`$a1` = 0, `FUN_001552f8`). Vtables (+0x30 ProcessControl / +0x34 ProcessCollision /
+  +0x48 UpdateAnim): random ped `0x490840` (`FUN_002d8788`), player `0x4902a8` (`FUN_00230640`), vehicles `0x4901c8`,
+  `0x490f10`, object `0x48f848`; ProcessCollision `FUN_00348d40` and UpdateAnim shared by all.
 - **Random traffic** (`FUN_00430148` six tries a frame -> GenerateOneRandomCar **`FUN_00430290`**; measured with entry
   counters, 2026-11-04). Wanted = the zone's car density x a per-player factor (the product kept at `0x4E4A54`, s16; 18
   at the Little Haiti street) x the scripts' `0x48A968` x `0x48A680`; then the cap `0x48A9A8` against the sum of the
