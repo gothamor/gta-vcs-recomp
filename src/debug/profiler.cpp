@@ -45,8 +45,56 @@ namespace vcs
         {
             return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
         }
+        // vcs.exe's function table (.pdata), looked up without RtlLookupFunctionEntry: that one takes the loader's
+        // inverted-function-table lock, which the suspended game thread may hold - the runtime moves control with C++
+        // exceptions, and an unwind in progress holds it - and the sampler then waited for it forever (an LTO build with
+        // VCS_PROFILE_INCLUSIVE froze the game within a minute).
+        struct Pdata
+        {
+            uintptr_t base = 0, end = 0;
+            const RUNTIME_FUNCTION *table = nullptr;
+            size_t count = 0;
+        };
+        const Pdata &mainPdata()
+        {
+            static const Pdata p = [] {
+                Pdata d;
+                const auto *image = reinterpret_cast<const unsigned char *>(GetModuleHandleW(nullptr));
+                const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(image);
+                const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS *>(image + dos->e_lfanew);
+                const IMAGE_DATA_DIRECTORY &dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+                d.base = reinterpret_cast<uintptr_t>(image);
+                d.end = d.base + nt->OptionalHeader.SizeOfImage;
+                d.table = reinterpret_cast<const RUNTIME_FUNCTION *>(image + dir.VirtualAddress);
+                d.count = dir.Size / sizeof(RUNTIME_FUNCTION);
+                return d;
+            }();
+            return p;
+        }
+        PRUNTIME_FUNCTION lookupFunction(DWORD64 pc, DWORD64 *imageBase)
+        {
+            const Pdata &p = mainPdata();
+            *imageBase = p.base;
+            if (pc < p.base || pc >= p.end || !p.count)
+                return nullptr;
+            const DWORD rva = static_cast<DWORD>(pc - p.base);
+            size_t lo = 0, hi = p.count;
+            while (lo < hi)
+            {
+                const size_t mid = (lo + hi) / 2;
+                if (rva < p.table[mid].BeginAddress)
+                    hi = mid;
+                else if (rva >= p.table[mid].EndAddress)
+                    lo = mid + 1;
+                else
+                    return const_cast<PRUNTIME_FUNCTION>(&p.table[mid]);
+            }
+            return nullptr;
+        }
+
         // up to n return addresses of a suspended thread's stack from its context. A fault while unwinding (a thread
-        // caught where its unwind data does not describe the stack yet) ends the walk instead of the process.
+        // caught where its unwind data does not describe the stack yet) ends the walk instead of the process. Only
+        // through vcs.exe's code: a frame in another module (a system DLL) ends the walk.
         int unwindFrames(CONTEXT u, uintptr_t *out, int n)
         {
             int count = 0;
@@ -55,7 +103,9 @@ namespace vcs
                 for (; count < n;)
                 {
                     DWORD64 imageBase = 0;
-                    PRUNTIME_FUNCTION fe = RtlLookupFunctionEntry(u.Rip, &imageBase, nullptr);
+                    if (u.Rip < mainPdata().base || u.Rip >= mainPdata().end)
+                        break;
+                    PRUNTIME_FUNCTION fe = lookupFunction(u.Rip, &imageBase);
                     if (!fe)
                     {
                         u.Rip = *reinterpret_cast<const DWORD64 *>(u.Rsp); // a leaf: the return address on top

@@ -50,6 +50,7 @@ One task at a time, in this order. T3 is the base for T4-T7.
 | T9 | PC `.dff` / `.txd` in mods: convert RW 3 clumps / TXDs to VCS's formats, or draw them natively (research) | T1c, RSL submission | Cars, bikes, boats, helicopters work as they come (67 / 67 checked triangle by triangle); wheels need T10 | [#12](https://github.com/willzmkv/gta-vcs-recomp/issues/12) |
 | T10 | More streaming memory: a larger EE RAM for the port, VCS's streaming heap (5.4 MB) moved into it; then resident models (VC's `wheels.dff`) | - | Steps 1-3 done (Game > Memory: up to 30 MB; more car variety); step 4 left | [#15](https://github.com/willzmkv/gta-vcs-recomp/issues/15) |
 | T11 | PC weapon mods (`.dff` / `.txd`): a VC weapon onto VCS's (one element), where VCS holds it, VCS's HUD icon kept | T9 | **Done** (the 10 of `HD Weapons` in Vic's hand where VCS holds its own, VCS's icons) | [#16](https://github.com/willzmkv/gta-vcs-recomp/issues/16) |
+| T12 | One menu: the game's own pause / options menu and the F2 settings menu joined (the final task) | T2, T8 | Planned (the player's request, 2026-11-04) | - |
 
 Backlog (not scheduled): SkyGFX's Xbox rim light / gloss / screen water drops, YCbCr correction, a larger reflection
 map, shadow maps, deferred lights, PBR sky, volumetric clouds, car paint reflections, rain on cars, ragdolls.
@@ -271,6 +272,13 @@ indoors.
 
 Graphics presets (Authentic = every default; Enhanced = the tasks' recommended values), the README's feature list,
 release notes for a fork build.
+
+### T12 - One menu
+
+Asked by the player on 2026-11-04, as the last task: rework the game's own menu (pause menu, its options) and the F2
+settings menu into one, so the port's settings sit where the game's are. Research first: how the frontend menu is built
+(its pages and items in the game's code), whether new pages / items can be added to it or the F2 menu takes its look and
+replaces it, gamepad navigation, and the text (GXT keys) for the new entries.
 
 ## Progress log
 
