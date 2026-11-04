@@ -1,15 +1,55 @@
 # GTA: Vice City Stories — Native PC port (PS2 static recompilation)
 
 > **This is a fork** of [gothamor/gta-vcs-recomp](https://github.com/gothamor/gta-vcs-recomp) that brings the effects of
-> PC mods (Proper Shaders, SkyGFX, Project2DFX, texture packs) to the native port as settings, authentic by default.
-> Done so far:
-> - **Fog**: the game's own distance fog as a setting (F2 > Graphics > Fog).
-> - **Texture packs**: PCSX2-named DDS (BC7 / BC1 / BC3, with mips) or PNG files; a texture dump to make them
->   ([docs/TEXTURE_PACKS.md](docs/TEXTURE_PACKS.md)).
-> - **Mod loader**, the way PC GTA's Mod Loader works: one folder per mod in `modloader/`, `modloader.ini`, and F2 > Mods
->   with a switch and a priority slider per mod, applied while the game runs ([docs/MODS.md](docs/MODS.md)).
->
-> What it changes and what comes next: [docs/FORK.md](docs/FORK.md). Everything below is upstream's.
+> PC mods (Proper Shaders, SkyGFX, Project2DFX, texture packs) to the native port as settings, authentic by default,
+> and runs PC Vice City (and San Andreas weapon) mods through a mod loader. What it adds is listed in
+> [What this fork adds](#what-this-fork-adds); the work list and what comes next are in [docs/FORK.md](docs/FORK.md).
+> Everything after that section is upstream's.
+
+## What this fork adds
+
+Everything is off or at the game's own values by default; the PS2 picture stays the reference.
+
+**Mods**
+- **Texture packs**: PCSX2-named DDS (BC1-BC5 / BC7, with their mips, uploaded as stored) or PNG files, and a texture
+  dump (`VCS_TEXTURE_DUMP=1`) to make them. F2 > Mods > Replace textures ([docs/TEXTURE_PACKS.md](docs/TEXTURE_PACKS.md);
+  [#9](https://github.com/willzmkv/gta-vcs-recomp/pull/9), PNG part from upstream PR #8).
+- **Mod loader**, the way PC GTA's Mod Loader works: one folder per mod in `modloader/`, its `modloader.ini`
+  (priorities, ignore lists), and F2 > Mods with a switch and a priority slider per mod, Rescan and Open folder, all
+  applied while the game runs ([docs/MODS.md](docs/MODS.md); [#9](https://github.com/willzmkv/gta-vcs-recomp/pull/9)).
+- **Game files from mods**: a mod's `GTA3PS2.IMG` entry (`admiral.mdl`, `#<index>.bin`) or loose file
+  (`AMERICAN.GXT`, `ENGLISH.GXT`, `MAIN.SCM`) is read in place of the disc's, without rebuilding any archive; `tools/img.py`
+  lists and extracts entries ([#13](https://github.com/willzmkv/gta-vcs-recomp/pull/13)).
+- **PC Vice City vehicle mods as they come**: drop a car's `.dff` + `.txd` into `modloader/` and the game's vehicle of
+  that name is replaced, converted to VCS's formats while the game loads. Cars, bikes, boats and helicopters, every
+  part checked triangle by triangle against the `.dff`. VC's `wheels.dff` is not supported yet
+  ([#14](https://github.com/willzmkv/gta-vcs-recomp/pull/14), [#19](https://github.com/willzmkv/gta-vcs-recomp/pull/19)).
+- **PC weapon mods** (Vice City and San Andreas): converted the same way, placed where VCS holds each weapon in Vic's
+  hand, with VCS's HUD icons kept. SA's D3D9 textures are read, SA's muzzle-flash mesh is left out, and the SA minigun
+  is drawn once, its barrels turning while firing
+  ([#18](https://github.com/willzmkv/gta-vcs-recomp/pull/18), [#19](https://github.com/willzmkv/gta-vcs-recomp/pull/19),
+  [#21](https://github.com/willzmkv/gta-vcs-recomp/pull/21)).
+
+**Graphics**
+- **Fog**: the game's own distance fog range as settings, F2 > Graphics > Fog (fog distance, fog start; 100 % = the
+  game's values).
+- **Object distance**: F2 > Graphics > Draw distance > Object distance (100-400 %) draws and streams objects and crowds
+  further, through the game's own LOD scale; traffic and pedestrians stay as on the PS2
+  ([#23](https://github.com/willzmkv/gta-vcs-recomp/pull/23)). The rest of the draw distance work (the detailed world
+  further, population density and distance) is still in progress ([docs/FORK.md](docs/FORK.md), T2).
+- **Fire on screen again**: flames from the flame-thrower, molotovs, explosions and burning cars were missing on
+  Direct3D 11 while their smoke showed; fixed, and checked by `tools/fire_check.py`
+  ([#20](https://github.com/willzmkv/gta-vcs-recomp/pull/20)).
+
+**Memory and performance**
+- **Streaming memory past the PS2's 32 MB**: F2 > Game > Memory > Streaming memory (PS2 5.4 MB, 12, 20 or 30 MB;
+  restart) gives the game's streaming more room for large mod models, and more different cars in traffic. Texture
+  pack images are now created off the main thread (far fewer hitches with an HD pack)
+  ([#17](https://github.com/willzmkv/gta-vcs-recomp/pull/17), [#19](https://github.com/willzmkv/gta-vcs-recomp/pull/19)).
+- **Native draws joined**: consecutive draws of the same mesh are merged, about half the draw calls; with VC car mods
+  the hitches mostly disappear ([#22](https://github.com/willzmkv/gta-vcs-recomp/pull/22)).
+
+---
 
 A native **Windows and Linux** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
 recompiling the game's PS2 executable into C++. Both are built from the same source and run natively: Direct3D 11 on
@@ -180,7 +220,7 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
 - Internal resolution from 1x (640x448) up to 8x, or the window's own resolution, with the effects keeping their
   original look.
 - Anti-aliasing (MSAA 2x / 4x / 8x) and anisotropic texture filtering (up to 16x).
-- Optional [PCSX2 PNG texture packs](docs/TEXTURE_PACKS.md), enabled in F2 > Graphics > Texture replacements.
+- Optional [PCSX2 texture packs](docs/TEXTURE_PACKS.md) (DDS or PNG), enabled in F2 > Mods > Replace textures.
 - Windowed or borderless full screen (Alt+Enter).
 
 **Controls**
