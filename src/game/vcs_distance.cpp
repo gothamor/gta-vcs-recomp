@@ -49,6 +49,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -132,8 +133,13 @@ namespace vcs::distance
         }
 
         float percent(const std::atomic<int> &v) { return static_cast<float>(v.load(std::memory_order_relaxed)) / 100.0f; }
-        float carDistance() { return percent(g_population); }
-        float pedDistance() { return std::min(percent(g_population), kMaxPedDistance); }
+        // the settings as they apply now: from the game's own (1) at a budget of 0 to the sliders' at 1 (updateBudget)
+        float g_budget = 1.0f;
+        float governed(float factor) { return 1.0f + (factor - 1.0f) * g_budget; }
+        float carDistance() { return governed(percent(g_population)); }
+        float pedDistance() { return governed(std::min(percent(g_population), kMaxPedDistance)); }
+        float trafficDensity() { return governed(percent(g_traffic)); }
+        float pedestrianDensity() { return governed(percent(g_pedestrians)); }
 
         // GenerateOneRandomCar gives up on a found spot unless rand() & 15 <= the road's density class value (the lower
         // of the link's two nodes): 1, 5, 8 and 16 chances in 16. More cars over a larger area need more spots taken -
@@ -145,6 +151,43 @@ namespace vcs::distance
                 const long v = std::lround((g_roadDensity[i] + 1) * factor) - 1;
                 g_rdram[(kRoadDensity + i) & PS2_RAM_MASK] = static_cast<uint8_t>(std::clamp<long>(v, 0, 15));
             }
+        }
+
+        // The population's frame-rate target (Graphics > Distance and population): each car and ped above the game's own
+        // numbers costs the game thread (its AI, collision, animation, the render setup) and the main thread (its draws
+        // into D3D11) - on the player's machine the densest streets fell to 30-50 fps. g_budget (0..1) takes the
+        // population distance and the densities from the sliders' (1) towards the game's own (0): the game frame's
+        // period, averaged over ~0.5 s, above the target takes it down, well below brings it back. The caps follow, and
+        // the removal distances with them: the cars and peds beyond go the game's own way (out of view first). Off: 1.
+        std::atomic<int> g_fpsTarget{60};
+        uint64_t g_lastFrameNs = 0, g_windowNs = 0;
+        uint32_t g_windowFrames = 0;
+        void updateBudget()
+        {
+            const uint64_t now = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+            const uint64_t period = g_lastFrameNs ? now - g_lastFrameNs : 0;
+            g_lastFrameNs = now;
+            const int target = g_fpsTarget.load(std::memory_order_relaxed);
+            if (target <= 0)
+            {
+                g_budget = 1.0f;
+                return;
+            }
+            if (!period || period > 250000000u) // a pause, a load: not the crowd's
+                return;
+            g_windowNs += period;
+            if (++g_windowFrames < 8 || g_windowNs < 500000000u)
+                return;
+            const double ms = g_windowNs / 1e6 / g_windowFrames, goal = 1000.0 / target;
+            g_windowNs = 0;
+            g_windowFrames = 0;
+            // down below ~96 % of the target, up while it is met (an external cap - a driver's - may hold the frame rate
+            // right at the target: that counts as met)
+            if (ms > goal * 1.04)
+                g_budget = std::max(0.0f, g_budget - (ms > goal * 1.25 ? 0.15f : 0.05f));
+            else if (ms < goal * 0.99)
+                g_budget = std::min(1.0f, g_budget + 0.02f);
         }
 
         // the numbers of cars and peds: the game's constants times the density and the population distance squared,
@@ -161,8 +204,8 @@ namespace vcs::distance
                 std::memcpy(g_roadDensity, g_rdram + (kRoadDensity & PS2_RAM_MASK), 4);
                 g_haveDefaults = true;
             }
-            const float cars = percent(g_traffic) * carDistance() * carDistance();
-            const float peds = percent(g_pedestrians) * pedDistance() * pedDistance();
+            const float cars = trafficDensity() * carDistance() * carDistance();
+            const float peds = pedestrianDensity() * pedDistance() * pedDistance();
             if (cars == 1.0f && peds == 1.0f)
             {
                 wrf(kCarNumber, g_carNumber); // the game's own (a setting back at 0)
@@ -205,7 +248,7 @@ namespace vcs::distance
             wrf(kLodDistScale, percent(g_view));
             applyDensity();
             g_genFresh = true;
-            if (carDistance() != 1.0f || g_genTouched)
+            if (percent(g_population) != 1.0f || g_genTouched)
             {
                 g_genTouched = true;
                 wrf(kGenMultiplier, kGenUnwritten);
@@ -253,6 +296,8 @@ namespace vcs::distance
             // the offscreen vehicle distances the patched code reads (game/vcs/overrides.toml): always written, the RAM
             // there starts at zero
             g_rdram = rdram;
+            if (kGenReaders[I] == 0x002AFE80u) // CPopulation::Update: once a game frame
+                updateBudget();
             const float cars = carDistance();
             wrf(kOffscreenSlots, 60.0f * cars);
             wrf(kOffscreenSlots + 4u, 90.0f * cars);
@@ -265,7 +310,7 @@ namespace vcs::distance
                     g_genBase = v == kGenUnwritten ? g_genBase : v;
                 }
                 wrf(kGenMultiplier, g_genBase * (I < kPedReaders ? pedDistance() : cars));
-                if (cars == 1.0f) // back at the game's own: this frame keeps it, the next is left alone
+                if (percent(g_population) == 1.0f) // back at the game's own: this frame keeps it, the next is left alone
                     g_genTouched = false;
             }
             g_genFresh = false;
@@ -652,6 +697,21 @@ namespace vcs::distance
                   "How far away cars and people appear and stay: 0 is the original, 100 three times as far for cars "
                   "(twice for people). Their numbers grow with the area, so the streets stay as busy.",
                   "VCS_POPULATION_DISTANCE", 300, g_population);
+        {
+            settings::Spec s;
+            s.key = "world.fps_target";
+            s.page = "Graphics";
+            s.section = "Distance and population";
+            s.label = "Population frame-rate target";
+            s.help = "Below this frame rate the cars and people beyond the original's are fewer until it is met again "
+                     "(the densities are then the most the machine keeps up with). Off: always the sliders' numbers.";
+            s.type = settings::Type::Choice;
+            s.choices = {{"Off", 0}, {"45", 45}, {"60", 60}, {"70", 70}, {"90", 90}, {"120", 120}, {"144", 144}};
+            s.defaultValue = 60;
+            s.env = "VCS_POPULATION_FPS";
+            s.onChange = [](int v) { g_fpsTarget.store(v, std::memory_order_relaxed); };
+            settings::add(s);
+        }
         addSlider("world.vehicle_density", "Vehicle density",
                   "How many cars drive around: 0 is the original (the PS2 keeps it low), 100 four times as many. Missions "
                   "still empty the streets when they want. More than the PS2 needs Streaming memory above PS2.",
@@ -714,10 +774,10 @@ namespace vcs::distance
             char text[320];
             std::snprintf(text, sizeof(text),
                           "ok view=%d detail=%d scale=%.3f lod=%.3f gen=%.3f population=%d traffic=%d pedestrians=%d "
-                          "cars=%d/%d peds=%d/%d pools=%u,%u numbers=%.3f,%.3f",
+                          "cars=%d/%d peds=%d/%d pools=%u,%u numbers=%.3f,%.3f budget=%.2f",
                           g_view.load(), g_detail.load(), rdf(kLodDistScale), rdf(kLodMultiplier), rdf(kGenMultiplier),
                           g_population.load(), g_traffic.load(), g_pedestrians.load(), rd32(kRandomCars), rd32(kMaxCars),
-                          rd32(kPeds), rd32(kMaxPeds), poolSize(kPedPool), poolSize(kCarPool), rdf(kCarNumber), rdf(kPedNumber));
+                          rd32(kPeds), rd32(kMaxPeds), poolSize(kPedPool), poolSize(kCarPool), rdf(kCarNumber), rdf(kPedNumber), g_budget);
             reply(text);
         });
     }
