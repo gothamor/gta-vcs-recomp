@@ -51,7 +51,10 @@ def step(g, out, name, slider):
 
 def check(out, save=None, port=None):
     os.makedirs(out, exist_ok=True)
-    g = rig.Game.start(save=save, name="distance_check", port=port, data_dir=os.path.join(out, "data"))
+    # the population distance at the game's own whatever the player's vcs.ini says: LODDistMultiplier is the generation
+    # multiplier times the scale only then (the population scales the generation multiplier's readers)
+    g = rig.Game.start(save=save, name="distance_check", port=port, data_dir=os.path.join(out, "data"),
+                       env={"VCS_POPULATION_DISTANCE": "0"})
     try:
         if save:
             g.wait_ingame()
