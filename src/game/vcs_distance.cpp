@@ -64,6 +64,8 @@ namespace vcs::distance
         constexpr uint32_t kLodDistScale = 0x004887F8u;  // CRenderer::ms_lodDistScale (1.0)
         constexpr uint32_t kLodMultiplier = 0x006F4CACu; // TheCamera.LODDistMultiplier (camera 0x6F44D0 + 0x7DC)
         constexpr uint32_t kGenMultiplier = 0x006F4CA0u; // TheCamera.GenerationDistMultiplier (+0x7D0)
+        constexpr uint32_t kCameraPos = 0x006F3C00u;     // the renderer's camera position
+        constexpr uint32_t kCameraFront = 0x006F44E0u;   // TheCamera's matrix: forward (+0x10)
         constexpr uint32_t kAtomicFromDistance = 0x003A52F8u; // CBaseModelInfo::GetAtomicFromDistance (leaf)
 
         // the functions that read GenerationDistMultiplier (not FUN_00219898: its +0x7D0 is a ped's); the first two are
@@ -133,13 +135,18 @@ namespace vcs::distance
         }
 
         float percent(const std::atomic<int> &v) { return static_cast<float>(v.load(std::memory_order_relaxed)) / 100.0f; }
-        // the settings as they apply now: from the game's own (1) at a budget of 0 to the sliders' at 1 (updateBudget)
+        float carDistance() { return percent(g_population); }
+        float pedDistance() { return std::min(percent(g_population), kMaxPedDistance); }
+        // the densities as they apply now (updateBudget): the sliders' at a budget of 1; at 0 the game's own numbers of
+        // cars and peds, spread over the population distance's area (the distances never change: spawns stay far)
         float g_budget = 1.0f;
-        float governed(float factor) { return 1.0f + (factor - 1.0f) * g_budget; }
-        float carDistance() { return governed(percent(g_population)); }
-        float pedDistance() { return governed(std::min(percent(g_population), kMaxPedDistance)); }
-        float trafficDensity() { return governed(percent(g_traffic)); }
-        float pedestrianDensity() { return governed(percent(g_pedestrians)); }
+        float governed(float density, float distance)
+        {
+            const float least = 1.0f / (distance * distance);
+            return least + (density - least) * g_budget;
+        }
+        float trafficDensity() { return governed(percent(g_traffic), carDistance()); }
+        float pedestrianDensity() { return governed(percent(g_pedestrians), pedDistance()); }
 
         // GenerateOneRandomCar gives up on a found spot unless rand() & 15 <= the road's density class value (the lower
         // of the link's two nodes): 1, 5, 8 and 16 chances in 16. More cars over a larger area need more spots taken -
@@ -156,9 +163,10 @@ namespace vcs::distance
         // The population's frame-rate target (Graphics > Distance and population): each car and ped above the game's own
         // numbers costs the game thread (its AI, collision, animation, the render setup) and the main thread (its draws
         // into D3D11) - on the player's machine the densest streets fell to 30-50 fps. g_budget (0..1) takes the
-        // population distance and the densities from the sliders' (1) towards the game's own (0): the game frame's
-        // period, averaged over ~0.5 s, above the target takes it down, well below brings it back. The caps follow, and
-        // the removal distances with them: the cars and peds beyond go the game's own way (out of view first). Off: 1.
+        // densities from the sliders' (1) towards the game's own numbers (0) - never the distances: the player saw the
+        // spawns come close and the far traffic go when they shrank too. The game frame's period, averaged over ~0.5 s,
+        // above the target takes it down, met brings it back. The caps follow; cars change all the time, peds linger,
+        // so the peds above the cap fade out, the farthest out of view first (trimCrowd). Off: 1.
         std::atomic<int> g_fpsTarget{60};
         uint64_t g_lastFrameNs = 0, g_windowNs = 0;
         uint32_t g_windowFrames = 0;
@@ -188,6 +196,54 @@ namespace vcs::distance
                 g_budget = std::max(0.0f, g_budget - (ms > goal * 1.25 ? 0.15f : 0.05f));
             else if (ms < goal * 0.99)
                 g_budget = std::min(1.0f, g_budget + 0.02f);
+        }
+
+        // Peds above the cap (0x488008) fade out and go - the flag CPopulation's removal sets (+0x1C8 bit 63, bFadeOut; it
+        // takes them away once faded): random peds on foot out of the camera's cone, the farthest first, at most two a
+        // frame. Only while the budget holds the numbers below the sliders'.
+        void trimCrowd()
+        {
+            if (g_budget >= 1.0f)
+                return;
+            const int32_t excess = rd32(kPeds) - rd32(kMaxPedsB);
+            const uint32_t pool = static_cast<uint32_t>(rd32(kPedPool));
+            if (excess <= 0 || !pool)
+                return;
+            const uint32_t entries = static_cast<uint32_t>(rd32(pool)), flags = static_cast<uint32_t>(rd32(pool + 4u));
+            const uint32_t size = std::min<uint32_t>(static_cast<uint32_t>(rd32(pool + 8u)), kLargePeds);
+            const float cx = rdf(kCameraPos), cy = rdf(kCameraPos + 4u), cz = rdf(kCameraPos + 8u);
+            const float fx = rdf(kCameraFront), fy = rdf(kCameraFront + 4u), fz = rdf(kCameraFront + 8u);
+            uint32_t pick[2] = {0, 0};
+            float far[2] = {0.0f, 0.0f};
+            for (uint32_t i = 0; i < size; ++i)
+            {
+                if (g_rdram[(flags + i) & PS2_RAM_MASK] & 0x80u)
+                    continue;
+                const uint32_t ped = entries + i * 0xD20u;
+                const int32_t state = rd32(ped + 0x8C4u);
+                if (rd32(ped + 0x8F4u) != 1 || state == 0x37 || state == 0x39 || state == 0x3A || rd32(ped + 0x538u) != 0 ||
+                    (rd32(ped + 0x1CCu) & 0x80000000))
+                    continue;
+                const float dx = rdf(ped + 0x30u) - cx, dy = rdf(ped + 0x34u) - cy, dz = rdf(ped + 0x38u) - cz;
+                const float d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 < 30.0f * 30.0f || dx * fx + dy * fy + dz * fz > 0.2f * std::sqrt(d2))
+                    continue; // near, or in view
+                for (int k = 0; k < 2; ++k)
+                    if (d2 > far[k])
+                    {
+                        if (k == 0)
+                        {
+                            far[1] = far[0];
+                            pick[1] = pick[0];
+                        }
+                        far[k] = d2;
+                        pick[k] = ped;
+                        break;
+                    }
+            }
+            for (int k = 0; k < std::min(excess, 2); ++k)
+                if (pick[k])
+                    wr32(pick[k] + 0x1CCu, rd32(pick[k] + 0x1CCu) | static_cast<int32_t>(0x80000000u));
         }
 
         // the numbers of cars and peds: the game's constants times the density and the population distance squared,
@@ -297,7 +353,10 @@ namespace vcs::distance
             // there starts at zero
             g_rdram = rdram;
             if (kGenReaders[I] == 0x002AFE80u) // CPopulation::Update: once a game frame
+            {
                 updateBudget();
+                trimCrowd();
+            }
             const float cars = carDistance();
             wrf(kOffscreenSlots, 60.0f * cars);
             wrf(kOffscreenSlots + 4u, 90.0f * cars);
@@ -454,8 +513,7 @@ namespace vcs::distance
         // VCS_CROWD_LOD=0 turns it off (A / B measures).
         constexpr uint32_t kUpdateAnim = 0x003C50A8u, kRandomPedControl = 0x002D8788u, kProcessCollision = 0x00348D40u;
         constexpr uint32_t kAnimUpdate = 0x00154D10u; // RpAnimBlendClumpUpdateAnimations(dt $f12, clump $a0, all $a1)
-        constexpr uint32_t kFrameCounter = 0x004CD124u, kCameraPos = 0x006F3C00u;
-        constexpr uint32_t kCameraFront = 0x006F44E0u; // TheCamera's matrix: forward (+0x10)
+        constexpr uint32_t kFrameCounter = 0x004CD124u;
         constexpr float kLodDistance = 70.0f, kLodFar = 110.0f; // every second frame past the first, every third past this
         PS2Runtime::RecompiledFunction g_updateAnim = nullptr, g_randomPedControl = nullptr, g_processCollision = nullptr,
                                        g_animUpdate = nullptr;
