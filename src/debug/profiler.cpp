@@ -230,6 +230,11 @@ namespace vcs
             };
             std::map<std::vector<uintptr_t>, uint64_t> stacks; // frames (innermost first) -> samples
             std::unordered_map<uint32_t, uint64_t> hits;    // guest function -> samples
+            // VCS_PROFILE_INCLUSIVE=1: every guest function on the sampled stack counts once per sample (generated
+            // functions call each other as host functions, so the host stack holds the guest call chain) - the cost of
+            // a subsystem with all it calls
+            static const bool inclusive = std::getenv("VCS_PROFILE_INCLUSIVE") != nullptr;
+            std::unordered_map<uint32_t, uint64_t> inclusiveHits;
             std::unordered_map<uintptr_t, uint64_t> other;  // non-generated host RIP (page) -> samples
             uint64_t total = 0;
             auto lastReport = std::chrono::steady_clock::now();
@@ -273,7 +278,7 @@ namespace vcs
                         continue;
                     uint32_t sampleChain = 0; // (VCS_PROFILE_SPIKES with VCS_PROFILE_CALLERS: its call chain, 1-based)
                     CONTEXT c{};
-                    c.ContextFlags = callersOf.empty() ? CONTEXT_CONTROL : CONTEXT_FULL;
+                    c.ContextFlags = callersOf.empty() && !inclusive ? CONTEXT_CONTROL : CONTEXT_FULL;
                     const bool got = GetThreadContext(h, &c) != 0;
                     const uintptr_t rip = c.Rip;
                     auto it = std::upper_bound(map.begin(), map.end(), rip,
@@ -325,6 +330,26 @@ namespace vcs
                                     found = chainIds.emplace(frames, static_cast<uint32_t>(chainNames.size())).first;
                                 }
                                 sampleChain = found->second;
+                            }
+                        }
+                    }
+                    if (got && inclusive)
+                    {
+                        uintptr_t raw[64];
+                        const int n = unwindFrames(c, raw, 64);
+                        uint32_t seen[65];
+                        int nseen = 0;
+                        for (int i = -1; i < n; ++i)
+                        {
+                            const uintptr_t pc = i < 0 ? rip : raw[i];
+                            auto f = std::upper_bound(map.begin(), map.end(), pc, [](uintptr_t v, const HostFn &fn) { return v < fn.host; });
+                            if (f == map.begin() || f == map.end() || !withinGenerated(std::prev(f)->host, pc))
+                                continue;
+                            const uint32_t guest = std::prev(f)->guest;
+                            if (std::find(seen, seen + nseen, guest) == seen + nseen)
+                            {
+                                seen[nseen++] = guest;
+                                ++inclusiveHits[guest];
                             }
                         }
                     }
@@ -391,6 +416,14 @@ namespace vcs
                              100.0 * guestTotal / total);
                 for (size_t i = 0; i < top.size() && i < 15; ++i)
                     std::fprintf(stderr, "[profile]   %5.1f%%  guest 0x%08x\n", 100.0 * top[i].second / total, top[i].first);
+                if (inclusive && total)
+                {
+                    std::vector<std::pair<uint32_t, uint64_t>> inc(inclusiveHits.begin(), inclusiveHits.end());
+                    std::sort(inc.begin(), inc.end(), [](auto &a, auto &b) { return a.second > b.second; });
+                    for (size_t i = 0; i < inc.size() && i < 60; ++i)
+                        std::fprintf(stderr, "[profile]   %5.1f%%  inclusive guest 0x%08x\n", 100.0 * inc[i].second / total, inc[i].first);
+                    inclusiveHits.clear();
+                }
                 // VCS_PROFILE_GUEST_FILE=<path>: every guest function's samples, appended per report window ("window <s> total
                 // N" then "0xADDR N" lines; s = seconds since the profiler started) - for summing by subsystem offline
                 static const char *guestFile = std::getenv("VCS_PROFILE_GUEST_FILE");
