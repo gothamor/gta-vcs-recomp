@@ -1726,16 +1726,33 @@ its lists; `pokef` of the scale below with screenshots).
   (`FUN_00478fc0`, 0x8C0), then 0x1DB, 0x14 and 0xC0 for the other pools; each constructor allocates its own entries
   and flags from the main heap. CPool::New for peds `FUN_004767b0` searches up from the last index (`+0xC`) and wraps,
   Delete `FUN_00476850` lowers it; GetHandle `FUN_004701b8` = index << 8 | flags, GetAt `FUN_00471788`. Enlarged
-  through the constructors' size (2026-11-04, `VCS_POOLS=peds,vehicles` for a test; hidden runs at a busy street with
-  the watchdog): **peds up to 129 run clean, 136 and more corrupt memory within a minute** - even with five peds
-  alive: RpClumpRender (`FUN_002c0270`, from CEntity::Render `FUN_003c3e58`) looping on a broken atomic list, the
-  main heap's bytes-in-use gone negative, an anim block's unload (`FUN_00225610` -> `FUN_001cf848`) destroying an array
-  with a garbage count, all during LOAD_SCENE or the first seconds. Vehicles 110 / 300 / 360 ran clean (their slots
-  never climbed far). The heap had 7 MB free, and every reader of the ped pool's size (VCS_RWATCH on it: 23 sites,
-  the pool loops, CPool's own functions, `FUN_00415ae8`, `FUN_0018f5d0`) only loops over the pool - so the culprit
-  is probably a ped's slot kept in a signed byte (a slot >= 128 turns negative) somewhere not found yet. The port
-  keeps peds at 128 and vehicles at 110. Two checks of the index elsewhere: `FUN_0020c3c8` (< 71) and `FUN_0020c400`
-  (< 70) answer false for higher slots.
+  through the constructors' size (2026-11-04, `VCS_POOLS=peds,vehicles` for a test). **More than 128 peds broke loads**:
+  with a save loaded, 130+ froze within seconds (RpClumpRender `FUN_002c0270` looping on a broken atomic list, the main
+  heap's bytes-in-use negative, an anim block's unload `FUN_00225610` -> `FUN_001cf848` over a garbage count), while a new
+  game ran clean with 280. The cause is the game's own: the world clear before a load / restart (**`FUN_0018f5d0`**)
+  deletes the peds with `for (i = 0; i < pool size; i++) if ((ped = GetAt(pool, i))) delete` - GetAt takes a *handle*, so
+  i is slot 0 with flag byte i. Below 128 that only matches slot 0's 7-bit id in use (the PS2 deletes that ped; the
+  flags are reset after, `FUN_004740b0`); from 128 up it matches slot 0's byte when the slot is **free** (bit 7) and a ped
+  that is not there gets "deleted". Found by elimination: not the heap (7 MB free), not slot use (a host CPool::New that
+  never hands out slots >= 128 still froze), not the size readers (VCS_RWATCH on the pool's size: 23 sites); a new game
+  never clears. The port gives that call (return `0x18F870`) an invalid handle for i >= 128 and builds 280 peds / 200
+  vehicles. No vehicle-size reader calls GetAt with an index. Two checks of the index elsewhere: `FUN_0020c3c8` (< 71)
+  and `FUN_0020c400` (< 70) answer false for higher slots.
+- **Random traffic** (`FUN_00430148` six tries a frame -> GenerateOneRandomCar **`FUN_00430290`**; measured with entry
+  counters, 2026-11-04). Wanted = the zone's car density x a per-player factor (the product kept at `0x4E4A54`, s16; 18
+  at the Little Haiti street) x the scripts' `0x48A968` x `0x48A680`; then the cap `0x48A9A8` against the sum of the
+  counts `0x48A96C` (random) .. `0x48A984` (`0x48A97C` not in it), main heap >= 0x19000 free, a loaded model
+  (`FUN_00432888`), a node near the spot (`FUN_00268880`), a spot (**`FUN_00267928`**): the point exactly `distance` from
+  the player on a road link crossing that circle, inside the cone along the direction (`cos > c`: 110 x gen ahead, 3
+  frames in 4) or outside it (40 m, the 4th: an offscreen spawn), from a node list it rebuilds every 64 frames
+  (**`FUN_00269228`**: up to 250 nodes in a square of +-310 m around the player, in grid order). Then a road chance:
+  `rand & 15 <= class value` (table **`0x487498`** = 0, 4, 7, 15 by the link's density class) - of ~950 spots found per
+  10 s only ~80 passed; a 10 m clearance (`FUN_00195380`); the car is built; then deleted again unless: out of view
+  (`FUN_003c4318`, the bounding sphere against the frustum: near `0x4CD130` 0.3, far `0x4CD12C` 1000) within **60 m**
+  (90 with extended range) or in view 100-160 x gen from the player and >= 82.5 x gen from the camera, then 20 m of room
+  and moving towards the player. Removal **`FUN_00433378`** (as VC's PossiblyRemoveVehicle): out of view past **60 m**
+  (70 with the camera looking down, x 1.5 extended), in view past 160 x gen. Standing still, 86 % of the new cars went
+  at once; driving about half (the offscreen ones behind).
 
 ## 10. Memory card and saves
 
