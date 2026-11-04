@@ -364,94 +364,117 @@ namespace vcs::distance
         // (+0x30; a random ped's FUN_002D8788) and ProcessCollision (+0x34, CPhysical's FUN_00348D40), one pass each,
         // in order. With the population distance most peds are beyond the PS2's own ped range (~65 m), and each costs
         // ~0.06 ms a frame (game-internals.md 9h). A random ped on foot farther than kLodDistance from the camera is
-        // processed every second frame (its slot's parity against the frame counter, so half of them each frame) and
-        // skips all three on the other. Its animation then advances by two frames' time (UpdateAnim passes the step to
-        // FUN_00154D10 in $f12 - a register, no global changes): the ped's speed comes from its animation's root
-        // movement over the frame's step (FUN_001F1D38), so it walks the same distance a second and turns at half the
-        // rate - at 70 m and more. With the population distance at 0 no ped is that far: the game's own then.
+        // processed every second frame (every third past kLodFar; its slot against the frame counter spreads them) and
+        // skips all three on the others. Its animation then advances by that many frames' time (UpdateAnim passes the
+        // step to FUN_00154D10 in $f12 - a register, no global changes): the ped's speed comes from its animation's root
+        // movement over the frame's step (FUN_001F1D38), so it walks the same distance a second and turns at a fraction
+        // of the rate - at 70 m and more. And a random ped outside the camera's cone gets the root-only animation update
+        // the game already gives vehicles and objects out of view ($a1 = 0; for peds UpdateAnim always asks the full one).
+        // Only while a population slider is above 0: the game's own otherwise.
         // VCS_CROWD_LOD=0 turns it off (A / B measures).
         constexpr uint32_t kUpdateAnim = 0x003C50A8u, kRandomPedControl = 0x002D8788u, kProcessCollision = 0x00348D40u;
         constexpr uint32_t kAnimUpdate = 0x00154D10u; // RpAnimBlendClumpUpdateAnimations(dt $f12, clump $a0, all $a1)
         constexpr uint32_t kFrameCounter = 0x004CD124u, kCameraPos = 0x006F3C00u;
-        constexpr float kLodDistance = 70.0f;
-        constexpr int kLodEvery = 2;
+        constexpr uint32_t kCameraFront = 0x006F44E0u; // TheCamera's matrix: forward (+0x10)
+        constexpr float kLodDistance = 70.0f, kLodFar = 110.0f; // every second frame past the first, every third past this
         PS2Runtime::RecompiledFunction g_updateAnim = nullptr, g_randomPedControl = nullptr, g_processCollision = nullptr,
                                        g_animUpdate = nullptr;
         struct LodState
         {
             int32_t frame = -1;
-            bool skip = false, lod = false;
+            uint8_t every = 1;     // processed one frame in `every` (1: every frame, not a LOD ped)
+            bool skip = false;     // not this frame
+            bool unseen = false;   // a random ped outside the camera's cone: the cheap animation update
         };
         LodState g_lod[kLargePeds];
-        uint32_t g_lodClump = 0; // the clump whose next animation update runs kLodEvery frames' time
-        uint64_t g_lodSkipped = 0, g_lodProcessed = 0;
+        uint32_t g_animClump = 0;  // the clump the next animation update is for, and how
+        float g_animTimes = 1.0f;
+        bool g_animCheap = false;
+        uint64_t g_lodSkipped = 0, g_lodProcessed = 0, g_lodCheap = 0;
         bool crowdLodOn()
         {
             static const bool on = !(std::getenv("VCS_CROWD_LOD") && std::getenv("VCS_CROWD_LOD")[0] == '0');
             return on;
         }
-        // this frame's decision for the entity: 0 not a far random ped, 1 processed (a LOD frame), 2 skipped
-        int crowdLod(uint32_t ent)
+        // this frame's decision for a ped (nullptr: not a ped, or the LOD off)
+        const LodState *crowdLod(uint32_t ent)
         {
             const uint32_t pool = static_cast<uint32_t>(rd32(kPedPool));
-            if (!pool || !crowdLodOn())
-                return 0;
+            const bool larger = g_population.load(std::memory_order_relaxed) > 100 ||
+                                g_traffic.load(std::memory_order_relaxed) > 100 ||
+                                g_pedestrians.load(std::memory_order_relaxed) > 100;
+            if (!pool || !crowdLodOn() || !larger)
+                return nullptr;
             const uint32_t entries = static_cast<uint32_t>(rd32(pool)), size = static_cast<uint32_t>(rd32(pool + 8u));
             if (ent < entries || ent >= entries + size * 0xD20u || (ent - entries) % 0xD20u)
-                return 0;
+                return nullptr;
             const uint32_t slot = (ent - entries) / 0xD20u;
             if (slot >= kLargePeds)
-                return 0;
+                return nullptr;
             LodState &s = g_lod[slot];
             const int32_t frame = rd32(kFrameCounter);
             if (s.frame != frame)
             {
                 s.frame = frame;
                 const int32_t createdBy = rd32(ent + 0x8F4u), state = rd32(ent + 0x8C4u);
+                const bool random = createdBy == 1 && state != 0x37 && state != 0x39 && state != 0x3A && rd32(ent + 0x538u) == 0;
                 const float dx = rdf(ent + 0x30u) - rdf(kCameraPos), dy = rdf(ent + 0x34u) - rdf(kCameraPos + 4u);
-                s.lod = createdBy == 1 && state != 0x37 && state != 0x39 && state != 0x3A && rd32(ent + 0x538u) == 0 &&
-                        dx * dx + dy * dy > kLodDistance * kLodDistance;
-                s.skip = s.lod && (static_cast<uint32_t>(frame) + slot) % kLodEvery != 0;
+                const float dz = rdf(ent + 0x38u) - rdf(kCameraPos + 8u);
+                const float d2 = dx * dx + dy * dy;
+                s.every = !random ? 1 : d2 > kLodFar * kLodFar ? 3 : d2 > kLodDistance * kLodDistance ? 2 : 1;
+                s.skip = (static_cast<uint32_t>(frame) + slot) % s.every != 0;
+                // outside a cone of acos(0.2) = 78 degrees around the camera's direction (wider than any field of view)
+                const float along = dx * rdf(kCameraFront) + dy * rdf(kCameraFront + 4u) + dz * rdf(kCameraFront + 8u);
+                s.unseen = random && d2 > 25.0f && along < 0.2f * std::sqrt(d2 + dz * dz);
             }
-            return s.lod ? (s.skip ? 2 : 1) : 0;
+            return &s;
         }
         PS2_GUEST_CC void skipCall(R5900Context *ctx) { ctx->pc = GPR_U32(ctx, 31); }
         PS2_GUEST_CC void updateAnim(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdram = rdram;
             const uint32_t ent = GPR_U32(ctx, 4);
-            switch (crowdLod(ent))
+            const LodState *s = crowdLod(ent);
+            g_animClump = 0;
+            if (s)
             {
-            case 2:
-                ++g_lodSkipped;
-                return skipCall(ctx);
-            case 1:
-                ++g_lodProcessed;
-                g_lodClump = static_cast<uint32_t>(rd32(ent + 0x50u));
-                break;
-            default:
-                g_lodClump = 0;
+                if (s->skip)
+                {
+                    ++g_lodSkipped;
+                    return skipCall(ctx);
+                }
+                g_lodProcessed += s->every > 1;
+                g_lodCheap += s->unseen;
+                g_animClump = static_cast<uint32_t>(rd32(ent + 0x50u));
+                g_animTimes = static_cast<float>(s->every);
+                g_animCheap = s->unseen;
             }
             g_updateAnim(rdram, ctx, runtime);
         }
+        // UpdateAnim's call: the step times the frames it stands for; outside the camera's cone the root's movement only
+        // ($a1 = 0: the update the game gives vehicles and objects out of view - FUN_001552F8, the root-motion node)
         PS2_GUEST_CC void animUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            if (g_lodClump && GPR_U32(ctx, 4) == g_lodClump)
-                ctx->f[12] *= static_cast<float>(kLodEvery);
-            g_lodClump = 0;
+            if (g_animClump && GPR_U32(ctx, 4) == g_animClump)
+            {
+                ctx->f[12] *= g_animTimes;
+                if (g_animCheap)
+                    SET_GPR_U32(ctx, 5, 0u);
+            }
+            g_animClump = 0;
             g_animUpdate(rdram, ctx, runtime);
         }
         PS2_GUEST_CC void randomPedControl(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdram = rdram;
-            if (crowdLod(GPR_U32(ctx, 4)) == 2)
+            if (const LodState *l = crowdLod(GPR_U32(ctx, 4)); l && l->skip)
                 return skipCall(ctx);
             g_randomPedControl(rdram, ctx, runtime);
         }
         PS2_GUEST_CC void processCollision(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdram = rdram;
-            if (crowdLod(GPR_U32(ctx, 4)) == 2)
+            if (const LodState *l = crowdLod(GPR_U32(ctx, 4)); l && l->skip)
                 return skipCall(ctx);
             g_processCollision(rdram, ctx, runtime);
         }
@@ -535,6 +558,31 @@ namespace vcs::distance
             ctx->pc = GPR_U32(ctx, 31);
         }
 
+        // AddToPopulation(nearest, farthest in view, nearest, farthest out of view) (FUN_002B17A8) places a ped on a pavement
+        // node in one of two rings around the player: in view 35-60 x GenerationDistMultiplier (scaled with the peds'
+        // reader), out of view a fixed 10-20 m (CPopulation::Update FUN_002AFE80: factor x 20 - 10 .. factor x 20). After a
+        // camera cut (a teleport, a load, a cutscene's end, an interior's door, a respawn) Update counts down 0x4CD3BA
+        // and fills the streets at once: FUN_002B0070 calls it 100 times with 10 m .. factor x 60 for both. The ring out
+        // of view is the easiest to fill, so with the larger caps the crowd gathered around the player: 92 of 152 peds
+        // within 30 m in Little Havana, the densest and slowest frames (game thread 15-27 ms). The ring out of view, and
+        // the fill's both, are times the peds' population distance here - the area the caps were scaled for: 42 of 82
+        // within 30 m, 7 ms. The game's own at 0.
+        constexpr uint32_t kAddToPopulation = 0x002B17A8u, kFill = 0x002B0070u, kFillEnd = 0x002B0200u;
+        PS2Runtime::RecompiledFunction g_addToPopulation = nullptr;
+        PS2_GUEST_CC void addToPopulation(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t ra = GPR_U32(ctx, 31);
+            const float k = pedDistance();
+            if (ra >= kFill && ra < kFillEnd)
+            {
+                ctx->f[12] *= k; // nearest in view
+                ctx->f[13] *= k; // farthest in view
+            }
+            ctx->f[14] *= k; // nearest out of view
+            ctx->f[15] *= k; // farthest out of view
+            g_addToPopulation(rdram, ctx, runtime);
+        }
+
         // a slider 0..100 (0 the game's own) to a percent of the game's, up to `most`
         void addSlider(const char *key, const char *label, const char *help, const char *env, int most, std::atomic<int> &to)
         {
@@ -601,6 +649,8 @@ namespace vcs::distance
             runtime.replaceFunction(kSpotFinder, &spotFinder);
         if ((g_nodeList = runtime.lookupFunction(kNodeList)))
             runtime.replaceFunction(kNodeList, &nodeList);
+        if ((g_addToPopulation = runtime.lookupFunction(kAddToPopulation)))
+            runtime.replaceFunction(kAddToPopulation, &addToPopulation);
         if ((g_nodeNew = runtime.lookupFunction(kNodeNew)))
             runtime.replaceFunction(kNodeNew, &nodeNew);
         if ((g_nodeDelete = runtime.lookupFunction(kNodeDelete)))
@@ -617,6 +667,7 @@ namespace vcs::distance
         //             overflow pool> peak=<most at once>
         ps2control::addCommand("crowdlod", [](const std::string &, ps2control::Reply reply) {
             reply("ok skipped=" + std::to_string(g_lodSkipped) + " processed=" + std::to_string(g_lodProcessed) +
+                  " cheap=" + std::to_string(g_lodCheap) +
                   " overflow=" + std::to_string(g_overflowUsed) + " peak=" + std::to_string(g_overflowPeak));
         });
         // distancestate -> ok view=<%> detail=<%> scale=<ms_lodDistScale> lod=<LODDistMultiplier>
