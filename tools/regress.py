@@ -214,6 +214,18 @@ def step_fire(out, quick):
     return {"pass": res.get("pass") is True, "best": res.get("best")}
 
 
+def step_distance(out, quick):
+    """Object distance (game-internals.md 9h): tools/distance_check.py - 100 % is the game's, 300 % draws more."""
+    d = os.path.abspath(os.path.join(out, "distance"))
+    r = subprocess.run([sys.executable, os.path.join(TOOLS, "distance_check.py"), d], capture_output=True, text=True,
+                       timeout=900)
+    try:
+        res = json.load(open(os.path.join(d, "result.json")))
+    except (OSError, ValueError):
+        return {"pass": False, "error": (r.stdout or r.stderr)[-300:]}
+    return {"pass": res.get("pass") is True, "visible": [s["visible"] for s in res["steps"]]}
+
+
 def step_menushape(out, quick):
     """The pause menu's shape (SETTINGS_MENU_WIDESCREEN.md): 32:9 game, 16:9 screen; every presented frame for 50 frames
     after Start, in and out (control command "burst"). Each frame's picture rectangle (4:3 or wide) has to fit its
@@ -327,7 +339,7 @@ def main():
     for name, fn in (("scenes", step_scenes), ("tour", step_tour), ("missions", step_missions), ("drive", step_drive),
                      ("evening", step_evening), ("saves", step_saves), ("shakedown", step_shakedown),
                      ("widecull", step_widecull), ("menushape", step_menushape), ("meters", step_meters), ("controls", step_controls),
-                     ("fire", step_fire)):
+                     ("fire", step_fire), ("distance", step_distance)):
         print("[regress] %s" % name)
         t0 = time.time()
         try:

@@ -846,6 +846,19 @@ parts' keys, its creation reserved ahead of the draw and filled when the group e
 (loading 0.01, pause map 0.00), the moving ones within run-to-run noise; `fire_check` passes. The player, playing it:
 "o jogo melhorou muito os engasgos, praticamente inexistentes".
 
+### 33. Object distance (2026-11-03)
+
+Graphics > Draw distance > Object distance (game-internals.md 9h) scales the entities' LOD and stream distances; the
+city's sectors are not entities and cost the same. The cruise (no mods, uncapped, ThinLTO, one run each):
+
+| Cruise | fps | p50 ms | p95 ms | p99 ms | hitches | worst ms |
+|---|---|---|---|---|---|---|
+| Object distance 100 % (the game's) | 189.0 | 4.86 | 8.26 | 9.86 | 39 | 36.0 |
+| Object distance 400 % | 177.5 | 5.23 | 8.46 | 10.64 | 53 | 41.0 |
+
+~6% at the maximum - more entities through SetupEntityVisibility and drawn (at Vice Point beach the visible list
+grows from 1 to 17-20), and more models streamed (texture uploads the same, 168 a second).
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker

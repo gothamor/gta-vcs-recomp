@@ -1661,6 +1661,68 @@ Read from the extracted entries (`tools/mdlinfo.py`, `tools/txd2xtx.py info`) fo
   nearest-point fit (ICP) slid along the barrels and left the grips 10 cm apart, or turned the launcher over. Some are
   other meshes: ak47 (VC's ruger), m16 (m4), m249 (m60), rocketla, minigun - fitted by grip and magazine.
 
+### 9h. Draw distances: the city's detail, entities, population (2026-11-03)
+
+Read for FORK.md T2 with `tools/eedecomp.py` (the world draw `FUN_0023e748`, the area chooser `FUN_0023c188` /
+`FUN_0023c820` / `FUN_0023d740`, the piece reader `FUN_002415b0` / `FUN_002417d0` / `FUN_00241278`, CRenderer's
+`FUN_0035efd8`, CCamera::Process `FUN_00378dd8`), then measured in game with the rig (`peek` of the level object and
+its lists; `pokef` of the scale below with screenshots).
+
+- **The city is two images.** The level's sector list for the current cell (9f: slot `+0x248`, its list `*(slot +
+  0x20)`: `+0` (id, geometry) pairs, `+4` their count (u16), `+8..+0x2C` ten bucket pointers; 9 buckets of 0x50-byte
+  sector records, sorted by sector id) holds **the whole map**: at Vice Point 585 sectors with centres from -1135 to
+  +1173, downtown 367, Little Havana 633. Buckets 0 / 1 / 2 / 6 are the **low-detail city** (ids above ~5500, 0.3 -
+  2.6 km away, radii 40 - 400), whose geometry is resident at `0x700000..0xC00000` (loaded with the level); buckets
+  3 / 4 / 7 (and some of 6) are the **detailed city** (ids below ~5000), only within **~260 m of the camera** (p90
+  235 m, at most 290-360 m), its geometry in the cell's piece and its 3 x 3 area's piece (owner tags in the table:
+  `0x40000000 | y << 16 | x` the cell's, `0x80000000 | ...` the area's). A low-detail sector that a detailed one
+  replaces near the cell carries bit 0x8000 (hidden) in that cell's list. So the pop-in while driving is the cell
+  change: the detailed band ~250 m around the camera moves with it (the cross-fade below softens it).
+- **Sector record** (0x50): `+0` u16 id | 0x8000 hidden (bit 0: a second pass), `+2` u16 index into the level's
+  geometry table `**(level + 0x1C)` (0xC entries: geometry, its cached DMA packet, owner tag), `+4/+6/+8/+A` half
+  floats: centre (world) and radius (the frustum test `FUN_003816f8`), `+0xC` a matrix pointer or 0, `+0x10..+0x4F`
+  the matrix - relative to its own cell's centre (`FUN_00241f00(cell x, y)`); the draw moves the world origin there
+  (`FUN_0018ed28`, `0x6FE980..0x6FE98C`). Ids below 0x20 are the moving sectors, placed every frame from
+  `level + 0x5E0 + id * 0xD0`. The draw skips sectors (all of them, also in `FUN_00240ed8`) while the packet buffer
+  `0x520F90` has less than 0x12C00 free of 0xE6670.
+- **Cross-fade**: after a swap (`FUN_0023d740`) `level + 0x264` = 0x1DF counts down (`FUN_0023c820`, by the time step
+  times `0x487018`); while it is above 0, `FUN_0023e748` merges the current and the previous cell's lists by id
+  (one draw for a sector in both, `FUN_0023e548` with the fade alpha for one only in either), the previous cell's
+  with the world origin at its centre.
+- **Cell pieces** (the level's piece index `*(level + 0x1C) + 4 + y * 8`: base, first x; 36 rows of 14-19 cells, x
+  starting at 2 / 3 alternately - the hex grid): 0x20 bytes each, `+0` 'DLRW', `+8` bytes read, `+0xC` bytes
+  kept, `+0x18` offset in the level's image; 110-220 KB apart in the image. `FUN_002417d0` reads a piece into the
+  slot's buffer cursor (`level + 0x280`, file `level + 0x278`, async `FUN_002213d0`, priority 500) and appends it to
+  the slot's lists; `FUN_00241278` relocates it (`FUN_00324ac0`) and starts the next queued piece (`level + 0x414` of
+  them at `level + 0x294`). The area pieces (`+0x24C/+0x254/+0x25C`, keyed by cell / 3) register their geometry in the
+  same table through `FUN_0023c018` (owner `0x80000000 | area`). The slot buffers share `0xCB7A80..0x112A660`.
+- **Seen**: with the camera 150 m ahead of where the cell was chosen (the streaming frozen, the free camera moved back)
+  the band reaches further along the view and the camera's own surroundings stay detailed; 250 m ahead the buildings
+  at the camera are low detail - the cell's list stops ~1.5 cells out.
+- **Entities** (objects, crowds; not the city) are VC's CRenderer: the sector lists of the world's entity grid
+  (`FUN_0035fae8` / `FUN_0035fed0` / `FUN_003602f8`, as VC's ScanSectorList) call **SetupEntityVisibility
+  `FUN_0035efd8`** (0 invisible, 1 visible, 2 offscreen but near, 3 request the model) and fill the visible lists
+  `0x742B80` (count `0x4CD598`), `0x744AC0` (`0x4CD59C`: vehicles, peds), `0x746C80` (`0x4CD5A0`), `0x746A00`
+  (`0x4CD5A4`, at most 0x95, within 30 / 65 m). The camera position for it is `0x6F3C00`. Model info: `+0x10` type,
+  `+0x28` atomics, `+0x2C` LOD distances, `+0x38` count, `+0x39` fade alpha, `+0x3A` flags. GetAtomicFromDistance
+  `FUN_003a52f8`: the first atomic with `distance < lod[i] * LODDistMultiplier`; GetLargestLodDistance `FUN_003a5380`;
+  past it a 20 m fade, the model streamed within +50 m (+30 without fade), beyond 330 m the distance is clamped to
+  the largest LOD distance. VC's IDE distances in VCS's data (e.g. model 0x1D1E and 0x18F5 forced to 300).
+- **The multipliers** (CCamera::Process `FUN_00378dd8`, `0x37AF4C..0x37B078`): `LODDistMultiplier` (camera
+  `0x6F44D0 + 0x7DC` = **`0x6F4CAC`**) = 70 / FOV first, times `1 + max(0, (z - 55) / 60)` when the camera is above
+  55 m (the near plane grows the same way, `FUN_0018f3b0`), at most 2.0; copied to `GenerationDistMultiplier`
+  (`+0x7D0` = **`0x6F4CA0`**), then times **CRenderer::ms_lodDistScale `0x4887F8`** (1.0; nothing writes it, only
+  this reads it). Measured: 1.0 / 1.0 at street level at 70 degrees. Writing 2 / 4 into `0x4887F8`: the visible
+  entity list at Vice Point beach went 1 -> 10 -> 20 (crowds far down the beach drawn), downtown 2 -> 10 -> 15; the
+  city did not change. Graphics > Draw distance > Object distance (src/game/vcs_distance.cpp) writes it before every
+  CCamera::Process.
+- **Population** reads `GenerationDistMultiplier` (gen): **`FUN_00430290`** (as VC's CCarCtrl::GenerateOneRandomCar:
+  a path node within 110 x gen, the car placed 100 x .. 160 x gen from the player (x 1.5 for some), never within 82.5 x
+  gen of the camera), **`FUN_00433378`** (a car's removal: beyond 160 x gen, 60 for some, 70 with the camera looking
+  down), **`FUN_002afe80`** (as CPopulation::Update: peds added 35 x .. 60 x gen times `FUN_002b44c8` by
+  `FUN_002b17a8`, as AddToPopulation), and `FUN_00219898`, `FUN_002b0200`, `FUN_0036ebf8`, `FUN_003da070`,
+  `FUN_003f29d8` (not read yet). It is copied before the scale, so Object distance leaves the population alone.
+
 ## 10. Memory card and saves
 
 ## 10. Memory card and saves

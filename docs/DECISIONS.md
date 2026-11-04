@@ -1137,3 +1137,15 @@ lossless (only shorter strips); textures stay 128 px, 4 or 8 bit like the disc's
   M16) have several equally good fits 13 cm apart. The table holds numbers, not game data.
 - A texture whose sides are not powers of two is resampled nearest to the powers of two below: the halving after it
   averages, and the C++ and Python converters give the same bytes with integer maths.
+
+## 2026-11-03 - Draw distance: the objects through the game's own scale, the population apart (FORK.md T2)
+
+- Object distance writes CRenderer::ms_lodDistScale (0x4887F8), the factor VC's renderer already has for this: the
+  camera's LODDistMultiplier keeps its own rules (70 / FOV, more above 55 m, at most 2) and the setting multiplies the
+  result, as VC PC's draw distance slider does. Nothing else reads the scale; 100 % writes the game's 1.0.
+- 100-400 %: below 100 nothing is gained (authentic is the default); 400 % already draws crowds the length of Vice
+  Point beach for ~6% of the frame (PERFORMANCE.md 33).
+- The population is not tied to it: CCamera::Process copies GenerationDistMultiplier before the scale, so cars and peds
+  are made and removed as on the PS2. Scaling those distances spreads the same counts over a larger area (emptier
+  streets); that step (T2 step 5) raises the counts with it, separately.
+- The city's detail is another mechanism (cells, game-internals.md 9h) and gets its own setting, not this one.

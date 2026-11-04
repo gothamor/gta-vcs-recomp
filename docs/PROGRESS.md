@@ -839,6 +839,7 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `VCS_TIMING_LOG=1` | independent timing: fps, host wait, EE clock vs real time, WaitVBlank callers every 2 s |
 | `VCS_GAME_VOLUME=0` | Audio > Music / Sound effects leave the game's own levels alone (no setter hooks, no sync; the reference) |
 | `VCS_FOG_DISTANCE=10..100`, `VCS_FOG_START=0..300` | Graphics > Fog for one run: the game's fog range in percent (100 = original; game/vcs_fog.cpp) |
+| `VCS_OBJECT_DISTANCE=100..400` | Graphics > Draw distance > Object distance for one run: CRenderer::ms_lodDistScale (0x4887F8) in percent, the entities' LOD / stream distances (100 = original; game/vcs_distance.cpp, game-internals.md 9h); `distancestate` reports the scale and the camera's LOD / generation multipliers |
 | `VCS_FOG_HOOK=0`, `VCS_TRACE_FOG=1` | the fog-range setter left alone (the reference); the game's (start, end) pairs every 5 s |
 | `VCS_FREEAIM=0` | free aim's hooks not installed (CGame::Process, CCamera::Process, the weapons' line test): the game's aiming untouched, the setting does nothing |
 | `VCS_INPUT_MAP=0` | the runtime's fixed built-in key / gamepad mapping instead of the player's bindings (`ps2_pad.cpp`; the reference) |

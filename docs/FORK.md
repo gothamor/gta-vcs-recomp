@@ -40,7 +40,7 @@ One task at a time, in this order. T3 is the base for T4-T7.
 | T1 | Texture replacement: PCSX2-compatible packs, **DDS** first-class, PNG kept | - | **Done** (Vulkan compiled, not run) | [#1](https://github.com/willzmkv/gta-vcs-recomp/issues/1) |
 | T1b | Mod loader (PC Mod Loader's way): `modloader/` folders as mods, `modloader.ini`, F2 > Mods switched live with priority sliders; texture packs as its first content | T1 | **Done** | [#10](https://github.com/willzmkv/gta-vcs-recomp/issues/10) |
 | T1c | Mod loader: VCS's own game files from mods (archive entries `.mdl` / `.xtx` / ..., `MAIN.SCM`, `.GXT`) - the `std.stream` of PC Mod Loader | T1b | **Done** (archive entries and loose files, any size) | [#11](https://github.com/willzmkv/gta-vcs-recomp/issues/11) |
-| T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Next (research first) | [#2](https://github.com/willzmkv/gta-vcs-recomp/issues/2) |
+| T2 | Draw distance (Project2DFX): view distance, object / LOD distance, HD world further, population distance, distant lights | - | Research done (game-internals.md 9h); object distance **done**; HD further, population next | [#2](https://github.com/willzmkv/gta-vcs-recomp/issues/2) |
 | T3 | Pre-HUD post-processing pass (colour + depth before the 2D) | - | Planned | [#3](https://github.com/willzmkv/gta-vcs-recomp/issues/3) |
 | T4 | Volumetric height fog (Proper Shaders `[VolumetricFog]`) | T3 | Planned | [#4](https://github.com/willzmkv/gta-vcs-recomp/issues/4) |
 | T5 | SMAA 1x | T3 | Planned | [#5](https://github.com/willzmkv/gta-vcs-recomp/issues/5) |
@@ -218,6 +218,15 @@ the camera, not the player. The guest has the PS2's 32 MB.
 **Done when.** Settings for view / object distance (and HD radius if step 4 lands), 100 % = the game's own; screenshots
 from fixed spots and `bench.py` numbers before / after in PERFORMANCE.md; `soak.py` hours at the maximum without hangs,
 streaming stalls or leaks; peds and cars appear beyond sight.
+
+**Status (2026-11-03).** Step 1 done (game-internals.md 9h): the city is a resident low-detail image of the whole map
+plus the detailed sectors of the camera's cell, ~260 m around it; entities follow VC's CRenderer with the camera's
+LODDistMultiplier; the population follows GenerationDistMultiplier. Step 3 done: Graphics > Draw distance > Object
+distance (100-400 %, `src/game/vcs_distance.cpp`, `tools/distance_check.py`). Next: step 4 - two ways, both measured
+first: the cell chosen ahead of the camera (a recompiler patch of the streaming's position, the detailed band moved
+~150 m along the view; cheap, but turning the camera changes cell), or more cells drawn at once (their pieces read into
+memory past the PS2's 32 MB, relocated, their lists merged by id as the cross-fade does, matrices moved to the drawn
+cell's origin); then step 5 (the generation multiplier with the car / ped counts raised to keep the density).
 
 ### T3 - Pre-HUD post-processing pass
 
