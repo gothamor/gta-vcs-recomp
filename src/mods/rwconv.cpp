@@ -1141,7 +1141,8 @@ namespace vcs::rwconv
                 if (used[k])
                     continue;
                 const std::string &n = namesOf[k];
-                if (endsWith(n, "_dam") || n.rfind("extra", 0) == 0 || endsWith(n, "_vlo") || !host)
+                // a weapon's muzzle flash (SA's `gunflash` part: shown by SA only while firing; VCS draws its own)
+                if (endsWith(n, "_dam") || n.rfind("extra", 0) == 0 || endsWith(n, "_vlo") || !host || (single && n == "gunflash"))
                     dropped.push_back(n);
                 else
                     assign[host].push_back(static_cast<int>(k));
@@ -1443,9 +1444,15 @@ namespace vcs::rwconv
                 PcTexture t;
                 t.name = cString(d, at + 8, at + 40);
                 const uint32_t raster = u32(d, at + 72);
-                const int w = u16(d, at + 80), h = u16(d, at + 82), compression = u8(d, at + 87);
-                if (platform != 8)
-                    throw Bad(t.name + ": not a D3D8 texture (VC PC's)");
+                const int w = u16(d, at + 80), h = u16(d, at + 82);
+                int compression = u8(d, at + 87);
+                if (platform != 8 && platform != 9)
+                    throw Bad(t.name + ": not a D3D8 / D3D9 texture (VC's, SA's PC)");
+                if (platform == 9) // SA: the D3DFORMAT where D3D8 has its alpha flag, flags where it has the compression
+                {
+                    const uint32_t fourcc = u32(d, at + 76);
+                    compression = fourcc == 0x31545844u ? 1 : fourcc == 0x33545844u ? 3 : fourcc == 0x35545844u ? 5 : 0; // DXT1 / 3 / 5
+                }
                 if (w <= 0 || h <= 0 || w > 4096 || h > 4096)
                     throw Bad(t.name + ": a size out of range");
                 at += 88;
@@ -1834,7 +1841,9 @@ namespace vcs::rwconv
                                                                   {"sabretur", "sabretb"}, {"washing", "washin"},
                                                                   // and VC's weapons VCS has under its own names
                                                                   {"colt45", "beretta"}, {"m4", "m16"}, {"tec9", "skorpion"},
-                                                                  {"mp5lng", "mplng"}, {"m60", "m249"}, {"ruger", "ak47"}};
+                                                                  {"mp5lng", "mplng"}, {"m60", "m249"}, {"ruger", "ak47"},
+                                                                  // ... and SA's
+                                                                  {"micro_uzi", "uzi"}, {"sawnoff", "buddyshot"}};
         const std::string name = lower(vcName);
         const auto it = kNames.find(name);
         return it != kNames.end() ? it->second : name;

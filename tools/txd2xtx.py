@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PC VC texture dictionary (.txd) -> VCS texture dictionary (`.xtx`, the game's `tex` resource), FORK.md T9.
+"""PC VC / SA texture dictionary (.txd) -> VCS texture dictionary (`.xtx`, the game's `tex` resource), FORK.md T9.
 
     python tools/txd2xtx.py convert IN.txd OUT.xtx [--max 128] [--only name,name] [--keep VCS.xtx] [--preserve NAME]
     python tools/txd2xtx.py info FILE.xtx [--png DIR]      a VCS texture dictionary: its textures (PNG each with --png)
@@ -14,7 +14,8 @@ levels << 20 | swizzle << 24; the upload word 0x450000 | row bytes (4 bit) or 0x
 (linear, not swizzled: every texture on the disc), then the palette: RGBA with alpha 0..0x80; an 8-bit palette in the
 GS's CSM1 order (index bits 3 and 4 swapped). The disc's textures are all 4 or 8 bit, one level, 8..256 pixels.
 
-A PC texture (D3D8 native: DXT1/3/5, 8-bit palettes, 8888 / 888 / 1555 / 565 / 4444 / LUM8) is decoded, its top level
+A PC texture (D3D8 native - VC's - or D3D9 - SA's, its DXT format named by its D3DFORMAT: DXT1/3/5, 8-bit palettes,
+8888 / 888 / 1555 / 565 / 4444 / LUM8) is decoded, its top level
 halved down to --max, and quantised (median cut) to 16 colours when it has at most 16, else 256. --keep: the VCS
 dictionary this one replaces - its textures the .txd has no name for follow, copied as they are (parts of the VCS model
 the conversion keeps use them: a helicopter's rotor blur).
@@ -93,8 +94,10 @@ def read_pc_txd(data):
         name = data[at + 8:at + 40].split(b"\0")[0].decode("latin1")
         raster, _alpha = struct.unpack_from("<2I", data, at + 72)
         w, h, depth, levels, _type, compression = struct.unpack_from("<2H4B", data, at + 80)
-        if platform != 8:
-            raise ValueError("%s: platform %d (only D3D8, VC PC's)" % (name, platform))
+        if platform not in (8, 9):
+            raise ValueError("%s: platform %d (only D3D8 / D3D9: VC's, SA's PC)" % (name, platform))
+        if platform == 9:  # SA: the D3DFORMAT where D3D8 has its alpha flag, flags where it has the compression
+            compression = {b"DXT1": 1, b"DXT3": 3, b"DXT5": 5}.get(bytes(data[at + 76:at + 80]), 0)
         at += 88
         palette = None
         if raster & 0x2000:

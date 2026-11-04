@@ -18,7 +18,7 @@ namespace vcs::rwconv
     bool dffToMdl(const std::vector<uint8_t> &dff, const std::vector<uint8_t> &templateMdl, const std::vector<uint8_t> *txd,
                   std::vector<uint8_t> &out, std::string &report, const std::string &weapon = {});
 
-    // A PC (D3D8) .txd into a VCS texture dictionary (a `tex` resource): each texture's top level, halved down to
+    // A PC (D3D8: VC's, D3D9: SA's) .txd into a VCS texture dictionary (a `tex` resource): each texture's top level, halved down to
     // `maxSize` pixels, quantised to 4 or 8 bit. `keep`: the VCS dictionary it replaces (may be null) - its textures
     // the .txd has no name for follow as they are (the parts of the VCS model the conversion keeps use them).
     // `preserve`: the .txd's texture of that name is written as `<name>_pc`, so VCS's own stays (dffToMdl).

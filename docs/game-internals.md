@@ -1653,7 +1653,8 @@ Read from the extracted entries (`tools/mdlinfo.py`, `tools/txd2xtx.py info`) fo
   chainsaw and the minigun. VCS's animations hold the moved models, so a VC model (or a VC mod, made to sit where
   VC's own does) is drawn into Vic's palm, a chainsaw's handles miss his hands. `tools/weaponfit.py` fits VC's
   originals (read from a VC PC's `models/gta3.img`) onto VCS's models into the converters' table
-  (dff2mdl.WEAPON_PLACES): by their outlines (side, top and front silhouettes, intersection over union), not nearest
+  (dff2mdl.WEAPON_PLACES; San Andreas holds its weapons as VC does - the table places SA mods too, MODS.md): by their
+  outlines (side, top and front silhouettes, intersection over union), not nearest
   points - where VCS's model is another mesh (VC's M4 onto VCS's M16, VC's rocket launcher with its rocket) a
   nearest-point fit (ICP) slid along the barrels and left the grips 10 cm apart, or turned the launcher over. Some are
   other meshes: ak47 (VC's ruger), m16 (m4), m249 (m60), rocketla, minigun - fitted by grip and magazine.

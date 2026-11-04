@@ -234,7 +234,8 @@ python tools/carmod_check.py                 # the Comet from Mods/Fixed_Xbox_Ve
 
 A VC weapon mod's `.dff` + `.txd` (`uzi.dff`, `uzi.txd`) in `modloader/` replace VCS's weapon of that name, converted
 while the game loads like a car. VC's names VCS has under its own map to VCS's: `colt45`, `m4`, `tec9`, `mp5lng`,
-`m60`, `ruger` -> `beretta`, `m16`, `skorpion`, `mplng`, `m249`, `ak47`. The mod loader takes a `.dff` whose VCS model
+`m60`, `ruger` -> `beretta`, `m16`, `skorpion`, `mplng`, `m249`, `ak47` (SA's `micro_uzi`, `sawnoff` -> `uzi`,
+`buddyshot`). The mod loader takes a `.dff` whose VCS model
 is a vehicle (model type 6) or a weapon (type 4); other models' (objects') files are named in the log and left out.
 
 - **The model**: a weapon's resource is one element (object type 1 at 0x20, its node unnamed: game-internals.md 9g),
@@ -243,6 +244,14 @@ is a vehicle (model type 6) or a weapon (type 4); other models' (objects') files
   weapon as it comes sat in Vic's palm. Each weapon's transform (`dff2mdl.WEAPON_PLACES`, `kWeaponPlaces` in
   rwconv.cpp) was fitted from VC's original models onto VCS's (`tools/weaponfit.py --vc <VC>/models/gta3.img`);
   a VC mod sits where VC's original does, so it lands where VCS's does.
+- **San Andreas weapon mods** (2026-11-03, the player's `Improved Default Armoury`): SA's `.txd`s are D3D9 (platform 9,
+  the DXT format named by its D3DFORMAT) - read too, before which every texture was missing and the model drawn white.
+  SA's weapons carry their muzzle flash as a part (`gunflash`, shown by SA only while firing): left out, VCS draws its
+  own. SA holds its weapons where VC does (the outlines over VCS's models with the VC table: pistol 0.46 -> 0.80,
+  chainsaw 0.52 -> 0.93, flame-thrower 0.33 -> 0.67, M4 0.37 -> 0.50), so the same table places them. SA's
+  `micro_uzi` and `sawnoff` map to VCS's `uzi` and `buddyshot`; SA-only weapons (desert eagle, silenced pistol, country
+  rifle, ...) have no VCS model and are named in the log. Checked: `rwconv_check` 104 / 104, `weaponmod_check` PASS
+  (16 weapons in the hand, textured, VCS's icons).
 - **The HUD icon stays VCS's**: a weapon's dictionary holds its HUD icon, the texture named like the weapon, and VC's
   `.txd` has its own (VC's style) under that name. `txd2xtx --preserve NAME` writes VC's texture of that name as
   `NAME_pc`, `dff2mdl --weapon NAME` points the model's materials naming it there, and `--keep` adds VCS's icon.

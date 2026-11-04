@@ -388,7 +388,9 @@ PAINT_LISTS = ((0x2C, 30), (0xA4, 25))
 VC_NAMES = {"boxville": "boxvil", "enforcer": "enforce", "fbiranch": "fbiran", "police": "policem", "sabretur": "sabretb",
             "washing": "washin",
             # and VC's weapons VCS has under its own names
-            "colt45": "beretta", "m4": "m16", "tec9": "skorpion", "mp5lng": "mplng", "m60": "m249", "ruger": "ak47"}
+            "colt45": "beretta", "m4": "m16", "tec9": "skorpion", "mp5lng": "mplng", "m60": "m249", "ruger": "ak47",
+            # ... and SA's
+            "micro_uzi": "uzi", "sawnoff": "buddyshot"}
 # VC's shared vehicle textures (generic.txd) -> VCS's own (their layouts differ: the closest, not the same picture)
 VC_GENERIC = {"vehiclegeneric256": "xv_vehiclegeneric_sl", "vehiclescratch64": "xv_scratch_sl",
               "vehiclegrunge256": "xv_vehiclegrunge_sl", "vehiclesteering": "xv_vehiclesteering_sl"}
@@ -625,7 +627,8 @@ def convert(dff_path, template_path, out_path, txd_path=None, weapon=None):
     for k, n in enumerate(names_of):
         if k in used:
             continue
-        if n.endswith("_dam") or n.startswith("extra") or n.endswith("_vlo") or host is None:
+        # a weapon's muzzle flash (SA's `gunflash` part: shown by SA only while firing; VCS draws its own)
+        if n.endswith("_dam") or n.startswith("extra") or n.endswith("_vlo") or host is None or (single and n == "gunflash"):
             dropped.append(n)
         else:
             assign.setdefault(host, []).append(k)

@@ -182,6 +182,9 @@ moved 2-14 cm and turned up to 30 degrees in the hand (game-internals.md 9g). Fi
 place to VCS's (`dff2mdl.WEAPON_PLACES`, `kWeaponPlaces`), fitted once from VC's originals (the player's VC PC
 `gta3.img`) onto VCS's models by their outlines (`tools/weaponfit.py`, 29 weapons); `weaponmod_check` now also checks
 that each converted weapon covers VCS's model better than at VC's place, and photographs the hand from the side.
+Then SA weapon mods (the player, 2026-11-03: white textures, the muzzle flash drawn as a mesh): D3D9 `.txd`s read,
+SA's `gunflash` part left out, SA's names mapped; SA holds its weapons as VC does, so the same table places them
+(MODS.md).
 
 ### T2 - Draw distance (Project2DFX)
 
