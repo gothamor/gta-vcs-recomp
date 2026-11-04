@@ -359,6 +359,182 @@ namespace vcs::distance
             g_carPoolCtor(rdram, ctx, runtime);
         }
 
+        // Crowd LOD (the simulation by distance, as GTA IV / Project2DFX keep far things cheap). CWorld::Process
+        // (FUN_001933C0) runs, for every moving entity, UpdateAnim (vtable +0x48, CEntity's FUN_003C50A8), ProcessControl
+        // (+0x30; a random ped's FUN_002D8788) and ProcessCollision (+0x34, CPhysical's FUN_00348D40), one pass each,
+        // in order. With the population distance most peds are beyond the PS2's own ped range (~65 m), and each costs
+        // ~0.06 ms a frame (game-internals.md 9h). A random ped on foot farther than kLodDistance from the camera is
+        // processed every second frame (its slot's parity against the frame counter, so half of them each frame) and
+        // skips all three on the other. Its animation then advances by two frames' time (UpdateAnim passes the step to
+        // FUN_00154D10 in $f12 - a register, no global changes): the ped's speed comes from its animation's root
+        // movement over the frame's step (FUN_001F1D38), so it walks the same distance a second and turns at half the
+        // rate - at 70 m and more. With the population distance at 0 no ped is that far: the game's own then.
+        // VCS_CROWD_LOD=0 turns it off (A / B measures).
+        constexpr uint32_t kUpdateAnim = 0x003C50A8u, kRandomPedControl = 0x002D8788u, kProcessCollision = 0x00348D40u;
+        constexpr uint32_t kAnimUpdate = 0x00154D10u; // RpAnimBlendClumpUpdateAnimations(dt $f12, clump $a0, all $a1)
+        constexpr uint32_t kFrameCounter = 0x004CD124u, kCameraPos = 0x006F3C00u;
+        constexpr float kLodDistance = 70.0f;
+        constexpr int kLodEvery = 2;
+        PS2Runtime::RecompiledFunction g_updateAnim = nullptr, g_randomPedControl = nullptr, g_processCollision = nullptr,
+                                       g_animUpdate = nullptr;
+        struct LodState
+        {
+            int32_t frame = -1;
+            bool skip = false, lod = false;
+        };
+        LodState g_lod[kLargePeds];
+        uint32_t g_lodClump = 0; // the clump whose next animation update runs kLodEvery frames' time
+        uint64_t g_lodSkipped = 0, g_lodProcessed = 0;
+        bool crowdLodOn()
+        {
+            static const bool on = !(std::getenv("VCS_CROWD_LOD") && std::getenv("VCS_CROWD_LOD")[0] == '0');
+            return on;
+        }
+        // this frame's decision for the entity: 0 not a far random ped, 1 processed (a LOD frame), 2 skipped
+        int crowdLod(uint32_t ent)
+        {
+            const uint32_t pool = static_cast<uint32_t>(rd32(kPedPool));
+            if (!pool || !crowdLodOn())
+                return 0;
+            const uint32_t entries = static_cast<uint32_t>(rd32(pool)), size = static_cast<uint32_t>(rd32(pool + 8u));
+            if (ent < entries || ent >= entries + size * 0xD20u || (ent - entries) % 0xD20u)
+                return 0;
+            const uint32_t slot = (ent - entries) / 0xD20u;
+            if (slot >= kLargePeds)
+                return 0;
+            LodState &s = g_lod[slot];
+            const int32_t frame = rd32(kFrameCounter);
+            if (s.frame != frame)
+            {
+                s.frame = frame;
+                const int32_t createdBy = rd32(ent + 0x8F4u), state = rd32(ent + 0x8C4u);
+                const float dx = rdf(ent + 0x30u) - rdf(kCameraPos), dy = rdf(ent + 0x34u) - rdf(kCameraPos + 4u);
+                s.lod = createdBy == 1 && state != 0x37 && state != 0x39 && state != 0x3A && rd32(ent + 0x538u) == 0 &&
+                        dx * dx + dy * dy > kLodDistance * kLodDistance;
+                s.skip = s.lod && (static_cast<uint32_t>(frame) + slot) % kLodEvery != 0;
+            }
+            return s.lod ? (s.skip ? 2 : 1) : 0;
+        }
+        PS2_GUEST_CC void skipCall(R5900Context *ctx) { ctx->pc = GPR_U32(ctx, 31); }
+        PS2_GUEST_CC void updateAnim(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            g_rdram = rdram;
+            const uint32_t ent = GPR_U32(ctx, 4);
+            switch (crowdLod(ent))
+            {
+            case 2:
+                ++g_lodSkipped;
+                return skipCall(ctx);
+            case 1:
+                ++g_lodProcessed;
+                g_lodClump = static_cast<uint32_t>(rd32(ent + 0x50u));
+                break;
+            default:
+                g_lodClump = 0;
+            }
+            g_updateAnim(rdram, ctx, runtime);
+        }
+        PS2_GUEST_CC void animUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_lodClump && GPR_U32(ctx, 4) == g_lodClump)
+                ctx->f[12] *= static_cast<float>(kLodEvery);
+            g_lodClump = 0;
+            g_animUpdate(rdram, ctx, runtime);
+        }
+        PS2_GUEST_CC void randomPedControl(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            g_rdram = rdram;
+            if (crowdLod(GPR_U32(ctx, 4)) == 2)
+                return skipCall(ctx);
+            g_randomPedControl(rdram, ctx, runtime);
+        }
+        PS2_GUEST_CC void processCollision(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            g_rdram = rdram;
+            if (crowdLod(GPR_U32(ctx, 4)) == 2)
+                return skipCall(ctx);
+            g_processCollision(rdram, ctx, runtime);
+        }
+
+        // The sector entries (EntryInfoNode: one per entity and 80 m world cell it touches, 0x14 bytes {list, ptr node,
+        // sector, prev, next}, chained at the entity's +0xE4) come from a CPool of 5200 in the game image (GAME.DTZ's
+        // header hands it to *0x487A90; FUN_003321F0). The city's buildings and dummies hold ~4810 of them; a ped or a
+        // vehicle takes 1-4. With the larger crowds it reached 5020 (Little Havana, 143 peds, 41 vehicles) and nothing
+        // checks a full pool: CWorld::Add / Move (FUN_00347348 / FUN_00347740) then write the node at address 0 and leave
+        // the entity in a sector list without its back link - out of the collision scans, or a dangling pointer once it is
+        // deleted. FUN_00478BF0 (New for the 0x14-byte pools: a ring search from +0xC, wrapping once) and FUN_00478C88
+        // (Delete) are done here: for that pool, past its last free entry, from an overflow pool of kNodeOverflowCount in
+        // the port's reserve at the top of the upper memory (game/vcs_memory.h); Delete knows both. The other pools, and
+        // this one while it has room, run the original. (Open Limit Adjuster's EntryInfoNode, game-internals.md 9h.)
+        constexpr uint32_t kNodeNew = 0x00478BF0u, kNodeDelete = 0x00478C88u, kEntryInfoPool = 0x00487A90u;
+        constexpr uint32_t kNodeOverflowCount = 8000u, kNodeSize = 0x14u;
+        constexpr uint32_t kNodeOverflowEntries = PS2_RAM_SIZE - 2u * 1024u * 1024u; // the reserve's start
+        constexpr uint32_t kNodeOverflowFlags = kNodeOverflowEntries + kNodeOverflowCount * kNodeSize;
+        PS2Runtime::RecompiledFunction g_nodeNew = nullptr, g_nodeDelete = nullptr;
+        bool g_overflowReady = false;
+        uint32_t g_overflowNext = kNodeOverflowCount - 1u, g_overflowUsed = 0, g_overflowPeak = 0;
+        // the original's search on a pool {entries, flags, size, last}: the next free entry after `last`, wrapping once
+        uint32_t poolNew(uint8_t *rdram, uint32_t entries, uint32_t flags, uint32_t size, uint32_t &last)
+        {
+            bool wrapped = false;
+            for (;;)
+            {
+                if (++last == size)
+                {
+                    if (wrapped)
+                        return 0;
+                    last = 0;
+                    wrapped = true;
+                }
+                uint8_t &f = rdram[(flags + last) & PS2_RAM_MASK];
+                if (f & 0x80u)
+                {
+                    f = static_cast<uint8_t>((f & 0x7Fu) + 1u) & 0x7Fu;
+                    return entries + last * kNodeSize;
+                }
+            }
+        }
+        PS2_GUEST_CC void nodeNew(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t pool = GPR_U32(ctx, 4);
+            g_rdram = rdram;
+            if (pool != static_cast<uint32_t>(rd32(kEntryInfoPool)))
+                return g_nodeNew(rdram, ctx, runtime);
+            // VCS_NODE_OVERFLOW_TEST=1: every new entry from the overflow pool (its path checked without a crowd)
+            static const bool test = std::getenv("VCS_NODE_OVERFLOW_TEST") != nullptr;
+            uint32_t last = static_cast<uint32_t>(rd32(pool + 12u));
+            uint32_t node = test ? 0u : poolNew(rdram, static_cast<uint32_t>(rd32(pool)), static_cast<uint32_t>(rd32(pool + 4u)),
+                                    static_cast<uint32_t>(rd32(pool + 8u)), last);
+            wr32(pool + 12u, static_cast<int32_t>(last));
+            if (!node)
+            {
+                if (!g_overflowReady)
+                {
+                    std::memset(rdram + kNodeOverflowFlags, 0x80, kNodeOverflowCount);
+                    g_overflowReady = true;
+                    std::fprintf(stderr, "[distance] sector entries: the game's 5200 are in use, the overflow pool of %u "
+                                         "at 0x%08x takes the next\n", kNodeOverflowCount, kNodeOverflowEntries);
+                }
+                node = poolNew(rdram, kNodeOverflowEntries, kNodeOverflowFlags, kNodeOverflowCount, g_overflowNext);
+                if (node)
+                    g_overflowPeak = std::max(g_overflowPeak, ++g_overflowUsed);
+            }
+            SET_GPR_U32(ctx, 2, node);
+            ctx->pc = GPR_U32(ctx, 31);
+        }
+        PS2_GUEST_CC void nodeDelete(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t node = GPR_U32(ctx, 5);
+            if (node < kNodeOverflowEntries || node >= kNodeOverflowFlags)
+                return g_nodeDelete(rdram, ctx, runtime);
+            const uint32_t index = (node - kNodeOverflowEntries) / kNodeSize;
+            rdram[kNodeOverflowFlags + index] |= 0x80u;
+            if (index < g_overflowNext)
+                g_overflowNext = index;
+            --g_overflowUsed;
+            ctx->pc = GPR_U32(ctx, 31);
+        }
+
         // a slider 0..100 (0 the game's own) to a percent of the game's, up to `most`
         void addSlider(const char *key, const char *label, const char *help, const char *env, int most, std::atomic<int> &to)
         {
@@ -425,6 +601,24 @@ namespace vcs::distance
             runtime.replaceFunction(kSpotFinder, &spotFinder);
         if ((g_nodeList = runtime.lookupFunction(kNodeList)))
             runtime.replaceFunction(kNodeList, &nodeList);
+        if ((g_nodeNew = runtime.lookupFunction(kNodeNew)))
+            runtime.replaceFunction(kNodeNew, &nodeNew);
+        if ((g_nodeDelete = runtime.lookupFunction(kNodeDelete)))
+            runtime.replaceFunction(kNodeDelete, &nodeDelete);
+        if ((g_updateAnim = runtime.lookupFunction(kUpdateAnim)))
+            runtime.replaceFunction(kUpdateAnim, &updateAnim);
+        if ((g_animUpdate = runtime.lookupFunction(kAnimUpdate)))
+            runtime.replaceFunction(kAnimUpdate, &animUpdate);
+        if ((g_randomPedControl = runtime.lookupFunction(kRandomPedControl)))
+            runtime.replaceFunction(kRandomPedControl, &randomPedControl);
+        if ((g_processCollision = runtime.lookupFunction(kProcessCollision)))
+            runtime.replaceFunction(kProcessCollision, &processCollision);
+        // crowdlod -> ok skipped=<ped updates skipped> processed=<LOD updates run> overflow=<sector entries in the
+        //             overflow pool> peak=<most at once>
+        ps2control::addCommand("crowdlod", [](const std::string &, ps2control::Reply reply) {
+            reply("ok skipped=" + std::to_string(g_lodSkipped) + " processed=" + std::to_string(g_lodProcessed) +
+                  " overflow=" + std::to_string(g_overflowUsed) + " peak=" + std::to_string(g_overflowPeak));
+        });
         // distancestate -> ok view=<%> detail=<%> scale=<ms_lodDistScale> lod=<LODDistMultiplier>
         //                  gen=<GenerationDistMultiplier> population=<%> traffic=<%> pedestrians=<%> cars=<random>/<cap>
         //                  peds=<peds>/<cap> pools=<peds>,<vehicles> numbers=<car>,<ped>
