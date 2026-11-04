@@ -213,3 +213,11 @@ value = "0xC420FF0C"
 [[patches]]
 address = "0x003E7960"
 value = "0x00000000"
+
+# FUN_00430148 (as VC's CCarCtrl::GenerateRandomCars) tries six new random cars a frame only while NumRandomCars
+# (0x48A96C) is below 30 (`slti $v0, $v0, 0x1E` at 0x4301B0) - a limit the PS2's own caps never reach (MaxNumberOfCarsInUse
+# 0x48A9A8 is 16; GenerateOneRandomCar FUN_00430290 compares with it and the zone's density). The traffic settings raise
+# those caps (src/game/vcs_distance.cpp, game-internals.md 9h); 127 lets them decide. At the game's own caps nothing changes.
+[[patches]]
+address = "0x004301B0"
+value = "0x2842007F"
