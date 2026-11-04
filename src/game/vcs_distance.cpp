@@ -213,6 +213,39 @@ namespace vcs::distance
             g_original(rdram, ctx, runtime);
         }
 
+        // FUN_0036EBF8(RwCamera) - VCS's CVisibilityPlugins setup, at each render - keeps the squared distances its render
+        // callbacks compare with: 0x4CD5C0 vehicle components culled past 20 m x LODDistMultiplier (1e6 in two camera
+        // modes), 0x4CD5D8 = 0x4CD5CC peds drawn up to 70 m x LODDistMultiplier (FUN_0036EB70), and the vehicles' LOD /
+        // fade distances 60, 70, 90, 100, 150 m x GenerationDistMultiplier. LODDistMultiplier carries the View distance
+        // (ms_lodDistScale), meant for objects: at 5.5x peds - drivers of far cars too - were drawn up to 385 m and car
+        // parts to 110 m, a good share of the dense frames' draws. Done here when a setting differs: the components at the
+        // camera's own multiplier (the view factor taken out), the peds as far as they live (times the peds' population
+        // distance), the vehicles as the game computes them (the generation multiplier carries the traffic's distance).
+        constexpr uint32_t kVisibilityInit = 0x0036EBF8u;
+        bool visibilityInit(uint8_t *rdram, R5900Context *ctx)
+        {
+            const float view = percent(g_view), peds = pedDistance();
+            if (view == 1.0f && peds == 1.0f)
+                return false;
+            const uint32_t camera = GPR_U32(ctx, 4);
+            wr32(0x00488E08u, static_cast<int32_t>(camera));
+            wr32(0x00488E0Cu, rd32(camera + 4u) + 0x40); // the camera frame's position
+            const uint32_t mode = rdram[0x006F4520u];
+            int16_t camMode;
+            std::memcpy(&camMode, rdram + 0x006F4540u + mode * 0x270u, 2);
+            const float own = rdf(kLodMultiplier) / view, gen = rdf(kGenMultiplier), ped = own * peds;
+            wrf(0x004CD5C0u, camMode == 1 || camMode == 0x25 ? 1e6f : own * (own * 400.0f));
+            wrf(0x004CD5D8u, ped * (ped * 4900.0f));
+            wrf(0x004CD5CCu, ped * (ped * 4900.0f));
+            wrf(0x004CD5BCu, gen * (gen * 4900.0f));
+            wrf(0x004CD5C4u, gen * (gen * 22500.0f));
+            wrf(0x004CD5D0u, gen * (gen * 8100.0f));
+            wrf(0x004CD5D4u, gen * (gen * 10000.0f));
+            wrf(0x004CD5C8u, gen * (gen * 3600.0f));
+            ctx->pc = GPR_U32(ctx, 31);
+            return true;
+        }
+
         // a reader of GenerationDistMultiplier: the frame's base (the game's value) times this reader's factor
         template <size_t I>
         PS2_GUEST_CC void genReader(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -236,6 +269,8 @@ namespace vcs::distance
                     g_genTouched = false;
             }
             g_genFresh = false;
+            if (kGenReaders[I] == kVisibilityInit && visibilityInit(rdram, ctx))
+                return;
             g_readers[I](rdram, ctx, runtime);
         }
 
