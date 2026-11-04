@@ -11,6 +11,7 @@ namespace rhi
         switch (backend)
         {
         case Backend::D3D11: return "D3D11";
+        case Backend::D3D12: return "D3D12";
         case Backend::Vulkan: return "Vulkan";
         case Backend::Null: return "null";
         }
@@ -26,6 +27,8 @@ namespace rhi
             lower[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(name[i])));
         if (std::strcmp(lower, "d3d11") == 0)
             out = Backend::D3D11;
+        else if (std::strcmp(lower, "d3d12") == 0)
+            out = Backend::D3D12;
         else if (std::strcmp(lower, "vulkan") == 0)
             out = Backend::Vulkan;
         else if (std::strcmp(lower, "null") == 0)
@@ -41,6 +44,9 @@ namespace rhi
         {
 #if defined(VCS_HAVE_D3D11)
         case Backend::D3D11: return true;
+#endif
+#if defined(VCS_HAVE_D3D12)
+        case Backend::D3D12: return true;
 #endif
 #if defined(VCS_HAVE_VULKAN)
         case Backend::Vulkan: return true;
@@ -67,6 +73,9 @@ namespace rhi
         {
 #if defined(VCS_HAVE_D3D11)
         case Backend::D3D11: return createD3D11Device(desc, error);
+#endif
+#if defined(VCS_HAVE_D3D12)
+        case Backend::D3D12: return createD3D12Device(desc, error);
 #endif
 #if defined(VCS_HAVE_VULKAN)
         case Backend::Vulkan: return createVulkanDevice(desc, error);
