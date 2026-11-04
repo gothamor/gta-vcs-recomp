@@ -1754,6 +1754,17 @@ its lists; `pokef` of the scale below with screenshots).
   view get the root-only one (`$a1` = 0, `FUN_001552f8`). Vtables (+0x30 ProcessControl / +0x34 ProcessCollision /
   +0x48 UpdateAnim): random ped `0x490840` (`FUN_002d8788`), player `0x4902a8` (`FUN_00230640`), vehicles `0x4901c8`,
   `0x490f10`, object `0x48f848`; ProcessCollision `FUN_00348d40` and UpdateAnim shared by all.
+- **CVisibilityPlugins** (VCS's, `FUN_0036ebf8(RwCamera)`, at each render from the frame function): squared
+  distances its render callbacks compare with - `0x4CD5C0` vehicle components culled past 20 m x LODDistMultiplier
+  (1e6 in camera modes 1 / 0x25), `0x4CD5D8` = `0x4CD5CC` peds drawn up to 70 m x LODDistMultiplier (the ped atomic
+  callback `FUN_0036eb70`), vehicles' LOD / fade 60, 70, 90, 100, 150 m x GenerationDistMultiplier (`0x4CD5C8`,
+  `0x4CD5BC`, `0x4CD5D0`, `0x4CD5D4`, `0x4CD5C4`). The camera's position for them: `*(*(camera + 4)) + 0x40` at `0x488E0C`.
+  Peds and vehicles have no other draw distance (SetupEntityVisibility gives them the frustum only).
+- **The frame** (`FUN_0021e950`: CGame::Process `FUN_003ba8d8`, then the render steps `FUN_0021eef0` (render list,
+  pre-render), `FUN_0021efb8` (the entities, the world `FUN_0023e748`, effects), `FUN_0021dad8` (twice)). Timed by
+  call site (`VCS_PHASES=1`, `phases` command) in Downtown with every population slider at 50 (106 peds, 39 vehicles,
+  15.7 ms): CWorld::Process 6.7 ms, `FUN_0021efb8` 3.1, `FUN_0021eef0` 2.2, `FUN_0021dad8` 1.3, the script VM
+  (`FUN_002559c8`) 0.4, CPopulation::Update 0.3, the car generator 0.3; with 42 peds 2.9 / 1.2 / 1.8 / 0.8 ms.
 - **Random traffic** (`FUN_00430148` six tries a frame -> GenerateOneRandomCar **`FUN_00430290`**; measured with entry
   counters, 2026-11-04). Wanted = the zone's car density x a per-player factor (the product kept at `0x4E4A54`, s16; 18
   at the Little Haiti street) x the scripts' `0x48A968` x `0x48A680`; then the cap `0x48A9A8` against the sum of the
