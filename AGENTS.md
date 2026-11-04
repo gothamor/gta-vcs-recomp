@@ -105,6 +105,7 @@ python tools/finale_check.py [OUT] [--story] [--full]         # Last Stand's end
 python tools/controls_check.py [OUT]                          # bindings, presets, reset, vibration, volume levels; menu screenshots
 python tools/hud_check.py [OUT]                               # HUD at the screen edges: radar left, centred text in the middle
 python tools/fog_check.py [OUT] [--save DIR]                  # Graphics > Fog: the game's fog range scaled, untouched at 100 %
+python tools/distance_check.py [OUT] [--save DIR]             # Graphics > Draw distance: the entities' LOD scale, more drawn at 300 %
 python tools/texture_check.py [OUT] [--pack DIR] [--loader-only] [--validate-pack] [--dump-check]   # texture packs (DDS / PNG)
 python tools/mods_check.py [OUT] --pack DIR                    # the mod loader: modloader.ini, priorities, F2 > Mods switched live
 python tools/img.py table|list|extract [OUT] [names]          # GTA3PS2.IMG entry by entry (the game's directory; extracts stay in build/)
