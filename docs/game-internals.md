@@ -1244,7 +1244,7 @@ pixels counted) and found with F12 draw logs, a read-back of the depth buffer ju
   depth they come out textured. Neither the depth values (forced 0.5 nearer: still gone) nor the post effects
   (`PS2X_HW_POSTFX=0`), MSAA, anisotropy, fog or the aspect changed it; `PS2X_HW_SHADER_DEPTH=0` (the rasterised
   depth, what Vulkan already used) drew the fire everywhere. Why only the bilinear variants lose it with SV_Depth is
-  not understood (most likely the driver: the GTX 1080 Ti here); the fix does not depend on it.
+  not understood (most likely the driver: an AMD Radeon RX 7700 XT here); the fix does not depend on it.
 - **Fixed**: the rasterised depth on D3D11 too (`gs_hw.cpp` `shaderDepth`, PS2RECOMP_PATCHES.md) - the same value with
   a 0..1 depth range, and early depth rejection back on. `fire_check.py` passes: fire pixels in the best frame from
   0-12 to hundreds (flame-thrower) and thousands (molotov).

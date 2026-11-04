@@ -821,6 +821,30 @@ quick build, `build/rig/saves/fortbaxter`), each from its own card copy, the mod
   (decoding), the GS stage and the worker. The VC cars pay the same way (section 30). Next, in the native path: one draw
   for consecutive batches of one mesh with the same state and constants (their meshes joined, or one buffer per
   element), measured here and on the cruise.
+- Since then (2026-11-03): the rasterised depth on D3D11 (game-internals.md 6m) took most of the HD weapons' cost - it
+  was GPU overdraw without early depth rejection: chainsaw 208 -> 189 fps, minigun 188 -> 172 (was 188 -> 135 and
+  181 -> 155); the joined draws (section 32) the rest of the per-draw cost.
+
+### 32. Native draws joined (2026-11-03)
+
+On this machine (Ryzen 7 5800X, Radeon RX 7700 XT) the VC car mods cost the main thread, not the GPU: a profile of
+MainThread on the cruise had ~40% in AMD's D3D11 driver and the kernel's submit / sync calls, the draw executor 4%. The
+native draws are one per VU1 batch (~70 vertices); counted on the cruise, **50%** had the same state, texture, kind and
+constants as the draw before - the batches of one mesh of one model. `gs_hw.cpp` (SubmitNative) now joins those: while
+nothing else is recorded after a native draw, the next one of the same state and constants joins it, the strips
+linked by two repeated vertices (degenerate triangles; the rasteriser does not cull); the joined mesh is cached by its
+parts' keys, its creation reserved ahead of the draw and filled when the group ends (or left empty when cached).
+`PS2X_HW_NATIVE_MERGE=0` draws one per batch.
+
+| Cruise (ThinLTO) | fps | p95 ms | p99 ms | hitches | worst ms |
+|---|---|---|---|---|---|
+| VC cars, 144 cap, one draw per batch | 130.9 | 11.8 | 17.7 | 199 | 107.8 |
+| VC cars, 144 cap, joined | **138.0** | **8.9** | **13.9** | **44** | **37.0** |
+| no mods, uncapped, one per batch / joined | 192.1 / 199.2 | 8.4 / 8.2 | 10.5 / 9.3 | | 59.5 / 34.4 |
+
+(No mods, uncapped, run to run: 179-200 fps either way.) Reference scenes with and without: the static ones identical
+(loading 0.01, pause map 0.00), the moving ones within run-to-run noise; `fire_check` passes. The player, playing it:
+"o jogo melhorou muito os engasgos, praticamente inexistentes".
 
 ## Next
 
