@@ -55,6 +55,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <utility>
+#include <vector>
 
 namespace vcs::distance
 {
@@ -741,6 +742,102 @@ namespace vcs::distance
         }
     }
 
+
+    // [T2 probe] VCS_PHASES=1: where the game thread's frame goes - every call the frame function and CGame::Process
+    // make is stamped at its entry; a step lasts until the next one (the last one to the next frame: the frame's tail,
+    // the limiter's wait). `phases` lists the costliest steps, ms a frame.
+    namespace phases
+    {
+        // [T2 probe] (call site, callee) of the frame function FUN_0021E950 and CGame::Process FUN_003BA8D8, in order
+        constexpr uint32_t kPhaseSites[][2] = {
+            {0x21E978u, 0x2217F0u}, {0x21E980u, 0x2BB658u}, {0x21E988u, 0x2BBCA0u}, {0x21E994u, 0x2BBCA0u}, {0x21E9B0u, 0x2BBCA0u}, {0x21E9B8u, 0x3DFC50u},
+            {0x21E9D0u, 0x3BA8D8u}, {0x3BA8FCu, 0x255D88u}, {0x3BA904u, 0x2559C8u}, {0x3BA910u, 0x378DD8u}, {0x3BA918u, 0x3CBE90u}, {0x3BA928u, 0x378DD8u},
+            {0x3BA930u, 0x3CBE90u}, {0x3BA93Cu, 0x284390u}, {0x3BA96Cu, 0x2AAC20u}, {0x3BA984u, 0x472CF8u}, {0x3BA98Cu, 0x280450u}, {0x3BA9A0u, 0x472CF8u},
+            {0x3BA9D8u, 0x3AC960u}, {0x3BA9E4u, 0x471400u}, {0x3BA9ECu, 0x3B5138u}, {0x3BAA14u, 0x367450u}, {0x3BAA1Cu, 0x2F4D98u}, {0x3BAA24u, 0x3CB9D8u},
+            {0x3BAA2Cu, 0x2F4D98u}, {0x3BAA44u, 0x46FFB8u}, {0x3BAA4Cu, 0x2E4428u}, {0x3BAA74u, 0x3DFC50u}, {0x3BAA7Cu, 0x2FCC38u}, {0x3BAA84u, 0x2FCC50u},
+            {0x3BAA8Cu, 0x2850B0u}, {0x3BAAA4u, 0x228840u}, {0x3BAAB8u, 0x3E3720u}, {0x3BAAC0u, 0x2559C8u}, {0x3BAAD4u, 0x244D48u}, {0x3BAADCu, 0x3A6860u},
+            {0x3BAAE4u, 0x22D1F8u}, {0x3BAAECu, 0x2E9D00u}, {0x3BAAF4u, 0x2A9578u}, {0x3BAAFCu, 0x407590u}, {0x3BAB04u, 0x2BAF78u}, {0x3BAB0Cu, 0x12C370u},
+            {0x3BAB14u, 0x279240u}, {0x3BAB1Cu, 0x1E9C90u}, {0x3BAB28u, 0x2BD478u}, {0x3BAB3Cu, 0x2F4D98u}, {0x3BAB44u, 0x2AFE80u}, {0x3BAB4Cu, 0x2F4D78u},
+            {0x3BAB54u, 0x2F4CF0u}, {0x3BAB5Cu, 0x2C0D88u}, {0x3BAB70u, 0x472CF8u}, {0x3BAB88u, 0x3DA278u}, {0x3BAB90u, 0x25F140u}, {0x3BAB98u, 0x18CD88u},
+            {0x3BABA0u, 0x243730u}, {0x3BABA8u, 0x1878F0u}, {0x3BABC8u, 0x23B260u}, {0x3BABD0u, 0x1933C0u}, {0x3BABDCu, 0x408C30u}, {0x3BABE4u, 0x1DD978u},
+            {0x3BABECu, 0x25BBA8u}, {0x3BABF4u, 0x36AFD0u}, {0x3BABFCu, 0x167610u}, {0x3BAC04u, 0x225B38u}, {0x3BAC10u, 0x1CCEC0u}, {0x3BAC18u, 0x40CE30u},
+            {0x3BAC38u, 0x378DD8u}, {0x3BAC40u, 0x24C428u}, {0x3BAC48u, 0x175620u}, {0x3BAC5Cu, 0x27E1C8u}, {0x3BAC64u, 0x27C308u}, {0x3BAC6Cu, 0x38D710u},
+            {0x3BAC74u, 0x38D7A0u}, {0x3BAC80u, 0x2EF6A8u}, {0x3BAC88u, 0x430148u}, {0x3BAC90u, 0x40A9E0u}, {0x3BAC98u, 0x433008u}, {0x3BACA0u, 0x433188u},
+            {0x21E9F0u, 0x2FA3D0u}, {0x21E9F8u, 0x1A6310u}, {0x21EA1Cu, 0x376D90u}, {0x21EA24u, 0x21DEB0u}, {0x21EA2Cu, 0x21DBF0u}, {0x21EA4Cu, 0x377418u},
+            {0x21EA60u, 0x3B10C8u}, {0x21EAACu, 0x376D90u}, {0x21EAB8u, 0x37B620u}, {0x21EACCu, 0x21E170u}, {0x21EAF8u, 0x471400u}, {0x21EB00u, 0x3B5130u},
+            {0x21EB10u, 0x377418u}, {0x21EB30u, 0x40D478u}, {0x21EB5Cu, 0x21CE80u}, {0x21EB8Cu, 0x21CE80u}, {0x21EB94u, 0x19B118u}, {0x21EBB0u, 0x18F400u},
+            {0x21EBC4u, 0x18F4A8u}, {0x21EBCCu, 0x21EEF0u}, {0x21EBDCu, 0x476770u}, {0x21EBF4u, 0x21EFB8u}, {0x21EBFCu, 0x21EFB0u}, {0x21EC04u, 0x476770u},
+            {0x21EC1Cu, 0x37BF10u}, {0x21EC24u, 0x21F348u}, {0x21EC34u, 0x2653F0u}, {0x21EC50u, 0x44A3C0u}, {0x21EC68u, 0x1AB9E0u}, {0x21EC70u, 0x36EBF8u},
+            {0x21EC78u, 0x2D7870u}, {0x21EC8Cu, 0x18F4A0u}, {0x21EC94u, 0x21F7D8u}, {0x21EC9Cu, 0x21D068u}, {0x21ECC0u, 0x21DAD8u}, {0x21ECD0u, 0x21F900u},
+            {0x21ECD8u, 0x272E78u}, {0x21ECE4u, 0x21DAD8u}, {0x21ECF8u, 0x21DEB0u}, {0x21ED00u, 0x21DBF0u}, {0x21ED10u, 0x376D90u}, {0x21ED30u, 0x2F4960u},
+            {0x21ED38u, 0x21E948u}, {0x21ED50u, 0x21E728u},
+        };
+        constexpr size_t kSites = sizeof(kPhaseSites) / sizeof(kPhaseSites[0]);
+        constexpr size_t kMaxTargets = 128;
+        uint32_t g_targets[kMaxTargets] = {};
+        PS2Runtime::RecompiledFunction g_orig[kMaxTargets] = {};
+        size_t g_targetCount = 0;
+        double g_sum[kSites] = {};
+        uint64_t g_frames = 0, g_lastNs = 0;
+        int g_last = -1;
+        uint64_t nowNs()
+        {
+            return static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        }
+        template <size_t I>
+        PS2_GUEST_CC void hook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t ra = GPR_U32(ctx, 31);
+            for (size_t s = 0; s < kSites; ++s)
+                if (kPhaseSites[s][0] + 8u == ra && kPhaseSites[s][1] == g_targets[I])
+                {
+                    const uint64_t now = nowNs();
+                    if (g_last >= 0)
+                        g_sum[g_last] += (now - g_lastNs) / 1e6;
+                    if (s == 0)
+                        ++g_frames;
+                    g_last = static_cast<int>(s);
+                    g_lastNs = now;
+                    break;
+                }
+            g_orig[I](rdram, ctx, runtime);
+        }
+        template <size_t... I>
+        void install(PS2Runtime &runtime, std::index_sequence<I...>)
+        {
+            if (!std::getenv("VCS_PHASES"))
+                return;
+            for (const auto &site : kPhaseSites)
+                if (std::find(g_targets, g_targets + g_targetCount, site[1]) == g_targets + g_targetCount && g_targetCount < kMaxTargets)
+                    g_targets[g_targetCount++] = site[1];
+            const PS2Runtime::RecompiledFunction hooks[] = {&hook<I>...};
+            for (size_t i = 0; i < g_targetCount; ++i)
+                if ((g_orig[i] = runtime.lookupFunction(g_targets[i])))
+                    runtime.replaceFunction(g_targets[i], hooks[i]);
+            // phases [reset] -> ok frames=<n> then "<site>:<callee>=<ms a frame>" for the 30 costliest steps
+            ps2control::addCommand("phases", [](const std::string &args, ps2control::Reply reply) {
+                std::vector<std::pair<double, size_t>> v;
+                for (size_t s = 0; s < kSites; ++s)
+                    v.push_back({g_frames ? g_sum[s] / g_frames : 0.0, s});
+                std::sort(v.begin(), v.end(), [](auto &a, auto &b) { return a.first > b.first; });
+                std::string text = "ok frames=" + std::to_string(g_frames);
+                for (size_t i = 0; i < v.size() && i < 30; ++i)
+                {
+                    char b[64];
+                    std::snprintf(b, sizeof(b), " %06x:%06x=%.2f", kPhaseSites[v[i].second][0], kPhaseSites[v[i].second][1], v[i].first);
+                    text += b;
+                }
+                if (args.find("reset") != std::string::npos)
+                {
+                    std::fill(std::begin(g_sum), std::end(g_sum), 0.0);
+                    g_frames = 0;
+                }
+                reply(text);
+            });
+        }
+    }
+
     void registerSettings()
     {
         addSlider("world.view_distance", "View distance",
@@ -816,6 +913,7 @@ namespace vcs::distance
             runtime.replaceFunction(kRandomPedControl, &randomPedControl);
         if ((g_processCollision = runtime.lookupFunction(kProcessCollision)))
             runtime.replaceFunction(kProcessCollision, &processCollision);
+        phases::install(runtime, std::make_index_sequence<phases::kMaxTargets>{});
         // crowdlod -> ok skipped=<ped updates skipped> processed=<LOD updates run> overflow=<sector entries in the
         //             overflow pool> peak=<most at once>
         ps2control::addCommand("crowdlod", [](const std::string &, ps2control::Reply reply) {
