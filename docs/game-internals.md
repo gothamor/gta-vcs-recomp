@@ -1722,6 +1722,20 @@ its lists; `pokef` of the scale below with screenshots).
   down), **`FUN_002afe80`** (as CPopulation::Update: peds added 35 x .. 60 x gen times `FUN_002b44c8` by
   `FUN_002b17a8`, as AddToPopulation), and `FUN_00219898`, `FUN_002b0200`, `FUN_0036ebf8`, `FUN_003da070`,
   `FUN_003f29d8` (not read yet). It is copied before the scale, so Object distance leaves the population alone.
+- **Pools** (`CPools::Initialise FUN_00288100`): peds 70 (`FUN_00478f28`, 0xD20 bytes each), vehicles 40
+  (`FUN_00478fc0`, 0x8C0), then 0x1DB, 0x14 and 0xC0 for the other pools; each constructor allocates its own entries
+  and flags from the main heap. CPool::New for peds `FUN_004767b0` searches up from the last index (`+0xC`) and wraps,
+  Delete `FUN_00476850` lowers it; GetHandle `FUN_004701b8` = index << 8 | flags, GetAt `FUN_00471788`. Enlarged
+  through the constructors' size (2026-11-04, `VCS_POOLS=peds,vehicles` for a test; hidden runs at a busy street with
+  the watchdog): **peds up to 129 run clean, 136 and more corrupt memory within a minute** - even with five peds
+  alive: RpClumpRender (`FUN_002c0270`, from CEntity::Render `FUN_003c3e58`) looping on a broken atomic list, the
+  main heap's bytes-in-use gone negative, an anim block's unload (`FUN_00225610` -> `FUN_001cf848`) destroying an array
+  with a garbage count, all during LOAD_SCENE or the first seconds. Vehicles 110 / 300 / 360 ran clean (their slots
+  never climbed far). The heap had 7 MB free, and every reader of the ped pool's size (VCS_RWATCH on it: 23 sites,
+  the pool loops, CPool's own functions, `FUN_00415ae8`, `FUN_0018f5d0`) only loops over the pool - so the culprit
+  is probably a ped's slot kept in a signed byte (a slot >= 128 turns negative) somewhere not found yet. The port
+  keeps peds at 128 and vehicles at 110. Two checks of the index elsewhere: `FUN_0020c3c8` (< 71) and `FUN_0020c400`
+  (< 70) answer false for higher slots.
 
 ## 10. Memory card and saves
 

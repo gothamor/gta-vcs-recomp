@@ -41,6 +41,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -67,7 +68,11 @@ namespace vcs::distance
         constexpr uint32_t kPedPoolCtor = 0x00478F28u, kCarPoolCtor = 0x00478FC0u;   // (memory, size, name)
         constexpr uint32_t kPedPoolReturn = 0x00288144u, kCarPoolReturn = 0x00288168u; // their calls in FUN_00288100
         constexpr uint32_t kPedPool = 0x00487A94u, kCarPool = 0x00487A98u;           // CPool *: +8 size
-        constexpr uint32_t kLargePeds = 280u, kLargeCars = 110u;
+        // Peds at most 128: with 136 or more the game corrupts its memory within a minute even with five peds alive
+        // (RpClumpRender looping on a broken atomic list, the main heap's header, a destructor over a garbage count),
+        // 129 and fewer run clean - as if a ped's slot were kept in a signed byte somewhere (game-internals.md 9h).
+        // Vehicles stay below 128 for the same reason (300 ran, but their slots never climbed that far).
+        constexpr uint32_t kLargePeds = 128u, kLargeCars = 110u;
         constexpr uint32_t kCarsKept = 25u; // vehicle slots left for missions, parked cars, the player's
         constexpr uint32_t kPedsKept = 30u; // ped slots left for missions and the player, besides two a car
 
@@ -189,15 +194,34 @@ namespace vcs::distance
 
         // the pools' constructors, from CPools::Initialise only: larger pools when the main heap has the room
         bool largePools() { return vcs::memory::streamingMegabytes() > 0; }
+        // VCS_POOLS=peds,vehicles: the pool sizes for a test (0 or missing: the game's)
+        uint32_t testPool(int which)
+        {
+            const char *env = std::getenv("VCS_POOLS");
+            unsigned peds = 0, cars = 0;
+            if (!env || std::sscanf(env, "%u,%u", &peds, &cars) < 1)
+                return 0;
+            return which ? cars : peds;
+        }
         PS2_GUEST_CC void pedPoolCtor(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            if (GPR_U32(ctx, 31) == kPedPoolReturn && largePools() && GPR_U32(ctx, 5) < kLargePeds)
+            if (GPR_U32(ctx, 31) == kPedPoolReturn && std::getenv("VCS_POOLS"))
+            {
+                if (testPool(0))
+                    SET_GPR_U32(ctx, 5, testPool(0));
+            }
+            else if (GPR_U32(ctx, 31) == kPedPoolReturn && largePools() && GPR_U32(ctx, 5) < kLargePeds)
                 SET_GPR_U32(ctx, 5, kLargePeds);
             g_pedPoolCtor(rdram, ctx, runtime);
         }
         PS2_GUEST_CC void carPoolCtor(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            if (GPR_U32(ctx, 31) == kCarPoolReturn && largePools() && GPR_U32(ctx, 5) < kLargeCars)
+            if (GPR_U32(ctx, 31) == kCarPoolReturn && std::getenv("VCS_POOLS"))
+            {
+                if (testPool(1))
+                    SET_GPR_U32(ctx, 5, testPool(1));
+            }
+            else if (GPR_U32(ctx, 31) == kCarPoolReturn && largePools() && GPR_U32(ctx, 5) < kLargeCars)
                 SET_GPR_U32(ctx, 5, kLargeCars);
             g_carPoolCtor(rdram, ctx, runtime);
         }
