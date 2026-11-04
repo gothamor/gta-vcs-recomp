@@ -1708,6 +1708,19 @@ its lists; `pokef` of the scale below with screenshots).
   `FUN_003a52f8`: the first atomic with `distance < lod[i] * LODDistMultiplier`; GetLargestLodDistance `FUN_003a5380`;
   past it a 20 m fade, the model streamed within +50 m (+30 without fade), beyond 330 m the distance is clamped to
   the largest LOD distance. VC's IDE distances in VCS's data (e.g. model 0x1D1E and 0x18F5 forced to 300).
+- **Rendering the lists, vehicles' classes, the draws' origin** (found 2026-11-04 for DISTANT_LIFE.md A2):
+  `FUN_0035c4b8` walks the four visible lists (entity pointers, 4 bytes each) calling each entry's vtable `+0x40`
+  (PreRender), then the moving list at `0x6F40D0`; the render functions that read the lists are `FUN_0035cd98` /
+  `FUN_0035d308`; `FUN_0035c2c8` empties them. The vtable is at entity `+0x5C`, Render at slot `+0x44`. Vehicle
+  classes by vtable (the pool in a street and a car made by the rig): `0x48F8C0` cars (Sentinel 211, 184, 236, 243,
+  259...; Render `0x14C308`), `0x490F10` (models 191, 212; `0x343F30`), `0x4901C8` the ambient planes (model 280,
+  1-3 km away, no clump; `0x22CF80`), `0x491680` (238, no clump). Every Render ends in **CEntity::Render
+  `FUN_003c3e58`**: entity `+0x50` the RW object (type byte 1 an atomic: its callback `+0x24`; else the clump's
+  render `FUN_0039ec18`). Hooking the class Render (`0x343F30`) saw nothing for the cars - CEntity::Render is where an
+  entity's draws begin. **The draws' world origin**: the renderer keeps positions relative to a cell's centre;
+  `0x6FE980` holds minus that centre (775, 1188.12, 0 with the camera in cell (13, 7)) and the VU1 object matrices are
+  the entity's world matrix plus it (a car at -766, -1208.7 drew with its matrix at 8, -21.1). The VU1 object matrix
+  carries the vertices' dequantisation scale in its rows (2, 4, 1 or 2, 8, 2 seen for car parts).
 - **The multipliers** (CCamera::Process `FUN_00378dd8`, `0x37AF4C..0x37B078`): `LODDistMultiplier` (camera
   `0x6F44D0 + 0x7DC` = **`0x6F4CAC`**) = 70 / FOV first, times `1 + max(0, (z - 55) / 60)` when the camera is above
   55 m (the near plane grows the same way, `FUN_0018f3b0`), at most 2.0; copied to `GenerationDistMultiplier`

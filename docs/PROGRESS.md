@@ -870,6 +870,9 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `VCS_VIEW_DISTANCE`, `VCS_DETAIL_DISTANCE`, `VCS_POPULATION_DISTANCE`, `VCS_VEHICLE_DENSITY`, `VCS_PEDESTRIAN_DENSITY` | Graphics > Distance and population for one run (0..100) |
 | `VCS_POOLS=peds,vehicles` | the ped / vehicle pool sizes for a test (default 280 / 200 with Streaming memory above PS2, else 70 / 40) |
 | `VCS_CROWD_LOD=0` | no crowd LOD (far random peds processed every frame; A / B measures) |
+| `VCS_DISTANT_TRAFFIC=0..100` | Graphics > Distant traffic for one run (DISTANT_LIFE.md: decorative cars beyond the simulated traffic) |
+| `VCS_DISTANT_BAND=lo,hi` | debug: the distant traffic's band in metres (`40,200` brings the proxies near, to look at them) |
+| `VCS_DISTANT_TINT=1` | debug: the proxies lit red alone (told apart from the real cars in pictures) |
 | `VCS_NODE_OVERFLOW_TEST=1` | every new sector entry from the overflow pool (its path checked without a crowd) |
 | `VCS_WATCH=lo,hi[,val[,mask]]` | guest write watchpoint (rig `watch lo,hi[,val[,mask]]` arms it mid-run) |
 | `VCS_WATCH_STACK=1`, `VCS_WATCH_STRIDE=stride,offset` | watch hits also list s2-s7 and the code addresses on the guest stack (callers); only writes to one field of every pool entry (e.g. `d20,1c8`: the peds' flags) |
