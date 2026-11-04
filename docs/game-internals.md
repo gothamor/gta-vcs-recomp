@@ -1637,6 +1637,8 @@ Read from the extracted entries (`tools/mdlinfo.py`, `tools/txd2xtx.py info`) fo
   344 molotov, 346 beretta, 347 python, 348 ak47, 349 chromegun, 350 shotgspa, 351 buddyshot, 352 m16, 353 skorpion,
   354 uzi, 355 ingramsl, 356 mplng, 357 sniper, 358 laser, 359 rocketla, 360 flame, 361 m249, 362 minigun). The
   trainer gives them as weapon types (src/game/vcs_trainer.cpp; type 25 holds model 354 `uzi`, 24 model 353).
+- **The minigun is two models**: 362 `minigun` (the body) and 366 `minigun2` (the barrels, in their own space,
+  `x` -0.46..0.02: the game places and turns them while firing), as in VC; SA keeps both as parts of one `.dff`.
 - **The model** (`ldm`): at 0x20 one element (object type 1, flags `0x0004AA01`), not a vehicle's element group (type
   2); its node has no name, parent or child. One geometry, 140-593 triangles, one or two materials (`gun_uzi3`,
   `iz_gun_beretta`). Its file's tail is not a vehicle's order: the relocation table comes right after the data, the
@@ -1653,7 +1655,8 @@ Read from the extracted entries (`tools/mdlinfo.py`, `tools/txd2xtx.py info`) fo
   chainsaw and the minigun. VCS's animations hold the moved models, so a VC model (or a VC mod, made to sit where
   VC's own does) is drawn into Vic's palm, a chainsaw's handles miss his hands. `tools/weaponfit.py` fits VC's
   originals (read from a VC PC's `models/gta3.img`) onto VCS's models into the converters' table
-  (dff2mdl.WEAPON_PLACES): by their outlines (side, top and front silhouettes, intersection over union), not nearest
+  (dff2mdl.WEAPON_PLACES; San Andreas holds its weapons as VC does - the table places SA mods too, MODS.md): by their
+  outlines (side, top and front silhouettes, intersection over union), not nearest
   points - where VCS's model is another mesh (VC's M4 onto VCS's M16, VC's rocket launcher with its rocket) a
   nearest-point fit (ICP) slid along the barrels and left the grips 10 cm apart, or turned the launcher over. Some are
   other meshes: ak47 (VC's ruger), m16 (m4), m249 (m60), rocketla, minigun - fitted by grip and magazine.
