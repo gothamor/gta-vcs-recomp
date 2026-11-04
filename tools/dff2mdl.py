@@ -624,11 +624,16 @@ def convert(dff_path, template_path, out_path, txd_path=None, weapon=None):
                     assign[e] = [k]
     host = group if single else next((e for name, els in by_node if name in ("chassis_hi", "boat_hi") for e in els), None)
     merged, dropped = [], []
+    # A weapon's .dff can hold a part VCS keeps as a model of its own - SA's minigun has its spinning barrels
+    # (`minigun2`, VCS's model 366, which the game turns while firing). Converted onto that model, only that part goes
+    # in, in its own frame (as VC's minigun2.dff has it); onto any other, a part named like a VCS weapon model stays out.
+    own = [k for k, n in enumerate(names_of) if single and weapon and n == weapon and frames[atoms[k]["frame"]]["parent"] >= 0]
     for k, n in enumerate(names_of):
         if k in used:
             continue
         # a weapon's muzzle flash (SA's `gunflash` part: shown by SA only while firing; VCS draws its own)
-        if n.endswith("_dam") or n.startswith("extra") or n.endswith("_vlo") or host is None or (single and n == "gunflash"):
+        if (n.endswith("_dam") or n.startswith("extra") or n.endswith("_vlo") or host is None or (single and n == "gunflash")
+                or (own and k not in own) or (single and n in WEAPON_PLACES and n != weapon)):
             dropped.append(n)
         else:
             assign.setdefault(host, []).append(k)
@@ -665,7 +670,8 @@ def convert(dff_path, template_path, out_path, txd_path=None, weapon=None):
         has_normals = any(dff["geometries"][atoms[k]["geometry"]]["normals"] for k in parts)
         for k in parts:
             g = dff["geometries"][atoms[k]["geometry"]]
-            to = mat_mul(rr_vc(atoms[k]["frame"]), to_node)  # the part's frame -> the element's node
+            # the part's frame -> the element's node (a weapon model's own part: its frame is the model's space)
+            to = mat_mul(IDENTITY if k in own else rr_vc(atoms[k]["frame"]), to_node)
             if place:
                 to = mat_mul(to, place)
             base = len(verts)

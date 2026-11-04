@@ -1136,13 +1136,21 @@ namespace vcs::rwconv
                     break;
                 }
             std::vector<std::string> dropped;
+            // a part VCS keeps as a model of its own (SA's minigun: its spinning barrels `minigun2`, VCS's model 366): onto
+            // that model only that part, in its own frame; onto any other, a part named like a VCS weapon model stays out
+            std::vector<char> own(namesOf.size(), 0);
+            bool anyOwn = false;
+            for (size_t k = 0; k < namesOf.size(); ++k)
+                if (single && !weapon.empty() && namesOf[k] == weapon && frames.at(dff.atomics[k].frame).parent >= 0)
+                    own[k] = 1, anyOwn = true;
             for (size_t k = 0; k < namesOf.size(); ++k)
             {
                 if (used[k])
                     continue;
                 const std::string &n = namesOf[k];
                 // a weapon's muzzle flash (SA's `gunflash` part: shown by SA only while firing; VCS draws its own)
-                if (endsWith(n, "_dam") || n.rfind("extra", 0) == 0 || endsWith(n, "_vlo") || !host || (single && n == "gunflash"))
+                if (endsWith(n, "_dam") || n.rfind("extra", 0) == 0 || endsWith(n, "_vlo") || !host || (single && n == "gunflash") ||
+                    (anyOwn && !own[k]) || (single && weaponPlaces().count(n) && n != weapon))
                     dropped.push_back(n);
                 else
                     assign[host].push_back(static_cast<int>(k));
@@ -1201,7 +1209,8 @@ namespace vcs::rwconv
                 for (const int k : parts)
                 {
                     const Geometry &g = dff.geometries.at(dff.atomics[k].geometry);
-                    Mat to = matMul(rrVc(dff.atomics[k].frame), toNode); // the part's frame -> the element's node
+                    // the part's frame -> the element's node (a weapon model's own part: its frame is the model's space)
+                    Mat to = matMul(own[k] ? kIdentity : rrVc(dff.atomics[k].frame), toNode);
                     if (weaponPlace)
                         to = matMul(to, *weaponPlace);
                     const auto base = static_cast<uint32_t>(verts.size());

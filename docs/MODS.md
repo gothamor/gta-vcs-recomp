@@ -247,7 +247,10 @@ is a vehicle (model type 6) or a weapon (type 4); other models' (objects') files
 - **San Andreas weapon mods** (2026-11-03, the player's `Improved Default Armoury`): SA's `.txd`s are D3D9 (platform 9,
   the DXT format named by its D3DFORMAT) - read too, before which every texture was missing and the model drawn white.
   SA's weapons carry their muzzle flash as a part (`gunflash`, shown by SA only while firing): left out, VCS draws its
-  own. SA holds its weapons where VC does (the outlines over VCS's models with the VC table: pistol 0.46 -> 0.80,
+  own. SA's minigun holds its spinning barrels as a part (`minigun2`) of `minigun.dff` and `minigun2.dff` alike, where
+  VC and VCS keep them as a model of their own (VCS's 366, turned while firing): converted onto `minigun` the barrels
+  stay out, onto `minigun2` only they go in, in their own frame - before, both models got the whole gun and it showed
+  twice. SA holds its weapons where VC does (the outlines over VCS's models with the VC table: pistol 0.46 -> 0.80,
   chainsaw 0.52 -> 0.93, flame-thrower 0.33 -> 0.67, M4 0.37 -> 0.50), so the same table places them. SA's
   `micro_uzi` and `sawnoff` map to VCS's `uzi` and `buddyshot`; SA-only weapons (desert eagle, silenced pistol, country
   rifle, ...) have no VCS model and are named in the log. Checked: `rwconv_check` 104 / 104, `weaponmod_check` PASS
