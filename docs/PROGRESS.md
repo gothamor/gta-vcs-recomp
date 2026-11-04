@@ -1005,6 +1005,7 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `PS2X_RHI_FULL_COPY=1` | Vulkan: a dynamic vertex / index buffer's whole capacity copied into the frame's ring, as before 2026-11-02 (now the bytes last written) |
 | `PS2X_RHI_REDUNDANT=1` | Vulkan: viewport, scissor, blend constants and vertex / index buffers recorded at every draw that set them, as before 2026-11-02 (now only when they change) |
 | `PS2X_HW_CB_DEDUPE=0`, `PS2X_HW_CB_LOG=1` | the GS draw / native constants written at every draw, as before 2026-11-02 (now only when they change); writes and skips every 5 s |
+| `PS2X_HW_NATIVE_MERGE=0` | one native draw per VU1 batch, not joined (PERFORMANCE.md 32) |
 | `PS2X_HW_SHADER_DEPTH=1` / `=0` | the GS pixel shader writes the depth / uses the rasterised depth, early depth rejection on (the default with D3D11 and Vulkan since 2026-11-03: with the shader depth D3D11 lost the game's fire, game-internals.md 6m; PERFORMANCE.md 26) |
 | `PS2X_RHI_FULL_BARRIERS=1` | Vulkan: whole-pipeline barriers, as before the layout-based ones |
 | `PS2X_HOST_PACED=0`, `PS2X_FRAME_LEAD=0`, `PS2X_FRAME_LEAD_MARGIN_US=<us>` | frame-rate independent timing: the game's own deadline instead of the host's frames; no frame lead; the lead's margin (1500) - PERFORMANCE.md 19 |

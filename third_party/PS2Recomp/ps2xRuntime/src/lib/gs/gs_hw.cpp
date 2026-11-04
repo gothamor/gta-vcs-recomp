@@ -1055,6 +1055,8 @@ namespace
                 case CmdType::MeshCreate:
                 {
                     const MeshCreate &m = f.meshes[c.index];
+                    if (m.bytes.empty()) // [gta-recomp] a merged native group's mesh that was cached (nativeMerge)
+                        break;
                     m_meshes[m.key] = m_dev.createBuffer({m.bytes.size(), rhi::BufferUsage::Vertex, false, "gs native mesh"}, m.bytes.data());
                     break;
                 }
@@ -4051,6 +4053,7 @@ namespace
 
         void endFrame(const uint64_t (&privRegs)[15]) override
         {
+            finishNativeGroup(); // [gta-recomp] the last native group's mesh (nativeMerge)
             if (const uint64_t generation = g_packGeneration.load(std::memory_order_acquire); generation != m_packGeneration)
                 switchTexturePack(generation); // [gta-recomp]
             // [gta-recomp] Publish images in command order. Current draws still name their originals; future binds
@@ -4218,42 +4221,12 @@ namespace
             extent.y = static_cast<float>(s.scy1); // the scissor bounds what the draw can touch
             noteTarget(s.fbp, s.fbw, s.fpsm, &extent, 1, s.scy1);
             Frame &f = *m_frame;
-            uint32_t transientOffset = 0;
-            if (draw.transient)
-            {
-                transientOffset = static_cast<uint32_t>(f.nativeBytes.size());
-                const auto *bytes = static_cast<const uint8_t *>(draw.vertices);
-                f.nativeBytes.insert(f.nativeBytes.end(), bytes, bytes + size_t(draw.vertexStride) * draw.vertexCount);
-            }
-            auto lru = draw.transient ? m_meshLru.end() : m_meshLru.find(draw.meshKey);
-            if (draw.transient)
-            {
-            }
-            else if (lru == m_meshLru.end())
-            {
-                MeshCreate mc;
-                mc.key = draw.meshKey;
-                mc.stride = draw.vertexStride;
-                mc.count = draw.vertexCount;
-                const auto *bytes = static_cast<const uint8_t *>(draw.vertices);
-                mc.bytes.assign(bytes, bytes + size_t(draw.vertexStride) * draw.vertexCount);
-                f.cmds.push_back({CmdType::MeshCreate, static_cast<uint32_t>(f.meshes.size())});
-                f.meshes.push_back(std::move(mc));
-                m_meshLru[draw.meshKey] = m_frameIndex;
-                if (m_meshLru.size() > kMaxMeshes)
-                    evictMeshes();
-            }
-            else
-            {
-                lru->second = m_frameIndex;
-            }
             NativeDrawCmd nd;
             nd.s = s;
             nd.meshKey = draw.meshKey;
             nd.kind = draw.kind;
             nd.drawCount = draw.drawCount;
             nd.transient = draw.transient;
-            nd.transientOffset = transientOffset;
             std::memcpy(nd.constants, draw.constants, sizeof(float) * draw.constantCount);
             const float zs = (s.zpsm == GS_PSM_Z32) ? (1.0f / 4294967296.0f)
                            : (s.zpsm == GS_PSM_Z16 || s.zpsm == GS_PSM_Z16S) ? (1.0f / 65536.0f)
@@ -4261,12 +4234,143 @@ namespace
             nd.constants[124] = state.context.xyoffset.ofx / 16.0f;
             nd.constants[125] = state.context.xyoffset.ofy / 16.0f;
             nd.constants[126] = zs;
-            f.cmds.push_back({CmdType::NativeDraw, static_cast<uint32_t>(f.nativeDraws.size())});
-            f.nativeDraws.push_back(nd);
             f.nativeVertices += draw.drawCount;
             f.had3d = true;
             ps2hle::g_gsVerticesRecorded += draw.drawCount;
+            if (extendNativeGroup(f, nd, draw))
+                return true;
+            finishNativeGroup();
+            // a new group: the draw as it is; while nothing else is recorded after it, the next draws of the same state
+            // and constants join it (extendNativeGroup)
+            NativeGroup &g = m_group;
+            g.frame = &f;
+            g.members = 1;
+            g.key = draw.meshKey;
+            g.stride = draw.vertexStride;
+            g.mesh = UINT32_MAX;
+            if (draw.transient)
+            {
+                nd.transientOffset = static_cast<uint32_t>(f.nativeBytes.size());
+                const auto *bytes = static_cast<const uint8_t *>(draw.vertices);
+                f.nativeBytes.insert(f.nativeBytes.end(), bytes, bytes + size_t(draw.vertexStride) * draw.vertexCount);
+            }
+            else if (nativeMerge())
+            {
+                // the mesh is made (or found cached) when the group is finished: its creation goes here, ahead of the draw
+                g.mesh = static_cast<uint32_t>(f.meshes.size());
+                f.cmds.push_back({CmdType::MeshCreate, g.mesh});
+                f.meshes.emplace_back();
+                const auto *bytes = static_cast<const uint8_t *>(draw.vertices);
+                g.bytes.assign(bytes, bytes + size_t(draw.vertexStride) * draw.vertexCount);
+            }
+            else
+                useMesh(f, draw.meshKey, draw.vertexStride, static_cast<const uint8_t *>(draw.vertices), draw.vertexCount);
+            g.cmd = static_cast<uint32_t>(f.cmds.size());
+            f.cmds.push_back({CmdType::NativeDraw, static_cast<uint32_t>(f.nativeDraws.size())});
+            f.nativeDraws.push_back(nd);
             return true;
+        }
+
+        // [gta-recomp] Native draws merged (PERFORMANCE.md 32): consecutive native draws with the same state, kind and
+        // constants - the VU1 batches of one mesh of one model, half of all native draws - become one draw, their strips
+        // joined by two repeated vertices (degenerate triangles: the rasteriser does not cull, nothing is drawn by them).
+        // Each draw went through the whole draw path and a driver call (on AMD's D3D11 driver ~40% of the main thread
+        // with VC car mods). The joined mesh is cached by its parts' keys. PS2X_HW_NATIVE_MERGE=0: one draw per batch.
+        static bool nativeMerge()
+        {
+            static const bool on = !(std::getenv("PS2X_HW_NATIVE_MERGE") && *std::getenv("PS2X_HW_NATIVE_MERGE") == '0');
+            return on;
+        }
+
+        struct NativeGroup
+        {
+            Frame *frame = nullptr;
+            uint32_t cmd = 0;             // the group's NativeDraw in frame->cmds
+            uint32_t mesh = UINT32_MAX;   // its MeshCreate in frame->meshes (cached meshes: filled when finished)
+            uint32_t members = 0, stride = 0;
+            uint64_t key = 0;             // one member: its mesh key; more: theirs mixed
+            std::vector<uint8_t> bytes;   // cached meshes: the vertices (one member: all; more: the drawn strips joined)
+        } m_group;
+
+        // a mesh used by a draw: cached, or created ahead of it
+        void useMesh(Frame &f, uint64_t key, uint32_t stride, const uint8_t *bytes, uint32_t count, uint32_t slot = UINT32_MAX)
+        {
+            auto lru = m_meshLru.find(key);
+            if (lru != m_meshLru.end())
+            {
+                lru->second = m_frameIndex;
+                return;
+            }
+            MeshCreate mc;
+            mc.key = key;
+            mc.stride = stride;
+            mc.count = count;
+            mc.bytes.assign(bytes, bytes + size_t(stride) * count);
+            if (slot == UINT32_MAX)
+            {
+                f.cmds.push_back({CmdType::MeshCreate, static_cast<uint32_t>(f.meshes.size())});
+                f.meshes.push_back(std::move(mc));
+            }
+            else
+                f.meshes[slot] = std::move(mc);
+            m_meshLru[key] = m_frameIndex;
+            if (m_meshLru.size() > kMaxMeshes)
+                evictMeshes();
+        }
+
+        bool extendNativeGroup(Frame &f, const NativeDrawCmd &nd, const GSNativeDraw &draw)
+        {
+            NativeGroup &g = m_group;
+            if (!nativeMerge() || g.frame != &f || g.cmd + 1u != f.cmds.size() || f.cmds.back().type != CmdType::NativeDraw ||
+                g.stride != draw.vertexStride || !draw.drawCount || draw.vertexStride > 64u)
+                return false;
+            NativeDrawCmd &p = f.nativeDraws[f.cmds.back().index];
+            if (p.kind != nd.kind || p.transient != nd.transient || std::memcmp(&p.s, &nd.s, sizeof(HwState)) != 0 ||
+                std::memcmp(p.constants, nd.constants, sizeof(nd.constants)) != 0 || !p.drawCount)
+                return false;
+            const size_t stride = g.stride;
+            std::vector<uint8_t> &out = draw.transient ? f.nativeBytes : g.bytes;
+            const size_t start = draw.transient ? p.transientOffset : 0u;
+            out.resize(start + size_t(p.drawCount) * stride); // the strip drawn so far (a single member: all its vertices)
+            const auto *bytes = static_cast<const uint8_t *>(draw.vertices);
+            uint8_t lastVertex[64];
+            std::memcpy(lastVertex, out.data() + out.size() - stride, stride); // (out may move as it grows)
+            out.insert(out.end(), lastVertex, lastVertex + stride);
+            out.insert(out.end(), bytes, bytes + stride);
+            out.insert(out.end(), bytes, bytes + size_t(draw.drawCount) * stride);
+            if (g.members == 1u)
+                g.key = mixMeshKey(0x4E4D45524745ull, g.key, p.drawCount);
+            g.key = mixMeshKey(g.key, draw.meshKey, draw.drawCount);
+            ++g.members;
+            p.drawCount += 2u + draw.drawCount;
+            return true;
+        }
+
+        static uint64_t mixMeshKey(uint64_t a, uint64_t b, uint32_t n)
+        {
+            uint64_t x = a ^ (b + 0x9E3779B97F4A7C15ull + (a << 6) + (a >> 2)) ^ (uint64_t(n) << 32);
+            x ^= x >> 31;
+            x *= 0xBF58476D1CE4E5B9ull;
+            return x ^ (x >> 29);
+        }
+
+        // the open group's mesh: cached, or its creation filled in ahead of its draw
+        void finishNativeGroup()
+        {
+            NativeGroup &g = m_group;
+            if (!g.frame || g.frame != m_frame.get())
+            {
+                g.frame = nullptr;
+                return;
+            }
+            Frame &f = *g.frame;
+            if (g.mesh != UINT32_MAX)
+            {
+                NativeDrawCmd &d = f.nativeDraws[f.cmds[g.cmd].index];
+                d.meshKey = g.key;
+                useMesh(f, g.key, g.stride, g.bytes.data(), static_cast<uint32_t>(g.bytes.size() / g.stride), g.mesh);
+            }
+            g.frame = nullptr;
         }
 
         void evictMeshes()
