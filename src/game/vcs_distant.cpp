@@ -581,7 +581,7 @@ namespace vcs::distant
         settings::Spec s;
         s.key = "world.distant_traffic";
         s.page = "Graphics";
-        s.section = "Distance and population";
+        s.section = "Distance and population (experimental)";
         s.label = "Distant traffic";
         s.help = "Cars far away, beyond the simulated traffic, that only drive the roads (as Project2DFX's distant cars): "
                  "0 none (the original), 100 the most and the farthest. They cost little: no AI, no physics.";

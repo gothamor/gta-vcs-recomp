@@ -728,7 +728,7 @@ namespace vcs::distance
             settings::Spec s;
             s.key = key;
             s.page = "Graphics";
-            s.section = "Distance and population";
+            s.section = "Distance and population (experimental)";
             s.label = label;
             s.help = help;
             s.type = settings::Type::Integer;
@@ -856,7 +856,7 @@ namespace vcs::distance
             settings::Spec s;
             s.key = "world.fps_target";
             s.page = "Graphics";
-            s.section = "Distance and population";
+            s.section = "Distance and population (experimental)";
             s.label = "Population frame-rate target";
             s.help = "Below this frame rate the cars and people beyond the original's are fewer until it is met again "
                      "(the densities are then the most the machine keeps up with). Off: always the sliders' numbers.";
