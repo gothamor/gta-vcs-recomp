@@ -92,9 +92,9 @@ namespace vcs::distance
         constexpr uint32_t kPedPoolCtor = 0x00478F28u, kCarPoolCtor = 0x00478FC0u;   // (memory, size, name)
         constexpr uint32_t kPedPoolReturn = 0x00288144u, kCarPoolReturn = 0x00288168u; // their calls in FUN_00288100
         constexpr uint32_t kPedPool = 0x00487A94u, kCarPool = 0x00487A98u;           // CPool *: +8 size
-        // 280 peds (VC's limit adjusters' usual) and 200 vehicles: +1.1 MB of the main heap, which has the 5.4 MB the PS2's
-        // streaming heap took. Above 128 peds a load needs the world clear's fix below (pedGetAt).
-        constexpr uint32_t kLargePeds = 280u, kLargeCars = 200u;
+        // Realistic Open Limit Adjuster (OLA) pools for Vice City:
+        // 160 peds (PC GTA VC was 140) and 100 vehicles (PC GTA VC was 110)
+        constexpr uint32_t kLargePeds = 160u, kLargeCars = 100u;
         constexpr uint32_t kCarsKept = 25u; // vehicle slots left for missions, parked cars, the player's
         constexpr uint32_t kPedsKept = 30u; // ped slots left for missions and the player, besides a driver a car
 
@@ -285,11 +285,18 @@ namespace vcs::distance
             // the caps share the ped pool: every random car takes a driver from it, the ambient peds the rest (less the
             // slots kept for missions and the player). Each keeps up to the game's own cap; what the settings ask beyond
             // that shares the room left, in proportion.
+            // Realistic Open Limit Adjuster (OLA) caps for 1986 Vice City:
+            // Base PS2: 16 cars, 30 peds.
+            // Realistic OLA target: up to 42 active cars and 70 active pedestrians.
+            // This provides rich, continuous traffic and bustling sidewalks without
+            // unrealistic 1000-NPC gridlocks or single-threaded MIPS CPU starvation.
+            constexpr int32_t kOlaMaxCars = 42;
+            constexpr int32_t kOlaMaxPeds = 70;
             const int32_t carPool = static_cast<int32_t>(poolSize(kCarPool)), pedPool = static_cast<int32_t>(poolSize(kPedPool));
-            const int32_t carRoom = std::max<int32_t>(g_maxCars, carPool - static_cast<int32_t>(kCarsKept));
+            const int32_t carRoom = std::clamp<int32_t>(carPool - static_cast<int32_t>(kCarsKept), g_maxCars, kOlaMaxCars);
             int32_t maxCars = std::clamp(static_cast<int32_t>(std::lround(g_maxCars * cars)), 0, carRoom);
-            int32_t maxPeds = std::max<int32_t>(0, static_cast<int32_t>(std::lround(g_maxPedsB * peds)));
-            const int32_t pedRoom = std::max<int32_t>(g_maxCars + g_maxPedsB, pedPool - static_cast<int32_t>(kPedsKept));
+            const int32_t pedRoom = std::clamp<int32_t>(pedPool - static_cast<int32_t>(kPedsKept), g_maxCars + g_maxPedsB, kOlaMaxCars + kOlaMaxPeds);
+            int32_t maxPeds = std::clamp(static_cast<int32_t>(std::lround(g_maxPedsB * peds)), 0, kOlaMaxPeds);
             const int32_t baseCars = std::min(maxCars, g_maxCars), basePeds = std::min(maxPeds, g_maxPedsB);
             const int32_t extraCars = maxCars - baseCars, extraPeds = maxPeds - basePeds;
             const int32_t rest = pedRoom - baseCars - basePeds;
@@ -299,12 +306,14 @@ namespace vcs::distance
                 maxCars = baseCars + static_cast<int32_t>(extraCars * f);
                 maxPeds = basePeds + static_cast<int32_t>(extraPeds * f);
             }
-            wrf(kCarNumber, g_carNumber * cars);
-            wrf(kPedNumber, g_pedNumber * peds);
+            const float carFactor = std::min(cars, static_cast<float>(kOlaMaxCars) / g_maxCars);
+            const float pedFactor = std::min(peds, static_cast<float>(kOlaMaxPeds) / g_maxPedsB);
+            wrf(kCarNumber, g_carNumber * carFactor);
+            wrf(kPedNumber, g_pedNumber * pedFactor);
             wr32(kMaxCars, maxCars);
             wr32(kMaxPeds, static_cast<int32_t>(std::lround(maxPeds * static_cast<double>(g_maxPeds) / g_maxPedsB)));
             wr32(kMaxPedsB, maxPeds);
-            applyRoadDensity(cars);
+            applyRoadDensity(carFactor);
         }
 
         // before the original (DECISIONS.md, hooks): it reads the scale once, near its end, and writes the multipliers

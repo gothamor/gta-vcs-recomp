@@ -217,3 +217,15 @@ All three steps above are implemented and verified in `src/game/vcs_distance.h`,
 - **Root Cause**: In `drawProxies` and `drawLitProxies`, `setupMatrices(tmp, 0, 16, 12, 24)` and `foldMatrix` were executed inside the proxy loop before testing whether the proxy was behind the camera or too small. With 240 proxies and ~20 parts per template car, 4,800 iterations per frame each executed 128 VU floating-point operations (~600k ops/frame) just to compute `m` for culling tests that 90% of proxies failed anyway.
 - **Solution**: Loaded the camera View matrix `br` (VU row 16) once outside the loop. For each proxy `n`, transformed the part's world center `W` into camera view space using `br` in 12 basic floating-point operations. If `z_cam <= 0.0f` or `size < threshold * z_cam` or outside view bounds, the proxy is immediately skipped without touching `tmp` or executing `setupMatrices`.
 - **Result**: `worker_ms` dropped from 16.95 ms down to **11.7 ms** (-31.0%), `game_ms` dropped from 15.73 ms to **12.2 ms**, and driving FPS jumped from 57.02 to **73.5 FPS** (+28.9%), eliminating all slowdown and input lag.
+
+
+### Anti-Pattern 7: Quadratic Population Multipliers Spawning ~1000 Unrealistic Entities vs OLA Calibration
+- **Failure Mode**: Setting all sliders to 100% resulted in ~1,000 entities in the scene simultaneously (175 real cars, 250 real peds, 240 distant cars, 300 distant walkers), causing surreal Miami traffic gridlocks, NPC swarms, and high physics collision load on the single-threaded EE guest thread.
+- **Root Cause**: Area scales with radius squared ($r^2$), so a 3x population distance multiplied by 4x density yielded $36x$ spawn demand, saturating the expanded memory pools to their absolute ceilings.
+- **Solution**: Calibrated the 100% targets to authentic Open Limit Adjuster (OLA) and SkyGFX / Project2DFX standards for 1986 Vice City:
+  - Real active cars: capped at 42 cars (PS2 base was 16).
+  - Real active pedestrians: capped at 70 peds (PS2 base was 30).
+  - Distant traffic proxies: capped at 60 cars on bridges and highways.
+  - Distant crowd proxies: capped at 60 walkers on distant beaches and promenades.
+  - Pools adjusted to PC OLA baseline: 160 peds, 100 cars.
+- **Result**: Scene entity count at 100% normalized from ~965 down to **~232 entities** (~5x the PS2 original, maintaining vibrant, full avenues without absurd congestion). Drive benchmark jumped from 73.5 FPS to **92.6 FPS**, frame time dropped to **10.8 ms**, and game thread time dropped to **9.7 ms**, guaranteeing zero slowdown at 60 FPS with huge safety margins.

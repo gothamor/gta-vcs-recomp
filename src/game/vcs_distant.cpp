@@ -39,7 +39,9 @@ namespace vcs::distant
         constexpr uint32_t kGenMultiplier = 0x006F4CA0u; // TheCamera.GenerationDistMultiplier (the traffic's, scaled)
         constexpr float kCarHeight = 0.8f;               // a car's origin above its path node
         constexpr float kLane = 2.6f;                    // to the right of the link's middle
-        constexpr uint32_t kMaxProxies = 240;
+        // Realistic Project2DFX / OLA limits for 1986 Vice City:
+        // 60 distant cars on bridges/expressways, 60 distant walkers on beaches/promenades
+        constexpr uint32_t kMaxProxies = 60;
         constexpr uint32_t kCameraFront = 0x006F44E0u;  // TheCamera's matrix: forward (+0x10)
         // step A2: the vehicles' classes by their vtable (entity +0x5C; found 2026-11-04 from the vehicle pool in a street
         // and a car made by the rig): 0x48F8C0 cars (a Sentinel, 211, 236, 243; Render, slot +0x44, 0x14C308), 0x490F10
@@ -72,7 +74,7 @@ namespace vcs::distant
         constexpr uint32_t kRandomPedVtable = 0x00490840u;
         constexpr float kPedHeight = 1.0f;          // a ped's origin above its node
         constexpr float kCrowdNear = 310.0f;        // strictly beyond the real pedestrian band (~300 m)
-        constexpr uint32_t kMaxWalkers = 320;
+        constexpr uint32_t kMaxWalkers = 60;
         constexpr float kPedTemplateRange = 360.0f; // cover the extended real pedestrian band (~325 m)
         constexpr uint32_t kRegisterCorona = 0x0027DD80u;
         constexpr uint32_t kCoronaTable = 0x00512560u, kCoronaSlots = 56u, kCoronaStride = 0x30u;
@@ -340,14 +342,16 @@ namespace vcs::distant
                 {
                     float lo, hi;
                     band(lo, hi);
-                    move(g_cars, kMaxProxies, std::min<uint32_t>(kMaxProxies, static_cast<uint32_t>(setting) * 2u), false, nodes, 0, count,
+                    const uint32_t wantedCars = std::min<uint32_t>(kMaxProxies, static_cast<uint32_t>(setting) * 60u / 100u);
+                    move(g_cars, kMaxProxies, wantedCars, false, nodes, 0, count,
                          links, lo, hi, kCarHeight, cars);
                 }
                 if (crowds > 0 && peds > 0)
                 {
                     float pedLo, pedHi;
                     crowdBand(pedLo, pedHi);
-                    move(g_walkers, kMaxWalkers, std::min<uint32_t>(kMaxWalkers, static_cast<uint32_t>(crowds) * 3u), true, nodes, count,
+                    const uint32_t wantedWalkers = std::min<uint32_t>(kMaxWalkers, static_cast<uint32_t>(crowds) * 60u / 100u);
+                    move(g_walkers, kMaxWalkers, wantedWalkers, true, nodes, count,
                          count + peds, links, pedLo, pedHi, kPedHeight, walkers);
                 }
             }
