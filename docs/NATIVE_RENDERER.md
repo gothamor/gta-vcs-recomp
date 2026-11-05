@@ -673,7 +673,8 @@ Checks still to do: picture against D3D11 on the same PC (scenes), validation cl
 ### D3D12 backend (Windows, 2026-11-04)
 
 `src/rhi/d3d12/rhi_d3d12.cpp` implements rhi.h on Direct3D 12 (feature level 11_0), for the main thread's per-draw
-cost on AMD's D3D11 driver (DECISIONS.md 2026-11-04; Graphics > Graphics API, `VCS_RHI=d3d12`). Built as the Vulkan
+cost on AMD's D3D11 driver (DECISIONS.md 2026-11-04; the default on Windows since 2026-11-05, D3D11 when no D3D12
+device can be made; Graphics > Graphics API, `VCS_RHI=d3d12`). Built as the Vulkan
 backend, with D3D11's DXBC shaders unchanged:
 - One root signature: b0..b3 root constant buffer views (vertex + pixel), t0..t7 and s0..s7 descriptor tables (pixel).
   The texture tables are copied into a shader-visible heap per frame (cached by contents, skipped when the draw's

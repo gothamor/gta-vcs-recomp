@@ -690,8 +690,8 @@ namespace
         s.page = "Graphics";
         s.section = "Renderer";
         s.label = "Graphics API";
-        s.help = "The graphics API the game draws with. D3D11 is the reference on Windows; D3D12 costs the CPU less per "
-                 "draw (dense streets, many cars); Vulkan is the one on Linux.";
+        s.help = "The graphics API the game draws with. D3D12 (the default on Windows) costs the CPU least per draw - dense "
+                 "streets, many cars; D3D11 is the reference it is checked against; Vulkan is the one on Linux.";
         s.type = Type::Choice;
         for (rhi::Backend b : {rhi::Backend::D3D11, rhi::Backend::D3D12, rhi::Backend::Vulkan})
             if (rhi::backendBuilt(b))

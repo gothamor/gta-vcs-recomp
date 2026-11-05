@@ -250,7 +250,7 @@ namespace rhi
     const char *backendName(Backend backend);         // "D3D11", "D3D12", "Vulkan", "null"
     bool backendFromName(const char *name, Backend &out); // d3d11 | d3d12 | vulkan | null, any case
     bool backendBuilt(Backend backend);               // compiled into this build
-    Backend defaultBackend();                         // D3D11 on Windows, Vulkan elsewhere
+    Backend defaultBackend();                         // D3D12 on Windows (D3D11 without it), Vulkan elsewhere
 
     // What the Vulkan backend needs from the window (the platform layer's SDL): opaque to the RHI.
     struct VulkanWindow

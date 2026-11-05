@@ -56,9 +56,13 @@ namespace rhi
         }
     }
 
+    // D3D12 on Windows since 2026-11-05 (DECISIONS.md: the player's dense streets lost the D3D11 slowdown with it); the
+    // presenter falls back to D3D11 when no D3D12 device can be made
     Backend defaultBackend()
     {
-#if defined(VCS_HAVE_D3D11)
+#if defined(VCS_HAVE_D3D12)
+        return Backend::D3D12;
+#elif defined(VCS_HAVE_D3D11)
         return Backend::D3D11;
 #elif defined(VCS_HAVE_VULKAN)
         return Backend::Vulkan;
