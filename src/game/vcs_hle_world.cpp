@@ -2205,6 +2205,9 @@ namespace
         for (int k = 0; k < 3; ++k)
             centre.v[k] = 0.5f * (lo[k] + hi[k]);
         centre.v[3] = 1.0f;
+        Vec4 br[4];
+        for (int i = 0; i < 4; ++i)
+            br[i] = loadF(vu, 16 + i);
         static thread_local uint8_t tmp[64 * 16];
         std::memcpy(tmp, vu, sizeof(tmp));
         GSNativeDraw e = d;
@@ -2218,18 +2221,30 @@ namespace
                 b[i] = a[i]; // (w as the game wrote it)
                 for (int c = 0; c < 3; ++c)
                     b[i].v[c] = local[i][0] * P[c] + local[i][1] * P[4 + c] + local[i][2] * P[8 + c] + (i == 3 ? P[12 + c] : 0.0f);
-                storeF(tmp, i, b[i]);
             }
-            setupMatrices(tmp, 0, 16, 12, 24);
-            Vec4 m[4];
-            foldMatrix(tmp, 28, m);
-            const Vec4 pc = transform(m, centre);
-            const float z_cam = pc.v[3];
+            float W[3];
+            for (int c = 0; c < 3; ++c)
+                W[c] = b[0].v[c] * centre.v[0] + b[1].v[c] * centre.v[1] + b[2].v[c] * centre.v[2] + b[3].v[c];
+            const float z_cam = br[0].v[2] * W[0] + br[1].v[2] * W[1] + br[2].v[2] * W[2] + br[3].v[2];
             if (z_cam <= 0.0f || size < 0.012f * z_cam)
             {
                 vcs::distant::noteProxy(1);
                 continue;
             }
+            const float x_cam = br[0].v[0] * W[0] + br[1].v[0] * W[1] + br[2].v[0] * W[2] + br[3].v[0];
+            const float y_cam = br[0].v[1] * W[0] + br[1].v[1] * W[1] + br[2].v[1] * W[2] + br[3].v[1];
+            const float bound = z_cam * 1.55f + size;
+            if (std::abs(x_cam) > bound || std::abs(y_cam) > bound)
+            {
+                ++g_proxyCulled;
+                vcs::distant::noteProxy(1);
+                continue;
+            }
+            for (int i = 0; i < 4; ++i)
+                storeF(tmp, i, b[i]);
+            setupMatrices(tmp, 0, 16, 12, 24);
+            Vec4 m[4];
+            foldMatrix(tmp, 28, m);
             uint32_t all = 0x3Fu;
             for (int corner = 0; corner < 8 && all; ++corner)
             {
@@ -2457,6 +2472,9 @@ namespace
         for (int k = 0; k < 3; ++k)
             centre.v[k] = 0.5f * (lo[k] + hi[k]);
         centre.v[3] = 1.0f;
+        Vec4 br[4];
+        for (int i = 0; i < 4; ++i)
+            br[i] = loadF(vu, 16 + i);
         static thread_local uint8_t tmp[64 * 16];
         std::memcpy(tmp, vu, sizeof(tmp));
         GSNativeDraw e = d;
@@ -2470,19 +2488,30 @@ namespace
                 b[i] = a[i];
                 for (int c = 0; c < 3; ++c)
                     b[i].v[c] = local[i][0] * P[c] + local[i][1] * P[4 + c] + local[i][2] * P[8 + c] + (i == 3 ? P[12 + c] : 0.0f);
-                storeF(tmp, i, b[i]);
             }
-            setupMatrices(tmp, 0, 16, 12, 24);
-            Vec4 m[4];
-            for (int r = 0; r < 4; ++r)
-                m[r] = loadF(tmp, 28 + r);
-            const Vec4 pc = transform(m, centre);
-            const float z_cam = pc.v[3];
+            float W[3];
+            for (int c = 0; c < 3; ++c)
+                W[c] = b[0].v[c] * centre.v[0] + b[1].v[c] * centre.v[1] + b[2].v[c] * centre.v[2] + b[3].v[c];
+            const float z_cam = br[0].v[2] * W[0] + br[1].v[2] * W[1] + br[2].v[2] * W[2] + br[3].v[2];
             if (z_cam <= 0.0f || size < 0.005f * z_cam)
             {
                 vcs::distant::noteProxy(1);
                 continue;
             }
+            const float x_cam = br[0].v[0] * W[0] + br[1].v[0] * W[1] + br[2].v[0] * W[2] + br[3].v[0];
+            const float y_cam = br[0].v[1] * W[0] + br[1].v[1] * W[1] + br[2].v[1] * W[2] + br[3].v[1];
+            const float bound = z_cam * 1.55f + size;
+            if (std::abs(x_cam) > bound || std::abs(y_cam) > bound)
+            {
+                vcs::distant::noteProxy(1);
+                continue;
+            }
+            for (int i = 0; i < 4; ++i)
+                storeF(tmp, i, b[i]);
+            setupMatrices(tmp, 0, 16, 12, 24);
+            Vec4 m[4];
+            for (int r = 0; r < 4; ++r)
+                m[r] = loadF(tmp, 28 + r);
             uint32_t all = 0x3Fu;
             for (int corner = 0; corner < 8 && all; ++corner)
             {

@@ -585,12 +585,10 @@ namespace vcs::distance
         // VCS_CROWD_LOD=0 turns it off (A / B measures).
         constexpr uint32_t kUpdateAnim = 0x003C50A8u, kRandomPedControl = 0x002D8788u, kProcessCollision = 0x00348D40u;
         constexpr uint32_t kAnimUpdate = 0x00154D10u; // RpAnimBlendClumpUpdateAnimations(dt $f12, clump $a0, all $a1)
-        constexpr uint32_t kScanSectorList = 0x0035FAE8u; // CRenderer::ScanSectorList
-        constexpr uint32_t kStreamingLocked = 0x004CD5ACu; // ms_bStreamingLocked
         constexpr uint32_t kFrameCounter = 0x004CD124u;
         constexpr float kLodDistance = 70.0f, kLodFar = 110.0f; // every second frame past the first, every third past this
         PS2Runtime::RecompiledFunction g_updateAnim = nullptr, g_randomPedControl = nullptr, g_processCollision = nullptr,
-                                       g_animUpdate = nullptr, g_scanSectorList = nullptr;
+                                       g_animUpdate = nullptr;
         struct LodState
         {
             int32_t frame = -1;
@@ -689,18 +687,6 @@ namespace vcs::distance
             if (const LodState *l = crowdLod(GPR_U32(ctx, 4)); l && l->skip)
                 return skipCall(ctx);
             g_processCollision(rdram, ctx, runtime);
-        }
-
-        // CRenderer::ScanSectorList (0x0035FAE8): Unblock streaming of models (trees, sidewalks, streetlamps, props)
-        // in visible sectors by clearing ms_bStreamingLocked (0x004CD5AC) when view distance slider is above 0%.
-        PS2_GUEST_CC void scanSectorList(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-        {
-            g_rdram = rdram;
-            if (ctx->pc == kScanSectorList && percent(g_view) > 1.0f)
-            {
-                wr32(kStreamingLocked, 0u);
-            }
-            g_scanSectorList(rdram, ctx, runtime);
         }
 
         // The sector entries (EntryInfoNode: one per entity and 80 m world cell it touches, 0x14 bytes {list, ptr node,
@@ -1015,8 +1001,6 @@ namespace vcs::distance
             runtime.replaceFunction(kRandomPedControl, &randomPedControl);
         if ((g_processCollision = runtime.lookupFunction(kProcessCollision)))
             runtime.replaceFunction(kProcessCollision, &processCollision);
-        if ((g_scanSectorList = runtime.lookupFunction(kScanSectorList)))
-            runtime.replaceFunction(kScanSectorList, &scanSectorList);
         phases::install(runtime, std::make_index_sequence<phases::kMaxTargets>{});
         // crowdlod -> ok skipped=<ped updates skipped> processed=<LOD updates run> overflow=<sector entries in the
         //             overflow pool> peak=<most at once>

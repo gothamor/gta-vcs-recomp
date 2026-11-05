@@ -545,20 +545,17 @@ namespace vcs
             ctx->pc = GPR_U32(ctx, 31);
         }
 
-        // FUN_002218f0(channel): a read still in flight is waited for on the host clock.
-        // Channel 4 is world chunk streaming: wait at most 250 us so frame pacing never stalls for 20 ms.
-        // Other channels wait up to 2 ms (enough for fast RAM/SSD transfer without dropping a whole frame).
+        // FUN_002218f0(channel): a read still in flight is waited for up to 20 ms - the game polls right after starting
+        // most reads and otherwise loses a frame per read to "busy" (boot took 1 s longer than through the IOP)
         PS2_GUEST_CC void streamPoll(uint8_t *, R5900Context *ctx, PS2Runtime *)
         {
             Reader &r = reader();
-            const uint32_t channel = GPR_U32(ctx, 4) % kChannels;
-            std::atomic<uint32_t> &pending = r.pending[channel];
+            std::atomic<uint32_t> &pending = r.pending[GPR_U32(ctx, 4) % kChannels];
             bool busy = pending.load(std::memory_order_acquire) != 0u;
             if (busy)
             {
                 std::unique_lock<std::mutex> lock(r.mutex);
-                const auto waitTimeout = (channel == 4u) ? std::chrono::microseconds(250) : std::chrono::milliseconds(2);
-                busy = !r.doneCv.wait_for(lock, waitTimeout,
+                busy = !r.doneCv.wait_for(lock, std::chrono::milliseconds(20),
                                           [&] { return pending.load(std::memory_order_acquire) == 0u; });
             }
             SET_GPR_U64(ctx, 2, busy ? kBusy : 0u);
