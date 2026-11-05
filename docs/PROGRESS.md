@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-11-05 - T2 population distance bands (0-325/400 m real, 310/340 m+ decorative) and night coronas
+
+- Documented the mandatory two-band architecture and agent rules in `docs/T2_POPULATION_AND_DISTANT_LIFE_PLAN.md` (linked from `AGENTS.md` and `docs/DISTANT_LIFE.md`).
+- Fixed `vcs_distance.cpp::pedDistance()` so enabling `Distant crowds` (`world.distant_crowds`) never shrinks real pedestrians back to PS2's 35-65 m (`1.0x`), raised `kMaxPedDistance = 5.0f` (~325 m survival / ~350 m visibility) with `kMaxPedDensityDistance = 2.2f` pool-cap balancing, and extended `nodeList` (`0x269228`, `ra == 0x26812C`) and `pedSpotFinder` (`0x268048`) with alternating `+40 m` / `+145 m` forward-shifted node caches and 4-band stratification across `35..300 m`.
+- Updated `vcs_distant.cpp` (`band()`, `crowdBand()`, `move()`) so decorative traffic (`>= max(340 m, realCarOuterRadius() + 15 m)`, `495..1045 m` at slider 100) and decorative crowds (`>= max(310 m, realPedOuterRadius() + 15 m)`, `340..640 m` at slider 100) only spawn and live strictly beyond the real population band, with `ctx->pc` entry guards on `worldProcess`, `entityRender`, and `preRenderLists`, and raised `kTemplateRange = 450 m` / `kPedTemplateRange = 360 m`.
+- Hooked `CCoronas::RegisterCorona` (`0x0027DD80`) in `vcs_distant.cpp`: suppresses corona registrations from off-screen template cars added by `addTemplates(false)`, culls behind-camera coronas (`dot < -5 m`) from the 56-slot `CCoronas::aCoronas` table (`0x00512560`), scales vehicle corona `farClip` up to `250 m` and building/streetlamp 2DFX `farClip` up to `300 m`, and evicts the farthest/behind-camera slot when all 56 slots are full.
+- Verified (`tools/distance_check.py` PASS + `t2_verify` hidden rig on Washington Beach / Ocean Drive, `population_distance=100`, `distant_traffic=100`, `distant_crowds=100`): `peddist=5.00`, `maxcard=350..371 m`, `maxpedd=351..371 m`, `carband=495..1045 m` (`mincar=496..500 m`), `pedband=340..640 m` (`minped=341..343 m`), `coronas: active=56 veh=27 maxdist=249..262 m tmplskip=397..488 behindskip=296k+ evicted=644..732`.
+
 ## 2026-11-02 - This fork (willzmkv/gta-vcs-recomp)
 
 The game's fog as a setting; texture packs in DDS (BC7) or PNG and a texture dump; a mod loader in PC Mod Loader's

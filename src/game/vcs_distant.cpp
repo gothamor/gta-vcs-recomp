@@ -9,6 +9,7 @@
 // reads it), a byte, its first link (s16), flags (u16: links & 0xF, 0x20 switched off, 0x100 a boat path). A link is a
 // u16, the neighbour & 0x3FFF. The car nodes are the first `count` (checked: the spot finder's list holds only those).
 #include "game/vcs_distant.h"
+#include "game/vcs_distance.h"
 
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -53,7 +54,7 @@ namespace vcs::distant
         // the proxies with them.
         constexpr uint32_t kPreRenderLists = 0x0035C4B8u;
         constexpr uint32_t kVehicleList = 0x00744AC0u, kVehicleListCount = 0x004CD59Cu, kVehicleListMax = 0x7D0u;
-        constexpr float kTemplateRange = 160.0f; // pool cars farther are not added (their models' detail is the low one)
+        constexpr float kTemplateRange = 450.0f; // cover the extended real vehicle band (~340-400 m)
         // The draws' world origin (game-internals.md 9, "Sector record"): the renderer keeps positions relative to a cell's
         // centre (FUN_0018ED28 moves it there): x, y, z here hold minus the centre, added to an entity's matrix for the VU.
         // Read when a car opens its group (found 2026-11-04: a car at -766, -1208.7 drew with its matrix at 8, -21.1; this
@@ -64,14 +65,17 @@ namespace vcs::distant
         // Distant crowds (DISTANT_LIFE.md, peds): the ped path nodes follow the car nodes in the same array - paths +0x0C
         // all (8387), +0x10 cars (3079), +0x14 peds (5308), one links table (found 2026-11-04 with the rig: the nodes past
         // the cars' lie on the pavements by the docks' streets). Random peds (vtable 0x490840) are the templates; with the
-        // crowds on the real peds keep the game's own distance (vcs_distance.cpp's pedDistance) and these walk beyond.
+        // crowds on the real peds keep the extended population distance (vcs_distance.cpp's pedDistance) and these walk
+        // strictly beyond the real pedestrian band (>= 310 m).
         constexpr uint32_t kPedPool = 0x00487A94u; // entries 0xD20 bytes
         constexpr uint32_t kPedSize = 0xD20u;
         constexpr uint32_t kRandomPedVtable = 0x00490840u;
-        constexpr float kPedHeight = 1.0f;      // a ped's origin above its node
-        constexpr float kCrowdNear = 60.0f;     // past the game's own peds
+        constexpr float kPedHeight = 1.0f;          // a ped's origin above its node
+        constexpr float kCrowdNear = 310.0f;        // strictly beyond the real pedestrian band (~300 m)
         constexpr uint32_t kMaxWalkers = 320;
-        constexpr float kPedTemplateRange = 60.0f;
+        constexpr float kPedTemplateRange = 360.0f; // cover the extended real pedestrian band (~325 m)
+        constexpr uint32_t kRegisterCorona = 0x0027DD80u;
+        constexpr uint32_t kCoronaTable = 0x00512560u, kCoronaSlots = 56u, kCoronaStride = 0x30u;
 
         std::atomic<int> g_setting{0}; // 0 off .. 100
         std::atomic<int> g_crowds{0};  // 0 off .. 100
@@ -113,8 +117,10 @@ namespace vcs::distant
         uint32_t g_renderedEntity = 0;
         uint16_t g_group = 0;
         std::vector<uint32_t> g_models, g_pedModels;
-        PS2Runtime::RecompiledFunction g_entityRender = nullptr, g_preRenderLists = nullptr;
+        std::vector<uint32_t> g_addedCarTemplates;
+        PS2Runtime::RecompiledFunction g_entityRender = nullptr, g_preRenderLists = nullptr, g_registerCorona = nullptr;
         std::atomic<uint64_t> g_statAdded{0};
+        std::atomic<uint64_t> g_statCoronaCalls{0}, g_statCoronaTemplateSkip{0}, g_statCoronaBehindSkip{0}, g_statCoronaEvicted{0};
 
         // a frame's groups for the worker: one per rendered vehicle; a template (the one of its model drawn farthest from
         // the camera) holds its proxies' matrices
@@ -239,16 +245,24 @@ namespace vcs::distant
             c.alive = false;
         }
 
-        // the band: from past the real traffic (made 100-160 x the generation multiplier, taken away past 160 x) out to
-        // the setting's distance
+        // the band: strictly past the real traffic outer radius (at least 340 m) out to the setting's distance
         void band(float &lo, float &hi)
         {
             static const char *forced = std::getenv("VCS_DISTANT_BAND"); // debug: "lo,hi" metres (proxies near, to look at)
             if (forced && std::sscanf(forced, "%f,%f", &lo, &hi) == 2)
                 return;
-            const float gen = std::max(1.0f, rdf(kGenMultiplier));
-            lo = 170.0f * gen;
-            hi = lo + 6.0f * static_cast<float>(g_setting.load(std::memory_order_relaxed));
+            lo = std::max(340.0f, vcs::distance::realCarOuterRadius() + 15.0f);
+            hi = lo + 5.5f * static_cast<float>(g_setting.load(std::memory_order_relaxed));
+        }
+
+        // the crowd band: strictly past the real pedestrian outer radius (at least 310 m) out to the setting's distance
+        void crowdBand(float &lo, float &hi)
+        {
+            static const char *forced = std::getenv("VCS_DISTANT_CROWD_BAND"); // debug: "lo,hi" metres
+            if (forced && std::sscanf(forced, "%f,%f", &lo, &hi) == 2)
+                return;
+            lo = std::max(kCrowdNear, vcs::distance::realPedOuterRadius() + 15.0f);
+            hi = lo + 3.0f * static_cast<float>(g_crowds.load(std::memory_order_relaxed));
         }
 
         // One kind's proxies a frame: placed in front of the camera in [lo, hi] (a few a frame), moved along their links,
@@ -300,7 +314,7 @@ namespace vcs::distant
                 const float x = a.x + (b.x - a.x) * c.t + rx * c.side, y = a.y + (b.y - a.y) * c.t + ry * c.side;
                 const float z = a.z + (b.z - a.z) * c.t + height;
                 const float d = std::hypot(x - cx, y - cy);
-                if (d < lo * 0.9f || d > hi * 1.05f || (x - cx) * vx + (y - cy) * vy < -0.3f * d)
+                if (d < lo || d > hi * 1.05f || (x - cx) * vx + (y - cy) * vy < -20.0f)
                 {
                     c.alive = false;
                     continue;
@@ -330,8 +344,12 @@ namespace vcs::distant
                          links, lo, hi, kCarHeight, cars);
                 }
                 if (crowds > 0 && peds > 0)
+                {
+                    float pedLo, pedHi;
+                    crowdBand(pedLo, pedHi);
                     move(g_walkers, kMaxWalkers, std::min<uint32_t>(kMaxWalkers, static_cast<uint32_t>(crowds) * 3u), true, nodes, count,
-                         count + peds, links, kCrowdNear, kCrowdNear + 2.4f * static_cast<float>(crowds), kPedHeight, walkers);
+                         count + peds, links, pedLo, pedHi, kPedHeight, walkers);
+                }
             }
             std::lock_guard<std::mutex> lock(g_publishMutex);
             g_published.swap(cars);
@@ -343,7 +361,8 @@ namespace vcs::distant
         PS2_GUEST_CC void worldProcess(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdram = rdram;
-            tick();
+            if (ctx->pc == kWorldProcess)
+                tick();
             g_worldProcess(rdram, ctx, runtime);
         }
 
@@ -416,7 +435,8 @@ namespace vcs::distant
         PS2_GUEST_CC void entityRender(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdram = rdram;
-            openGroup(GPR_U32(ctx, 4));
+            if (ctx->pc == kEntityRender)
+                openGroup(GPR_U32(ctx, 4));
             g_entityRender(rdram, ctx, runtime);
         }
 
@@ -480,6 +500,8 @@ namespace vcs::distant
                 if (!picks[k].listed)
                 {
                     std::memcpy(g_rdram + ((kVehicleList + count * 4u) & PS2_RAM_MASK), &picks[k].entity, 4);
+                    if (!ped)
+                        g_addedCarTemplates.push_back(picks[k].entity);
                     ++count;
                     ++g_statAdded;
                 }
@@ -490,11 +512,145 @@ namespace vcs::distant
         PS2_GUEST_CC void preRenderLists(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdram = rdram;
-            if (g_setting.load(std::memory_order_relaxed) > 0)
-                addTemplates(false);
-            if (g_crowds.load(std::memory_order_relaxed) > 0)
-                addTemplates(true);
+            if (ctx->pc == kPreRenderLists)
+            {
+                g_addedCarTemplates.clear();
+                if (g_setting.load(std::memory_order_relaxed) > 0)
+                    addTemplates(false);
+                if (g_crowds.load(std::memory_order_relaxed) > 0)
+                    addTemplates(true);
+            }
             g_preRenderLists(rdram, ctx, runtime);
+        }
+
+        // CCoronas::RegisterCorona (0x0027DD80):
+        // 1. Suppress corona registrations from off-screen template cars added by addTemplates(false).
+        // 2. Cull behind-camera coronas (and evict any existing behind-camera slot) so the 56-slot table
+        //    at 0x00512560 is not filled by invisible behind-camera streetlamps.
+        // 3. Scale vehicle corona farClip ($f13 <= 55m) with carDistance() and building/2DFX farClip with
+        //    objectDistance().
+        // 4. When all 56 slots are occupied, evict the farthest / behind-camera non-sun/moon slot in favor
+        //    of closer lights.
+        PS2_GUEST_CC void registerCorona(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            g_rdram = rdram;
+            if (ctx->pc == kRegisterCorona)
+            {
+                g_statCoronaCalls.fetch_add(1, std::memory_order_relaxed);
+                const uint32_t id = GPR_U32(ctx, 4);
+                for (uint32_t e : g_addedCarTemplates)
+                {
+                    if (id >= e && id < e + kVehicleSize)
+                    {
+                        g_statCoronaTemplateSkip.fetch_add(1, std::memory_order_relaxed);
+                        ctx->pc = GPR_U32(ctx, 31);
+                        return;
+                    }
+                }
+                if (id > 2u)
+                {
+                    const uint32_t posAddr = GPR_U32(ctx, 9);
+                    if (posAddr >= 0x00100000u && posAddr + 12u <= PS2_RAM_SIZE)
+                    {
+                        const float px = rdf(posAddr), py = rdf(posAddr + 4u), pz = rdf(posAddr + 8u);
+                        const float cx = rdf(kCameraPos), cy = rdf(kCameraPos + 4u), cz = rdf(kCameraPos + 8u);
+                        const float fx = rdf(kCameraFront), fy = rdf(kCameraFront + 4u), fz = rdf(kCameraFront + 8u);
+                        const float dx = px - cx, dy = py - cy, dz = pz - cz;
+                        const float dist2 = dx * dx + dy * dy + dz * dz;
+                        const float dot = dx * fx + dy * fy + dz * fz;
+                        if (dot < 1.2f || dist2 < 1.8f)
+                        {
+                            for (uint32_t i = 0; i < kCoronaSlots; ++i)
+                            {
+                                const uint32_t slot = kCoronaTable + i * kCoronaStride;
+                                if (rd32(slot + 0x20u) == id)
+                                {
+                                    const uint32_t zero = 0u;
+                                    std::memcpy(g_rdram + ((slot + 0x20u) & PS2_RAM_MASK), &zero, 4);
+                                    g_rdram[(slot + 0x24u) & PS2_RAM_MASK] = 0u;
+                                    g_rdram[(slot + 0x25u) & PS2_RAM_MASK] = 0u;
+                                    break;
+                                }
+                            }
+                            g_statCoronaBehindSkip.fetch_add(1, std::memory_order_relaxed);
+                            ctx->pc = GPR_U32(ctx, 31);
+                            return;
+                        }
+                        const float dist = std::sqrt(dist2);
+                        const float origFarClip = ctx->f[13];
+                        const bool isVehicleLight = (origFarClip > 0.0f && origFarClip <= 55.0f);
+                        // Cap world-space corona base radius and smoothly shrink & fade it as the camera approaches
+                        // so coronas never blow up across the screen when passing near a streetlamp or car.
+                        const float maxBaseSize = isVehicleLight ? 0.65f : 0.85f;
+                        const float clampedBaseSize = std::min(std::abs(ctx->f[12]), maxBaseSize);
+                        if (dot < 9.0f || dist < 20.0f)
+                        {
+                            const float fade = std::clamp((dot - 1.5f) / 7.5f, 0.0f, 1.0f) *
+                                               std::clamp((dist - 2.0f) / 18.0f, 0.0f, 1.0f);
+                            const float scaledSize = clampedBaseSize * std::max(0.04f, fade);
+                            ctx->f[12] = std::copysign(scaledSize, ctx->f[12]);
+                            const uint32_t origAlpha = GPR_U32(ctx, 8) & 0xFFu;
+                            const uint32_t newAlpha = static_cast<uint32_t>(origAlpha * fade);
+                            SET_GPR_U32(ctx, 8, newAlpha);
+                        }
+                        else
+                        {
+                            ctx->f[12] = std::copysign(clampedBaseSize, ctx->f[12]);
+                        }
+                        if (isVehicleLight)
+                        {
+                            const float scale = std::clamp(vcs::distance::realCarOuterRadius() / 160.0f, 1.0f, 5.0f);
+                            ctx->f[13] = std::min(origFarClip * scale, 250.0f);
+                        }
+                        else if (origFarClip > 55.0f && origFarClip <= 200.0f)
+                        {
+                            const float scale = std::clamp(rdf(0x004887F8u), 1.0f, 2.5f);
+                            ctx->f[13] = std::min(origFarClip * scale, 300.0f);
+                        }
+                        const float farClip = ctx->f[13];
+                        if (dist2 < farClip * farClip)
+                        {
+                            bool hasSlot = false;
+                            uint32_t worstSlot = 0u;
+                            float worstDist2 = -1.0f;
+                            for (uint32_t i = 0; i < kCoronaSlots; ++i)
+                            {
+                                const uint32_t slot = kCoronaTable + i * kCoronaStride;
+                                const uint32_t slotId = rd32(slot + 0x20u);
+                                if (slotId == id || slotId == 0u)
+                                {
+                                    hasSlot = true;
+                                    break;
+                                }
+                                if (slotId <= 2u)
+                                    continue;
+                                const float sx = rdf(slot + 0x10u) - cx;
+                                const float sy = rdf(slot + 0x14u) - cy;
+                                const float sz = rdf(slot + 0x18u) - cz;
+                                const float sdot = sx * fx + sy * fy + sz * fz;
+                                float sdist2 = sx * sx + sy * sy + sz * sz;
+                                if (sdot < 1.2f)
+                                    sdist2 += 1.0e8f;
+                                if (sdist2 > worstDist2)
+                                {
+                                    worstDist2 = sdist2;
+                                    worstSlot = slot;
+                                }
+                            }
+                            const float candidateDist2 = isVehicleLight ? (dist2 * 0.44f) : dist2;
+                            if (!hasSlot && worstSlot != 0u && worstDist2 > candidateDist2)
+                            {
+                                const uint32_t zero = 0u;
+                                std::memcpy(g_rdram + ((worstSlot + 0x20u) & PS2_RAM_MASK), &zero, 4);
+                                g_rdram[(worstSlot + 0x24u) & PS2_RAM_MASK] = 0u;
+                                g_rdram[(worstSlot + 0x25u) & PS2_RAM_MASK] = 0u;
+                                g_statCoronaEvicted.fetch_add(1, std::memory_order_relaxed);
+                            }
+                        }
+                    }
+                }
+            }
+            g_registerCorona(rdram, ctx, runtime);
         }
 
         // the inverse of a rigid matrix (rows right, forward, up, position)
@@ -680,9 +836,9 @@ namespace vcs::distant
         s.page = "Graphics";
         s.section = "Distance and population (experimental)";
         s.label = "Distant crowds";
-        s.help = "People far away who only walk the pavements, drawn with the real people's models: 0 none (the original), "
-                 "100 the most and the farthest. With them on, the real people stay as near as the game's own (the "
-                 "pedestrian density still applies) - far crowds cost almost nothing instead of the game's whole AI.";
+        s.help = "People far away, beyond the simulated pedestrians (> 300 m), who walk the pavements drawn with the real "
+                 "people's models: 0 none (the original), 100 the most and the farthest. Real pedestrians keep their full "
+                 "population distance and density.";
         s.type = settings::Type::Integer;
         s.min = 0;
         s.max = 100;
@@ -701,17 +857,30 @@ namespace vcs::distant
             runtime.replaceFunction(kEntityRender, &entityRender);
         if ((g_preRenderLists = runtime.lookupFunction(kPreRenderLists)))
             runtime.replaceFunction(kPreRenderLists, &preRenderLists);
+        if ((g_registerCorona = runtime.lookupFunction(kRegisterCorona)))
+            runtime.replaceFunction(kRegisterCorona, &registerCorona);
 
         // proxies -> ok frame=<n> count=<n>, the templates / proxy draw counters, then "x,y,z,distance" for the first eight
         ps2control::addCommand("proxies", [](const std::string &, ps2control::Reply reply) {
-            std::vector<Proxy> p;
+            std::vector<Proxy> p, wp;
             const uint32_t frame = snapshot(p);
-            size_t walkers = 0;
             {
                 std::lock_guard<std::mutex> lock(g_publishMutex);
-                walkers = g_publishedPeds.size();
+                wp = g_publishedPeds;
             }
-            std::string text = "ok frame=" + std::to_string(frame) + " count=" + std::to_string(p.size()) + " walkers=" + std::to_string(walkers) +
+            float carLo = 0.0f, carHi = 0.0f, pedLo = 0.0f, pedHi = 0.0f;
+            band(carLo, carHi);
+            crowdBand(pedLo, pedHi);
+            float minCar = 0.0f, minPed = 0.0f;
+            for (const Proxy &c : p)
+                minCar = (minCar == 0.0f) ? c.distance : std::min(minCar, c.distance);
+            for (const Proxy &w : wp)
+                minPed = (minPed == 0.0f) ? w.distance : std::min(minPed, w.distance);
+            char bandBuf[160];
+            std::snprintf(bandBuf, sizeof(bandBuf), " carband=%.0f..%.0f pedband=%.0f..%.0f mincar=%.0f minped=%.0f",
+                          carLo, carHi, pedLo, pedHi, minCar, minPed);
+            std::string text = "ok frame=" + std::to_string(frame) + " count=" + std::to_string(p.size()) +
+                               " walkers=" + std::to_string(wp.size()) + bandBuf +
                                " frames=" + std::to_string(g_statFrames.load()) + " templates=" + std::to_string(g_statTemplates.load()) +
                                " added=" + std::to_string(g_statAdded.load()) + " assigned=" + std::to_string(g_statAssigned.load()) +
                                " drawn=" + std::to_string(g_statDrawn.load()) + " proxydraws=" + std::to_string(g_statProxy[0].load()) + "/" +
@@ -724,6 +893,45 @@ namespace vcs::distant
                 text += b;
             }
             reply(text);
+        });
+
+        ps2control::addCommand("coronas", [](const std::string &, ps2control::Reply reply) {
+            if (!g_rdram)
+            {
+                reply("ok active=0");
+                return;
+            }
+            const float cx = rdf(kCameraPos), cy = rdf(kCameraPos + 4u), cz = rdf(kCameraPos + 8u);
+            uint32_t active = 0, veh = 0;
+            float maxDist = 0.0f, maxSize = 0.0f;
+            const uint32_t vpool = rd32(kVehiclePool);
+            const uint32_t ventries = vpool ? rd32(vpool) : 0u;
+            const uint32_t vsize = vpool ? rd32(vpool + 8u) : 0u;
+            for (uint32_t i = 0; i < kCoronaSlots; ++i)
+            {
+                const uint32_t slot = kCoronaTable + i * kCoronaStride;
+                const uint32_t id = rd32(slot + 0x20u);
+                if (!id)
+                    continue;
+                ++active;
+                if (ventries && id >= ventries && id < ventries + vsize * kVehicleSize)
+                    ++veh;
+                if (id > 2u)
+                {
+                    const float dx = rdf(slot + 0x10u) - cx, dy = rdf(slot + 0x14u) - cy, dz = rdf(slot + 0x18u) - cz;
+                    maxDist = std::max(maxDist, std::sqrt(dx * dx + dy * dy + dz * dz));
+                    maxSize = std::max(maxSize, std::abs(rdf(slot + 0x00u)));
+                }
+            }
+            char buf[280];
+            std::snprintf(buf, sizeof(buf),
+                          "ok active=%u veh=%u maxdist=%.0f maxsz=%.2f calls=%llu tmplskip=%llu behindskip=%llu evicted=%llu",
+                          active, veh, maxDist, maxSize,
+                          static_cast<unsigned long long>(g_statCoronaCalls.load()),
+                          static_cast<unsigned long long>(g_statCoronaTemplateSkip.load()),
+                          static_cast<unsigned long long>(g_statCoronaBehindSkip.load()),
+                          static_cast<unsigned long long>(g_statCoronaEvicted.load()));
+            reply(buf);
         });
     }
 }

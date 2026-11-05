@@ -216,6 +216,11 @@ card copies to start from (never the user's live card).
   zipped into `<data>/backups/auto-*.zip` before every change (`[MC] card backup` in the log).
 - No fire (flame-thrower, molotovs, explosions, burning cars) while their smoke shows: GS sprites lost in the D3D11
   renderer - the pixel shader's depth output was the cause once (game-internals.md 6m); `tools/fire_check.py`.
+- Decorative crowds or traffic appearing close to the player or replacing real peds/cars, or distant lights missing:
+  read `docs/T2_POPULATION_AND_DISTANT_LIFE_PLAN.md` before touching `vcs_distance.*`, `vcs_distant.*`, or proxy draws
+  in `vcs_hle_world.cpp`. Never clamp `pedDistance()` or `carDistance()` when `Distant crowds` / `Distant traffic` are
+  enabled, never read `0x006F4CA0` directly inside `CWorld::Process`, and keep all decorative proxies strictly beyond
+  the real population band (`>= 320-350 m`).
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs
