@@ -874,7 +874,6 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `VCS_DISTANT_BAND=lo,hi` | debug: the distant traffic's band in metres (`40,200` brings the proxies near, to look at them) |
 | `VCS_DISTANT_TINT=1` | debug: the proxies (cars and walkers) lit red alone (told apart from the real ones in pictures) |
 | `VCS_DISTANT_CROWDS=0..100` | Graphics > Distant crowds for one run (walkers on the pavements beyond the real peds, DISTANT_LIFE.md) |
-| `VCS_DISTANT_LOG=1` | debug: the first walker draws refused as not their ped's, with their matrices |
 | `VCS_NODE_OVERFLOW_TEST=1` | every new sector entry from the overflow pool (its path checked without a crowd) |
 | `VCS_WATCH=lo,hi[,val[,mask]]` | guest write watchpoint (rig `watch lo,hi[,val[,mask]]` arms it mid-run) |
 | `VCS_WATCH_STACK=1`, `VCS_WATCH_STRIDE=stride,offset` | watch hits also list s2-s7 and the code addresses on the guest stack (callers); only writes to one field of every pool entry (e.g. `d20,1c8`: the peds' flags) |
