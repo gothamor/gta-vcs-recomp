@@ -2221,9 +2221,11 @@ namespace
                 storeF(tmp, i, b[i]);
             }
             setupMatrices(tmp, 0, 16, 12, 24);
-            Vec4 cm[4], m[4];
-            foldMatrix(tmp, 24, cm);
-            if (size < 0.008f * transform(cm, centre).v[3])
+            Vec4 m[4];
+            foldMatrix(tmp, 28, m);
+            const Vec4 pc = transform(m, centre);
+            const float z_cam = pc.v[3];
+            if (z_cam <= 0.0f || size < 0.012f * z_cam)
             {
                 vcs::distant::noteProxy(1);
                 continue;
@@ -2236,7 +2238,7 @@ namespace
                 v.v[1] = corner & 2 ? hi[1] : lo[1];
                 v.v[2] = corner & 4 ? hi[2] : lo[2];
                 v.v[3] = 1.0f;
-                const Vec4 q = transform(cm, v);
+                const Vec4 q = transform(m, v);
                 all &= clipFlags(q, q.v[3]);
             }
             if (all)
@@ -2245,7 +2247,8 @@ namespace
                 vcs::distant::noteProxy(1);
                 continue;
             }
-            foldMatrix(tmp, 28, m);
+            Vec4 cm[4];
+            foldMatrix(tmp, 24, cm);
             for (int r = 0; r < 4; ++r)
             {
                 putRow(k + r * 4, m[r]);
@@ -2470,10 +2473,12 @@ namespace
                 storeF(tmp, i, b[i]);
             }
             setupMatrices(tmp, 0, 16, 12, 24);
-            Vec4 cm[4];
+            Vec4 m[4];
             for (int r = 0; r < 4; ++r)
-                cm[r] = loadF(tmp, 24 + r);
-            if (size < 0.008f * transform(cm, centre).v[3])
+                m[r] = loadF(tmp, 28 + r);
+            const Vec4 pc = transform(m, centre);
+            const float z_cam = pc.v[3];
+            if (z_cam <= 0.0f || size < 0.005f * z_cam)
             {
                 vcs::distant::noteProxy(1);
                 continue;
@@ -2486,7 +2491,7 @@ namespace
                 v.v[1] = corner & 2 ? hi[1] : lo[1];
                 v.v[2] = corner & 4 ? hi[2] : lo[2];
                 v.v[3] = 1.0f;
-                const Vec4 q = transform(cm, v);
+                const Vec4 q = transform(m, v);
                 all &= clipFlags(q, q.v[3]);
             }
             if (all)
@@ -2494,9 +2499,12 @@ namespace
                 vcs::distant::noteProxy(1);
                 continue;
             }
+            Vec4 cm[4];
+            for (int r = 0; r < 4; ++r)
+                cm[r] = loadF(tmp, 24 + r);
             for (int r = 0; r < 4; ++r)
             {
-                putRow(k + r * 4, loadF(tmp, 28 + r));
+                putRow(k + r * 4, m[r]);
                 putRow(k + 32 + r * 4, cm[r]);
             }
             float rb[3][3];

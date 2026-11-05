@@ -440,15 +440,22 @@ namespace vcs
         void overlay(uint32_t lsn, uint32_t bytes, uint8_t *dest)
         {
             std::lock_guard<std::mutex> lock(g_filesMutex);
+            if (g_overlays.empty())
+                return;
             const uint64_t start = uint64_t(lsn) * 2048u, end = start + bytes;
             for (const Overlay &o : g_overlays)
             {
                 const uint64_t from = std::max<uint64_t>(start, uint64_t(o.lsn) * 2048u);
                 const uint64_t to = std::min<uint64_t>(end, (uint64_t(o.lsn) + o.sectors) * 2048u);
-                for (uint64_t at = from; at < to; ++at)
+                if (from < to)
                 {
-                    const uint64_t inEntry = at - uint64_t(o.lsn) * 2048u;
-                    dest[at - start] = inEntry < o.data.size() ? o.data[static_cast<size_t>(inEntry)] : 0u;
+                    const uint64_t inEntry = from - uint64_t(o.lsn) * 2048u;
+                    const uint64_t span = to - from;
+                    const uint64_t copyBytes = inEntry < o.data.size() ? std::min(span, o.data.size() - inEntry) : 0u;
+                    if (copyBytes > 0)
+                        std::memcpy(dest + (from - start), o.data.data() + inEntry, static_cast<size_t>(copyBytes));
+                    if (span > copyBytes)
+                        std::memset(dest + (from - start) + copyBytes, 0, static_cast<size_t>(span - copyBytes));
                 }
             }
         }
@@ -538,17 +545,20 @@ namespace vcs
             ctx->pc = GPR_U32(ctx, 31);
         }
 
-        // FUN_002218f0(channel): a read still in flight is waited for up to 20 ms - the game polls right after starting
-        // most reads and otherwise loses a frame per read to "busy" (boot took 1 s longer than through the IOP)
+        // FUN_002218f0(channel): a read still in flight is waited for on the host clock.
+        // Channel 4 is world chunk streaming: wait at most 250 us so frame pacing never stalls for 20 ms.
+        // Other channels wait up to 2 ms (enough for fast RAM/SSD transfer without dropping a whole frame).
         PS2_GUEST_CC void streamPoll(uint8_t *, R5900Context *ctx, PS2Runtime *)
         {
             Reader &r = reader();
-            std::atomic<uint32_t> &pending = r.pending[GPR_U32(ctx, 4) % kChannels];
+            const uint32_t channel = GPR_U32(ctx, 4) % kChannels;
+            std::atomic<uint32_t> &pending = r.pending[channel];
             bool busy = pending.load(std::memory_order_acquire) != 0u;
             if (busy)
             {
                 std::unique_lock<std::mutex> lock(r.mutex);
-                busy = !r.doneCv.wait_for(lock, std::chrono::milliseconds(20),
+                const auto waitTimeout = (channel == 4u) ? std::chrono::microseconds(250) : std::chrono::milliseconds(2);
+                busy = !r.doneCv.wait_for(lock, waitTimeout,
                                           [&] { return pending.load(std::memory_order_acquire) == 0u; });
             }
             SET_GPR_U64(ctx, 2, busy ? kBusy : 0u);

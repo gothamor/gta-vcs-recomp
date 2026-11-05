@@ -197,3 +197,14 @@ All three steps above are implemented and verified in `src/game/vcs_distance.h`,
   SET_GPR_U32(ctx, 8, static_cast<uint32_t>(origAlpha * fade));
   ```
   The near-camera perspective singularity (`1 / dot` approaching infinity) is algebraically cancelled out, preventing coronas from blowing up across the screen when passing streetlamps or cars.
+
+
+### Anti-Pattern 4: Testing Model-View Matrix (.v[3]) instead of MVP Matrix (.v[3]) for Proxy Distance & Frustum Culling
+- **Failure Mode**: In drawProxies and drawLitProxies (src/game/vcs_hle_world.cpp), size culling tested size < 0.008f * transform(cm, centre).v[3] and frustum culling tested clipFlags(q, q.v[3]) using cm (VU row 24).
+- **Root Cause**: setupMatrices(tmp, 0, 16, 12, 24) outputs Model-View to rows 24-27 and MVP (Model-View-Projection) to rows 28-31. In an affine Model-View matrix, v[3] is always 1.0f. Testing transform(cm, centre).v[3] resulted in size < 0.008f * 1.0f = 8 mm, meaning no part of any car or pedestrian was ever culled, causing all 240 distant cars to submit ~20 individual draw calls (wheels, doors, headlights, wipers) even at 800 meters, flooding the worker thread with 7,906 draws per frame and collapsing framerates to 30 FPS. Furthermore, clipFlags against q.v[3] == 1.0f on eye-space coordinates completely broke bounding-box frustum culling.
+- **Solution**: Fold MVP row 28 (m) first. In row 28, pc.v[3] is true camera depth z_cam. Sub-meshes smaller than threshold are culled before matrix setup, and transform(m, v) produces true clip-space coordinates for exact frustum culling. Row 24 (cm) is folded only for visible surviving meshes. This reduced drive draw calls from 7,906 down to 2,494 (-68.5%) and restored 57-60 FPS driving performance.
+
+### Anti-Pattern 5: PS2 DVD-Head Streaming Lock (ms_bStreamingLocked = 0x004CD5AC) Stalling World Props
+- **Failure Mode**: When driving fast through sectors, trees, sidewalks, and street props popped in right in front of the vehicle.
+- **Root Cause**: CRenderer::ScanSectorList_Priority (0x0035FED0) sets ms_bStreamingLocked = 1 on the first missing model in the camera sector. This flag remained set for the entire rest of CRenderer::ScanWorld, causing ScanSectorList (0x0035FAE8) to skip RequestModel for every other visible sector.
+- **Solution**: Hooked ScanSectorList (0x0035FAE8) to clear ms_bStreamingLocked = 0 when world.view_distance is active, allowing models across visible sectors to prefetch asynchronously ahead of the player. Additionally reduced streamPoll (0x002218F0) wait from 20 ms to 250 us on channel 4 and replaced byte-by-byte copies in overlay() with std::memcpy.
