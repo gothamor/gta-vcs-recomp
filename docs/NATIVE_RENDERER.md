@@ -686,8 +686,15 @@ backend, with D3D11's DXBC shaders unchanged:
   resting state after (PIXEL_SHADER_RESOURCE when sampled). No render-pass API: copies inside a pass are plain.
 - Pipelines per (colour format, depth format, samples) at the first draw; generateMips draws each level from the one
   above (D3D12 has no GenerateMips); new committed resources start as zeros.
-- Textures made on helper threads (freeThreadedCreation) stage their data in an upload buffer of their own, copied by the
-  owner's set-up commands at its next submit. Dear ImGui through the RHI (render/ui_renderer.cpp).
+- Textures made on helper threads (freeThreadedCreation; the GS textures' helpers are on with D3D12, as with D3D11) stage
+  their data in ranges of 64 MB upload chunks, copied by the owner's set-up commands at its next submit. Sampled textures
+  with data are placed in 128 MB heaps; targets stay committed. Dear ImGui through the RHI (render/ui_renderer.cpp).
+- Frees (after the frame's fence) run on a thread of their own (`RhiReaper`): releasing a resource costs ~0.25 ms in
+  the driver and the texture cache lets 750-3800 go at once - 160-200 ms of the main thread in one frame before.
+- Stutter rig (`cruise.py`, 144 km/h through the city, 2026-11-04): D3D11 p95 20.6 / p99 33.1 ms, 297 frames over
+  25 ms, 45 hitches; D3D12 p95 16.7 / p99 16.9 ms, 37 frames over 25 ms, 16 hitches (texture bursts of 200-350 new
+  textures left, in both). `PS2X_HOST_SPIKES=<ms>` prints a long frame's D3D12 time: pipelines, textures, buffers,
+  memory, GPU waits, present, frees.
 Checked against Microsoft's "Porting from Direct3D 11 to Direct3D 12" (the player's reference): device / swapchain made
 apart through DXGI, committed resources, uploads through mappable memory with GetCopyableFootprints, one PSO for the
 state, the DIRECT list as the immediate context, fences and a ring for WRITE_DISCARD, descriptor tables renamed by the

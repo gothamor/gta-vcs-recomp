@@ -34,6 +34,7 @@
 #include <atomic>
 #include <chrono>
 #include <cfloat>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -75,6 +76,27 @@ namespace rhi
             static const bool on = std::getenv("PS2X_RHI_STATS") && std::getenv("PS2X_RHI_STATS")[0] != '0';
             return on;
         }
+
+        // PS2X_HOST_SPIKES=<ms> (as rhi_vulkan.cpp): a frame of the main thread longer than that, with where its D3D12 time
+        // went - pipelines compiled, textures / buffers / memory made, waits for the GPU, the present
+        double spikeMs()
+        {
+            static const double ms = std::getenv("PS2X_HOST_SPIKES") ? std::atof(std::getenv("PS2X_HOST_SPIKES")) : 0.0;
+            return ms;
+        }
+        struct Spans
+        {
+            double pso = 0, texture = 0, buffer = 0, memory = 0, wait = 0, present = 0, collect = 0;
+            uint32_t psos = 0, textures = 0, buffers = 0, memories = 0, waits = 0, flushes = 0, collected = 0;
+        };
+        thread_local Spans t_spans; // the owner's (helper threads' textures are not its time)
+        struct Span
+        {
+            double &to;
+            std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+            explicit Span(double &t) : to(t) {}
+            ~Span() { to += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
+        };
 
         DXGI_FORMAT resourceFormat(Format f)
         {
@@ -351,6 +373,145 @@ namespace rhi
             }
         };
 
+        // The free ranges of a block of memory (offset -> bytes): first fit with an alignment, neighbours joined when freed
+        struct Ranges
+        {
+            std::map<UINT64, UINT64> free;
+
+            void init(UINT64 size)
+            {
+                free.clear();
+                free.emplace(0, size);
+            }
+
+            bool alloc(UINT64 size, UINT64 align, UINT64 &offset)
+            {
+                for (auto it = free.begin(); it != free.end(); ++it)
+                {
+                    const UINT64 start = it->first, end = it->first + it->second, at = alignUp(start, align);
+                    if (at + size > end)
+                        continue;
+                    free.erase(it);
+                    if (at > start)
+                        free.emplace(start, at - start);
+                    if (at + size < end)
+                        free.emplace(at + size, end - at - size);
+                    offset = at;
+                    return true;
+                }
+                return false;
+            }
+
+            void release(UINT64 offset, UINT64 size)
+            {
+                UINT64 start = offset, length = size;
+                auto next = free.lower_bound(start);
+                if (next != free.begin())
+                {
+                    auto prev = std::prev(next);
+                    if (prev->first + prev->second == start)
+                    {
+                        start = prev->first;
+                        length += prev->second;
+                        free.erase(prev);
+                    }
+                }
+                if (next != free.end() && start + length == next->first)
+                {
+                    length += next->second;
+                    free.erase(next);
+                }
+                free.emplace(start, length);
+            }
+        };
+
+        // Upload memory for textures made on helper threads: ranges of 64 MB mapped buffers, given back after the frame
+        // that copies them. An upload buffer of its own per texture was a driver allocation each (cruise.py: a 184-texture
+        // burst held the picture 200 ms).
+        struct StagingPool
+        {
+            static constexpr UINT64 kChunk = 64ull << 20;
+            struct Chunk
+            {
+                ComPtr<ID3D12Resource> buffer;
+                uint8_t *data = nullptr;
+                Ranges ranges;
+            };
+            std::vector<std::unique_ptr<Chunk>> chunks;
+            std::mutex mutex;
+
+            Chunk *alloc(ID3D12Device *device, UINT64 size, UINT64 &offset)
+            {
+                size = alignUp(std::max<UINT64>(size, 512), 512);
+                std::lock_guard<std::mutex> lock(mutex);
+                for (auto &c : chunks)
+                    if (c->ranges.alloc(size, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, offset))
+                        return c.get();
+                auto c = std::make_unique<Chunk>();
+                const UINT64 bytes = std::max(kChunk, size);
+                const D3D12_HEAP_PROPERTIES heap = heapProps(D3D12_HEAP_TYPE_UPLOAD);
+                const D3D12_RESOURCE_DESC bd = bufferDesc(bytes);
+                void *mapped = nullptr;
+                if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                           IID_PPV_ARGS(&c->buffer))) ||
+                    FAILED(c->buffer->Map(0, nullptr, &mapped)))
+                    return nullptr;
+                c->data = static_cast<uint8_t *>(mapped);
+                c->ranges.init(bytes);
+                c->ranges.alloc(size, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, offset);
+                chunks.push_back(std::move(c));
+                return chunks.back().get();
+            }
+
+            void release(Chunk *c, UINT64 offset, UINT64 size)
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                c->ranges.release(offset, alignUp(std::max<UINT64>(size, 512), 512));
+            }
+        };
+
+        // Sampled textures with first contents (the GS's, texture packs') placed in 128 MB heaps: a committed resource each
+        // was ~0.35 ms of a driver allocation. Targets and multisampled textures stay committed (few, made once).
+        struct TextureHeaps
+        {
+            static constexpr UINT64 kHeap = 128ull << 20;
+            struct Heap
+            {
+                ComPtr<ID3D12Heap> heap;
+                Ranges ranges;
+            };
+            std::vector<std::unique_ptr<Heap>> heaps;
+            std::mutex mutex;
+
+            Heap *alloc(ID3D12Device *device, UINT64 size, UINT64 align, UINT64 &offset)
+            {
+                if (size > kHeap / 2)
+                    return nullptr; // its own allocation
+                std::lock_guard<std::mutex> lock(mutex);
+                for (auto &h : heaps)
+                    if (h->ranges.alloc(size, align, offset))
+                        return h.get();
+                auto h = std::make_unique<Heap>();
+                D3D12_HEAP_DESC hd{};
+                hd.SizeInBytes = kHeap;
+                hd.Properties = heapProps(D3D12_HEAP_TYPE_DEFAULT);
+                hd.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
+                hd.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES; // (resource heap tier 1 needs it)
+                if (FAILED(device->CreateHeap(&hd, IID_PPV_ARGS(&h->heap))))
+                    return nullptr;
+                h->ranges.init(kHeap);
+                h->ranges.alloc(size, align, offset);
+                heaps.push_back(std::move(h));
+                return heaps.back().get();
+            }
+
+            void release(Heap *h, UINT64 offset, UINT64 size)
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                h->ranges.release(offset, size);
+            }
+        };
+
         // ---- the device's lifetime: shared by every object made from it ------------------------------------------
         // As rhi_vulkan.cpp's Core: objects may outlive the Device object; they free their D3D12 objects through the
         // frame queues while it lives (after the GPU is done with the frame), at once after (it waited for the GPU).
@@ -359,6 +520,8 @@ namespace rhi
             ComPtr<ID3D12Device> device;
             DescriptorPool srvs, rtvs, dsvs, samplers;
             BufferPages bufferPages;
+            StagingPool staging;
+            TextureHeaps textureHeaps;
             bool alive = false;
             uint32_t frame = 0;
             std::array<std::vector<std::function<void()>>, kFrames> garbage;
@@ -396,12 +559,48 @@ namespace rhi
                 return out;
             }
 
+            // A frame slot's frees, once the GPU is done with it: to the reaper thread. Releasing a D3D12 resource costs
+            // ~0.25 ms in the driver and the texture cache lets go of hundreds at once - cruise.py: 750-3800 objects,
+            // 160-200 ms of the main thread in one frame. D3D12 objects are free-threaded; the pools the frees give
+            // ranges and descriptors back to take their own locks.
             void collect(uint32_t slot)
             {
                 std::vector<std::function<void()>> items;
                 items.swap(garbage[slot]);
-                for (auto &f : items)
-                    f();
+                if (items.empty())
+                    return;
+                if (!reaper.joinable())
+                {
+                    for (auto &f : items)
+                        f();
+                    return;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(reaperMutex);
+                    for (auto &f : items)
+                        reaperQueue.push_back(std::move(f));
+                }
+                reaperWake.notify_one();
+            }
+
+            void startReaper()
+            {
+                reaper = std::thread([this] {
+                    SetThreadDescription(GetCurrentThread(), L"RhiReaper");
+                    std::unique_lock<std::mutex> lock(reaperMutex);
+                    for (;;)
+                    {
+                        reaperWake.wait(lock, [this] { return reaperStop || !reaperQueue.empty(); });
+                        if (reaperQueue.empty() && reaperStop)
+                            return;
+                        std::vector<std::function<void()>> items;
+                        items.swap(reaperQueue);
+                        lock.unlock();
+                        for (auto &f : items)
+                            f();
+                        lock.lock();
+                    }
+                });
             }
 
             ~Core()
@@ -410,7 +609,22 @@ namespace rhi
                     collect(i);
                 for (auto &f : takeOrphans())
                     f();
+                if (reaper.joinable())
+                {
+                    {
+                        std::lock_guard<std::mutex> lock(reaperMutex);
+                        reaperStop = true;
+                    }
+                    reaperWake.notify_one();
+                    reaper.join(); // (it empties the queue first)
+                }
             }
+
+            std::mutex reaperMutex;
+            std::condition_variable reaperWake;
+            std::vector<std::function<void()>> reaperQueue;
+            bool reaperStop = false;
+            std::thread reaper;
         };
 
         class DxTexture final : public Texture
@@ -424,7 +638,9 @@ namespace rhi
                 ComPtr<ID3D12Resource> r = resource;
                 std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> views = levelSrv, targets = levelRtv;
                 const D3D12_CPU_DESCRIPTOR_HANDLE s = srv, t = rtv, d = dsv;
-                core->defer([c, r, views, targets, s, t, d]() mutable {
+                TextureHeaps::Heap *heap = placedHeap;
+                const UINT64 offset = placedOffset, size = placedSize;
+                core->defer([c, r, views, targets, s, t, d, heap, offset, size]() mutable {
                     c->srvs.free(s);
                     c->rtvs.free(t);
                     c->dsvs.free(d);
@@ -432,7 +648,9 @@ namespace rhi
                         c->srvs.free(h);
                     for (auto h : targets)
                         c->rtvs.free(h);
-                    r.Reset();
+                    r.Reset(); // (before its range is given to another texture)
+                    if (heap)
+                        c->textureHeaps.release(heap, offset, size);
                 });
             }
 
@@ -440,6 +658,8 @@ namespace rhi
             ComPtr<ID3D12Resource> resource;
             D3D12_CPU_DESCRIPTOR_HANDLE srv{}, rtv{}, dsv{};
             std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> levelSrv, levelRtv; // generateMips: one level each (made at first use)
+            TextureHeaps::Heap *placedHeap = nullptr; // placed in a texture heap: where
+            UINT64 placedOffset = 0, placedSize = 0;
             DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
             uint32_t mips = 1, samples = 1;
             D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;   // now (every subresource)
@@ -695,6 +915,7 @@ namespace rhi
                 }
                 m_core->alive = true;
                 m_core->unbind = [this](const void *object) { unbind(object); };
+                m_core->startReaper();
                 beginFrame();
                 return true;
             }
@@ -1175,7 +1396,11 @@ namespace rhi
                 flushBarriers();
                 submit(true);
                 const bool tearing = mode == PresentMode::Tearing && (m_swapFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING);
-                const HRESULT hr = m_swapchain->Present(mode == PresentMode::Vsync ? 1u : 0u, tearing ? DXGI_PRESENT_ALLOW_TEARING : 0u);
+                HRESULT hr;
+                {
+                    Span span(t_spans.present);
+                    hr = m_swapchain->Present(mode == PresentMode::Vsync ? 1u : 0u, tearing ? DXGI_PRESENT_ALLOW_TEARING : 0u);
+                }
                 if ((hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) && !m_lostReported)
                 {
                     m_lostReported = true;
@@ -1186,6 +1411,7 @@ namespace rhi
                 if (statsOn())
                     reportStats();
                 beginFrame();
+                reportSpike();
             }
 
             // ---- Dear ImGui: drawn through the RHI by render::UiRenderer (as Vulkan) ---------------------------------
@@ -1195,6 +1421,24 @@ namespace rhi
             void uiShutdown() override {}
 
         private:
+            // after the frame's beginFrame (its fence wait counted)
+            void reportSpike()
+            {
+                const auto now = std::chrono::steady_clock::now();
+                const double span = std::chrono::duration<double, std::milli>(now - m_spikeFrameEnd).count();
+                const Spans f = t_spans;
+                t_spans = {};
+                const bool known = m_spikeFrameEnd.time_since_epoch().count() != 0;
+                m_spikeFrameEnd = now;
+                if (spikeMs() <= 0.0 || !known || span <= spikeMs())
+                    return;
+                std::fprintf(stderr,
+                             "[rhi-spike] d3d12 frame %.1f ms: pipelines %u (%.1f ms), textures %u (%.1f ms), buffers %u (%.1f ms), "
+                             "memory %u (%.1f ms), GPU waits %u (%.1f ms, %u flushes), present %.1f ms, freed %u (%.1f ms)\n",
+                             span, f.psos, f.pso, f.textures, f.texture, f.buffers, f.buffer, f.memories, f.memory, f.waits, f.wait,
+                             f.flushes, f.present, f.collected, f.collect);
+            }
+
             void reportStats()
             {
                 ++g_stats.frames;
@@ -1342,8 +1586,42 @@ namespace rhi
                                                                 : D3D12_RESOURCE_STATE_COMMON;
                 t->state = copied ? D3D12_RESOURCE_STATE_COPY_DEST : t->resting;
                 const D3D12_HEAP_PROPERTIES heap = heapProps(D3D12_HEAP_TYPE_DEFAULT);
-                const HRESULT hr = m_core->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd, t->state, nullptr,
-                                                                           IID_PPV_ARGS(&t->resource));
+                HRESULT hr = E_FAIL;
+                {
+                    Span span(t_spans.texture);
+                    ++t_spans.textures;
+                    ID3D12Device *dev = m_core->device.Get();
+                    // placed when it is a plain sampled texture whose contents come by a copy (placed memory starts
+                    // undefined): 4 KB alignment for the small ones, else 64 KB
+                    if (copied && !(rd.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) &&
+                        t->samples == 1u)
+                    {
+                        rd.Alignment = D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT;
+                        D3D12_RESOURCE_ALLOCATION_INFO info = dev->GetResourceAllocationInfo(0, 1, &rd);
+                        if (info.Alignment != D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT)
+                        {
+                            rd.Alignment = 0;
+                            info = dev->GetResourceAllocationInfo(0, 1, &rd);
+                        }
+                        UINT64 offset = 0;
+                        if (info.SizeInBytes != UINT64_MAX)
+                            if (TextureHeaps::Heap *h = m_core->textureHeaps.alloc(dev, info.SizeInBytes, info.Alignment, offset))
+                            {
+                                hr = dev->CreatePlacedResource(h->heap.Get(), offset, &rd, t->state, nullptr, IID_PPV_ARGS(&t->resource));
+                                if (SUCCEEDED(hr))
+                                {
+                                    t->placedHeap = h;
+                                    t->placedOffset = offset;
+                                    t->placedSize = info.SizeInBytes;
+                                }
+                                else
+                                    m_core->textureHeaps.release(h, offset, info.SizeInBytes);
+                            }
+                        rd.Alignment = 0;
+                    }
+                    if (!t->resource)
+                        hr = dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd, t->state, nullptr, IID_PPV_ARGS(&t->resource));
+                }
                 if (FAILED(hr))
                 {
                     std::fprintf(stderr, "[rhi] D3D12 texture %ux%u failed (%s)\n", w, h, hex(hr).c_str());
@@ -1397,6 +1675,8 @@ namespace rhi
             {
                 const UINT64 bytes = BufferPages::rounded(std::max<size_t>(b.desc().size, 4));
                 UINT64 offset = 0;
+                Span span(t_spans.buffer);
+                ++t_spans.buffers;
                 BufferPages::Page *page = m_core->bufferPages.alloc(m_core->device.Get(), bytes, offset);
                 if (!page)
                 {
@@ -1478,7 +1758,11 @@ namespace rhi
                 m_core->frame = (m_core->frame + 1) % kFrames;
                 FrameSlot &f = frame();
                 waitFor(f.fence);
-                m_core->collect(m_core->frame);
+                {
+                    Span span(t_spans.collect);
+                    t_spans.collected += static_cast<uint32_t>(m_core->garbage[m_core->frame].size());
+                    m_core->collect(m_core->frame);
+                }
                 for (size_t i = 0; i < f.used; ++i)
                     f.allocators[i]->Reset();
                 f.used = 0;
@@ -1523,6 +1807,8 @@ namespace rhi
                 if (!value || m_fence->GetCompletedValue() >= value)
                     return;
                 ++g_stats.waits;
+                Span span(t_spans.wait);
+                ++t_spans.waits;
                 m_fence->SetEventOnCompletion(value, m_fenceEvent);
                 WaitForSingleObject(m_fenceEvent, INFINITE);
             }
@@ -1538,6 +1824,7 @@ namespace rhi
             // The commands so far run to the end (readbacks); recording goes on in new lists of this frame
             void flushAndWait()
             {
+                ++t_spans.flushes;
                 submit(false);
                 waitIdle();
                 beginCommands();
@@ -1698,6 +1985,8 @@ namespace rhi
                         }
                         ++ring.current;
                     }
+                    Span span(t_spans.memory);
+                    ++t_spans.memories;
                     Ring::Chunk c;
                     c.size = std::max(kRingChunk, alignUp(size + align, 65536));
                     const D3D12_HEAP_PROPERTIES heap = heapProps(D3D12_HEAP_TYPE_UPLOAD);
@@ -1971,7 +2260,12 @@ namespace rhi
                 pd.DSVFormat = depth;
                 pd.SampleDesc.Count = samples;
                 ComPtr<ID3D12PipelineState> pso;
-                const HRESULT hr = m_core->device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso));
+                HRESULT hr;
+                {
+                    Span span(t_spans.pso);
+                    ++t_spans.psos;
+                    hr = m_core->device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso));
+                }
                 if (FAILED(hr))
                 {
                     std::fprintf(stderr, "[rhi] D3D12 pipeline '%s' (%u / %u x%u) rejected (%s)\n", p.name.c_str(), color, depth, samples,
@@ -2029,7 +2323,9 @@ namespace rhi
             // on: the owner gets it only after this returns, so what it records with it runs after the copies.
             struct Staged
             {
-                ComPtr<ID3D12Resource> texture, buffer;
+                ComPtr<ID3D12Resource> texture;
+                StagingPool::Chunk *chunk = nullptr; // the data's range of the staging pool
+                UINT64 offset = 0, size = 0;
                 D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp[16];
                 uint32_t count = 0;
                 D3D12_RESOURCE_STATES resting = D3D12_RESOURCE_STATE_COMMON;
@@ -2044,19 +2340,17 @@ namespace rhi
                 UINT rows[16];
                 UINT64 rowSizes[16], total = 0;
                 const D3D12_RESOURCE_DESC rd = t.resource->GetDesc();
-                m_core->device->GetCopyableFootprints(&rd, 0, st.count, 0, st.fp, rows, rowSizes, &total);
-                const D3D12_HEAP_PROPERTIES heap = heapProps(D3D12_HEAP_TYPE_UPLOAD);
-                const D3D12_RESOURCE_DESC bd = bufferDesc(total);
-                void *mapped = nullptr;
-                if (FAILED(m_core->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                                   IID_PPV_ARGS(&st.buffer))) ||
-                    FAILED(st.buffer->Map(0, nullptr, &mapped)))
+                m_core->device->GetCopyableFootprints(&rd, 0, st.count, st.offset, st.fp, rows, rowSizes, &total);
+                st.chunk = m_core->staging.alloc(m_core->device.Get(), total, st.offset);
+                if (!st.chunk)
                 {
                     std::fprintf(stderr, "[rhi] D3D12 staging memory (%llu bytes) failed\n", static_cast<unsigned long long>(total));
                     return false;
                 }
-                fillLevels(static_cast<uint8_t *>(mapped), t, st.fp, rows, levels, pitches, st.count);
-                st.buffer->Unmap(0, nullptr);
+                st.size = total;
+                // the footprints at the range's offset
+                m_core->device->GetCopyableFootprints(&rd, 0, st.count, st.offset, st.fp, rows, rowSizes, &total);
+                fillLevels(st.chunk->data, t, st.fp, rows, levels, pitches, st.count);
                 t.state = t.resting;
                 std::lock_guard<std::mutex> lock(m_stagedMutex);
                 m_staged.push_back(std::move(st));
@@ -2080,7 +2374,7 @@ namespace rhi
                         {
                             D3D12_TEXTURE_COPY_LOCATION dst{st.texture.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, {}};
                             dst.SubresourceIndex = i;
-                            D3D12_TEXTURE_COPY_LOCATION src{st.buffer.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, {}};
+                            D3D12_TEXTURE_COPY_LOCATION src{st.chunk->buffer.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, {}};
                             src.PlacedFootprint = st.fp[i];
                             cmd->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
                         }
@@ -2091,10 +2385,13 @@ namespace rhi
                             b.Transition = {st.texture.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_COPY_DEST, st.resting};
                             cmd->ResourceBarrier(1, &b);
                         }
-                        ComPtr<ID3D12Resource> texture = st.texture, buffer = st.buffer;
-                        m_core->garbage[m_core->frame].push_back([texture, buffer]() mutable {
-                            buffer.Reset();
+                        Core *c = m_core.get();
+                        ComPtr<ID3D12Resource> texture = st.texture;
+                        StagingPool::Chunk *chunk = st.chunk;
+                        const UINT64 offset = st.offset, size = st.size;
+                        m_core->garbage[m_core->frame].push_back([c, texture, chunk, offset, size]() mutable {
                             texture.Reset();
+                            c->staging.release(chunk, offset, size);
                         });
                     }
                 }
@@ -2215,6 +2512,7 @@ namespace rhi
 
             std::shared_ptr<Core> m_core;
             ComPtr<ID3D12InfoQueue> m_infoQueue;
+            std::chrono::steady_clock::time_point m_spikeFrameEnd{};
             uint32_t m_debugPrinted = 0;
             HWND m_hwnd = nullptr;
             ComPtr<IDXGIFactory4> m_factory;
