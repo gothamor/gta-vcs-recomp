@@ -40,6 +40,7 @@
 // (patched constants read from 0x7FF40..), the spot finder's node list moves ahead along its direction, and the road
 // classes' spawn chances scale with the number of cars wanted.
 #include "game/vcs_distance.h"
+#include "game/vcs_distant.h"
 
 #include "game/vcs_memory.h"
 #include "ps2_runtime.h"
@@ -137,7 +138,8 @@ namespace vcs::distance
 
         float percent(const std::atomic<int> &v) { return static_cast<float>(v.load(std::memory_order_relaxed)) / 100.0f; }
         float carDistance() { return percent(g_population); }
-        float pedDistance() { return std::min(percent(g_population), kMaxPedDistance); }
+        // with distant crowds on (vcs_distant.cpp) the real peds keep the game's own distance: the walkers are drawn beyond
+        float pedDistance() { return vcs::distant::crowdsOn() ? 1.0f : std::min(percent(g_population), kMaxPedDistance); }
         // the densities as they apply now (updateBudget): the sliders' at a budget of 1; at 0 the game's own numbers of
         // cars and peds, spread over the population distance's area (the distances never change: spawns stay far)
         float g_budget = 1.0f;

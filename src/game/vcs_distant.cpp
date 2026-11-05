@@ -61,8 +61,20 @@ namespace vcs::distant
         constexpr uint32_t kDrawOrigin = 0x006FE980u;
         constexpr uint32_t kVehiclePool = 0x00487A98u;      // CPool {entries, flags, size, last}, entries 0x8C0 bytes
         constexpr uint32_t kVehicleSize = 0x8C0u;
+        // Distant crowds (DISTANT_LIFE.md, peds): the ped path nodes follow the car nodes in the same array - paths +0x0C
+        // all (8387), +0x10 cars (3079), +0x14 peds (5308), one links table (found 2026-11-04 with the rig: the nodes past
+        // the cars' lie on the pavements by the docks' streets). Random peds (vtable 0x490840) are the templates; with the
+        // crowds on the real peds keep the game's own distance (vcs_distance.cpp's pedDistance) and these walk beyond.
+        constexpr uint32_t kPedPool = 0x00487A94u; // entries 0xD20 bytes
+        constexpr uint32_t kPedSize = 0xD20u;
+        constexpr uint32_t kRandomPedVtable = 0x00490840u;
+        constexpr float kPedHeight = 1.0f;      // a ped's origin above its node
+        constexpr float kCrowdNear = 60.0f;     // past the game's own peds
+        constexpr uint32_t kMaxWalkers = 320;
+        constexpr float kPedTemplateRange = 60.0f;
 
         std::atomic<int> g_setting{0}; // 0 off .. 100
+        std::atomic<int> g_crowds{0};  // 0 off .. 100
         PS2Runtime::RecompiledFunction g_worldProcess = nullptr;
 
         struct Node
@@ -75,13 +87,15 @@ namespace vcs::distant
             uint16_t from = 0, to = 0;
             float t = 0.0f, length = 1.0f, speed = 10.0f;
             uint32_t model = 0;
+            float side = 0.0f; // to the right of the link (walkers: a pavement's width)
             bool alive = false;
         };
         Car g_cars[kMaxProxies];
+        Car g_walkers[kMaxWalkers];
         std::mt19937 g_rng{0x5643u};
 
         std::mutex g_publishMutex;
-        std::vector<Proxy> g_published;
+        std::vector<Proxy> g_published, g_publishedPeds;
         uint32_t g_publishedFrame = 0;
 
         // step A2: the vehicles rendered this frame (game thread), the models seen lately (proxies take theirs from them)
@@ -92,11 +106,13 @@ namespace vcs::distant
             float m[16];
             float distance;
             float origin[3]; // the draws' world origin when it rendered (minus the cell's centre)
+            bool ped = false;
+            bool moving = false; // a ped walking (its pose suits a walker)
         };
         std::vector<Rendered> g_rendered;
         uint32_t g_renderedEntity = 0;
         uint16_t g_group = 0;
-        std::vector<uint32_t> g_models;
+        std::vector<uint32_t> g_models, g_pedModels;
         PS2Runtime::RecompiledFunction g_entityRender = nullptr, g_preRenderLists = nullptr;
         std::atomic<uint64_t> g_statAdded{0};
 
@@ -133,8 +149,9 @@ namespace vcs::distant
             return f;
         }
 
-        // the network as the game holds it now (it is loaded with the game; nothing moves it)
-        bool network(uint32_t &nodes, uint32_t &count, uint32_t &links)
+        // the network as the game holds it now (it is loaded with the game; nothing moves it): the car nodes are
+        // [0, cars), the ped nodes [cars, cars + peds)
+        bool network(uint32_t &nodes, uint32_t &count, uint32_t &links, uint32_t *peds = nullptr)
         {
             const uint32_t paths = rd32(kPaths);
             if (!paths)
@@ -142,7 +159,9 @@ namespace vcs::distant
             nodes = rd32(paths);
             count = rd32(paths + 0x10u);
             links = rd32(paths + 0x7BA0u);
-            return nodes && links && count > 0 && count < 0x4000u;
+            if (peds)
+                *peds = rd32(paths + 0x14u);
+            return nodes && links && count > 0 && count < 0x4000u && (!peds || count + *peds < 0x4000u);
         }
         Node node(uint32_t nodes, uint32_t i)
         {
@@ -167,7 +186,7 @@ namespace vcs::distant
         }
 
         // the next link at a node: any but the one back, else back
-        uint16_t nextNode(uint32_t nodes, uint32_t count, uint32_t links, uint16_t at, uint16_t from)
+        uint16_t nextNode(uint32_t nodes, uint32_t count, uint32_t links, uint16_t at, uint16_t from, uint32_t first = 0)
         {
             const Node n = node(nodes, at);
             uint16_t choice[16];
@@ -175,7 +194,7 @@ namespace vcs::distant
             for (uint32_t i = 0; i < n.links; ++i)
             {
                 const uint16_t to = neighbour(links, n, i);
-                if (to != from && to < count && usable(node(nodes, to)))
+                if (to != from && to >= first && to < count && usable(node(nodes, to)))
                     choice[k++] = to;
             }
             return k ? choice[g_rng() % k] : from;
@@ -183,16 +202,18 @@ namespace vcs::distant
 
         // on a random car node of the band, in front of the camera (within 60 degrees of where it looks: proxies are for
         // being seen; those behind are placed again in front)
-        void place(Car &c, uint32_t nodes, uint32_t count, uint32_t links, float cx, float cy, float fx, float fy, float lo, float hi)
+        // walker: a ped on the pavement nodes [first, count) at walking pace, else a car on [0, count)
+        void place(Car &c, uint32_t nodes, uint32_t count, uint32_t links, float cx, float cy, float fx, float fy, float lo, float hi,
+                   bool walker = false, uint32_t first = 0)
         {
             for (int tries = 0; tries < 48; ++tries)
             {
-                const uint16_t i = static_cast<uint16_t>(g_rng() % count);
+                const uint16_t i = static_cast<uint16_t>(first + g_rng() % (count - first));
                 const Node n = node(nodes, i);
                 const float d = std::hypot(n.x - cx, n.y - cy);
                 if (!usable(n) || d < lo || d > hi || (n.x - cx) * fx + (n.y - cy) * fy < 0.5f * d)
                     continue;
-                const uint16_t to = nextNode(nodes, count, links, i, 0xFFFFu);
+                const uint16_t to = nextNode(nodes, count, links, i, 0xFFFFu, first);
                 if (to == 0xFFFFu || to == i)
                     continue;
                 const Node m = node(nodes, to);
@@ -200,8 +221,18 @@ namespace vcs::distant
                 c.to = to;
                 c.length = std::max(1.0f, std::hypot(m.x - n.x, m.y - n.y));
                 c.t = std::uniform_real_distribution<float>(0.0f, 1.0f)(g_rng);
-                c.speed = std::uniform_real_distribution<float>(8.0f, 15.0f)(g_rng);
-                c.model = g_models.empty() ? 0u : g_models[g_rng() % g_models.size()];
+                if (walker)
+                {
+                    c.speed = std::uniform_real_distribution<float>(1.1f, 1.7f)(g_rng);
+                    c.side = std::uniform_real_distribution<float>(-2.0f, 2.0f)(g_rng);
+                    c.model = g_pedModels.empty() ? 0u : g_pedModels[g_rng() % g_pedModels.size()];
+                }
+                else
+                {
+                    c.speed = std::uniform_real_distribution<float>(8.0f, 15.0f)(g_rng);
+                    c.side = kLane;
+                    c.model = g_models.empty() ? 0u : g_models[g_rng() % g_models.size()];
+                }
                 c.alive = true;
                 return;
             }
@@ -220,32 +251,22 @@ namespace vcs::distant
             hi = lo + 6.0f * static_cast<float>(g_setting.load(std::memory_order_relaxed));
         }
 
-        void tick()
+        // One kind's proxies a frame: placed in front of the camera in [lo, hi] (a few a frame), moved along their links,
+        // taken away when they leave the band or fall behind the camera
+        void move(Car *all, uint32_t max, uint32_t wanted, bool walker, uint32_t nodes, uint32_t first, uint32_t count, uint32_t links,
+                  float lo, float hi, float height, std::vector<Proxy> &out)
         {
-            const int setting = g_setting.load(std::memory_order_relaxed);
-            uint32_t nodes, count, links;
-            if (setting <= 0 || !network(nodes, count, links))
-            {
-                std::lock_guard<std::mutex> lock(g_publishMutex);
-                g_published.clear();
-                g_publishedFrame = 0;
-                return;
-            }
             const float dt = std::clamp(rdf(kTimeStep), 0.0f, 4.0f) / 50.0f;
             const float cx = rdf(kCameraPos), cy = rdf(kCameraPos + 4u), cz = rdf(kCameraPos + 8u);
-            float fx = rdf(kCameraFront), fy = rdf(kCameraFront + 4u);
-            const float fl = std::max(0.001f, std::hypot(fx, fy));
-            fx /= fl;
-            fy /= fl;
-            float lo, hi;
-            band(lo, hi);
+            float vx = rdf(kCameraFront), vy = rdf(kCameraFront + 4u);
+            const float vl = std::max(0.001f, std::hypot(vx, vy));
+            vx /= vl;
+            vy /= vl;
             uint32_t placed = 0; // a few a frame: a turned camera fills its view over a second, not all at once
-            const uint32_t wanted = std::min<uint32_t>(kMaxProxies, static_cast<uint32_t>(setting) * 2u);
-            std::vector<Proxy> out;
             out.reserve(wanted);
-            for (uint32_t i = 0; i < kMaxProxies; ++i)
+            for (uint32_t i = 0; i < max; ++i)
             {
-                Car &c = g_cars[i];
+                Car &c = all[i];
                 if (i >= wanted)
                 {
                     c.alive = false;
@@ -253,17 +274,17 @@ namespace vcs::distant
                 }
                 if (!c.alive)
                 {
-                    if (placed >= 4u)
+                    if (placed >= (walker ? 8u : 4u))
                         continue;
                     ++placed;
-                    place(c, nodes, count, links, cx, cy, fx, fy, lo, hi);
+                    place(c, nodes, count, links, cx, cy, vx, vy, lo, hi, walker, first);
                     if (!c.alive)
                         continue;
                 }
                 c.t += c.speed * dt / c.length;
                 while (c.t >= 1.0f)
                 {
-                    const uint16_t next = nextNode(nodes, count, links, c.to, c.from);
+                    const uint16_t next = nextNode(nodes, count, links, c.to, c.from, first);
                     c.t -= 1.0f;
                     c.from = c.to;
                     c.to = next;
@@ -276,10 +297,10 @@ namespace vcs::distant
                 fx /= len;
                 fy /= len;
                 const float rx = fy, ry = -fx; // right of the direction (z up)
-                const float x = a.x + (b.x - a.x) * c.t + rx * kLane, y = a.y + (b.y - a.y) * c.t + ry * kLane;
-                const float z = a.z + (b.z - a.z) * c.t + kCarHeight;
+                const float x = a.x + (b.x - a.x) * c.t + rx * c.side, y = a.y + (b.y - a.y) * c.t + ry * c.side;
+                const float z = a.z + (b.z - a.z) * c.t + height;
                 const float d = std::hypot(x - cx, y - cy);
-                if (d < lo * 0.9f || d > hi * 1.05f || (x - cx) * fx + (y - cy) * fy < -0.3f * d)
+                if (d < lo * 0.9f || d > hi * 1.05f || (x - cx) * vx + (y - cy) * vy < -0.3f * d)
                 {
                     c.alive = false;
                     continue;
@@ -292,9 +313,30 @@ namespace vcs::distant
                 p.model = c.model;
                 out.push_back(p);
             }
+        }
+
+        void tick()
+        {
+            const int setting = g_setting.load(std::memory_order_relaxed), crowds = g_crowds.load(std::memory_order_relaxed);
+            uint32_t nodes, count, links, peds = 0;
+            std::vector<Proxy> cars, walkers;
+            if ((setting > 0 || crowds > 0) && network(nodes, count, links, &peds))
+            {
+                if (setting > 0)
+                {
+                    float lo, hi;
+                    band(lo, hi);
+                    move(g_cars, kMaxProxies, std::min<uint32_t>(kMaxProxies, static_cast<uint32_t>(setting) * 2u), false, nodes, 0, count,
+                         links, lo, hi, kCarHeight, cars);
+                }
+                if (crowds > 0 && peds > 0)
+                    move(g_walkers, kMaxWalkers, std::min<uint32_t>(kMaxWalkers, static_cast<uint32_t>(crowds) * 3u), true, nodes, count,
+                         count + peds, links, kCrowdNear, kCrowdNear + 2.4f * static_cast<float>(crowds), kPedHeight, walkers);
+            }
             std::lock_guard<std::mutex> lock(g_publishMutex);
-            g_published.swap(out);
-            g_publishedFrame = rd32(kFrameCounter) | 1u;
+            g_published.swap(cars);
+            g_publishedPeds.swap(walkers);
+            g_publishedFrame = (g_published.empty() && g_publishedPeds.empty()) ? 0u : (rd32(kFrameCounter) | 1u);
         }
 
         // before the original (DECISIONS.md, hooks)
@@ -310,13 +352,20 @@ namespace vcs::distant
         // closes it. Draws made later
         // for it (an alpha list) or for nothing (effects) after the last entity keep the group: the worker checks that a
         // draw sits on the car (its matrix within a few metres of the car's) before it takes it as a template.
-        bool isVehicle(uint32_t entity)
+        bool inPool(uint32_t global, uint32_t entrySize, uint32_t entity)
         {
-            const uint32_t pool = rd32(kVehiclePool);
+            const uint32_t pool = rd32(global);
             if (!pool)
                 return false;
             const uint32_t entries = rd32(pool), size = rd32(pool + 8u);
-            return entity >= entries && entity < entries + size * kVehicleSize && (entity - entries) % kVehicleSize == 0u;
+            return entity >= entries && entity < entries + size * entrySize && (entity - entries) % entrySize == 0u;
+        }
+        bool isVehicle(uint32_t entity) { return inPool(kVehiclePool, kVehicleSize, entity); }
+        bool isRandomPed(uint32_t entity) { return inPool(kPedPool, kPedSize, entity) && rd32(entity + 0x5Cu) == kRandomPedVtable; }
+        bool pedMoving(uint32_t ped)
+        {
+            const float vx = rdf(ped + 0x140u), vy = rdf(ped + 0x144u);
+            return vx * vx + vy * vy > 0.0004f; // (0.02 m a 1/50 s: ~1 m/s)
         }
 
         void readMatrix(uint32_t at, float m[16])
@@ -335,13 +384,23 @@ namespace vcs::distant
                 return;
             g_renderedEntity = entity;
             g_group = 0;
-            if (g_setting.load(std::memory_order_relaxed) <= 0 || g_rendered.size() >= 0xFFF0u || !isVehicle(entity))
+            if (g_rendered.size() >= 0xFFF0u)
                 return;
-            const uint32_t vtable = rd32(entity + 0x5Cu);
-            if (vtable != kCarVtable && vtable != kCar2Vtable)
+            bool ped = false;
+            if (g_setting.load(std::memory_order_relaxed) > 0 && isVehicle(entity))
+            {
+                const uint32_t vtable = rd32(entity + 0x5Cu);
+                if (vtable != kCarVtable && vtable != kCar2Vtable)
+                    return;
+            }
+            else if (g_crowds.load(std::memory_order_relaxed) > 0 && isRandomPed(entity))
+                ped = true;
+            else
                 return;
             Rendered r{};
             r.entity = entity;
+            r.ped = ped;
+            r.moving = ped && pedMoving(entity);
             uint16_t model;
             std::memcpy(&model, g_rdram + ((entity + 0x56u) & PS2_RAM_MASK), 2);
             r.model = model;
@@ -362,12 +421,14 @@ namespace vcs::distant
         }
 
 
-        void addTemplates()
+        // ped: the random peds within kPedTemplateRange, a walking one of each model rather than the farthest
+        void addTemplates(bool ped)
         {
-            const uint32_t pool = rd32(kVehiclePool);
+            const uint32_t pool = rd32(ped ? kPedPool : kVehiclePool);
             const uint32_t listed = rd32(kVehicleListCount);
             if (!pool || listed >= kVehicleListMax - 64u)
                 return;
+            const uint32_t entrySize = ped ? kPedSize : kVehicleSize;
             const uint32_t entries = rd32(pool), flags = rd32(pool + 4u), size = std::min(rd32(pool + 8u), 1024u);
             const float cx = rdf(kCameraPos), cy = rdf(kCameraPos + 4u), cz = rdf(kCameraPos + 8u);
             struct Pick
@@ -382,14 +443,16 @@ namespace vcs::distant
             {
                 if (g_rdram[(flags + i) & PS2_RAM_MASK] & 0x80u)
                     continue;
-                const uint32_t e = entries + i * kVehicleSize;
+                const uint32_t e = entries + i * entrySize;
                 const uint32_t vt = rd32(e + 0x5Cu);
-                if ((vt != kCarVtable && vt != kCar2Vtable) || !rd32(e + 0x50u))
+                if ((ped ? vt != kRandomPedVtable : (vt != kCarVtable && vt != kCar2Vtable)) || !rd32(e + 0x50u))
                     continue;
                 const float dx = rdf(e + 0x30u) - cx, dy = rdf(e + 0x34u) - cy, dz = rdf(e + 0x38u) - cz;
-                const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
-                if (d > kTemplateRange)
+                float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (d > (ped ? kPedTemplateRange : kTemplateRange))
                     continue;
+                if (ped && pedMoving(e))
+                    d += 1000.0f; // a walking ped of the model first
                 uint16_t model;
                 std::memcpy(&model, g_rdram + ((e + 0x56u) & PS2_RAM_MASK), 2);
                 uint32_t k = 0;
@@ -428,7 +491,9 @@ namespace vcs::distant
         {
             g_rdram = rdram;
             if (g_setting.load(std::memory_order_relaxed) > 0)
-                addTemplates();
+                addTemplates(false);
+            if (g_crowds.load(std::memory_order_relaxed) > 0)
+                addTemplates(true);
             g_preRenderLists(rdram, ctx, runtime);
         }
 
@@ -454,7 +519,9 @@ namespace vcs::distant
         return g_publishedFrame;
     }
 
-    bool enabled() { return g_setting.load(std::memory_order_relaxed) > 0; }
+    bool enabled() { return g_setting.load(std::memory_order_relaxed) > 0 || g_crowds.load(std::memory_order_relaxed) > 0; }
+
+    bool crowdsOn() { return g_crowds.load(std::memory_order_relaxed) > 0; }
 
     uint16_t currentGroup() { return g_group; }
 
@@ -474,28 +541,41 @@ namespace vcs::distant
         auto table = std::make_shared<FrameGroups>();
         table->frame = itemFrame;
         table->groups.resize(g_rendered.size());
-        // the templates: per model, the one drawn farthest from the camera (the fewest details)
+        // the templates: per kind and model, the one drawn farthest from the camera (the fewest details); for peds a
+        // walking one first (its pose suits a walker)
+        std::vector<Proxy> carProxies, pedProxies;
+        {
+            std::lock_guard<std::mutex> lock(g_publishMutex);
+            carProxies = g_published;
+            pedProxies = g_publishedPeds;
+        }
+        for (int kind = 0; kind < 2; ++kind)
+        {
+        const bool peds = kind == 1;
         std::vector<uint32_t> templates; // indices into g_rendered
         for (uint32_t i = 0; i < g_rendered.size(); ++i)
         {
             const Rendered &r = g_rendered[i];
+            if (r.ped != peds)
+                continue;
             auto at = std::find_if(templates.begin(), templates.end(), [&](uint32_t t) { return g_rendered[t].model == r.model; });
             if (at == templates.end())
                 templates.push_back(i);
-            else if (r.distance > g_rendered[*at].distance)
-                *at = i;
+            else
+            {
+                const Rendered &was = g_rendered[*at];
+                if ((r.moving && !was.moving) || (r.moving == was.moving && r.distance > was.distance))
+                    *at = i;
+            }
         }
         std::sort(templates.begin(), templates.end(), [](uint32_t a, uint32_t b) { return g_rendered[a].model < g_rendered[b].model; });
         if (!templates.empty())
         {
-            g_models.clear();
+            std::vector<uint32_t> &models = peds ? g_pedModels : g_models;
+            models.clear();
             for (uint32_t t : templates)
-                g_models.push_back(g_rendered[t].model);
-            std::vector<Proxy> proxies;
-            {
-                std::lock_guard<std::mutex> lock(g_publishMutex);
-                proxies = g_published;
-            }
+                models.push_back(g_rendered[t].model);
+            const std::vector<Proxy> &proxies = peds ? pedProxies : carProxies;
             // each proxy to the template of its model, else to one chosen by its slot; those behind the camera dropped
             const float cx = rdf(kCameraPos), cy = rdf(kCameraPos + 4u), cz = rdf(kCameraPos + 8u);
             const float fx = rdf(kCameraFront), fy = rdf(kCameraFront + 4u), fz = rdf(kCameraFront + 8u);
@@ -531,6 +611,7 @@ namespace vcs::distant
                 g_statAssigned += g.count;
             }
             g_statTemplates += templates.size();
+        }
         }
         ++g_statFrames;
         g_rendered.clear();
@@ -593,6 +674,23 @@ namespace vcs::distant
         s.env = "VCS_DISTANT_TRAFFIC";
         s.onChange = [](int v) { g_setting.store(std::clamp(v, 0, 100), std::memory_order_relaxed); };
         settings::add(s);
+
+        s = {};
+        s.key = "world.distant_crowds";
+        s.page = "Graphics";
+        s.section = "Distance and population (experimental)";
+        s.label = "Distant crowds";
+        s.help = "People far away who only walk the pavements, drawn with the real people's models: 0 none (the original), "
+                 "100 the most and the farthest. With them on, the real people stay as near as the game's own (the "
+                 "pedestrian density still applies) - far crowds cost almost nothing instead of the game's whole AI.";
+        s.type = settings::Type::Integer;
+        s.min = 0;
+        s.max = 100;
+        s.format = "%d";
+        s.defaultValue = 0;
+        s.env = "VCS_DISTANT_CROWDS";
+        s.onChange = [](int v) { g_crowds.store(std::clamp(v, 0, 100), std::memory_order_relaxed); };
+        settings::add(s);
     }
 
     void install(PS2Runtime &runtime)
@@ -608,7 +706,12 @@ namespace vcs::distant
         ps2control::addCommand("proxies", [](const std::string &, ps2control::Reply reply) {
             std::vector<Proxy> p;
             const uint32_t frame = snapshot(p);
-            std::string text = "ok frame=" + std::to_string(frame) + " count=" + std::to_string(p.size()) +
+            size_t walkers = 0;
+            {
+                std::lock_guard<std::mutex> lock(g_publishMutex);
+                walkers = g_publishedPeds.size();
+            }
+            std::string text = "ok frame=" + std::to_string(frame) + " count=" + std::to_string(p.size()) + " walkers=" + std::to_string(walkers) +
                                " frames=" + std::to_string(g_statFrames.load()) + " templates=" + std::to_string(g_statTemplates.load()) +
                                " added=" + std::to_string(g_statAdded.load()) + " assigned=" + std::to_string(g_statAssigned.load()) +
                                " drawn=" + std::to_string(g_statDrawn.load()) + " proxydraws=" + std::to_string(g_statProxy[0].load()) + "/" +

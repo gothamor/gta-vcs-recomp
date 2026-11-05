@@ -62,3 +62,25 @@ peds near the player (the population distance), decorative traffic beyond, dista
 - A3 band hand-off (no proxy where real traffic is; fade at the edges), density, cost measured.
 - A4 proxy lights, then LOD lights.
 - Then path B.
+
+## Distant crowds (2026-11-05)
+
+The player's priority after the D3D12 backend: with every slider at the most the game thread is the limit, and the cost
+is the peds past the game's own ped distance (~0.07 ms each; Downtown 19 peds at the original, ~100 at the most: game
+thread 4.3 -> 11-14 ms). Cars are cheap already: the traffic is almost all on rails (vehicle status 2, entity +0x48
+bits 4-8; physics, status 3, only for 1-5 cars at a time) - a vehicle simulation LOD would gain little.
+- Graphics > Distance and population > Distant crowds (`world.distant_crowds`, 0..100, `VCS_DISTANT_CROWDS`): with it on
+  the real peds keep the game's own distance (vcs_distance.cpp `pedDistance` = 1; the pedestrian density still applies
+  there) and up to 300 walkers walk the pavement nodes from 60 m out to 60 + 2.4 x the setting m, placed in front of
+  the camera as the distant cars are.
+- The pavement network: the path nodes' array holds the car nodes [0, paths +0x10) then the ped nodes [.., + paths
+  +0x14), one links table (8387 = 3079 + 5308; game-internals.md 9h).
+- Templates: random peds (vtable 0x490840) open a group in CEntity::Render (the ped Render 0x201300 calls it); per model a
+  walking one (move speed at +0x140) rather than the farthest; one of each model within 60 m joins the visible list when
+  off screen, as the cars do.
+- Drawing (`drawLitProxies`, the skinned lit pipeline): a skinned ped's VU object matrix is the identity and its skinned
+  positions are in the draws' space (the bones carry the ped's place), so a' = inv(ped) x walker moves the posed mesh
+  onto the walker; the walker wears the template's pose of that frame.
+- Measured (hidden rig, D3D12, every slider at 100, on the pavement facing the street): in front of the Downtown police
+  station 86-92 fps (game thread ~10 ms, ~85 real peds from the density), Little Havana 83-96 fps; Downtown on the old
+  roof spot 66-83 -> 121 fps with the crowds.
