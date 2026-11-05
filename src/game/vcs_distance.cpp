@@ -69,6 +69,17 @@ namespace vcs::distance
         constexpr uint32_t kCameraPos = 0x006F3C00u;     // the renderer's camera position
         constexpr uint32_t kCameraFront = 0x006F44E0u;   // TheCamera's matrix: forward (+0x10)
         constexpr uint32_t kAtomicFromDistance = 0x003A52F8u; // CBaseModelInfo::GetAtomicFromDistance (leaf)
+        constexpr uint32_t kLargestLodDistance = 0x003A5380u; // CBaseModelInfo::GetLargestLodDistance (leaf)
+
+        // Call-site return addresses of GetLargestLodDistance:
+        // 1. SetupEntityVisibility 330m clamp:
+        constexpr uint32_t kSetupEntityVisibility330ClampReturn = 0x0035F5ECu;
+        // 2. SetupEntityVisibility prefetch (no fade / fade):
+        constexpr uint32_t kSetupEntityVisibilityPrefetchNoFadeReturn = 0x0035F7A0u;
+        constexpr uint32_t kSetupEntityVisibilityPrefetchWithFadeReturn = 0x0035F8BCu;
+        // 3. SetupBigBuildingVisibility prefetch (no fade / fade):
+        constexpr uint32_t kSetupBigBuildingPrefetchNoFadeReturn = 0x0035FA70u;
+        constexpr uint32_t kSetupBigBuildingPrefetchWithFadeReturn = 0x0035FAA0u;
 
         // the functions that read GenerationDistMultiplier (not FUN_00219898: its +0x7D0 is a ped's); the first two are
         // the peds'
@@ -99,8 +110,13 @@ namespace vcs::distance
         constexpr uint32_t kPedsKept = 30u; // ped slots left for missions and the player, besides a driver a car
 
         PS2Runtime::RecompiledFunction g_original = nullptr, g_pedPoolCtor = nullptr, g_carPoolCtor = nullptr;
-        PS2Runtime::RecompiledFunction g_atomicFromDistance = nullptr;
+        PS2Runtime::RecompiledFunction g_atomicFromDistance = nullptr, g_largestLodDistance = nullptr;
         PS2Runtime::RecompiledFunction g_readers[kReaderCount] = {};
+        std::atomic<uint32_t> g_statClamp330Bypasses{0};
+        std::atomic<uint32_t> g_statPrefetchLookahead{0};
+        std::atomic<float> g_cameraSpeed{0.0f};
+        float g_lastCamX = 0.0f, g_lastCamY = 0.0f;
+        bool g_lastCamInit = false;
         // percent of the game's: object draw distance (view), detail distance, population distance, densities
         std::atomic<int> g_view{100}, g_detail{100}, g_population{100}, g_traffic{100}, g_pedestrians{100};
         uint8_t *g_rdram = nullptr;
@@ -320,6 +336,21 @@ namespace vcs::distance
         PS2_GUEST_CC void cameraProcess(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdram = rdram;
+            const float cx = rdf(kCameraPos), cy = rdf(kCameraPos + 4u);
+            if (g_lastCamInit)
+            {
+                const float dist = std::hypot(cx - g_lastCamX, cy - g_lastCamY);
+                const float instantSpeed = dist * 30.0f;
+                const float current = g_cameraSpeed.load(std::memory_order_relaxed);
+                g_cameraSpeed.store(current * 0.7f + std::min(instantSpeed, 120.0f) * 0.3f, std::memory_order_relaxed);
+            }
+            else
+            {
+                g_lastCamInit = true;
+            }
+            g_lastCamX = cx;
+            g_lastCamY = cy;
+
             wrf(kLodDistScale, percent(g_view));
             applyDensity();
             g_genFresh = true;
@@ -441,6 +472,44 @@ namespace vcs::distance
             }
             SET_GPR_U32(ctx, 2, result);
             ctx->pc = GPR_U32(ctx, 31);
+        }
+
+        // CBaseModelInfo::GetLargestLodDistance (FUN_003A5380):
+        // SetupEntityVisibility (0x0035EFD8) has a hardcoded 330m check at 0x35F5AC. When distance > 330.0f,
+        // it calls GetLargestLodDistance at 0x35F5E4 (return 0x35F5EC). If distance < largestLodDistance,
+        // it clamps distance = largestLodDistance (mov.s $f20, $f0 at 0x35F604), which causes GetAtomicFromDistance
+        // to return NULL, forcing a hard pop-in wall at exactly 330m! Returning 0.0f here makes `distance < 0.0f`
+        // evaluate false, taking bc1fl 0x35f60c to skip the clamp completely so objects render at their true extended
+        // LOD distance.
+        // Furthermore, SetupEntityVisibility and SetupBigBuildingVisibility check `distance - 50.0f < largestLodDistance`
+        // to decide whether to stream in models. At high speed (144 km/h = 40 m/s), a static 50m margin only gives 1.2s
+        // of advance warning, causing billboards, streetlamps, and trees to pop in late. For streaming call sites,
+        // we add a velocity-aware prefetch bonus so models stream well ahead of high-speed travel.
+        PS2_GUEST_CC void largestLodDistance(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t ra = GPR_U32(ctx, 31);
+            const float viewFactor = percent(g_view);
+
+            g_largestLodDistance(rdram, ctx, runtime);
+
+            if (viewFactor <= 1.0f)
+                return;
+
+            if (ra == kSetupEntityVisibility330ClampReturn)
+            {
+                ctx->f[0] = 0.0f;
+                g_statClamp330Bypasses.fetch_add(1, std::memory_order_relaxed);
+            }
+            else if (ra == kSetupEntityVisibilityPrefetchNoFadeReturn ||
+                     ra == kSetupEntityVisibilityPrefetchWithFadeReturn ||
+                     ra == kSetupBigBuildingPrefetchNoFadeReturn ||
+                     ra == kSetupBigBuildingPrefetchWithFadeReturn)
+            {
+                const float speed = g_cameraSpeed.load(std::memory_order_relaxed);
+                const float prefetchBonus = std::max(120.0f, 60.0f + speed * 4.0f) * viewFactor;
+                ctx->f[0] += prefetchBonus;
+                g_statPrefetchLookahead.fetch_add(1, std::memory_order_relaxed);
+            }
         }
 
         // The spot finder FUN_00267928(x, y, dirx, diry, distance, cos, nodes, ...) looks for a road node `distance` (110 x
@@ -984,6 +1053,8 @@ namespace vcs::distance
         hookReaders(runtime, std::make_index_sequence<kReaderCount>{});
         if ((g_atomicFromDistance = runtime.lookupFunction(kAtomicFromDistance)))
             runtime.replaceFunction(kAtomicFromDistance, &atomicFromDistance);
+        if ((g_largestLodDistance = runtime.lookupFunction(kLargestLodDistance)))
+            runtime.replaceFunction(kLargestLodDistance, &largestLodDistance);
         if ((g_pedPoolCtor = runtime.lookupFunction(kPedPoolCtor)))
             runtime.replaceFunction(kPedPoolCtor, &pedPoolCtor);
         if ((g_carPoolCtor = runtime.lookupFunction(kCarPoolCtor)))
@@ -1017,6 +1088,16 @@ namespace vcs::distance
             reply("ok skipped=" + std::to_string(g_lodSkipped) + " processed=" + std::to_string(g_lodProcessed) +
                   " cheap=" + std::to_string(g_lodCheap) +
                   " overflow=" + std::to_string(g_overflowUsed) + " peak=" + std::to_string(g_overflowPeak));
+        });
+        // lodstats -> ok clamp330_skips=<skips> prefetch_expanded=<lookaheads> camspeed=<speed m/s>
+        ps2control::addCommand("lodstats", [](const std::string &, ps2control::Reply reply) {
+            char text[256];
+            std::snprintf(text, sizeof(text),
+                          "ok clamp330_skips=%u prefetch_expanded=%u camspeed=%.1f",
+                          g_statClamp330Bypasses.load(std::memory_order_relaxed),
+                          g_statPrefetchLookahead.load(std::memory_order_relaxed),
+                          g_cameraSpeed.load(std::memory_order_relaxed));
+            reply(text);
         });
         // distancestate -> ok view=<%> detail=<%> scale=<ms_lodDistScale> lod=<LODDistMultiplier>
         //                  gen=<GenerationDistMultiplier> population=<%> traffic=<%> pedestrians=<%> cars=<random>/<cap>

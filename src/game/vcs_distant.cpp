@@ -247,23 +247,23 @@ namespace vcs::distant
             c.alive = false;
         }
 
-        // the band: strictly past the real traffic outer radius (at least 340 m) out to the setting's distance
+        // the band: strictly past the real traffic outer radius (at least 100 m) out to the setting's distance
         void band(float &lo, float &hi)
         {
             static const char *forced = std::getenv("VCS_DISTANT_BAND"); // debug: "lo,hi" metres (proxies near, to look at)
             if (forced && std::sscanf(forced, "%f,%f", &lo, &hi) == 2)
                 return;
-            lo = std::max(340.0f, vcs::distance::realCarOuterRadius() + 15.0f);
+            lo = std::max(100.0f, vcs::distance::realCarOuterRadius() + 5.0f);
             hi = lo + 5.5f * static_cast<float>(g_setting.load(std::memory_order_relaxed));
         }
 
-        // the crowd band: strictly past the real pedestrian outer radius (at least 310 m) out to the setting's distance
+        // the crowd band: strictly past the real pedestrian outer radius (at least 50 m) out to the setting's distance
         void crowdBand(float &lo, float &hi)
         {
             static const char *forced = std::getenv("VCS_DISTANT_CROWD_BAND"); // debug: "lo,hi" metres
             if (forced && std::sscanf(forced, "%f,%f", &lo, &hi) == 2)
                 return;
-            lo = std::max(kCrowdNear, vcs::distance::realPedOuterRadius() + 15.0f);
+            lo = std::max(50.0f, vcs::distance::realPedOuterRadius() + 5.0f);
             hi = lo + 3.0f * static_cast<float>(g_crowds.load(std::memory_order_relaxed));
         }
 
