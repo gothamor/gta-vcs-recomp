@@ -57,7 +57,8 @@ namespace settings
         // Key: 0 (unbound) is a valid value. A control binding; the menu clears one with a right click.
         bool optional = false;
         // Key: keys of one group are exclusive - binding a key another setting of the group has takes it from that
-        // setting when that one is optional, and is refused otherwise (e.g. the menu key).
+        // setting when that one is optional, and is refused otherwise (e.g. the menu key). A comma-separated list is
+        // several groups ("foot,car"): two settings clash when their lists share a name.
         std::string group;
         // Key: a second binding of the same action, drawn in this row beside the first (its own Spec, `hidden`).
         std::string partner;

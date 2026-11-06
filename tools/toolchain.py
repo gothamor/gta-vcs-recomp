@@ -219,13 +219,24 @@ def git_commit():
     return ""
 
 
+def test_keys(env):
+    """The checks drive the game with the PS2-button keys (Shift Cross, Return Start, F Triangle, Shift accelerates);
+    players' default is the PC scheme (Keyboard > Control scheme, DECISIONS.md 2026-11-05). VCS_KEYS=1 tests the PC
+    scheme."""
+    env.setdefault("VCS_KEYS", "0")
+    return env
+
+
 def test_window(env, visible=False):
     """Test runs are hidden by default (the user's choice, 2026-10-24): no window on the desktop, physical input
     ignored, driven through the control channel (tools/gamectl.py). Sound stays on (PS2X_AUDIO=1; the user mutes the
     game in Windows). visible=True or VCS_TEST_VISIBLE=1 shows the window."""
+    if os.environ.get("VCS_TEST_VISIBLE") == "1":
+        test_keys(env)
     if visible or os.environ.get("VCS_TEST_VISIBLE") == "1":
         env.pop("PS2X_HIDDEN", None)
         return env
+    test_keys(env)
     env["PS2X_HIDDEN"] = "1"
     env.setdefault("PS2X_AUDIO", "1")
     # the timing the regression baselines and checks were made with: original, 30 fps. Players' default is 60 with

@@ -4,7 +4,89 @@ Keyboard, mouse and a gamepad (anything SDL3 knows: Xbox, DualShock / DualSense,
 same PS2 controller (DualShock 2, analog mode), so they can be mixed. Every binding can be changed in the settings
 menu (F2): the **Keyboard** and **Gamepad** pages (src/game/vcs_input.cpp).
 
-## Default bindings
+## Control scheme
+
+Keyboard > **Control scheme** picks how the keyboard and mouse drive the pad:
+
+- **PC (Vice City / San Andreas)**, the default: actions as in the PC games (their CControllerConfigManager) - each key
+  does one thing on foot and another in a vehicle, and the game's menus have their own keys. Each action presses the
+  PS2 button VCS's default controller setup gives it (the game's own help-text key names, game-internals.md 12a).
+- **PS2 buttons**: a key for each button of the PS2 controller (the PS2 keys page; the old default, below).
+
+The gamepad is the same with either: its buttons are the PS2's (Gamepad page).
+
+## PC scheme (default)
+
+Default keys are Vice City's on PC, with San Andreas' Q / E for the weapons (Vice City's keypad Enter / Delete:
+Keypad Enter is Enter here). Every action has two slots on the Keyboard page.
+
+**On foot**
+
+| Action | Keys | PS2 |
+|---|---|---|
+| Forward / backward / left / right (also in the scopes) | W S A D, arrow keys | Left stick |
+| Walk (hold) | Alt (as in San Andreas; Alt + Enter stays full screen, so walk to a car and press F) | small stick tilt |
+| Sprint / swim faster | Shift | Cross |
+| Jump / climb | Space | Square |
+| Crouch | C | L3 |
+| Fire / attack | left mouse button, Ctrl | Circle |
+| Target / lock on | right mouse button, Delete | R1 |
+| Next / previous weapon | E / Q, mouse wheel | R2 / L2 |
+| Next / previous target | ] / [ | R2 / L2 |
+| Action (pick up a weapon, answer the phone) | Tab | L1 |
+| Look behind | middle mouse button, Keypad 1 | R3 |
+| Sniper zoom in / out (scopes, camera, binoculars) | Page Up, Z / Page Down, X; mouse wheel | Square / Cross |
+
+**Fighting** (VCS's unarmed combat: fists in hand and Target / lock on held - locked on to a ped, or ready to). These
+keys win over the on-foot ones meanwhile (Space kicks instead of jumping, Shift blocks instead of sprinting); let go of
+Target and they are the on-foot keys again.
+
+| Action | Keys | PS2 |
+|---|---|---|
+| Light attack | Fire's keys (left mouse button, Ctrl) | Circle |
+| Heavy attack | Space, mouse button 4 | Cross |
+| Block (hold) | Shift, mouse button 5 | Square |
+| Grab (the grabbed ped can't defend) | F | Triangle |
+
+Next / previous target (] / [, and Q / E: L2 / R2 change the target while locked on) work as on foot.
+
+**In a vehicle**
+
+| Action | Keys | PS2 |
+|---|---|---|
+| Accelerate | W, Up | Cross |
+| Brake / reverse | S, Down | Square |
+| Steer left / right | A / D, Left / Right | Left stick |
+| Lean forward / back (bikes; aircraft nose) | Keypad 8 / Keypad 5 | Left stick up / down |
+| Handbrake (also the Hunter's cannon) | Space | R1 |
+| Fire (drive-by, the Hunter's rockets, the fire engine's water, other vehicle weapons) | left mouse button, Ctrl | Circle |
+| Secondary fire (the Hunter's cannon) - R1, so in a car also the handbrake | right mouse button | R1 |
+| Horn / siren | Shift, H | L3 |
+| Next radio station | R, Insert | L1 |
+| Look left / right (helicopters: turn) | Q / E | L2 / R2 |
+| Look behind | middle mouse button, Keypad 1 | L2 + R2 |
+| Forklift: forks up / down | Page Up / Page Down | D-pad up / down |
+
+**Both**: Enter / exit vehicle F, Enter (Triangle); Change camera view V, Home (Select); Sub-missions / activity (site
+attacks, buying sites, recruiting) Caps Lock, Keypad + (R3); camera I J K L (right stick).
+
+**Menus and pause**: Pause menu Escape (fixed) and P (Start); Menu select / skip Enter, Space (Cross); Menu back
+Backspace, F (Triangle); the arrow keys are the D-pad in the menus (while playing they move, as in Vice City; the
+D-pad while playing has rows of its own under "Both", unbound). The menu keys apply while the game is paused, before
+the player exists (title screen, intro movies) and while the game holds the player's controls (cutscenes, shops); then
+the play keys do nothing. A key held from a menu into play (Enter choosing Resume) does nothing on the other side until
+let go.
+
+A key can do several actions as long as they never work at the same moment, as in the PC games' Controls menu: W is
+Forward on foot and Accelerate in a vehicle, Z is a sniper zoom in a scope and could be Jump on foot. Binding a key
+takes it from the actions that work at the same time as this one (the menu says which, in blue under the list) and
+leaves it on the others. The situations: on foot, in a scope (first-person weapon views: the sniper rifles, rocket
+launcher, M16, camera, binoculars - there the on-foot-only actions do nothing, as on PC), in a vehicle, in the menus.
+Forward / back / left / right, Fire and Target work on foot and in scopes; Change camera view and the camera keys
+everywhere but the menus. The fighting keys may share with the on-foot keys (they win while fighting). The menu keys
+(F2, F5, F6, F8) never share.
+
+## PS2 scheme
 
 | PS2 | Keyboard / mouse | Gamepad |
 |---|---|---|
@@ -24,7 +106,7 @@ menu (F2): the **Keyboard** and **Gamepad** pages (src/game/vcs_input.cpp).
 | Select | Backspace | Back / View |
 | Walk (hold) | - (unbound) | - (a small stick tilt) |
 
-**While driving** (Keyboard page, Driving) these keys do what a PC driving game does, and nothing else meanwhile; on
+**While driving** (PS2 keys page, Driving) these keys do what a PC driving game does, and nothing else meanwhile; on
 foot they keep their bindings above (W walks, Space jumps):
 
 | Driving | Keyboard | PS2 |
@@ -37,9 +119,10 @@ foot they keep their bindings above (W walks, Space jumps):
 
 Steering stays on A / D (the left stick); Shift still accelerates and E / the right mouse button is still R1. The
 game's own PS2 controls apply on top. Start or Cross (Enter / Shift) skips the intro movie; the Rockstar logos before
-it can't be skipped, as on the PS2 (Game > Skip intro movies skips both).
+it can't be skipped, as on the PS2 (Game > Skip intro movies skips both). The test tools use this scheme
+(`VCS_KEYS=0`, set by `toolchain.test_keys`).
 
-**Right mouse button = R1**: on foot it locks on to the ped nearest in front while held (with fists or a weapon), as R1
+**Right mouse button = R1** (Target in the PC scheme): on foot it locks on to the ped nearest in front while held (with fists or a weapon), as R1
 does on the PS2; left mouse button (Circle) attacks / fires. With **Free aim** on (below) it aims a gun instead.
 
 ## Free aim
@@ -48,7 +131,7 @@ Keyboard > **Free aim** (off by default) and Gamepad > **Free aim** (off), each 
 game-internals.md 12c):
 
 - With a gun in hand (pistols, shotguns, SMGs, rifles, the M249, minigun and flame-thrower), holding the target button
-  (R1's binding: the right mouse button / E; on the gamepad R1's button, RB unless changed) puts up the game's own
+  (Target / lock on: the right mouse button; in the PS2 scheme R1's binding, the right mouse button / E; on the gamepad R1's button, RB unless changed) puts up the game's own
   white aiming circle in the middle of the screen instead of locking on to the nearest person. The mouse (or the right
   stick, 2 rad/s at full tilt, finer near the centre) turns the aim and the camera with it, 1:1 like the camera on foot
   (Mouse sensitivity, Invert mouse up / down apply; zoomed views turn slower).
@@ -87,7 +170,7 @@ It does nothing of this while a control is bound to the wheel, while driving or 
 
 ## Keyboard page
 
-- Every PS2 button, both sticks' directions and **Walk** have two slots. Click a slot, then press a key, a mouse
+- Every action (PC scheme; on the PS2 keys page every PS2 button), both sticks' directions and **Walk** have two slots. Click a slot, then press a key, a mouse
   button (left, right, middle, 4, 5) or turn the wheel (each notch is a short press); Esc cancels, a right-click on a
   slot clears it. Shift / Ctrl / Alt bind both sides, Enter is also Keypad Enter.
 - A key does one thing: binding it to a control takes it from the control that had it. The menu keys (Settings menu

@@ -1949,6 +1949,18 @@ mission's runtime IP is 0x3CAE3 + (IP - its start)) and reproduced with the rig.
 - **scePadRead runs three times per game frame** (366 reads in 122 frames, counted with the `reads=` of `padstate`).
   vcs_input.cpp works the mouse out once per `m_FrameCounter` 0x4CD124 and repeats that report for the frame's other
   reads, so whichever read the game keeps carries it (not measured which one that is).
+- **What each button does** (2026-11-05, read from the PS2 GXT, not checked in game): the help texts name buttons
+  through `~k~ ~XXX~` tokens, and the text has each one per controller setup as `C0XXX`..`C3XXX` (C0 the default).
+  C0: VEACC Cross, VEBRK Square, VEHB R1 (handbrake), VEHN **L3 (horn / siren)**, VECRS **L1 (radio station)**, VELL /
+  VELR / VELB **L2 / R2 / L2 + R2 (look left / right / behind in a vehicle; HERO also turns a helicopter)**, VEEE
+  Triangle, VEWEP Circle (vehicle weapon, drive-by), VEWE2 R1 (the Hunter's cannon), VEWEA right stick (turrets),
+  VETU / VETD / VEWEI left stick up / down (lean, pitch), FLUP / FLDN D-pad up / down; PDSPR Cross, PDFW Circle, PDLT R1
+  (lock on), PDCWE / PDCTL L2 / R2 (weapons; targets while locked on), PUCF / ANS **L1 (pick up a weapon, answer the
+  phone)**, SNZI / SNZO Square / Cross (sniper zoom), SNSLO L1 (steady aim), FREE1 L3 (free aim, while locked on),
+  CVEIW **Select (camera view)**, PDBAK **R3 (look behind on foot)**, TGSUB **R3 (sub-missions, site attacks, buying
+  sites, recruiting)**, **unarmed combat, locked on** (UCBT_01..03): PUNA Circle light attack, PUHA Cross heavy
+  attack, PUBL Square block (held), PUGR Triangle grab ("making them defenseless to your attacks"), TAXJU L3, SWIMF Cross, SWIMO Square, AMBUY / AMEXI Cross / Triangle (shops), AMLEF / AMRIG
+  D-pad left / right. The keyboard's PC scheme presses these (src/game/vcs_input.cpp, docs/CONTROLS.md).
 - **Driving buttons**, measured with a car on a straight street (575, 175): Cross accelerates (forward speed 0.28 after
   2 s), R1 is the handbrake (0.12 to 0 in 0.7 s; coasting 0.28 to 0.20), Square brakes, then reverses. Vehicle +0x140
   is its velocity (units per 1/50 s), +0x10 its forward vector.

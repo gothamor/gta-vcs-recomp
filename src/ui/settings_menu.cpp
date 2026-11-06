@@ -82,21 +82,59 @@ namespace ui
         // keys, a group of their own, may share the on-foot keys but not the menu keys). False (with the reason in
         // g_refusal) when refused.
         std::string g_refusal;
+
+        // Two groups clash when they share a name: a group may be a list ("foot,car": keys that work both on foot and
+        // in a vehicle clash with each).
+        bool sameGroup(const std::string &a, const std::string &b)
+        {
+            auto names = [](const std::string &g) {
+                std::vector<std::string> out;
+                for (size_t at = 0; at <= g.size();)
+                {
+                    const size_t comma = std::min(g.find(',', at), g.size());
+                    out.push_back(g.substr(at, comma - at));
+                    at = comma + 1;
+                }
+                return out;
+            };
+            const std::vector<std::string> nb = names(b);
+            for (const std::string &n : names(a))
+                if (std::find(nb.begin(), nb.end(), n) != nb.end())
+                    return true;
+            return false;
+        }
+
+        // As the PC games' Controls menu (DeleteMatchingActionInitiators): the controls that clash with `s` (a group they
+        // share: keys that work at the same moment) lose the key, the others keep it - a key does one thing per
+        // situation. The PC games say nothing; g_shared names what lost it.
+        std::string g_shared;
         bool bindKey(const settings::Spec &s, int key)
         {
+            std::string taken;
             if (key != 0 && !s.group.empty())
                 for (const settings::Spec &o : settings::all())
                     if (&o != &s && o.type == settings::Type::Key && !o.group.empty() &&
-                        (o.group == s.group || !o.optional || !s.optional) && settings::value(o.key) == key)
+                        (sameGroup(o.group, s.group) || !o.optional || !s.optional) && settings::value(o.key) == key)
                     {
                         if (!o.optional || !s.optional) // a menu key never takes a control's key, nor gives its own
                         {
                             g_refusal = std::string(keyName(key)) + " is already \"" + o.label + "\" (" + o.page + ").";
                             return false;
                         }
+                        if (o.partner.empty() && o.hidden) // a second slot: named by its row's label
+                            for (const settings::Spec &row : settings::all())
+                                if (row.partner == o.key)
+                                {
+                                    if (&row != &s)
+                                        taken += (taken.empty() ? "" : ", ") + row.label + " (" + row.section + ")";
+                                    break;
+                                }
+                        if (!o.hidden && o.partner != s.key) // not this action's own other slot
+                            taken += (taken.empty() ? "" : ", ") + o.label + " (" + o.section + ")";
                         settings::set(o.key, 0);
                     }
             g_refusal.clear();
+            g_shared = taken.empty() ? "" : std::string(keyName(key)) + " taken from: " + taken + ".";
             return settings::set(s.key, key);
         }
 
@@ -121,6 +159,7 @@ namespace ui
             g_capturing.clear();
             g_confirming.clear();
             g_refusal.clear();
+            g_shared.clear();
             g_helpKey.clear();
             g_navFocused.clear();
             ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
@@ -201,6 +240,7 @@ namespace ui
                 g_capturing = s.key;
                 g_captureArmed = false;
                 g_refusal.clear();
+                g_shared.clear();
             }
             if (s.optional && ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
                 settings::set(s.key, 0);
@@ -506,6 +546,8 @@ namespace ui
                 ImGui::PushTextWrapPos(0.0f);
                 if (!g_refusal.empty())
                     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Not changed: %s", g_refusal.c_str());
+                else if (!g_shared.empty())
+                    ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "%s", g_shared.c_str());
                 else if (helpSpec)
                 {
                     const std::string text = helpText(*helpSpec);
