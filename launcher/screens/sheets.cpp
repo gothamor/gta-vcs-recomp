@@ -212,7 +212,221 @@ namespace screens
                 toast(app.shortcut(error) ? "Shortcut \"GTA Vice City Stories\" added to the desktop" : "No shortcut: " + error,
                       error.empty() ? 0 : theme::kRed);
             }
-            text(r, y, "The game's own settings - graphics, widescreen, controls, sound - are in the game: press F2 while playing.", theme::kFaint);
+            divider(r, y);
+
+            section(r, y, "DISPLAY & RESOLUTION");
+            {
+                // Window Mode
+                const Rect line{r.x, y, r.w, px(30)};
+                ui::label(kFontBody, px(theme::kBody), {line.x, line.y, line.w - px(60), line.h}, theme::kText, "Full screen");
+                bool fs = app.gameSettings.windowMode == 1;
+                if (ui::toggle("#fullscreen-toggle", {line.right() - px(44), line.y, px(44), line.h}, fs))
+                {
+                    app.gameSettings.windowMode = fs ? 1 : 0;
+                    app.saveGameSettings();
+                }
+                y += px(36);
+
+                // Resolution
+                ui::label(kFontSemibold, px(theme::kSmall), {r.x, y, r.w, px(20)}, theme::kDim, "WINDOW RESOLUTION (16:9 / 4:3 / ULTRA)");
+                y += px(24);
+                struct ResChoice { const char *label; int w; int h; };
+                const ResChoice resRow1[] = {
+                    {"720p", 1280, 720},
+                    {"900p", 1600, 900},
+                    {"1080p", 1920, 1080},
+                    {"1440p (2K)", 2560, 1440}
+                };
+                const ResChoice resRow2[] = {
+                    {"4K UHD", 3840, 2160},
+                    {"5K", 5120, 2880},
+                    {"6K", 6016, 3384},
+                    {"8K UHD", 7680, 4320}
+                };
+                const ResChoice resRow3[] = {
+                    {"4:3 720p", 960, 720},
+                    {"4:3 1440p", 1920, 1440},
+                    {"21:9 1080p", 2560, 1080},
+                    {"21:9 1440p", 3440, 1440},
+                    {"32:9 1440p", 5120, 1440}
+                };
+
+                auto handleResRow = [&](std::string_view idLabel, const ResChoice choices[], size_t count) {
+                    int sel = -1;
+                    std::vector<std::string> labels;
+                    for (size_t i = 0; i < count; ++i)
+                    {
+                        labels.push_back(choices[i].label);
+                        if (app.gameSettings.windowWidth == choices[i].w && app.gameSettings.windowHeight == choices[i].h)
+                            sel = int(i);
+                    }
+                    if (ui::segmented(idLabel, {r.x, y, r.w, px(32)}, labels, sel))
+                    {
+                        if (sel >= 0 && size_t(sel) < count)
+                        {
+                            app.gameSettings.windowWidth = choices[sel].w;
+                            app.gameSettings.windowHeight = choices[sel].h;
+                            app.saveGameSettings();
+                        }
+                    }
+                    y += px(38);
+                };
+
+                handleResRow("#res-row1", resRow1, 4);
+                handleResRow("#res-row2", resRow2, 4);
+                handleResRow("#res-row3", resRow3, 5);
+                y += px(6);
+
+                // Aspect Ratio
+                ui::label(kFontSemibold, px(theme::kSmall), {r.x, y, r.w, px(20)}, theme::kDim, "ASPECT RATIO");
+                y += px(24);
+                const int aspects1[] = {43, 54, 1610, 169};
+                int aspectSel1 = -1;
+                for (int i = 0; i < 4; ++i)
+                    if (app.gameSettings.aspect == aspects1[i])
+                        aspectSel1 = i;
+                if (ui::segmented("#aspect-seg1", {r.x, y, r.w, px(32)}, {"4:3", "5:4", "16:10", "16:9"}, aspectSel1))
+                {
+                    app.gameSettings.aspect = aspects1[aspectSel1];
+                    app.saveGameSettings();
+                }
+                y += px(38);
+
+                const int aspects2[] = {219, 329, 0};
+                int aspectSel2 = -1;
+                for (int i = 0; i < 3; ++i)
+                    if (app.gameSettings.aspect == aspects2[i])
+                        aspectSel2 = i;
+                if (ui::segmented("#aspect-seg2", {r.x, y, r.w, px(32)}, {"21:9 (Ultrawide)", "32:9 (Super Ultrawide)", "Auto (Window)"}, aspectSel2))
+                {
+                    app.gameSettings.aspect = aspects2[aspectSel2];
+                    app.saveGameSettings();
+                }
+                y += px(44);
+
+                // Internal Render Scale
+                ui::label(kFontSemibold, px(theme::kSmall), {r.x, y, r.w, px(20)}, theme::kDim, "INTERNAL RENDER SCALE");
+                y += px(24);
+                const int scales1[] = {1, 2, 3, 4};
+                int scaleSel1 = -1;
+                for (int i = 0; i < 4; ++i)
+                    if (app.gameSettings.scale == scales1[i])
+                        scaleSel1 = i;
+                if (ui::segmented("#scale-seg1", {r.x, y, r.w, px(32)}, {"1x (PS2)", "2x", "3x", "4x"}, scaleSel1))
+                {
+                    app.gameSettings.scale = scales1[scaleSel1];
+                    app.saveGameSettings();
+                }
+                y += px(38);
+
+                const int scales2[] = {6, 8, 10, 0};
+                int scaleSel2 = -1;
+                for (int i = 0; i < 4; ++i)
+                    if (app.gameSettings.scale == scales2[i])
+                        scaleSel2 = i;
+                if (ui::segmented("#scale-seg2", {r.x, y, r.w, px(32)}, {"6x", "8x", "10x", "Match Window"}, scaleSel2))
+                {
+                    app.gameSettings.scale = scales2[scaleSel2];
+                    app.saveGameSettings();
+                }
+                y += px(44);
+
+                // HUD Layout
+                ui::label(kFontSemibold, px(theme::kSmall), {r.x, y, r.w, px(20)}, theme::kDim, "HUD IN WIDESCREEN");
+                y += px(24);
+                const int huds[] = {2, 0, 1};
+                int hudSel = 0;
+                for (int i = 0; i < 3; ++i)
+                    if (app.gameSettings.hud == huds[i])
+                        hudSel = i;
+                if (ui::segmented("#hud-seg", {r.x, y, r.w, px(34)}, {"Screen edges", "Keep 4:3", "Stretch"}, hudSel))
+                {
+                    app.gameSettings.hud = huds[hudSel];
+                    app.saveGameSettings();
+                }
+                y += px(44);
+            }
+            divider(r, y);
+
+            section(r, y, "MOUSE & KEYBOARD");
+            {
+                auto addMouseToggle = [&](std::string_view idLabel, std::string_view label, int &val) {
+                    const Rect line{r.x, y, r.w, px(30)};
+                    ui::label(kFontBody, px(theme::kBody), {line.x, line.y, line.w - px(60), line.h}, theme::kText, label);
+                    bool b = val != 0;
+                    if (ui::toggle(idLabel, {line.right() - px(44), line.y, px(44), line.h}, b))
+                    {
+                        val = b ? 1 : 0;
+                        app.saveGameSettings();
+                    }
+                    y += px(36);
+                };
+
+                addMouseToggle("#mouse-camera", "Mouse camera look (PC style)", app.gameSettings.mouseCamera);
+                addMouseToggle("#mouse-free-aim", "Free aim with mouse (Right Mouse Button)", app.gameSettings.mouseFreeAim);
+                addMouseToggle("#mouse-wheel", "Mouse wheel changes weapons / zooms", app.gameSettings.mouseWheel);
+                addMouseToggle("#mouse-invert-y", "Invert mouse vertical look", app.gameSettings.mouseInvertY);
+            }
+            divider(r, y);
+
+            section(r, y, "GAMEPAD");
+            {
+                auto addPadToggle = [&](std::string_view idLabel, std::string_view label, int &val) {
+                    const Rect line{r.x, y, r.w, px(30)};
+                    ui::label(kFontBody, px(theme::kBody), {line.x, line.y, line.w - px(60), line.h}, theme::kText, label);
+                    bool b = val != 0;
+                    if (ui::toggle(idLabel, {line.right() - px(44), line.y, px(44), line.h}, b))
+                    {
+                        val = b ? 1 : 0;
+                        app.saveGameSettings();
+                    }
+                    y += px(36);
+                };
+
+                addPadToggle("#pad-free-aim", "Free aim with right stick (R1/RB aims reticle)", app.gameSettings.padFreeAim);
+                addPadToggle("#pad-swap-sticks", "Swap sticks (Southpaw: left-handed)", app.gameSettings.padSwapSticks);
+                addPadToggle("#pad-invert-x", "Invert camera left / right", app.gameSettings.padInvertX);
+                addPadToggle("#pad-invert-y", "Invert camera up / down", app.gameSettings.padInvertY);
+
+                // Vibration toggle
+                const Rect vibLine{r.x, y, r.w, px(30)};
+                ui::label(kFontBody, px(theme::kBody), {vibLine.x, vibLine.y, vibLine.w - px(60), vibLine.h}, theme::kText, "Gamepad vibration (rumble)");
+                bool vibOn = app.gameSettings.padVibration > 0;
+                if (ui::toggle("#pad-vib-toggle", {vibLine.right() - px(44), vibLine.y, px(44), vibLine.h}, vibOn))
+                {
+                    app.gameSettings.padVibration = vibOn ? 100 : 0;
+                    app.saveGameSettings();
+                }
+                y += px(36);
+            }
+            divider(r, y);
+
+            if (action(r, y, "Reset game settings to default", ButtonStyle::Ghost, theme::icon::kUndo))
+            {
+                app.gameSettings.windowMode = 0;
+                app.gameSettings.aspect = 43;
+                app.gameSettings.hud = 0;
+                app.gameSettings.scale = 1;
+                app.gameSettings.windowWidth = 960;
+                app.gameSettings.windowHeight = 720;
+                app.gameSettings.mouseCamera = 1;
+                app.gameSettings.mouseSensitivity = 100;
+                app.gameSettings.mouseInvertY = 0;
+                app.gameSettings.mouseFreeAim = 0;
+                app.gameSettings.mouseWheel = 1;
+                app.gameSettings.padFreeAim = 0;
+                app.gameSettings.padSwapSticks = 0;
+                app.gameSettings.padInvertX = 0;
+                app.gameSettings.padInvertY = 0;
+                app.gameSettings.padVibration = 100;
+                app.gameSettings.padCameraSpeed = 100;
+                app.gameSettings.padDeadzoneLeft = 12;
+                app.gameSettings.padDeadzoneRight = 12;
+                app.gameSettings.padTrigger = 30;
+                app.saveGameSettings();
+                toast("Game settings reset to default", 0);
+            }
+            text(r, y, "Additional fine tuning (sound volume, custom key/pad remapping) can also be configured in-game anytime: press F2 while playing.", theme::kFaint);
             if (changed)
                 app.saveSettings();
             return y;

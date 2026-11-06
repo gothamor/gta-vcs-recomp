@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <map>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -307,6 +308,7 @@ namespace launcher
                 sourceVersion = "development";
         }
         loadSettings();
+        loadGameSettings();
 
         // the disc vcs.exe would use
         std::string iniIso;
@@ -520,6 +522,7 @@ namespace launcher
         {
             build = pathFrom(t.result["path"].str());
             loadSettings(); // launcher.ini came along
+            loadGameSettings();
             say(t.result["old_built"].boolean()
                     ? "Build folder changed. The game is built again there; the old folder can be deleted afterwards: " +
                           t.result["previous"].str()
@@ -869,5 +872,217 @@ namespace launcher
             << "check_updates=" << (settings.checkUpdates ? 1 : 0) << "\n"
             << "theme=" << settings.theme << "\n"
             << "reduce_motion=" << (settings.reduceMotion ? 1 : 0) << "\n";
+    }
+
+    void App::loadGameSettings()
+    {
+        std::ifstream in(build / "vcs.ini");
+        std::string line;
+        while (std::getline(in, line))
+        {
+            line = trim(line);
+            const size_t eq = line.find('=');
+            if (eq == std::string::npos || line.empty() || line[0] == '#' || line[0] == ';')
+                continue;
+            const std::string key = trim(line.substr(0, eq)), value = trim(line.substr(eq + 1));
+            if (key == "display.window")
+                gameSettings.windowMode = std::atoi(value.c_str());
+            else if (key == "display.aspect")
+                gameSettings.aspect = std::atoi(value.c_str());
+            else if (key == "display.hud")
+                gameSettings.hud = std::atoi(value.c_str());
+            else if (key == "display.scale" || key == "scale")
+                gameSettings.scale = std::atoi(value.c_str());
+            else if (key == "window.width")
+                gameSettings.windowWidth = std::atoi(value.c_str());
+            else if (key == "window.height")
+                gameSettings.windowHeight = std::atoi(value.c_str());
+            else if (key == "mouse.camera")
+                gameSettings.mouseCamera = std::atoi(value.c_str());
+            else if (key == "mouse.sensitivity")
+                gameSettings.mouseSensitivity = std::atoi(value.c_str());
+            else if (key == "mouse.invert_y")
+                gameSettings.mouseInvertY = std::atoi(value.c_str());
+            else if (key == "mouse.free_aim")
+                gameSettings.mouseFreeAim = std::atoi(value.c_str());
+            else if (key == "mouse.wheel")
+                gameSettings.mouseWheel = std::atoi(value.c_str());
+            else if (key == "pad.free_aim")
+                gameSettings.padFreeAim = std::atoi(value.c_str());
+            else if (key == "pad.swap_sticks")
+                gameSettings.padSwapSticks = std::atoi(value.c_str());
+            else if (key == "pad.invert_x")
+                gameSettings.padInvertX = std::atoi(value.c_str());
+            else if (key == "pad.invert_y")
+                gameSettings.padInvertY = std::atoi(value.c_str());
+            else if (key == "pad.vibration")
+                gameSettings.padVibration = std::atoi(value.c_str());
+            else if (key == "pad.camera_speed")
+                gameSettings.padCameraSpeed = std::atoi(value.c_str());
+            else if (key == "pad.deadzone_left")
+                gameSettings.padDeadzoneLeft = std::atoi(value.c_str());
+            else if (key == "pad.deadzone_right")
+                gameSettings.padDeadzoneRight = std::atoi(value.c_str());
+            else if (key == "pad.trigger")
+                gameSettings.padTrigger = std::atoi(value.c_str());
+        }
+    }
+
+    void App::saveGameSettings()
+    {
+        const fs::path ini = build / "vcs.ini";
+        std::vector<std::string> lines;
+        std::unordered_map<std::string, bool> handled;
+        {
+            std::ifstream in(ini);
+            std::string line;
+            while (std::getline(in, line))
+            {
+                const std::string t = trim(line);
+                const size_t eq = t.find('=');
+                if (t.empty() || t[0] == '#' || t[0] == ';' || eq == std::string::npos)
+                {
+                    lines.push_back(line);
+                    continue;
+                }
+                const std::string key = trim(t.substr(0, eq));
+                if (key == "display.window")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.windowMode));
+                    handled[key] = true;
+                }
+                else if (key == "display.aspect")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.aspect));
+                    handled[key] = true;
+                }
+                else if (key == "display.hud")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.hud));
+                    handled[key] = true;
+                }
+                else if (key == "display.scale" || key == "scale")
+                {
+                    lines.push_back(std::string("display.scale=") + std::to_string(gameSettings.scale));
+                    handled["display.scale"] = handled["scale"] = true;
+                }
+                else if (key == "window.width")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.windowWidth));
+                    handled[key] = true;
+                }
+                else if (key == "window.height")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.windowHeight));
+                    handled[key] = true;
+                }
+                else if (key == "mouse.camera")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.mouseCamera));
+                    handled[key] = true;
+                }
+                else if (key == "mouse.sensitivity")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.mouseSensitivity));
+                    handled[key] = true;
+                }
+                else if (key == "mouse.invert_y")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.mouseInvertY));
+                    handled[key] = true;
+                }
+                else if (key == "mouse.free_aim")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.mouseFreeAim));
+                    handled[key] = true;
+                }
+                else if (key == "mouse.wheel")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.mouseWheel));
+                    handled[key] = true;
+                }
+                else if (key == "pad.free_aim")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.padFreeAim));
+                    handled[key] = true;
+                }
+                else if (key == "pad.swap_sticks")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.padSwapSticks));
+                    handled[key] = true;
+                }
+                else if (key == "pad.invert_x")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.padInvertX));
+                    handled[key] = true;
+                }
+                else if (key == "pad.invert_y")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.padInvertY));
+                    handled[key] = true;
+                }
+                else if (key == "pad.vibration")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.padVibration));
+                    handled[key] = true;
+                }
+                else if (key == "pad.camera_speed")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.padCameraSpeed));
+                    handled[key] = true;
+                }
+                else if (key == "pad.deadzone_left")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.padDeadzoneLeft));
+                    handled[key] = true;
+                }
+                else if (key == "pad.deadzone_right")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.padDeadzoneRight));
+                    handled[key] = true;
+                }
+                else if (key == "pad.trigger")
+                {
+                    lines.push_back(key + "=" + std::to_string(gameSettings.padTrigger));
+                    handled[key] = true;
+                }
+                else
+                {
+                    lines.push_back(line);
+                }
+            }
+        }
+
+        auto appendIfNotHandled = [&](const std::string &k, const std::string &val) {
+            if (!handled[k])
+                lines.push_back(k + "=" + val);
+        };
+
+        appendIfNotHandled("display.window", std::to_string(gameSettings.windowMode));
+        appendIfNotHandled("display.aspect", std::to_string(gameSettings.aspect));
+        appendIfNotHandled("display.hud", std::to_string(gameSettings.hud));
+        appendIfNotHandled("display.scale", std::to_string(gameSettings.scale));
+        appendIfNotHandled("window.width", std::to_string(gameSettings.windowWidth));
+        appendIfNotHandled("window.height", std::to_string(gameSettings.windowHeight));
+        appendIfNotHandled("mouse.camera", std::to_string(gameSettings.mouseCamera));
+        appendIfNotHandled("mouse.sensitivity", std::to_string(gameSettings.mouseSensitivity));
+        appendIfNotHandled("mouse.invert_y", std::to_string(gameSettings.mouseInvertY));
+        appendIfNotHandled("mouse.free_aim", std::to_string(gameSettings.mouseFreeAim));
+        appendIfNotHandled("mouse.wheel", std::to_string(gameSettings.mouseWheel));
+        appendIfNotHandled("pad.free_aim", std::to_string(gameSettings.padFreeAim));
+        appendIfNotHandled("pad.swap_sticks", std::to_string(gameSettings.padSwapSticks));
+        appendIfNotHandled("pad.invert_x", std::to_string(gameSettings.padInvertX));
+        appendIfNotHandled("pad.invert_y", std::to_string(gameSettings.padInvertY));
+        appendIfNotHandled("pad.vibration", std::to_string(gameSettings.padVibration));
+        appendIfNotHandled("pad.camera_speed", std::to_string(gameSettings.padCameraSpeed));
+        appendIfNotHandled("pad.deadzone_left", std::to_string(gameSettings.padDeadzoneLeft));
+        appendIfNotHandled("pad.deadzone_right", std::to_string(gameSettings.padDeadzoneRight));
+        appendIfNotHandled("pad.trigger", std::to_string(gameSettings.padTrigger));
+
+        std::error_code ec;
+        fs::create_directories(build, ec);
+        std::ofstream out(ini, std::ios::trunc | std::ios::binary);
+        for (const auto &l : lines)
+            out << (l.empty() || l.back() != '\r' ? l : l.substr(0, l.size() - 1)) << "\n";
     }
 }

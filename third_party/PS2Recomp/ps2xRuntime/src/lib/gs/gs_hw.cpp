@@ -231,7 +231,7 @@ GSHwOptions GSHwOptions::fromEnvironment()
         // [gta-recomp] 0: the native frame (the picture's targets at the window's resolution, the rest at 1x)
         const int v = std::atoi(s);
         o.nativeFrame = v == 0 && s[0] == '0';
-        o.scale = o.nativeFrame ? 1u : std::clamp<uint32_t>(static_cast<uint32_t>(v), 1u, 8u);
+        o.scale = o.nativeFrame ? 1u : std::clamp<uint32_t>(static_cast<uint32_t>(v), 1u, 16u);
     }
     if (const char *s = std::getenv("PS2X_HW_MSAA")) // [gta-recomp] 2, 4, 8
     {

@@ -189,11 +189,13 @@ namespace
         return true;
     }
 
-    // display.aspect: 43, 1610, 169, 219, 329, or 0 = the window's shape
+    // display.aspect: 43, 54, 1610, 169, 219, 329, or 0 = the window's shape
     float aspectFor(int code)
     {
         switch (code)
         {
+        case 54:
+            return 5.0f / 4.0f;
         case 1610:
             return 16.0f / 10.0f;
         case 169:
@@ -429,7 +431,7 @@ namespace
                  "follows the window's shape (between 4:3 and 32:9), for monitors such as 3440x1440 that are not "
                  "exactly 21:9.";
         s.type = Type::Choice;
-        s.choices = {{"4:3 (original)", 43}, {"16:10", 1610}, {"16:9", 169}, {"21:9", 219}, {"32:9", 329}, {"Match window", 0}};
+        s.choices = {{"4:3 (original)", 43}, {"5:4", 54}, {"16:10", 1610}, {"16:9", 169}, {"21:9", 219}, {"32:9", 329}, {"Match window", 0}};
         s.defaultValue = 43;
         s.env = "VCS_ASPECT";
         s.onChange = [](int) { applyAspect(); };
@@ -472,7 +474,7 @@ namespace
                  "is 853x448), or at the window's own resolution (sharpest; the effects keep the original's look). "
                  "Costs GPU time.";
         s.type = Type::Choice;
-        s.choices = {{"1x (original)", 1}, {"2x", 2}, {"3x", 3}, {"4x", 4}, {"6x", 6}, {"8x", 8}, {"Match window", 0}};
+        s.choices = {{"1x (original)", 1}, {"2x", 2}, {"3x", 3}, {"4x", 4}, {"6x", 6}, {"8x", 8}, {"10x", 10}, {"Match window", 0}};
         s.defaultValue = 1;
         s.apply = Apply::Restart;
         s.env = "PS2X_HW_SCALE";
