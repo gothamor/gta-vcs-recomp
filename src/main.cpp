@@ -72,7 +72,7 @@ namespace vcs
 namespace
 {
     using vcs::disc::kElfName;
-    using vcs::disc::kElfSha1;
+    using vcs::disc::isSupportedElfSha1;
 
     class MappedDisc final : public IPS2DiscImage
     {
@@ -790,7 +790,7 @@ namespace
         std::vector<uint8_t> elf(entry.size);
         iso.readBytes(uint64_t(entry.lba) * vcs::IsoImage::kSectorSize, elf.size(), elf.data());
         const std::string sha1 = vcs::sha1Hex(elf.data(), elf.size());
-        if (sha1 != kElfSha1)
+        if (!isSupportedElfSha1(sha1))
         {
             error = "unsupported game build (executable sha1 " + sha1 + ")";
             return vcs::disc::kExitWrongDisc;
