@@ -239,6 +239,7 @@ namespace rhi
     {
         const char *const *(*instanceExtensions)(uint32_t *count) = nullptr; // for the surface
         bool (*createSurface)(void *instance, uint64_t *surface) = nullptr;  // VkInstance -> VkSurfaceKHR
+        const char *loaderPath = nullptr; // macOS: the loader's dylib (Homebrew); null elsewhere
     };
 
     struct DeviceDesc

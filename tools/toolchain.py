@@ -49,6 +49,7 @@ def show(path):
         return path
     return path if rel.startswith("..") else rel
 IS_WINDOWS = platform.system() == "Windows"
+IS_MAC = platform.system() == "Darwin"
 
 # our progress lines and the tools' output interleave in order even when stdout is a pipe. UTF-8 whatever the
 # console's code page: the launcher reads UTF-8, and its PYTHONIOENCODING / PYTHONUTF8 do nothing under -I (isolated
@@ -228,6 +229,10 @@ def test_window(env, visible=False):
         return env
     env["PS2X_HIDDEN"] = "1"
     env.setdefault("PS2X_AUDIO", "1")
+    # silent: scripted runs on a machine someone is using. VCS_SILENT mutes at the audio output rather than through
+    # the audio.volume setting, whose env override would lock it (settings::overridden refuses writes; controls_check
+    # and the Audio page still set the volume settings of a hidden run)
+    env.setdefault("VCS_SILENT", "1")
     # the timing the regression baselines and checks were made with: original, 30 fps. Players' default is 60 with
     # frame-rate independent timing (2026-10-30); a test that wants another sets VCS_TIMING / VCS_FPS itself, and one
     # that tests the setting (controls_check: the presets) passes VCS_TIMING="" - set, so not pinned, and empty, so
@@ -663,12 +668,60 @@ def llvm_mingw_bin(download=True):
                            need="llvm-mingw (clang %d or newer)" % MIN_CLANG)
     print("[toolchain] llvm-mingw: " + os.path.dirname(os.path.dirname(clang)))
     return os.path.dirname(clang)
+def _mac_llvm_bin(env):
+    """The bin folder of Homebrew's newest LLVM >= MIN_CLANG (keg-only: /opt/homebrew/opt/llvm@<N>/bin), arm64 there
+    on Apple Silicon; Apple's own clang is a fallback when it is new enough (it reports as Clang 21)."""
+    found = []
+    for d in glob.glob("/opt/homebrew/opt/llvm*/bin") + glob.glob("/usr/local/opt/llvm*/bin"):
+        clang = os.path.join(d, "clang")
+        if os.path.isfile(clang):
+            found.append((clang_version(clang), d))
+    on_path = _which("clang", env)
+    if on_path:
+        found.append((clang_version(on_path), os.path.dirname(os.path.realpath(on_path))))
+    found = [f for f in found if f[0] >= MIN_CLANG]
+    return max(found)[1] if found else None
+
+
+def profdata_tool(env):
+    """llvm-profdata that reads the compiler's raw profiles: Xcode's own on macOS (the raw profile format version
+    follows the compiler, and Homebrew's newer one refuses Apple clang's), else the one on PATH."""
+    if IS_MAC:
+        try:
+            out = subprocess.run(["xcrun", "-f", "llvm-profdata"], capture_output=True, text=True, timeout=30).stdout.strip()
+            if out and os.path.isfile(out):
+                return out
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return shutil.which("llvm-profdata", path=env.get("PATH")) or "llvm-profdata"
+
+
+def _apple_clang(path):
+    """True for Apple's own clang (its ThinLTO bitcode is the one ld64 can read)."""
+    try:
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "Apple clang" in out
 
 
 def build_env():
     """Environment for CMake / Ninja / the compiler."""
     env = dict(os.environ)
     if not IS_WINDOWS:
+        if IS_MAC:
+            # Apple clang + ld64 is the default (its ThinLTO bitcode is the one ld64 reads; Homebrew LLVM's is newer);
+            # VCS_APPLE_CLANG=0 switches to Homebrew's clang. Brew LLVM stays on PATH when present for llvm-symbolizer.
+            apple = "/usr/bin/clang"
+            use_apple = env.get("VCS_APPLE_CLANG", "1") != "0" and os.path.isfile(apple) \
+                and clang_version(apple) >= MIN_CLANG
+            llvm = _mac_llvm_bin(env)
+            if llvm:
+                env["PATH"] = os.pathsep.join([llvm, env.get("PATH", "")])
+            if use_apple:
+                env["VCS_CC"] = env.get("VCS_CC") or apple
+                env["VCS_CXX"] = env.get("VCS_CXX") or "/usr/bin/clang++"
+            return env
         llvm = _linux_llvm_bin(env)
         if llvm:
             env["PATH"] = os.pathsep.join([llvm, env.get("PATH", "")])
@@ -1151,13 +1204,14 @@ def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
         defines = dict(defines or {}, PS2X_CPU=level)
     if configured and not force and not defines:
         return
-    cmd = ["cmake", "-S", ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
+    cmd = [build_tools(env)["cmake"], "-S", ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
     cmd += ["-D%s=%s" % (k, v) for k, v in (defines or {}).items()]
     cmd += compiler_defines(env) + deps_defines() + python_defines()
     if os.path.normcase(os.path.abspath(build_dir)) == os.path.normcase(BUILD_DIR):
         cmd.append("-DVCS_GAME_DIR=" + BUILD.replace(os.sep, "/"))  # vcs.exe at the top of the build folder
     print("[build] configuring " + show(build_dir) + "".join(" %s=%s" % kv for kv in (defines or {}).items()))
     stage("configure", "Configuring the build (CMake)")
+    os.makedirs(BUILD, exist_ok=True)  # a fresh VCS_BUILD_DIR (a second tree: build-apple) has no logs folder yet
     log = os.path.join(BUILD, "configure.log")
     if run_with_progress(cmd, log, "[build] configure", env=env) != 0:
         print(tail(log, 30))
@@ -1283,10 +1337,21 @@ def compiler_defines(env):
         return ["-DCMAKE_%s_COMPILER=%s" % (lang, tools[name].replace(os.sep, "/"))
                 for lang, name in (("C", "clang"), ("CXX", "clang++"), ("RC", "llvm-windres"))] + \
                ["-DCMAKE_EXE_LINKER_FLAGS=-static"] + ninja
-    clang, clangxx = _which("clang", env), _which("clang++", env)
+    clang = env.get("VCS_CC") or _which("clang", env)
+    clangxx = env.get("VCS_CXX") or _which("clang++", env)
     if not clang or not clangxx or clang_version(clang) < MIN_CLANG:
         fail("clang %d or newer not found - install it (docs/LINUX.md; e.g. sudo apt install clang-20 lld-20 llvm-20), "
              "or run python tools/build.py --check-deps" % MIN_CLANG)
+    if IS_MAC:
+        # ld64 links (lld 23 mis-links the current SDK's Objective-C stubs); LLVM's ar indexes bitcode archives
+        # (Apple's ar leaves the index empty - but it is the ar its own bitcode needs)
+        archiver = []
+        if not _apple_clang(clang):
+            llvm_bin = os.path.dirname(os.path.realpath(clang))
+            llvm_ar, llvm_ranlib = os.path.join(llvm_bin, "llvm-ar"), os.path.join(llvm_bin, "llvm-ranlib")
+            if os.path.isfile(llvm_ar) and os.path.isfile(llvm_ranlib):
+                archiver = ["-DCMAKE_AR=" + llvm_ar, "-DCMAKE_RANLIB=" + llvm_ranlib]
+        return ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx] + archiver + ninja
     if not _which("ld.lld", env):
         fail("ld.lld not found (the LLVM linker, next to clang): e.g. sudo apt install lld-%d" % clang_version(clang))
     defines = ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx] + ninja
@@ -1488,8 +1553,39 @@ def linux_install_command(packages, sudo="sudo"):
     return cmd + " ".join(packages).split()
 
 
+def check_mac_deps(env):
+    """Missing build dependencies on macOS (Homebrew), with the brew command; True when nothing is missing."""
+    missing = []
+    if not _which("glslangValidator", env) and not _which("glslang", env):
+        missing.append(("glslang", "glslang"))
+    if not _which("pkg-config", env):
+        missing.append(("pkg-config", "pkgconf"))
+    elif subprocess.run(["pkg-config", "--exists", "libavcodec", "libavformat", "libavutil", "libswresample", "libswscale"],
+                        env=env).returncode != 0:
+        missing.append(("FFmpeg (libav*)", "ffmpeg"))
+    llvm = _mac_llvm_bin(env)
+    apple = "/usr/bin/clang"
+    have_apple = os.path.isfile(apple) and clang_version(apple) >= MIN_CLANG
+    if not llvm and not have_apple:
+        missing.append(("clang %d+" % MIN_CLANG, "llvm"))  # xcode-select --install, or brew install llvm
+    tools = build_tools(env, download=False)
+    for tool, title, packages in (("cmake", "CMake", "cmake"), ("ninja", "Ninja", "ninja")):
+        if not tools[tool]:
+            missing.append(("%s %s+" % (title, _version_text(MIN_CMAKE if tool == "cmake" else MIN_NINJA)), packages))
+    if not missing:
+        compiler = "Apple clang %d" % clang_version(apple) if have_apple else "LLVM: %s" % llvm
+        print("[deps] all build dependencies found (%s)" % compiler)
+        return True
+    for label, _ in missing:
+        print("[deps] missing: " + label)
+    print("[deps] install them with:\n    brew install " + " ".join(p for _, p in missing))
+    return False
+
+
 def check_linux_deps(env, deps=None):
     """Missing build dependencies on Linux, with the install command for this distro; True when nothing is missing."""
+    if IS_MAC:
+        return check_mac_deps(env)
     missing = linux_missing(env, deps)
     if not missing:
         llvm = _linux_llvm_bin(env) if deps is None else None

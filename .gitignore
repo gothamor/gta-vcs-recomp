@@ -33,3 +33,15 @@ __pycache__/
 .vcs-build-dir
 /VCSLauncher
 /VCSLauncher.old
+
+# the macOS app made by tools/package_mac.py (built, not source)
+VCS.app/
+
+# macOS Finder
+.DS_Store
+
+# diagnostic bundle (built locally)
+VCS-diagnostics.app/
+
+# the macOS launcher bundle (built locally; the launcher itself is Windows-only)
+VCSLauncher.app/

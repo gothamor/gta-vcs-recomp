@@ -66,7 +66,7 @@ function(EnableFastReleaseMode TargetName)
     # x86-64-v3 is /arch:AVX2 (AVX2, FMA, BMI); -ffp-contract=off for the same reason. clang-cl defaults to
     # -fno-strict-aliasing (MSVC compatibility) and the runtime and generated code read guest memory through casts, so
     # say it here. No stack protector / CET (Ubuntu turns them on; clang-cl gets /GS-, no CET).
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT MSVC)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT MSVC AND NOT APPLE)
         target_compile_options(${TargetName} PRIVATE
             $<$<CONFIG:Release>:-O2 -DNDEBUG ${_ps2x_arch_clang} -ffp-contract=off -fno-math-errno -fno-strict-aliasing
                                 -fno-stack-protector -fcf-protection=none>
@@ -82,6 +82,40 @@ function(EnableFastReleaseMode TargetName)
                 if(PS2X_LTO_JOBS)
                     target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-Wl,--thinlto-jobs=${PS2X_LTO_JOBS}>)
                 endif()
+            endif()
+        elseif(PS2X_LTO STREQUAL "FULL" AND IPO_SUPPORTED)
+            set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+        endif()
+        if(PS2X_PGO STREQUAL "GEN")
+            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-generate>)
+            target_compile_definitions(${TargetName} PRIVATE $<$<CONFIG:Release>:PS2X_PGO_GEN=1>)
+            if(_type STREQUAL "EXECUTABLE")
+                target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-generate>)
+            endif()
+        elseif(PS2X_PGO)
+            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-fprofile-instr-use=${PS2X_PGO}
+                                   -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled -Wno-profile-instr-missing
+                                   -Wno-backend-plugin>)
+        endif()
+        return()
+    endif()
+    # [gta-recomp] macOS arm64 (docs/MACOS.md): the same numerics as above; -mcpu=native (Apple Silicon: no AVX,
+    # the SSE intrinsics come from sse2neon). ld64 links ThinLTO itself and caches chunks with -cache_path_lto.
+    if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+        target_compile_options(${TargetName} PRIVATE
+            $<$<CONFIG:Release>:-O2 -DNDEBUG -mcpu=native -ffp-contract=off -fno-math-errno -fno-strict-aliasing
+                                -fno-stack-protector>
+        )
+        get_target_property(_type ${TargetName} TYPE)
+        # ld64 reads Apple clang's ThinLTO bitcode; Homebrew LLVM's is newer than it can (VCS_APPLE_CLANG=1)
+        if(PS2X_LTO STREQUAL "THIN" AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+            message(STATUS "ThinLTO is off on macOS with this compiler: build with Apple clang (VCS_APPLE_CLANG=1) "
+                           "for ThinLTO, or --opt none on purpose")
+        endif()
+        if(PS2X_LTO STREQUAL "THIN" AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+            target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
+            if(_type STREQUAL "EXECUTABLE")
+                target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
             endif()
         elseif(PS2X_LTO STREQUAL "FULL" AND IPO_SUPPORTED)
             set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)

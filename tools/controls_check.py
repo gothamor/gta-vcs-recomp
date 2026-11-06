@@ -39,7 +39,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # DualShock 2 bits (pressed), as "padstate" reports them
 SELECT, L3, R3, START, UP, RIGHT, DOWN, LEFT = 0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080
 L2, R2, L1, R1, TRIANGLE, CIRCLE, CROSS, SQUARE = 0x0100, 0x0200, 0x0400, 0x0800, 0x1000, 0x2000, 0x4000, 0x8000
-KEY_G, KEY_SHIFT, KEY_WHEEL_UP, KEY_F2 = 71, 340, 405, 291
+KEY_G, KEY_SHIFT, KEY_WHEEL_UP, KEY_F2, KEY_GRAVE = 71, 340, 405, 291, 96
+# the settings menu key: backquote on Apple platforms (F2 is the brightness key there), F2 elsewhere
+MENU_KEY_DEFAULT = KEY_GRAVE if sys.platform == "darwin" else KEY_F2
 
 # control-channel key name -> what the default bindings make of it: a button bit, or (axis, byte)
 DEFAULTS = [
@@ -123,10 +125,16 @@ class Check:
         self.ok("music / effects settings reach the game", s.get("music") == "32" and s.get("effects") == "64" and
                 prefs == "4000000020000000", "%s prefs %s" % (s, prefs))
         # loading the card's save (it holds the defaults) keeps the player's levels: pause menu > Game > Load, slot 1
+        g.cmd("menu close")  # a settings menu left open by the checks above would eat the first Escape
+        time.sleep(0.5)
+        if g.peek(0x4CD2AC, 1)[0]:  # CTimer::m_UserPause: the pause menu itself open the same way
+            self.keys("Escape@2")
         self.keys("Escape@3", "Right", "Right", "Shift@2", "Shift@3", "Down", "Shift@3", "Up", "Shift@25")
         s = self.sound()
         with open(g.log_path, encoding="utf-8", errors="replace") as f:
-            loaded = "the game sets the music level 80 (ra=0x3add90): the player's 32" in f.read()
+            # the level in the card is the player's (a rig card has 80, a save made in game usually differs): the
+            # setter's line means the save was read and its level was overridden by the player's setting
+            loaded = re.search(r"the game sets the music level \d+ \(ra=0x3add90\): the player's 32", f.read()) is not None
         self.ok("a save load keeps the player's levels", loaded and s.get("music") == "32" and s.get("effects") == "64",
                 "%s, load %s" % (s, "seen" if loaded else "not seen"))
         # the pause menu's Audio page shows them (2 and 4 bars) and its slider changes the setting
@@ -172,7 +180,10 @@ class Check:
         self.ok("mouse turns the camera on foot", mode == 4 and abs(turn + 0.75) < 0.03 and abs(up - 0.225) < 0.02,
                 "mode %d heading %+.3f pitch %+.3f" % (mode, turn, up))
         # up / down at once as left / right: 120 counts up are +0.3 two frames later (through the stick's top speed and
-        # the game's easing it was under 0.06) and stay there
+        # the game's easing it was under 0.06) and stay there. Start from the camera's bottom limit (a large downward
+        # move clamps there on any platform and any indoors / outdoors table) so the 0.3 has room
+        g.cmd("mouse 0 600")
+        g.wait_frames(30)
         _, p0, _ = self.cam()
         g.cmd("mouse 0 -120")
         g.wait_frames(2)
@@ -994,7 +1005,7 @@ class Check:
             self.setting("advanced.reset_all")
             got = {k: self.setting(k) for k in ("keys.cross", "audio.volume", "pad.vibration", "controls.menu_key")}
             self.ok("Reset all settings", got == {"keys.cross": str(KEY_SHIFT), "audio.volume": "100", "pad.vibration": "100",
-                                                  "controls.menu_key": str(KEY_F2)}, str(got))
+                                                  "controls.menu_key": str(MENU_KEY_DEFAULT)}, str(got))
             p = self.held("shift")
             self.ok("bindings after the reset", p["buttons"] == CROSS, str(p))
 

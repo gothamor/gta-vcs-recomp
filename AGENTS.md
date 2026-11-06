@@ -18,6 +18,7 @@ detailed knowledge lives in `docs/`:
 | [docs/DISC.md](docs/DISC.md), [docs/CONTROLS.md](docs/CONTROLS.md) | Disc layout; keyboard / gamepad mapping |
 | [docs/TRAINER.md](docs/TRAINER.md) | The trainer (F5): what it does, how (the game's script commands), its check |
 | [docs/LINUX.md](docs/LINUX.md) | The Linux build: packages, flags, the Vulkan backend, what differs from Windows, the work list |
+| [docs/MACOS.md](docs/MACOS.md) | The macOS (Apple Silicon) build: Homebrew deps, Apple clang with ThinLTO, sse2neon, MoltenVK, the .app |
 | [docs/LAUNCHER.md](docs/LAUNCHER.md) | The launcher and releases: what a release holds, the player's flow, the tools behind each button, the `@vcs` events, what was checked |
 
 **When you learn something about the game, write it into docs/game-internals.md in the same change.**
@@ -30,7 +31,7 @@ choices).
 - GTA: Vice City Stories (PS2, SLUS-21590 USA) statically recompiled to C++ (PS2Recomp, vendored and
   heavily modified in `third_party/PS2Recomp`), turned step by step into a native port: native D3D11
   rendering of the game's models (`src/game/vcs_hle_world.cpp`), SDL3 platform layer, settings menu.
-- Windows and Linux (docs/LINUX.md: clang, Vulkan; a plain host build). macOS later is possible (SDL3 + the RHI); the
+- Windows, Linux and macOS (docs/LINUX.md, docs/MACOS.md: clang, Vulkan; a plain host build - MoltenVK on macOS). The
   Steam Deck is postponed.
 - Distribution is source-only, bring your own disc. **Never commit game code or data**: no ISO, no
   ELF, no generated C++ (`generated/`), no disassembly listings, no extracted assets. Analysis dumps go

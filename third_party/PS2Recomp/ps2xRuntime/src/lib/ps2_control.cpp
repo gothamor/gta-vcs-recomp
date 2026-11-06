@@ -102,6 +102,8 @@ namespace ps2control
                 {"mousemiddle", platform::KEY_MOUSE_MIDDLE}, {"mouse4", platform::KEY_MOUSE_X1}, {"mouse5", platform::KEY_MOUSE_X2},
                 {"wheelup", platform::KEY_WHEEL_UP}, {"wheeldown", platform::KEY_WHEEL_DOWN},
                 {"rshift", platform::KEY_RIGHT_SHIFT}, {"rctrl", platform::KEY_RIGHT_CONTROL}, {"kpenter", platform::KEY_KP_ENTER},
+                {"comma", platform::KEY_COMMA}, {"period", platform::KEY_PERIOD}, // [gta-recomp] Ctrl+, / Ctrl+. shortcuts
+                {"grave", platform::KEY_GRAVE}, {"backslash", platform::KEY_BACKSLASH}, {"tilde", platform::KEY_GRAVE},
             };
             for (const Named &n : named)
                 if (name == n.name)

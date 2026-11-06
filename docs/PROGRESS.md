@@ -883,6 +883,8 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `VCS_TIMESTEP=N` | independent timing: exactly 1/N s per game frame, unpaced (frame-dependence tests) |
 | `VCS_SKIP_MOVIES=0\|1` | play / skip the intro movies (Display > Skip intro movies); test tools default to 1 |
 | `PS2X_MC_BACKUP=0` | no automatic card backup (`<data>/backups/auto-*.zip`) before the game deletes or overwrites a card file |
+| `VCS_VIRTUAL_GAMEPAD=1` | attach an SDL virtual gamepad (left stick moves in a 6 s cycle): checks the gamepad path without hardware |
+| `VCS_SILENT=1` | mute the audio output (hidden test runs, `toolchain.test_window`): unlike an `audio.volume` env override it leaves the volume settings settable |
 | `VCS_MOVIE_LOG=1` | movie playback: sound pushed / queued / played vs the pictures, every second |
 | `VCS_NATIVE_STREAM=0`, `VCS_STREAM_LOG=1` | disc streaming through the IOP (the reference); native read stats every 5 s |
 | `VCS_NATIVE_SOUND=0` | sound through the emulated IOP's CDSTREAM / LIBSD (the reference) |

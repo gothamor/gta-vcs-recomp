@@ -103,6 +103,7 @@ namespace present
         desc.nativeWindow = platform::nativeWindow();
         desc.vulkan.instanceExtensions = platform::vulkanInstanceExtensions;
         desc.vulkan.createSurface = platform::vulkanCreateSurface;
+        desc.vulkan.loaderPath = platform::vulkanLoaderPath();
         desc.offscreen = platform::windowHidden();
         desc.width = static_cast<uint32_t>(std::max(width, 1));
         desc.height = static_cast<uint32_t>(std::max(height, 1));

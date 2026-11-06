@@ -766,6 +766,47 @@ from them: Vic moves while free aiming exactly when he can move locked on with t
   them only while its own stick moves the dummy, so the host clamps). Asked, the user chose the gamepad's R1 firing
   there too (the same reach problem as the car): it fires in any free aim a script starts, and is R1 everywhere else.
 
+## 2026-10-31 - macOS arm64: ld64, no ThinLTO, sse2neon, MoltenVK
+
+The port to Apple Silicon keeps the Linux shape (SDL3 + the Vulkan RHI + clang) and solves four platform gaps:
+- **SSE**: the runtime and the generated code are written against SSE intrinsics. `third_party/PS2Recomp` already
+  fetched sse2neon for ARM (Vita/Android) and `ps2_runtime*.h`/`ps2_memory.h` switch on `USE_SSE2NEON`; the top-level
+  CMake defines it for `ps2EntryRunner` too, so `src/game` (`vcs_hle_world`, `vcs_rsl_world`) and `ps2_render_worker`
+  use the same header. sse2neon implements `_mm_setcsr`/`_mm_getcsr` rounding through FPCR, so the VU's round-to-zero
+  path survives.
+- **AVX2 vs NEON**: `ps2_vu1_compiled.h`'s `vu1v` 128-bit path is now compiled when `__AVX2__` *or* `USE_SSE2NEON` is
+  set; the parts that need 256-bit doubles (`fused`, `floatToInt`) keep the AVX2 code and get a per-lane fallback on
+  ARM, using the same `vu1fast::exactResult`. Results are bit-identical by construction.
+- **Linker/compiler**: Homebrew LLVM 23 compiles (`-mcpu=native`); ld64 links because lld 23 mis-links the current
+  SDK's Objective-C stubs (`objc_msgSendClass$...` unresolved) and ld64 cannot read LLVM 23 ThinLTO bitcode. ThinLTO
+  stays off on macOS until Apple clang (or a fixed lld) can carry it; `tools/build.py` defaults to `--opt none` there.
+- **Vulkan**: MoltenVK 1.4 is a Vulkan 1.3 portability implementation with dynamic rendering, synchronization2 and
+  push descriptors, so the RHI needs no feature changes - only `VK_KHR_portability_enumeration` at instance creation
+  and `VK_KHR_portability_subset` on the device. dlopen ignores rpaths, so the platform layer locates Homebrew's
+  loader and the RHI initialises volk from that handle (`VCS_VULKAN_LOADER` overrides).
+Details and numbers: docs/MACOS.md.
+
+## 2026-10-31 - macOS parity: launcher, profiler, PGO, platform menu keys
+
+- **Launcher**: not part of this port. 0.1.0 rewrote the Windows launcher as its own Win32/D3D11 app; a
+  macOS front end would need that UI layer portable first (the tools and `tools/package_mac.py` are enough meanwhile).
+- **Menu keys**: on Mac keyboards F2/F5 are the brightness and backlight keys, so the *defaults* of
+  `controls.menu_key` / `controls.trainer_key` are ` and \ on Apple platforms (`#if defined(__APPLE__)` in
+  vcs_input.cpp); F2/F5 keep working with Fn held (the UI also accepts them there). Both stay rebindable, and
+  `ps2_control.cpp` gained `grave` / `tilde` / `backslash` key names so the scripted checks can press them. The same
+  change first also moved Start to Escape, gave Cross an Enter binding and put Select on C, following the PC games;
+  those were dropped - main's 2026-11-05 pause-menu work made Start Escape and Enter the menu's Cross on every
+  platform, and keeping macOS versions would have meant a permanent fork of `keys.cross` and of the check that asserts
+  Enter presses nothing outside the pause menu. Select stays on Backspace and L3 on C, as elsewhere.
+- **Profiler**: `task_threads` + `pthread_kill(SIGPROF)`, PC from the ucontext (`__ss.__pc`), thread names via
+  `pthread_getname_np`, `dladdr` for symbols; hidden test runs block physical input, so pad and key checks use the
+  control channel or a visible run.
+- **PGO**: Apple clang's raw profiles are merged with Xcode's `llvm-profdata` (`tools/toolchain.py profdata_tool`);
+  Homebrew LLVM 23 refuses raw format 10. Training needs gameplay: `bench.py` requires a free-roam card, so a fresh
+  install trains from the trainer-driven runs.
+- **Build tooling**: Apple clang is the default compiler (ThinLTO works with ld64); `VCS_APPLE_CLANG=0` selects
+  Homebrew LLVM without LTO. macOS dependency check (`check_mac_deps`) accepts Apple clang without Homebrew LLVM.
+
 ## 2026-11-01 - The launcher draws itself (docs/LAUNCHER.md)
 
 The user asked for the launcher to become a high-performance application with its own native UI and beautiful
@@ -1185,3 +1226,14 @@ and suggested keeping only F2's widescreen, with what is worth keeping as separa
   the PS2's mode, `VCS_HIDE_WIDESCREEN=0` keeps the row.
 - Would change: if a 4:3-display player wanted the anamorphic HUD for a TV that stretches (unlikely on a PC), the
   preference could come back as an Advanced setting. The code is a switch away.
+
+## 2026-11-06 - Silent test runs mute at the audio output, not through `audio.volume`
+
+The macOS port made hidden test runs quiet, at first by giving `audio.volume` an `env` (`VCS_VOLUME=0` in
+test_window). `settings::set` refuses anything its environment pinned (`overridden()`, and the settings menu draws
+the row read-only for the same reason), so `tools/controls_check.py`'s presets-and-reset section could no longer set
+the master volume at all: `setting audio.volume 40 -> error refused`, and the run stopped there. Muting is now
+`VCS_SILENT=1`, read where the gain is applied (`src/main.cpp`, `applyVolume`): the settings stay live for the game,
+the menu and the checks, and a tool that needs sound (a visible run, `VCS_TEST_VISIBLE=1`) simply does not get the
+default. `PS2X_AUDIO_DUMP` is written in `ps2AudioPush`, before the master gain, so `tools/soundcheck.py` records the
+same bytes either way and needs no opt-out.

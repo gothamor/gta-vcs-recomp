@@ -377,7 +377,12 @@ namespace ui
         // the physical key, or one injected over the control channel (scripted checks; physical input to the game is
         // blocked while the menu is open, so ps2control::keyPressed alone would not close it)
         const int key = settings::value("controls.menu_key");
-        const bool menuKey = g_capturing.empty() && (platform::keyPressed(key) || ps2control::keyPressed(key));
+        bool menuKey = g_capturing.empty() && (platform::keyPressed(key) || ps2control::keyPressed(key));
+#if defined(__APPLE__)
+        // the macOS default is ` (F2 is the brightness key); F2 keeps working with Fn held
+        if (g_capturing.empty())
+            menuKey = menuKey || platform::keyPressed(platform::KEY_F2) || ps2control::keyPressed(platform::KEY_F2);
+#endif
         if (menuKey || chordPressed)
             g_open ? close() : open();
         else if (g_open && g_capturing.empty() && !g_popupWasOpen &&

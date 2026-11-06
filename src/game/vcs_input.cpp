@@ -853,10 +853,15 @@ namespace vcs::input
         s.page = kKeys;
         s.section = "Menus";
         s.label = "Settings menu";
-        s.help = "Opens and closes this menu. On a gamepad: press Back + Start together.";
+        s.help = "Opens and closes this menu. On a gamepad: press Back + Start together. On macOS the default is ` "
+                 "because F2 is the brightness key; F2 still works with Fn held.";
         s.type = Type::Key;
         s.group = "keys";
+#if defined(__APPLE__)
+        s.defaultValue = KEY_GRAVE; // F2 is the brightness key on Mac keyboards
+#else
         s.defaultValue = KEY_F2;
+#endif
         settings::add(s);
 
         s = {};
@@ -864,11 +869,16 @@ namespace vcs::input
         s.page = kKeys;
         s.section = "Menus";
         s.label = "Trainer menu";
-        s.help = "Opens and closes the trainer (god mode, weapons, vehicles, teleports...). On a gamepad: press Back + RB "
-                 "together.";
+        s.help = "Opens and closes the trainer (god mode, weapons, vehicles, teleports...). On a gamepad: press Back + "
+                 "RB together. On macOS the default is \\ because F5 is the keyboard backlight key; F5 still works "
+                 "with Fn held.";
         s.type = Type::Key;
         s.group = "keys";
+#if defined(__APPLE__)
+        s.defaultValue = KEY_BACKSLASH; // F5 is the keyboard backlight key on Mac keyboards
+#else
         s.defaultValue = KEY_F5;
+#endif
         settings::add(s);
 
         s = {};

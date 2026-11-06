@@ -22,15 +22,21 @@
 #include <dbghelp.h>
 #include "win_symbols.h"
 #include <string>
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 #include <csignal>
 #include <cxxabi.h>
-#include <dirent.h>
 #include <dlfcn.h>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <pthread.h>
+#include <sys/ucontext.h>
+#else
+#include <dirent.h>
 #include <link.h>
 #include <ucontext.h>
-#include <unistd.h>
 #include <sys/syscall.h>
+#endif
 #endif
 
 namespace vcs
@@ -511,8 +517,9 @@ namespace vcs
             g_spikeToNs.store(now, std::memory_order_release);
         }
     }
-#elif defined(__linux__)
-    // Linux: the sampler thread sends SIGPROF to each sampled thread (tgkill); the handler hands its RIP back. Same reports
+#elif defined(__linux__) || defined(__APPLE__)
+    // Linux / macOS: the sampler thread sends SIGPROF to each sampled thread (tgkill / pthread_kill); the handler hands its
+    // PC back. Same reports
     // as on Windows (guest functions, host symbols, [spike] frames, VCS_PROFILE_GUEST_FILE); VCS_PROFILE_CALLERS and
     // VCS_PROFILE_LINES are Windows only - `perf record -g` covers them here (docs/LINUX.md).
     namespace
@@ -530,7 +537,11 @@ namespace vcs
         void onSample(int, siginfo_t *, void *context)
         {
             const ucontext_t *uc = static_cast<const ucontext_t *>(context);
+#if defined(__APPLE__)
+            g_sampledRip.store(static_cast<uintptr_t>(uc->uc_mcontext->__ss.__pc), std::memory_order_relaxed);
+#else
             g_sampledRip.store(static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RIP]), std::memory_order_relaxed);
+#endif
             g_sampleReady.store(true, std::memory_order_release);
         }
 
@@ -559,8 +570,14 @@ namespace vcs
             return map;
         }
 
-        // the threads named in VCS_PROFILE_THREAD (default GameThread), by /proc/self/task/*/comm
-        std::vector<std::pair<pid_t, std::string>> findThreads()
+        struct ThreadRef
+        {
+            uintptr_t id; // Linux: tid (tgkill); macOS: pthread_t (pthread_kill)
+            std::string name;
+        };
+
+        // the threads named in VCS_PROFILE_THREAD (default GameThread); all threads when none carries those names
+        std::vector<ThreadRef> findThreads()
         {
             std::vector<std::string> wanted{"GameThread"};
             if (const char *thread = std::getenv("VCS_PROFILE_THREAD"))
@@ -574,31 +591,87 @@ namespace vcs
                     p = comma ? comma + 1 : e;
                 }
             }
-            std::vector<std::pair<pid_t, std::string>> out;
-            DIR *dir = opendir("/proc/self/task");
-            if (!dir)
-                return out;
-            while (dirent *e = readdir(dir))
+            std::vector<ThreadRef> all;
+#if defined(__APPLE__)
+            mach_port_t task = mach_task_self();
+            thread_act_array_t list = nullptr;
+            mach_msg_type_number_t count = 0;
+            if (task_threads(task, &list, &count) == KERN_SUCCESS)
             {
-                if (e->d_name[0] == '.')
-                    continue;
-                char path[64], name[32] = {};
-                std::snprintf(path, sizeof(path), "/proc/self/task/%s/comm", e->d_name);
-                if (FILE *f = std::fopen(path, "r"))
+                for (mach_msg_type_number_t i = 0; i < count; ++i)
                 {
-                    if (std::fgets(name, sizeof(name), f))
-                        name[std::strcspn(name, "\n")] = 0;
-                    std::fclose(f);
+                    char name[64] = {};
+                    if (pthread_t pt = pthread_from_mach_thread_np(list[i]))
+                    {
+                        pthread_getname_np(pt, name, sizeof(name));
+                        all.push_back({reinterpret_cast<uintptr_t>(pt), name});
+                    }
+                    mach_port_deallocate(task, list[i]);
                 }
-                for (const std::string &w : wanted)
-                    if (w == name)
-                        out.emplace_back(static_cast<pid_t>(std::atoi(e->d_name)), name);
+                vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(list), count * sizeof(thread_t));
             }
-            closedir(dir);
-            return out;
+#else
+            DIR *dir = opendir("/proc/self/task");
+            if (dir)
+            {
+                while (dirent *e = readdir(dir))
+                {
+                    if (e->d_name[0] == '.')
+                        continue;
+                    char path[64], name[32] = {};
+                    std::snprintf(path, sizeof(path), "/proc/self/task/%s/comm", e->d_name);
+                    if (FILE *f = std::fopen(path, "r"))
+                    {
+                        if (std::fgets(name, sizeof(name), f))
+                            name[std::strcspn(name, "\n")] = 0;
+                        std::fclose(f);
+                    }
+                    all.push_back({static_cast<uintptr_t>(std::atoi(e->d_name)), name});
+                }
+                closedir(dir);
+            }
+#endif
+            std::vector<ThreadRef> out;
+            for (const ThreadRef &t : all)
+                for (const std::string &w : wanted)
+                    if (w == t.name)
+                    {
+                        out.push_back(t);
+                        break;
+                    }
+            return out.empty() ? all : out;
+        }
+
+        bool sendSample(uintptr_t id)
+        {
+#if defined(__APPLE__)
+            return pthread_kill(reinterpret_cast<pthread_t>(id), SIGPROF) == 0;
+#else
+            return syscall(SYS_tgkill, getpid(), static_cast<pid_t>(id), SIGPROF) == 0;
+#endif
         }
 
         // A host address's symbol (demangled) and its function's size, from the exe's dynamic symbols (-rdynamic)
+#if defined(__APPLE__)
+        bool hostSymbol(uintptr_t addr, std::string *name, uintptr_t *start, uint64_t *size)
+        {
+            Dl_info info{};
+            if (!dladdr(reinterpret_cast<void *>(addr), &info) || !info.dli_sname)
+                return false;
+            if (name)
+            {
+                int status = 0;
+                char *plain = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
+                *name = status == 0 && plain ? plain : info.dli_sname;
+                std::free(plain);
+            }
+            if (start)
+                *start = reinterpret_cast<uintptr_t>(info.dli_saddr);
+            if (size)
+                *size = 0;
+            return true;
+        }
+#else
         bool hostSymbol(uintptr_t addr, std::string *name, uintptr_t *start, uint64_t *size)
         {
             Dl_info info{};
@@ -619,6 +692,7 @@ namespace vcs
                 *size = sym ? sym->st_size : 0;
             return true;
         }
+#endif
     }
 
     void startProfiler(PS2Runtime &runtime)
@@ -630,7 +704,7 @@ namespace vcs
         if (const char *spikes = std::getenv("VCS_PROFILE_SPIKES"))
             g_spikeMs = std::atoll(spikes);
         if (std::getenv("VCS_PROFILE_CALLERS") || std::getenv("VCS_PROFILE_LINES"))
-            std::fprintf(stderr, "[profile] VCS_PROFILE_CALLERS / VCS_PROFILE_LINES are Windows only: use perf record -g on Linux\n");
+            std::fprintf(stderr, "[profile] VCS_PROFILE_CALLERS / VCS_PROFILE_LINES are Windows only: use perf record -g on Linux, or Instruments on macOS\n");
         struct sigaction sa{};
         sa.sa_sigaction = &onSample;
         sa.sa_flags = SA_SIGINFO | SA_RESTART;
@@ -639,7 +713,6 @@ namespace vcs
 
         std::thread([&runtime, reportSeconds]() {
             const std::vector<HostFn> map = buildHostMap();
-            const pid_t pid = getpid();
             // is the host function at `host` generated code (FUN_*, not a hook), and how long is it (symbol size)
             struct GeneratedInfo
             {
@@ -678,7 +751,7 @@ namespace vcs
                 }
                 return std::string("?");
             };
-            std::vector<std::pair<pid_t, std::string>> threads;
+            std::vector<ThreadRef> threads;
             std::unordered_map<uint32_t, uint64_t> hits;   // guest function -> samples
             std::unordered_map<uintptr_t, uint64_t> other; // host RIP -> samples
             uint64_t total = 0;
@@ -706,7 +779,7 @@ namespace vcs
                 for (size_t ti = 0; ti < threads.size(); ++ti)
                 {
                     g_sampleReady.store(false, std::memory_order_relaxed);
-                    if (syscall(SYS_tgkill, pid, threads[ti].first, SIGPROF) != 0)
+                    if (!sendSample(threads[ti].id))
                     {
                         threads.clear(); // gone: looked for again
                         break;
@@ -744,7 +817,7 @@ namespace vcs
                             char key[32];
                             if (t.guest)
                                 std::snprintf(key, sizeof(key), "guest 0x%08x", t.guest);
-                            const std::string who = threads.size() > 1 && t.thread < threads.size() ? threads[t.thread].second + ": " : "";
+                            const std::string who = threads.size() > 1 && t.thread < threads.size() ? threads[t.thread].name + ": " : "";
                             by[who + (t.guest ? std::string(key) : "host " + symbolName(t.rip))]++;
                         }
                     if (n && spikesReported++ < 400)

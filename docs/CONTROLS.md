@@ -24,6 +24,10 @@ menu (F2): the **Keyboard** and **Gamepad** pages (src/game/vcs_input.cpp).
 | Select | Backspace | Back / View |
 | Walk (hold) | - (unbound) | - (a small stick tilt) |
 
+**On macOS** the settings menu and the trainer default to the backquote and the backslash keys (F2 and F5 are the
+brightness and backlight keys there; with Fn held they work too). Every binding stays rebindable; the rest of the
+table is the same on every platform.
+
 **While driving** (Keyboard page, Driving) these keys do what a PC driving game does, and nothing else meanwhile; on
 foot they keep their bindings above (W walks, Space jumps):
 
@@ -152,7 +156,9 @@ game-internals.md 6m; before 2026-11-05 Start was Enter and the menu took the pa
 ## Menus
 
 F2 (or Back + Start on a gamepad) opens the settings, F5 (or Back + RB) the trainer (docs/TRAINER.md), F6 (or Back + LB)
-turns the trainer's free camera on and off. Flying: W / A / S / D, E or Space up, Q down, mouse look, Shift faster,
+turns the trainer's free camera on and off. On macOS the settings default to the backquote key and the trainer to the
+backslash key (F2 and F5 are the brightness and backlight keys there; with Fn held they work too), and both stay
+rebindable in Settings > Keyboard & mouse. Flying: W / A / S / D, E or Space up, Q down, mouse look, Shift faster,
 Ctrl slower, Z / X zoom out / in; gamepad left stick, right stick, RT / LT, A / B, D-pad up / down (fixed keys; the
 game gets no input meanwhile). In the
 trainer: Up / Down or numpad 8 / 2 or the D-pad select, Left / Right or numpad 4 / 6 change a value, Enter / numpad

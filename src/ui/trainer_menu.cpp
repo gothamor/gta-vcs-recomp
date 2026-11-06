@@ -535,7 +535,11 @@ namespace ui
             if (g_open)
                 close();
         }
-        else if (pressedKey(key) || chordPressed)
+        else if (pressedKey(key) || chordPressed
+#if defined(__APPLE__)
+                 || pressedKey(platform::KEY_F5) // the macOS default is \ (F5 is the backlight key); Fn+F5 too
+#endif
+        )
             g_open ? close() : open();
 
         if (g_releaseWait && !anyInputHeld())

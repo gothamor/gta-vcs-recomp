@@ -20,6 +20,10 @@
 
 #include <volk.h>
 
+#if defined(__APPLE__)
+#include <dlfcn.h> // dlopen ignores rpaths: the loader's path comes from the platform layer
+#endif
+
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #define VMA_IMPLEMENTATION
@@ -474,9 +478,24 @@ namespace rhi
 
             bool create(const DeviceDesc &desc, std::string &error)
             {
-                if (volkInitialize() != VK_SUCCESS)
+                VkResult loader = volkInitialize();
+#if defined(__APPLE__)
+                if (loader != VK_SUCCESS && desc.vulkan.loaderPath)
                 {
-                    error = "no Vulkan loader (libvulkan.so.1 / vulkan-1.dll): install the GPU's Vulkan driver";
+                    // Homebrew's loader is not in dlopen's search path
+                    void *dylib = dlopen(desc.vulkan.loaderPath, RTLD_NOW | RTLD_LOCAL);
+                    auto getInstanceProcAddr = dylib ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(dylib, "vkGetInstanceProcAddr")) : nullptr;
+                    if (getInstanceProcAddr)
+                    {
+                        volkInitializeCustom(getInstanceProcAddr); // void
+                        loader = volkGetInstanceVersion() ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
+                    }
+                }
+#endif
+                if (loader != VK_SUCCESS)
+                {
+                    error = "no Vulkan loader (macOS: brew install vulkan-loader molten-vk; Linux: libvulkan.so.1; "
+                            "Windows: the GPU driver's vulkan-1.dll)";
                     return false;
                 }
                 if (volkGetInstanceVersion() < VK_API_VERSION_1_3)
@@ -1236,6 +1255,13 @@ namespace rhi
                 vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
                 std::vector<VkExtensionProperties> available(count);
                 vkEnumerateInstanceExtensionProperties(nullptr, &count, available.data());
+                // MoltenVK is a portability implementation: without this the loader lists no device with it
+                bool portabilityEnumeration = false;
+                for (const VkExtensionProperties &e : available)
+                    if (std::strcmp(e.extensionName, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0)
+                        portabilityEnumeration = true;
+                if (portabilityEnumeration)
+                    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
                 for (const VkExtensionProperties &e : available)
                     if (std::strcmp(e.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0)
                         m_debugUtils = true;
@@ -1259,6 +1285,7 @@ namespace rhi
                 app.apiVersion = VK_API_VERSION_1_3;
                 VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
                 ci.pApplicationInfo = &app;
+                ci.flags = portabilityEnumeration ? VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR : 0;
                 ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
                 ci.ppEnabledExtensionNames = extensions.data();
                 ci.enabledLayerCount = static_cast<uint32_t>(layers.size());
@@ -1432,6 +1459,16 @@ namespace rhi
                 std::vector<const char *> extensions{VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
                 if (!m_offscreen)
                     extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+                // MoltenVK (macOS) advertises the portability subset: it must be enabled when present
+                {
+                    uint32_t n = 0;
+                    vkEnumerateDeviceExtensionProperties(m_core->physical, nullptr, &n, nullptr);
+                    std::vector<VkExtensionProperties> all(n);
+                    vkEnumerateDeviceExtensionProperties(m_core->physical, nullptr, &n, all.data());
+                    for (const VkExtensionProperties &e : all)
+                        if (std::strcmp(e.extensionName, "VK_KHR_portability_subset") == 0)
+                            extensions.push_back("VK_KHR_portability_subset");
+                }
                 // GPU time on the CPU's clock (the input delay, PS2X_RHI_STATS): CLOCK_MONOTONIC is steady_clock on Linux
                 if (statsOn() && deviceHas(VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME))
                 {

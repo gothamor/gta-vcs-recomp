@@ -18,9 +18,32 @@ set(PS2X_BUILD_ANALYZER ${VCS_BUILD_TOOLS} CACHE BOOL "" FORCE)
 set(PS2X_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(PS2X_BUILD_STUDIO OFF CACHE BOOL "" FORCE)
 
-# Linux (docs/LINUX.md) and Windows' llvm-mingw (DECISIONS.md 2026-11-03): clang 19+ only - the same compiler as
-# clang-cl, and PS2_GUEST_CC needs its preserve_none. Linked with lld (ThinLTO).
-if(NOT MSVC)
+# macOS (docs/MACOS.md): clang 19+ only, like Linux. ld64 links (lld 23 mis-links the current SDK's Objective-C
+# stubs), so ThinLTO is off there for now: ld64 cannot read a newer LLVM's bitcode. The x86 SSE code is translated to
+# NEON by sse2neon (USE_SSE2NEON, third_party/PS2Recomp). Compile jobs follow the memory: a unity batch of generated
+# code takes up to ~2 GB, and Apple Silicon shares that memory with the GPU.
+if(APPLE)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19)
+        message(FATAL_ERROR "macOS builds need clang 19 or newer (found ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}). "
+                            "python tools/build.py finds Homebrew LLVM (docs/MACOS.md)")
+    endif()
+    cmake_host_system_information(RESULT _vcs_mem_mb QUERY TOTAL_PHYSICAL_MEMORY)
+    cmake_host_system_information(RESULT _vcs_cores QUERY NUMBER_OF_LOGICAL_CORES)
+    math(EXPR _vcs_jobs "${_vcs_mem_mb} / 3072")
+    if(_vcs_jobs LESS 1)
+        set(_vcs_jobs 1)
+    endif()
+    if(_vcs_jobs GREATER _vcs_cores)
+        set(_vcs_jobs ${_vcs_cores})
+    endif()
+    set(VCS_COMPILE_JOBS ${_vcs_jobs} CACHE STRING "Parallel compile jobs (default: one per 3 GB of memory, at most one per core)")
+    set(PS2X_LTO_JOBS ${_vcs_jobs} CACHE STRING "Parallel ThinLTO backend jobs at the game's link")
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS vcs_compile=${VCS_COMPILE_JOBS})
+    set(CMAKE_JOB_POOL_COMPILE vcs_compile)
+    message(STATUS "macOS build: ${VCS_COMPILE_JOBS} compile jobs, ${PS2X_LTO_JOBS} ThinLTO jobs (${_vcs_mem_mb} MB memory)")
+elseif(NOT MSVC)
+    # Linux (docs/LINUX.md) and Windows' llvm-mingw (DECISIONS.md 2026-11-03): clang 19+ only - the same compiler as
+    # clang-cl, and PS2_GUEST_CC needs its preserve_none. Linked with lld (ThinLTO).
     if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19)
         message(FATAL_ERROR "The game needs clang 19 or newer (found ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}). "
                             "python tools/build.py picks it up (docs/LINUX.md; Windows: llvm-mingw, downloaded)")
@@ -33,8 +56,9 @@ if(MINGW)
     add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00)
     add_link_options(-static)
 endif()
-# Linux: compile and ThinLTO jobs follow the memory - a unity batch of generated code takes up to ~2 GB to compile.
-if(NOT WIN32)
+# Linux: compile and ThinLTO jobs follow the memory - a unity batch of generated code takes up to ~2 GB to compile
+# (macOS has its own, above).
+if(NOT WIN32 AND NOT APPLE)
     cmake_host_system_information(RESULT _vcs_mem_mb QUERY TOTAL_PHYSICAL_MEMORY)
     cmake_host_system_information(RESULT _vcs_cores QUERY NUMBER_OF_LOGICAL_CORES)
     math(EXPR _vcs_jobs "${_vcs_mem_mb} / 2048")
@@ -85,6 +109,11 @@ add_subdirectory(third_party/PS2Recomp)
 
 if(VCS_HAVE_GENERATED)
     set_target_properties(ps2EntryRunner PROPERTIES OUTPUT_NAME "vcs")
+    # [gta-recomp] macOS arm64: src/game's x86 SSE intrinsics compile to NEON through the sse2neon the runtime uses
+    if(APPLE)
+        target_compile_definitions(ps2EntryRunner PRIVATE USE_SSE2NEON)
+        target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_BINARY_DIR}/_deps/sse2neon-src")
+    endif()
     # The main build tree (build/release) puts vcs.exe, its DLLs and vcs.ini at the top of build/ instead of
     # build/release/third_party/PS2Recomp/ps2xRuntime; other trees (PGO training's build/pgo-gen) keep theirs.
     # VCS_GAME_DIR: the build folder chosen elsewhere (tools/toolchain.py passes it for the main tree; docs/LAUNCHER.md).
@@ -155,7 +184,9 @@ elseif(VCS_RUNTIME_DEBUG_INFO)
     if(VCS_HAVE_GENERATED)
         set_source_files_properties(${VCS_SOURCES} "${CMAKE_SOURCE_DIR}/src/main.cpp"
             TARGET_DIRECTORY ps2EntryRunner PROPERTIES COMPILE_OPTIONS "-gline-tables-only;-fno-omit-frame-pointer")
-        target_link_options(ps2EntryRunner PRIVATE -rdynamic)
+        if(NOT APPLE) # Mach-O exports symbols by default; -rdynamic is ELF-only
+            target_link_options(ps2EntryRunner PRIVATE -rdynamic)
+        endif()
     endif()
 endif()
 # llvm-mingw: the profiler's __try / __except (src/debug/profiler.cpp) need the Microsoft extensions clang-cl has on

@@ -1,8 +1,8 @@
 # GTA: Vice City Stories — Native PC port (PS2 static recompilation)
 
-A native **Windows and Linux** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
-recompiling the game's PS2 executable into C++. Both are built from the same source and run natively: Direct3D 11 on
-Windows, Vulkan on Linux.
+A native **Windows, Linux and macOS** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
+recompiling the game's PS2 executable into C++. All are built from the same source and run natively: Direct3D 11 on
+Windows, Vulkan on Linux and macOS (Apple Silicon, MoltenVK; docs/MACOS.md).
 
 **This repository contains no game code or game data.** You need your own copy of the game as an `.iso`.
 The build reads the executable from your disc, and the finished game reads everything else from it while it runs.
@@ -93,6 +93,22 @@ With Visual Studio 2022 or newer installed (*Desktop development with C++* and *
   ```
 - A graphics driver with Vulkan 1.3: Mesa (AMD, Intel) or NVIDIA's own. `vulkaninfo --summary` shows it.
 
+### macOS (Apple Silicon)
+
+Xcode's command line tools plus a few Homebrew packages are everything the build needs:
+
+```bash
+xcode-select --install
+brew install cmake ninja glslang ffmpeg pkgconf vulkan-loader molten-vk
+python3 tools/build.py --check-deps       # what is missing, with the brew line
+```
+
+Then build and run exactly as below (`python3 tools/build.py --recompile "<your disc>.iso"`, `build/vcs`). Apple clang
+builds it with ThinLTO; a Finder-friendly bundle is `python3 tools/package_mac.py --out VCS.app`. The launcher
+(Windows, and Linux since 0.1.1) is not part of this port; a macOS front end can follow once it gets a Cocoa back end.
+Details, the keyboard differences (F2/F5 are the brightness and backlight keys; use ` and \) and troubleshooting:
+[docs/MACOS.md](docs/MACOS.md).
+
 ### 2. Get the source and your disc
 
 1. Get the source, e.g. into `C:\Games\vcs-recomp` (Windows) or `~/games/vcs-recomp` (Linux):
@@ -144,7 +160,7 @@ other improvement below is an option in the settings menu (F2), and *Authentic (
 *Display > Presets* turns on the usual ones at once: **Enhanced** for a modern graphics card, **Widescreen, light**
 for older PCs and integrated graphics, **Authentic (PS2)** to go back.
 
-**Runs natively, on Windows and Linux.** The game's own code, recompiled to C++ and running on the PC, not in an
+**Runs natively, on Windows, Linux and macOS (Apple Silicon).** The game's own code, recompiled to C++ and running on the PC, not in an
 emulator. The 3D world, characters, vehicles, HUD and menus are drawn by a native renderer - Direct3D 11 on Windows,
 Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded with FFmpeg.
 

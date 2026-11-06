@@ -18,7 +18,11 @@
 #include "game/vcs_hle_world.h"
 
 #include <algorithm>
+#if defined(USE_SSE2NEON)
+#include "sse2neon.h" // x86 SSE intrinsics on arm64 (the runtime's copy)
+#else
 #include <immintrin.h>
+#endif
 #include <chrono>
 #include <cfenv>
 #include <cmath>

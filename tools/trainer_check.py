@@ -25,6 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rig  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# the trainer menu's key: backslash on Apple platforms (F5 is the keyboard backlight key there), F5 elsewhere
+TRAINER_KEY = "backslash" if sys.platform == "darwin" else "f5"
 S = rig.Scm
 PED_HEALTH, PED_VEHICLE, PED_STATE, PED_WEAPONS = 0x4E4, 0x480, 0x8C4, 0x578
 CAR_HEALTH = 0x278
@@ -379,7 +381,7 @@ class Check:
             # the menu, driven by keys: opening it and flipping a row; the game behind it keeps running and gets
             # none of the keys (Escape, the trainer's back, is the game's Start: it would open the pause map)
             self.t("toggle god 0")
-            g.cmd("press f5 60")
+            g.cmd("press %s 60" % TRAINER_KEY)
             time.sleep(0.5)
             self.shot("menu_main")
             for k in ("return", "return"):  # Player, then God mode

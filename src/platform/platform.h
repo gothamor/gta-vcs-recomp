@@ -158,6 +158,8 @@ namespace platform
     // For the Vulkan renderer (rhi::VulkanWindow), on a window made with WindowDesc::vulkan. Main thread.
     const char *const *vulkanInstanceExtensions(uint32_t *count); // the instance extensions the surface needs
     bool vulkanCreateSurface(void *instance, uint64_t *surface);  // VkInstance -> VkSurfaceKHR
+    // macOS: the Vulkan loader's path (Homebrew), for the RHI's volk and a second dlopen; null elsewhere.
+    const char *vulkanLoaderPath();
 
     // Main thread, once per host frame, in this order:
     //   pumpEvents()      events + input snapshot

@@ -21,6 +21,60 @@
 #include <limits>
 #if defined(__AVX__)
 #include <immintrin.h>
+#elif defined(USE_SSE2NEON)
+#include "sse2neon.h"
+// SSE compare predicates: immintrin.h defines them, sse2neon takes the bare immediate
+#ifndef _CMP_EQ_OQ
+#define _CMP_EQ_OQ 0x00
+#define _CMP_LT_OS 0x01
+#define _CMP_LE_OS 0x02
+#define _CMP_UNORD_Q 0x03
+#define _CMP_NEQ_UQ 0x04
+#define _CMP_NLT_US 0x05
+#define _CMP_NLE_US 0x06
+#define _CMP_ORD_Q 0x07
+#define _CMP_EQ_UQ 0x08
+#define _CMP_NGE_US 0x09
+#define _CMP_NGT_US 0x0a
+#define _CMP_FALSE_OQ 0x0b
+#define _CMP_NEQ_OQ 0x0c
+#define _CMP_GE_OS 0x0d
+#define _CMP_GT_OS 0x0e
+#define _CMP_TRUE_UQ 0x0f
+#define _CMP_EQ_OS 0x10
+#define _CMP_LT_OQ 0x11
+#define _CMP_LE_OQ 0x12
+#define _CMP_UNORD_S 0x13
+#define _CMP_NEQ_US 0x14
+#define _CMP_NLT_UQ 0x15
+#define _CMP_NLE_UQ 0x16
+#define _CMP_ORD_S 0x17
+#define _CMP_EQ_US 0x18
+#define _CMP_NGE_UQ 0x19
+#define _CMP_NGT_UQ 0x1a
+#define _CMP_FALSE_OS 0x1b
+#define _CMP_NEQ_OS 0x1c
+#define _CMP_GE_OQ 0x1d
+#define _CMP_GT_OQ 0x1e
+#define _CMP_TRUE_US 0x1f
+#endif
+// sse2neon has the SSE compares but not SSE4.1's _mm_cmp_ps (predicate in the low 3 bits; the quiet/signaling
+// bit only changes which exceptions are raised, and they end in the same mask)
+inline __m128 ps2x_cmp_ps(__m128 a, __m128 b, int predicate)
+{
+    switch (predicate & 7)
+    {
+    case 0: return _mm_cmpeq_ps(a, b);
+    case 1: return _mm_cmplt_ps(a, b);
+    case 2: return _mm_cmple_ps(a, b);
+    case 3: return _mm_cmpunord_ps(a, b);
+    case 4: return _mm_cmpneq_ps(a, b);
+    case 5: return _mm_cmpnlt_ps(a, b);
+    case 6: return _mm_cmpnle_ps(a, b);
+    default: return _mm_cmpord_ps(a, b);
+    }
+}
+#define _mm_cmp_ps(a, b, predicate) ps2x_cmp_ps((a), (b), (predicate))
 #endif
 
 enum class Vu1CompiledResult : uint8_t // (declared in ps2_vu1.h, with Vu1CompiledFn)
@@ -232,7 +286,7 @@ namespace vu1fast
 // 256-bit pd - so an AVX build keeps the vector path; only an SSE4 build takes the per-lane one.
 namespace vu1v
 {
-#if defined(__AVX__)
+#if defined(__AVX__) || defined(USE_SSE2NEON)
     using V = __m128;
     using VI = __m128i;
 
@@ -287,6 +341,7 @@ namespace vu1v
             if ((~static_cast<unsigned>(_mm_movemask_ps(_mm_or_ps(inRange, zeroOperand))) & Dest) == 0u)
                 return value;
         }
+#if defined(__AVX__)
         const __m256d product = _mm256_mul_pd(_mm256_cvtps_pd(a), _mm256_cvtps_pd(b));
         const __m256d exact = Subtract ? _mm256_sub_pd(_mm256_cvtps_pd(c), product)
                                        : _mm256_add_pd(_mm256_cvtps_pd(c), product);
@@ -307,15 +362,43 @@ namespace vu1v
                 values[component] = vu1fast::exactResult(values[component], exacts[component]);
         }
         return _mm_load_ps(values);
+#else
+        // arm64 (sse2neon): the same per-lane double test, one lane at a time
+        alignas(16) float values[4], lanesC[4], lanesA[4], lanesB[4];
+        _mm_store_ps(values, value);
+        _mm_store_ps(lanesC, c);
+        _mm_store_ps(lanesA, a);
+        _mm_store_ps(lanesB, b);
+        for (unsigned component = 0; component < 4u; ++component)
+        {
+            if ((Dest & (1u << component)) == 0u)
+                continue;
+            const double exact = Subtract ? static_cast<double>(lanesC[component]) - static_cast<double>(lanesA[component]) * static_cast<double>(lanesB[component])
+                                          : static_cast<double>(lanesC[component]) + static_cast<double>(lanesA[component]) * static_cast<double>(lanesB[component]);
+            values[component] = vu1fast::exactResult(values[component], exact);
+        }
+        return _mm_load_ps(values);
+#endif
     }
 
     // = vu1fast::floatToInt(value, scale) per lane: (double)value * scale, clamped to int32, truncated
     VU1_FORCEINLINE V floatToInt(V value, float scale)
     {
+#if defined(__AVX__)
         __m256d scaled = _mm256_mul_pd(_mm256_cvtps_pd(value), _mm256_set1_pd(static_cast<double>(scale)));
         scaled = _mm256_min_pd(_mm256_max_pd(scaled, _mm256_set1_pd(static_cast<double>(std::numeric_limits<int32_t>::min()))),
                                _mm256_set1_pd(static_cast<double>(std::numeric_limits<int32_t>::max())));
         return _mm_castsi128_ps(_mm256_cvttpd_epi32(scaled));
+#else
+        alignas(16) float values[4];
+        _mm_store_ps(values, value);
+        for (unsigned k = 0; k < 4u; ++k)
+        {
+            const int32_t i = vu1fast::floatToInt(values[k], scale);
+            std::memcpy(&values[k], &i, 4);
+        }
+        return _mm_load_ps(values);
+#endif
     }
 
     // static_cast<float>(int32 lane bits) / divisor (ITOF4 / 12 / 15; ITOF0 = intToFloat(v))

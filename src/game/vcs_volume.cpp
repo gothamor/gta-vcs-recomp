@@ -71,8 +71,11 @@ namespace vcs::volume
             if (GPR_U32(ctx, 31) != l.menuReturn && target >= 0)
             {
                 if (static_cast<int>(GPR_U32(ctx, 5) & 0xFF) != target)
+                {
                     std::fprintf(stderr, "[volume] the game sets the %s level %u (ra=0x%x): the player's %d instead\n", l.name,
                                  GPR_U32(ctx, 5) & 0xFF, GPR_U32(ctx, 31), target);
+                    std::fflush(stderr); // scripted checks read this line from the log right away
+                }
                 SET_GPR_U32(ctx, 5, static_cast<uint32_t>(target));
             }
             l.original(rdram, ctx, runtime);

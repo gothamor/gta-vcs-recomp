@@ -45,6 +45,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -56,6 +57,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <climits>
 #endif
 
 #if defined(PS2X_PGO_GEN)
@@ -125,6 +129,17 @@ namespace
         const fs::path self = fs::read_symlink("/proc/self/exe", ec);
         if (!ec && !self.empty())
             return self.parent_path();
+#elif defined(__APPLE__)
+        // a .app starts with / as the working directory: vcs.ini sits next to the executable
+        char buffer[PATH_MAX];
+        uint32_t size = sizeof(buffer);
+        if (_NSGetExecutablePath(buffer, &size) == 0)
+        {
+            std::error_code ec;
+            const fs::path self = fs::weakly_canonical(buffer, ec);
+            if (!ec && !self.empty())
+                return self.parent_path();
+        }
 #endif
         return fs::current_path();
     }
@@ -137,6 +152,9 @@ namespace
 #if defined(_WIN32)
         if (const char *local = std::getenv("LOCALAPPDATA"))
             return fs::path(local) / "VCSRecomp";
+#elif defined(__APPLE__)
+        if (const char *home = std::getenv("HOME"))
+            return fs::path(home) / "Library/Application Support/VCSRecomp";
 #endif
         if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg == '/') // absolute only (the XDG spec)
             return fs::path(xdg) / "VCSRecomp";
@@ -493,7 +511,13 @@ namespace
         settings::add(s);
 
         auto applyVolume = [](int) {
-            auto gain = [](int percent) { return (percent / 100.0f) * (percent / 100.0f); }; // even steps to the ear
+            // VCS_SILENT=1 keeps a scripted run quiet (toolchain.test_window) without taking the volume settings
+            // away from it: a hidden run still sets them, and settings::set refuses only what its own env pinned.
+            const char *silent = std::getenv("VCS_SILENT");
+            const bool mute = silent && *silent && strcmp(silent, "0") != 0;
+            auto gain = [mute](int percent) {
+                return (percent / 100.0f) * (percent / 100.0f) * (mute ? 0.0f : 1.0f); // even steps to the ear
+            };
             ps2AudioSetVolume(gain(settings::value("audio.volume")), gain(settings::value("audio.movie_volume")));
         };
         s = {};

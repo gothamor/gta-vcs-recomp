@@ -39,6 +39,7 @@ namespace platform
         std::array<std::atomic<float>, AXIS_COUNT> g_padAxes{};
         std::atomic<bool> g_padConnected{false};
         SDL_Gamepad *g_gamepad = nullptr;
+        SDL_Joystick *g_virtualJoy = nullptr; // VCS_VIRTUAL_GAMEPAD=1: a test pad, no hardware needed
 
         SDL_AudioStream *g_audio = nullptr;
         AudioFill g_audioFill = nullptr;
@@ -346,6 +347,26 @@ namespace platform
         }
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
             std::fprintf(stderr, "[platform] no audio: %s\n", SDL_GetError());
+        // VCS_VIRTUAL_GAMEPAD=1: an SDL virtual pad that pushes the left stick up / right in a 6 s cycle (tests, no
+        // controller at hand). The game opens it like any gamepad (GAMEPAD_ADDED).
+        if (std::getenv("VCS_VIRTUAL_GAMEPAD"))
+        {
+            SDL_VirtualJoystickDesc vdesc{};
+            SDL_INIT_INTERFACE(&vdesc);
+            vdesc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+            vdesc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+            vdesc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+            vdesc.name = "VCS virtual gamepad";
+            if (const SDL_JoystickID id = SDL_AttachVirtualJoystick(&vdesc); id > 0)
+            {
+                g_virtualJoy = SDL_OpenJoystick(id);
+                std::fprintf(stderr, "[platform] virtual gamepad %s\n", g_virtualJoy ? "attached" : SDL_GetError());
+            }
+        }
+        if (desc.vulkan)
+            if (const char *loader = vulkanLoaderPath())
+                if (!SDL_Vulkan_LoadLibrary(loader))
+                    std::fprintf(stderr, "[platform] SDL_Vulkan_LoadLibrary(%s): %s\n", loader, SDL_GetError());
 
         // created hidden, placed, then shown: no flash at the default place
         g_window = SDL_CreateWindow(desc.title, desc.width, desc.height,
@@ -371,6 +392,8 @@ namespace platform
             g_mouseMovedNs = SDL_GetTicksNS();
             SDL_ShowWindow(g_window);
             SDL_SyncWindow(g_window);
+            // a launcher/Finder start can leave another app frontmost: the game takes the keyboard right away
+            SDL_RaiseWindow(g_window);
             if (!placed)
                 notePlacement();
             currentPlacement(g_reported);
@@ -405,6 +428,9 @@ namespace platform
         if (g_gamepad)
             SDL_CloseGamepad(g_gamepad);
         g_gamepad = nullptr;
+        if (g_virtualJoy)
+            SDL_CloseJoystick(g_virtualJoy);
+        g_virtualJoy = nullptr;
         if (g_window)
             SDL_DestroyWindow(g_window);
         g_window = nullptr;
@@ -437,6 +463,28 @@ namespace platform
         return names;
     }
 
+    const char *vulkanLoaderPath()
+    {
+#if defined(__APPLE__)
+        // Homebrew's Vulkan loader (a portability implementation, MoltenVK behind it). dlopen ignores rpaths, so
+        // both SDL and volk need the path (the RHI gets it through VulkanWindow::loaderPath).
+        static const char *path = [] () -> const char * {
+            if (const char *given = std::getenv("VCS_VULKAN_LOADER"); given && *given)
+                return given;
+            for (const char *candidate : {"/opt/homebrew/lib/libvulkan.1.dylib", "/usr/local/lib/libvulkan.1.dylib"})
+                if (std::FILE *f = std::fopen(candidate, "rb"))
+                {
+                    std::fclose(f);
+                    return candidate;
+                }
+            return nullptr;
+        }();
+        return path;
+#else
+        return nullptr;
+#endif
+    }
+
     bool vulkanCreateSurface(void *instance, uint64_t *surface)
     {
         VkSurfaceKHR made{};
@@ -466,6 +514,14 @@ namespace platform
 
     void pumpEvents(bool frameStart)
     {
+        if (g_virtualJoy)
+        {
+            const double cycle = std::fmod(static_cast<double>(SDL_GetTicks()) / 1000.0, 6.0);
+            SDL_SetJoystickVirtualAxis(g_virtualJoy, SDL_GAMEPAD_AXIS_LEFTY, cycle < 2.0 ? -32000 : 0);
+            SDL_SetJoystickVirtualAxis(g_virtualJoy, SDL_GAMEPAD_AXIS_LEFTX, cycle >= 2.0 && cycle < 4.0 ? 32000 : 0);
+            SDL_SetJoystickVirtualButton(g_virtualJoy, SDL_GAMEPAD_BUTTON_SOUTH, cycle >= 4.0 && cycle < 4.3);
+        }
+
         SDL_Event e;
         while (SDL_PollEvent(&e))
         {
