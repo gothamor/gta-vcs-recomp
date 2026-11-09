@@ -1,14 +1,14 @@
 # GTA: Vice City Stories — Native PC port (PS2 static recompilation)
 
-A native **Windows and Linux** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
-recompiling the game's PS2 executable into C++. Both are built from the same source and run natively: Direct3D 11 on
-Windows, Vulkan on Linux.
+A native **Windows, Linux and macOS** port of **Grand Theft Auto: Vice City Stories** (PS2, USA, SLUS-21590), made by
+recompiling the game's PS2 executable into C++. All are built from the same source and run natively: Direct3D 11 on
+Windows, Vulkan on Linux, Vulkan on Metal (MoltenVK) on macOS.
 
 **This repository contains no game code or game data.** You need your own copy of the game as an `.iso`.
 The build reads the executable from your disc, and the finished game reads everything else from it while it runs.
 
-Status: in development. See [docs/PROGRESS.md](docs/PROGRESS.md) for what works, and [docs/LINUX.md](docs/LINUX.md)
-for the Linux build in detail.
+Status: in development. See [docs/PROGRESS.md](docs/PROGRESS.md) for what works, [docs/LINUX.md](docs/LINUX.md)
+for the Linux build in detail and [docs/MACOS.md](docs/MACOS.md) for the Mac's.
 
 ## Install on Windows: the launcher (easiest)
 
@@ -55,6 +55,35 @@ The AppImage is the whole launcher: *Add a shortcut to the desktop* in *Settings
 too. Updates replace the AppImage itself (*Settings > Check now*); the next start puts the new files in place and only
 what changed is rebuilt. Without FUSE (some containers and minimal systems), start it with
 `--appimage-extract-and-run`.
+
+## Install on macOS (Apple silicon)
+
+The Mac version is new: it is built on your Mac from the source (no launcher yet) and has been played on an Apple M5
+with macOS 27. It needs a Mac with Apple silicon (M1 or newer); Intel Macs aren't supported.
+
+1. **The tools** (once). Install [Homebrew](https://brew.sh) and Apple's command line tools (`xcode-select --install`,
+   or Xcode), then in Terminal:
+   ```bash
+   brew install llvm lld cmake ninja pkgconf glslang ffmpeg molten-vk vulkan-loader vulkan-headers
+   ```
+   Homebrew's LLVM is the compiler (the same clang as on Windows and Linux; Xcode's clang isn't used). MoltenVK runs
+   the game's Vulkan renderer on Metal.
+2. **The source and your disc.** Clone the repository (`git clone <this repository's URL> ~/Games/vcs-recomp`) and copy
+   your `.iso` into that folder (USA release, `Vice City Stories` in its name). `python3 tools/build.py --check-deps`
+   says if anything from step 1 is missing.
+3. **Build** (15-30 minutes the first time):
+   ```bash
+   cd ~/Games/vcs-recomp
+   python3 tools/build.py --recompile
+   ```
+   It ends with `[build] ok: build/vcs (optimised: ThinLTO, for ARM64 CPUs)` and puts **Vice City Stories** in
+   `~/Applications`.
+4. **Play**: open **Vice City Stories** from Launchpad, Spotlight or Finder > Applications (keep it in the Dock from
+   its right-click menu). `python3 tools/run.py 0 play` starts it from Terminal instead.
+
+On a Mac, full screen is **Option+Return** (or F2 > Display > Window mode), and Retina displays are drawn at their full
+resolution. Saves live in `~/Library/Application Support/VCSRecomp`, the game's log in
+`~/Library/Logs/VCSRecomp/play.log`. Updating is the same as for a git clone (below): every build makes the app again.
 
 ## Install by hand (Windows and Linux)
 
@@ -131,11 +160,12 @@ where your disc is.
   gamepad binding. The defaults match the PS2 except the frame rate (60 fps, frame-rate independent); every other
   improvement is an option you turn on (Display > Presets > Enhanced turns on the usual ones at once). Settings are
   saved in `vcs.ini` next to the game.
-- **Alt+Enter** switches between full screen and the window.
+- **Alt+Enter** switches between full screen and the window (Option+Return on a Mac).
 - **F5** opens the trainer ([docs/TRAINER.md](docs/TRAINER.md)).
 - **F8** saves a screenshot to the `screenshots` folder next to the game.
 - Keyboard, mouse and gamepads (Xbox, PlayStation, Switch Pro, ...) all work: [docs/CONTROLS.md](docs/CONTROLS.md).
-- Saves (the memory card) live in `%LOCALAPPDATA%\VCSRecomp` on Windows and `~/.local/share/VCSRecomp` on Linux.
+- Saves (the memory card) live in `%LOCALAPPDATA%\VCSRecomp` on Windows, `~/.local/share/VCSRecomp` on Linux and
+  `~/Library/Application Support/VCSRecomp` on macOS.
 
 ## Features
 
@@ -227,6 +257,9 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
 | Linux: `clang 19 or newer not found` / `missing build dependencies` | Install what `python3 tools/build.py --check-deps` lists. |
 | Linux: `cannot find -lstdc++` | Install `libstdc++-<N>-dev` for your newest GCC (`build.py` works around it when an older one has it). |
 | Linux: the game starts but no window / `no GPU with Vulkan 1.3` | Install your GPU's Vulkan driver (Mesa or NVIDIA); `vulkaninfo --summary` should list it. |
+| macOS: `Homebrew's clang 19 or newer not found` / `missing build dependencies` | Run the `brew install` line that `python3 tools/build.py --check-deps` prints. |
+| macOS: `no Vulkan loader` | `brew install vulkan-loader molten-vk`. |
+| macOS: the app says the game isn't built | Build again (`python3 tools/build.py`), or `python3 tools/macos_app.py` after moving the folder. |
 
 The build's full output is in `build/build.log` (`build/configure.log` for the configure step).
 `python tools/doctor.py` checks everything at once (folder, compiler, disc, whether the game is current) and says what
