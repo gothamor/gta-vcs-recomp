@@ -19,8 +19,23 @@ elseif(PS2X_CPU STREQUAL "AVX")
 elseif(PS2X_CPU STREQUAL "SSE4")
     set(_ps2x_arch_msvc "/clang:-march=x86-64-v2")  # SSE4.2, SSSE3, POPCNT (clang-cl's /arch has no SSE4 level)
     set(_ps2x_arch_clang "-march=x86-64-v2")
+elseif(PS2X_CPU STREQUAL "ARM64")
+    # [gta-recomp] macOS on Apple silicon (docs/MACOS.md): the x86 intrinsics go through sse2neon (USE_SSE2NEON);
+    # apple-m1 is the oldest Mac it runs on.
+    set(_ps2x_arch_msvc "")
+    if(APPLE)
+        set(_ps2x_arch_clang "-mcpu=apple-m1")
+    else()
+        set(_ps2x_arch_clang "-march=armv8.2-a")
+    endif()
 else()
-    message(FATAL_ERROR "PS2X_CPU=${PS2X_CPU}: AVX2, AVX or SSE4")
+    message(FATAL_ERROR "PS2X_CPU=${PS2X_CPU}: AVX2, AVX, SSE4 or ARM64")
+endif()
+# [gta-recomp] -fcf-protection is an x86 option (CET); clang rejects it for arm64
+if(PS2X_CPU STREQUAL "ARM64")
+    set(_ps2x_no_cet "")
+else()
+    set(_ps2x_no_cet "-fcf-protection=none")
 endif()
 
 function(EnableFastReleaseMode TargetName)
@@ -69,12 +84,20 @@ function(EnableFastReleaseMode TargetName)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT MSVC)
         target_compile_options(${TargetName} PRIVATE
             $<$<CONFIG:Release>:-O2 -DNDEBUG ${_ps2x_arch_clang} -ffp-contract=off -fno-math-errno -fno-strict-aliasing
-                                -fno-stack-protector -fcf-protection=none>
+                                -fno-stack-protector ${_ps2x_no_cet}>
         )
         get_target_property(_type ${TargetName} TYPE)
         if(PS2X_LTO STREQUAL "THIN")
             target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin>)
-            if(_type STREQUAL "EXECUTABLE")
+            if(_type STREQUAL "EXECUTABLE" AND APPLE)
+                # [gta-recomp] macOS: ld64.lld spells the cache option the Apple way
+                target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin
+                                    -Wl,-cache_path_lto,${CMAKE_BINARY_DIR}/lto-cache
+                                    -Wl,--thinlto-cache-policy=cache_size_bytes=1g:prune_after=72h>)
+                if(PS2X_LTO_JOBS)
+                    target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-Wl,--thinlto-jobs=${PS2X_LTO_JOBS}>)
+                endif()
+            elseif(_type STREQUAL "EXECUTABLE")
                 target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=thin
                                     -Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache
                                     -Wl,--thinlto-cache-policy=cache_size_bytes=1g:prune_after=72h>)

@@ -1,5 +1,6 @@
 // SDL3 implementation of platform.h.
 #include "platform/platform.h"
+#include "util/vulkan_loader_path.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -363,6 +364,9 @@ namespace platform
 
     bool init(const WindowDesc &desc)
     {
+        // macOS: SDL loads the Vulkan loader for the window by name, which misses Homebrew's (docs/MACOS.md)
+        if (const std::string loader = vcs::vulkanLoaderPath(); desc.vulkan && !loader.empty())
+            SDL_SetHint(SDL_HINT_VULKAN_LIBRARY, loader.c_str());
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
         {
             std::fprintf(stderr, "[platform] SDL_Init: %s\n", SDL_GetError());

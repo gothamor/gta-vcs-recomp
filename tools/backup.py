@@ -32,6 +32,8 @@ def data_dir():
         return os.environ["VCS_DATA_DIR"]
     if tc.IS_WINDOWS:
         return os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "VCSRecomp")
+    if tc.IS_MACOS:  # the game's dataDirectory (src/main.cpp)
+        return os.path.expanduser("~/Library/Application Support/VCSRecomp")
     xdg = os.environ.get("XDG_DATA_HOME", "")
     return os.path.join(xdg if xdg.startswith("/") else os.path.expanduser("~/.local/share"), "VCSRecomp")
 

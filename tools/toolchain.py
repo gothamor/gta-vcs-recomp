@@ -49,6 +49,7 @@ def show(path):
         return path
     return path if rel.startswith("..") else rel
 IS_WINDOWS = platform.system() == "Windows"
+IS_MACOS = platform.system() == "Darwin"  # docs/MACOS.md: Apple silicon, Homebrew's LLVM, Vulkan through MoltenVK
 
 # our progress lines and the tools' output interleave in order even when stdout is a pipe. UTF-8 whatever the
 # console's code page: the launcher reads UTF-8, and its PYTHONIOENCODING / PYTHONUTF8 do nothing under -I (isolated
@@ -420,9 +421,9 @@ def run_with_progress(cmd, log, label, cwd=ROOT, env=None):
 # SSE4 (SSE4.2 and POPCNT: x86-64-v2) for CPUs without AVX - first-generation Core i, and the Pentium / Celeron / Atom
 # chips that lacked AVX until 2020. A binary built for a newer CPU dies on its first unknown instruction before it
 # prints anything (a report from a Xeon E5-2687W, 2026-10-30: "recompiling fails in 1 second", empty log).
-CPU_LEVELS = ("AVX2", "AVX", "SSE4")
+CPU_LEVELS = ("AVX2", "AVX", "SSE4", "ARM64")
 CPU_TEXT = {"AVX2": "AVX2 (Haswell / Zen and newer)", "AVX": "AVX (Sandy Bridge class, no AVX2)",
-            "SSE4": "SSE4.2 (no AVX)"}
+            "SSE4": "SSE4.2 (no AVX)", "ARM64": "ARM64 (Apple silicon)"}
 
 
 def cpu_features():
@@ -463,6 +464,8 @@ def cpu_level():
         if forced not in CPU_LEVELS:
             fail("VCS_CPU=%s: one of %s" % (forced, ", ".join(CPU_LEVELS)))
         return forced
+    if platform.machine().lower() in ("arm64", "aarch64"):
+        return "ARM64"
     found = cpu_features()
     if found is None:
         return "AVX2"
@@ -483,6 +486,12 @@ def cpu_name():
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
                 return " ".join(str(winreg.QueryValueEx(key, "ProcessorNameString")[0]).split())
         except OSError:
+            return ""
+    if IS_MACOS:
+        try:
+            return subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True,
+                                  timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
             return ""
     try:
         with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
@@ -665,9 +674,34 @@ def llvm_mingw_bin(download=True):
     return os.path.dirname(clang)
 
 
+def _brew_prefix():
+    """Homebrew's prefix (/opt/homebrew on Apple silicon), None without Homebrew."""
+    for prefix in (os.environ.get("HOMEBREW_PREFIX"), "/opt/homebrew", "/usr/local"):
+        if prefix and os.path.isfile(os.path.join(prefix, "bin", "brew")):
+            return prefix
+    return None
+
+
+def _macos_llvm_bins():
+    """macOS: Homebrew's LLVM (clang 19+, not Apple's clang: the same compiler as Windows and Linux) and lld (a formula
+    of its own since LLVM 20). VCS_LLVM=<folder> takes another LLVM's bin."""
+    given = os.environ.get("VCS_LLVM")
+    if given:
+        return [given]
+    prefix = _brew_prefix()
+    if not prefix:
+        return []
+    return [os.path.join(prefix, "opt", f, "bin") for f in ("llvm", "lld")
+            if os.path.isdir(os.path.join(prefix, "opt", f, "bin"))]
+
+
 def build_env():
     """Environment for CMake / Ninja / the compiler."""
     env = dict(os.environ)
+    if IS_MACOS:
+        front = [d for d in _macos_llvm_bins() if d]
+        env["PATH"] = os.pathsep.join(front + [env.get("PATH", "")])
+        return env
     if not IS_WINDOWS:
         llvm = _linux_llvm_bin(env)
         if llvm:
@@ -1283,6 +1317,14 @@ def compiler_defines(env):
         return ["-DCMAKE_%s_COMPILER=%s" % (lang, tools[name].replace(os.sep, "/"))
                 for lang, name in (("C", "clang"), ("CXX", "clang++"), ("RC", "llvm-windres"))] + \
                ["-DCMAKE_EXE_LINKER_FLAGS=-static"] + ninja
+    if IS_MACOS:
+        clang, clangxx = _which("clang", env), _which("clang++", env)
+        if not clang or not clangxx or clang_version(clang) < MIN_CLANG or "Apple" in _clang_vendor(clang):
+            fail("Homebrew's clang %d or newer not found: brew install llvm lld (docs/MACOS.md), or run "
+                 "python3 tools/build.py --check-deps" % MIN_CLANG, "no_clang")
+        if not _which("ld64.lld", env):
+            fail("ld64.lld not found (the LLVM linker): brew install lld", "no_clang")
+        return ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx] + ninja
     clang, clangxx = _which("clang", env), _which("clang++", env)
     if not clang or not clangxx or clang_version(clang) < MIN_CLANG:
         fail("clang %d or newer not found - install it (docs/LINUX.md; e.g. sudo apt install clang-20 lld-20 llvm-20), "
@@ -1295,6 +1337,14 @@ def compiler_defines(env):
         flag = "--gcc-install-dir=" + gcc
         defines += ["-DCMAKE_C_FLAGS=" + flag, "-DCMAKE_CXX_FLAGS=" + flag]
     return defines
+
+
+def _clang_vendor(clang):
+    """The first line of `clang --version` ("Apple clang version ..." for Xcode's)."""
+    try:
+        return subprocess.run([clang, "--version"], capture_output=True, text=True, timeout=30).stdout.split("\n")[0]
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def _gcc_with_libstdcxx(clangxx):
@@ -1488,8 +1538,66 @@ def linux_install_command(packages, sudo="sudo"):
     return cmd + " ".join(packages).split()
 
 
+# ---- macOS (docs/MACOS.md): Homebrew formulas -------------------------------------------------------------------
+# (what is checked, how, the formula). SDL3 is built from source as elsewhere (it needs nothing from Homebrew on
+# macOS: Cocoa, Core Audio, GameController are the system's); Vulkan is MoltenVK behind the Khronos loader.
+MACOS_DEPS = [
+    ("git", "git", "git"),
+    ("pkg-config", "pkg-config", "pkgconf"),
+    ("CMake %d.%d+" % (3, 21), "cmake", "cmake"),
+    ("Ninja", "ninja", "ninja"),
+    ("glslangValidator", "glslangValidator", "glslang"),
+    ("FFmpeg (movies)", "pc:libavcodec libavformat libavutil libswscale libswresample", "ffmpeg"),
+    ("Vulkan loader", "pc:vulkan", "vulkan-loader"),
+    ("MoltenVK (Vulkan on Metal)", "file:opt/molten-vk/lib/libMoltenVK.dylib", "molten-vk"),
+]
+
+
+def macos_missing(env):
+    """The missing macOS build dependencies: a list of (label, Homebrew formula)."""
+    prefix = _brew_prefix() or "/opt/homebrew"
+    missing = []
+    for label, check, formula in MACOS_DEPS:
+        if check.startswith("pc:"):
+            ok = bool(_which("pkg-config", env)) and subprocess.run(
+                ["pkg-config", "--exists"] + check[3:].split(), env=env).returncode == 0
+        elif check.startswith("file:"):
+            ok = os.path.isfile(os.path.join(prefix, check[5:]))
+        else:
+            ok = bool(_which(check, env))
+        if not ok:
+            missing.append((label, formula))
+    clang = _which("clang", env)
+    if not clang or clang_version(clang) < MIN_CLANG or "Apple" in _clang_vendor(clang):
+        missing.append(("Homebrew's clang %d+ (not Xcode's)" % MIN_CLANG, "llvm"))
+    if not _which("ld64.lld", env):
+        missing.append(("lld (ld64.lld)", "lld"))
+    return missing
+
+
+def check_macos_deps(env, deps=None):
+    """Missing build dependencies on macOS, with the brew command; True when nothing is missing. The launcher has no
+    macOS port yet (deps = its list): nothing to check."""
+    if deps is not None:
+        return True
+    if not _brew_prefix():
+        print("[deps] Homebrew not found: install it from https://brew.sh, then run this again")
+        return False
+    missing = macos_missing(env)
+    if not missing:
+        print("[deps] all build dependencies found (LLVM: %s)" % os.path.dirname(_which("clang", env) or "?"))
+        return True
+    for label, _ in missing:
+        print("[deps] missing: " + label)
+    print("[deps] install them with:\n    brew install " + " ".join(sorted({f for _, f in missing})))
+    return False
+
+
 def check_linux_deps(env, deps=None):
-    """Missing build dependencies on Linux, with the install command for this distro; True when nothing is missing."""
+    """Missing build dependencies on Linux, with the install command for this distro; True when nothing is missing.
+    (macOS: check_macos_deps.)"""
+    if IS_MACOS:
+        return check_macos_deps(env, deps)
     missing = linux_missing(env, deps)
     if not missing:
         llvm = _linux_llvm_bin(env) if deps is None else None

@@ -58,6 +58,12 @@ if(PS2X_IS_ARM_TARGET)
 
     include_directories(${sse2neon_SOURCE_DIR})
     add_compile_definitions(USE_SSE2NEON)
+    # [gta-recomp] <immintrin.h> & co. in code without a USE_SSE2NEON branch (the runtime's render worker, our
+    # src/game) resolve to sse2neon through these one-line headers (docs/MACOS.md). Global so the game's own sources,
+    # added from the parent project, see them too.
+    include_directories(BEFORE "${CMAKE_CURRENT_SOURCE_DIR}/ps2xRuntime/include/arm_x86_shim")
+    set(PS2X_ARM_SHIM_DIRS "${sse2neon_SOURCE_DIR};${CMAKE_CURRENT_SOURCE_DIR}/ps2xRuntime/include/arm_x86_shim"
+        CACHE INTERNAL "")
 
     if(PS2X_IS_AARCH64_TARGET AND APPLE)
         # macOS ARM64 already uses optimal defaults

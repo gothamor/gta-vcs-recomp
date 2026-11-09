@@ -17,12 +17,20 @@
 #include <windows.h>
 #include <dbghelp.h>
 #include "win_symbols.h"
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 #include <dlfcn.h>
 #include <execinfo.h>
+#if defined(__APPLE__)
+#include <sys/ucontext.h> // <ucontext.h> wants _XOPEN_SOURCE on macOS; only the type is used
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
+#if defined(__linux__)
 #include <sys/syscall.h>
+#else
+#include <pthread.h> // pthread_threadid_np
+#endif
 #endif
 
 namespace vcs
@@ -106,7 +114,7 @@ namespace vcs
             printStack(info->ContextRecord);
             return EXCEPTION_CONTINUE_SEARCH;
         }
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
         // Frames as "module+0xoffset (symbol+0xoffset)", then one llvm-symbolizer line per module seen. Called from
         // signal handlers: no allocation; dladdr is not async-signal-safe in theory, but the process is ending anyway.
         void printStack(void *faultPc)
@@ -159,6 +167,31 @@ namespace vcs
             std::fflush(stderr);
         }
 
+        // The interrupted instruction, per OS and CPU (macOS: the Mach thread state behind uc_mcontext).
+        void *faultingPc(const ucontext_t *uc)
+        {
+#if defined(__APPLE__) && defined(__aarch64__)
+            return reinterpret_cast<void *>(__darwin_arm_thread_state64_get_pc(uc->uc_mcontext->__ss));
+#elif defined(__APPLE__)
+            return reinterpret_cast<void *>(uc->uc_mcontext->__ss.__rip);
+#elif defined(__aarch64__)
+            return reinterpret_cast<void *>(uc->uc_mcontext.pc);
+#else
+            return reinterpret_cast<void *>(uc->uc_mcontext.gregs[REG_RIP]);
+#endif
+        }
+
+        long threadId()
+        {
+#if defined(__APPLE__)
+            uint64_t id = 0;
+            pthread_threadid_np(nullptr, &id);
+            return static_cast<long>(id);
+#else
+            return static_cast<long>(syscall(SYS_gettid));
+#endif
+        }
+
         void onFatalSignal(int sig, siginfo_t *info, void *context)
         {
             static volatile sig_atomic_t inside = 0;
@@ -166,12 +199,12 @@ namespace vcs
                 _exit(128 + sig);
             inside = 1;
             const ucontext_t *uc = static_cast<const ucontext_t *>(context);
-            void *pc = uc ? reinterpret_cast<void *>(uc->uc_mcontext.gregs[REG_RIP]) : nullptr;
+            void *pc = uc ? faultingPc(uc) : nullptr;
             const char *name = sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" : sig == SIGILL ? "SIGILL" : sig == SIGFPE ? "SIGFPE" : "signal";
             std::fprintf(stderr, "[crash] %s at %p", name, pc);
             if ((sig == SIGSEGV || sig == SIGBUS) && info)
                 std::fprintf(stderr, " %s address %p", info->si_code == SEGV_ACCERR ? "no access to" : "bad", info->si_addr);
-            std::fprintf(stderr, " (thread %ld)\n", static_cast<long>(syscall(SYS_gettid)));
+            std::fprintf(stderr, " (thread %ld)\n", threadId());
             printStack(pc);
             // the default action: the exit status (and a core dump where enabled) say what happened
             signal(sig, SIG_DFL);
@@ -199,7 +232,7 @@ namespace vcs
                 }
             }
             std::fprintf(stderr, "\n");
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
             printStack(nullptr);
 #endif
             std::_Exit(3);
@@ -208,7 +241,7 @@ namespace vcs
         void onAbort(int)
         {
             std::fprintf(stderr, "[crash] abort()\n");
-#if defined(_WIN32) || defined(__linux__)
+#if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
             printStack(nullptr);
 #endif
             std::_Exit(3);
@@ -225,7 +258,7 @@ namespace vcs
         _set_invalid_parameter_handler(&onInvalidParameter);
         if (std::getenv("VCS_CRASH_FIRST_CHANCE"))
             AddVectoredExceptionHandler(1, &onFirstChance);
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
         // the handler runs on its own stack, so a stack overflow is reported too (the main thread's; other threads
         // report on their own stack)
         static char altStack[64 * 1024];

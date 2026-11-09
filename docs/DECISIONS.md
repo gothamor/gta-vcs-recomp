@@ -1255,3 +1255,17 @@ on the Enhancements page.
   skipping the whole update would also hold back its burst gate and animation, so bursts would end late.
 - **The next shot is due one interval after the last was due**, not after it came, with 2 ms tolerance: the rate is
   exact whatever the frame length, and at 30 fps every frame (33 / 34 ms) still fires - identical to the original.
+
+## 2026-11-09 - macOS: native on Apple silicon, Vulkan through MoltenVK (the user's request)
+- The user asked for a Mac port. It builds the same way as Linux (docs/MACOS.md): `python3 tools/build.py`, Homebrew's
+  clang (not Xcode's: the same compiler as Windows and Linux) linked with ld64.lld, the Vulkan RHI backend on the
+  Khronos loader + MoltenVK (Vulkan 1.3 on Metal: on an M5 with MoltenVK 1.4.2 every feature the backend needs is
+  there - dynamic rendering, push descriptors, dual-source blend, depth clamp, clip distances).
+- Native arm64, not x86-64 under Rosetta: the runtime already had sse2neon for ARM (upstream's), the x86-only code is
+  guarded (`__AVX__` / `__AVX2__` paths have plain fallbacks; `PS2_GUEST_CC`'s `preserve_none` is x86-64 only), and
+  Rosetta would have needed a second, x86-64 Homebrew for FFmpeg and the Vulkan loader. `PS2X_CPU=ARM64`.
+- Bit-exactness on ARM is not checked yet: the VU's rounding mode goes through sse2neon's `_mm_setcsr` (FPCR's
+  rounding bits) and `-ffp-contract=off` stays (ARM fuses multiply-adds by default). `PS2X_HLE_VERIFY=1` /
+  `PS2X_VU0_VERIFY=1` on a Mac are the check to run.
+- No Metal backend: MoltenVK is enough until measurements say otherwise. Would change if MoltenVK's translation
+  costs measurable frame time or misses a feature the renderer comes to need.
