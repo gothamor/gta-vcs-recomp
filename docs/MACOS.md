@@ -32,6 +32,19 @@ python3 tools/run.py 0 play                            # play (window; build/run
 - The game is `build/vcs`, its settings `build/vcs.ini`. Saves and caches go to `~/Library/Application Support/VCSRecomp`
   (`VCS_DATA_DIR` works as elsewhere).
 
+## The app
+
+`python3 tools/macos_app.py` makes `build/Vice City Stories.app` and copies it to `~/Applications` (Launchpad,
+Spotlight, the Dock); `tools/build.py` makes it again after every successful macOS build (`VCS_NO_APP=1` skips that).
+The app holds no game: `Contents/MacOS/vcs` links to `build/vcs`, started by `Contents/MacOS/vcs-launch` (a few lines
+of shell: the log to `~/Library/Logs/VCSRecomp/play.log`, the previous one as `play.prev.log`, then `exec`). Started
+through the link, macOS takes the game for the app (`lsappinfo`: "Vice City Stories", `local.vcs-recomp.game`), while
+the game still finds `vcs.ini` and the disc next to `build/vcs` (`exeDirectory` resolves the link). The games category
+turns on Game Mode in full screen. A missing build shows a dialog. The icon is the launcher's
+(`launcher/make_icon.py`), 824 px on a 1024 px canvas, made into an .icns with `sips` / `iconutil` once
+(`build/macos-icon`). `--check` says whether the installed app starts this build. It needs Homebrew's Vulkan loader
+and FFmpeg at run time: an app that carries them (for other Macs) is on the work list.
+
 ## Running
 
 - **Vulkan**: `[rhi] Vulkan loader /opt/homebrew/lib/libvulkan.1.dylib` and `Vulkan on Apple M5 (MoltenVK 1.4.2)` in the
@@ -72,4 +85,5 @@ python3 tools/run.py 0 play                            # play (window; build/run
 | Bit-exact checks on ARM: `PS2X_HLE_VERIFY=1`, `PS2X_VU0_VERIFY=1`, `--iop-tests` | done (90 s flyover): VU0 every program 0 differed (millions of runs); setup programs, re-draws, C++ clipper, env pass exact; world fast path 11 within 1 / 14 off of 2.0 M - the same as Windows' llvm-mingw reference (11 / 14, docs/LINUX.md); SPU2 tests 0 failures. sse2neon's `_mm_setcsr` rounding and `-ffp-contract=off` give x86's numbers |
 | Retina: the window at the display's pixel density (`SDL_WINDOW_HIGH_PIXEL_DENSITY`, macOS only) | done: a 640x448-point window is a 1280x896 swapchain; the mouse was already in drawable pixels |
 | Sampling profiler on macOS (`thread_get_state`) | to do |
-| The launcher (Cocoa window, Metal or Vulkan) and an .app bundle with the loader + MoltenVK inside | to do |
+| An app for the Dock / Launchpad (`tools/macos_app.py`) | done (2026-11-09): starts this build, its own name and icon, log in ~/Library/Logs |
+| A self-contained app (the Vulkan loader, MoltenVK and FFmpeg inside: no Homebrew to play) and the launcher (Cocoa) | to do |

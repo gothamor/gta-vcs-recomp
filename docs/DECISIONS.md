@@ -1269,3 +1269,14 @@ on the Enhancements page.
   `PS2X_VU0_VERIFY=1` on a Mac are the check to run.
 - No Metal backend: MoltenVK is enough until measurements say otherwise. Would change if MoltenVK's translation
   costs measurable frame time or misses a feature the renderer comes to need.
+
+## 2026-11-09 - macOS: an app that starts the build, not the launcher yet (the user's request)
+- The user asked for an easier way to start the game than the terminal. `tools/macos_app.py` makes
+  `Vice City Stories.app` in `~/Applications`, re-made by every macOS build (docs/MACOS.md "The app").
+- A link to `build/vcs` inside the bundle rather than a copy of the game: rebuilds need no new app, there is one
+  `vcs.ini` (next to `build/vcs`), and macOS still takes the process for the app (name, icon, Game Mode). Its starter is
+  a few lines of shell embedded in the Python tool (the log, then `exec`): the only shell in the repository, because an
+  app's executable must be something macOS runs directly.
+- Not the cross-platform launcher (`launcher/`): it has its own windowing and renderer per OS (Win32 / X11 + Wayland,
+  D3D11 / Vulkan) - a Cocoa port is a project of its own. Would change when players without a terminal need the setup
+  steps (disc, tools, build) on a Mac.
