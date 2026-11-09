@@ -1255,3 +1255,28 @@ on the Enhancements page.
   skipping the whole update would also hold back its burst gate and animation, so bursts would end late.
 - **The next shot is due one interval after the last was due**, not after it came, with 2 ms tolerance: the rate is
   exact whatever the frame length, and at 30 fps every frame (33 / 34 ms) still fires - identical to the original.
+
+## 2026-11-09 - macOS: native on Apple silicon, Vulkan through MoltenVK (the user's request)
+- The user asked for a Mac port. It builds the same way as Linux (docs/MACOS.md): `python3 tools/build.py`, Homebrew's
+  clang (not Xcode's: the same compiler as Windows and Linux) linked with ld64.lld, the Vulkan RHI backend on the
+  Khronos loader + MoltenVK (Vulkan 1.3 on Metal: on an M5 with MoltenVK 1.4.2 every feature the backend needs is
+  there - dynamic rendering, push descriptors, dual-source blend, depth clamp, clip distances).
+- Native arm64, not x86-64 under Rosetta: the runtime already had sse2neon for ARM (upstream's), the x86-only code is
+  guarded (`__AVX__` / `__AVX2__` paths have plain fallbacks; `PS2_GUEST_CC`'s `preserve_none` is x86-64 only), and
+  Rosetta would have needed a second, x86-64 Homebrew for FFmpeg and the Vulkan loader. `PS2X_CPU=ARM64`.
+- Bit-exactness on ARM is not checked yet: the VU's rounding mode goes through sse2neon's `_mm_setcsr` (FPCR's
+  rounding bits) and `-ffp-contract=off` stays (ARM fuses multiply-adds by default). `PS2X_HLE_VERIFY=1` /
+  `PS2X_VU0_VERIFY=1` on a Mac are the check to run.
+- No Metal backend: MoltenVK is enough until measurements say otherwise. Would change if MoltenVK's translation
+  costs measurable frame time or misses a feature the renderer comes to need.
+
+## 2026-11-09 - macOS: an app that starts the build, not the launcher yet (the user's request)
+- The user asked for an easier way to start the game than the terminal. `tools/macos_app.py` makes
+  `Vice City Stories.app` in `~/Applications`, re-made by every macOS build (docs/MACOS.md "The app").
+- A link to `build/vcs` inside the bundle rather than a copy of the game: rebuilds need no new app, there is one
+  `vcs.ini` (next to `build/vcs`), and macOS still takes the process for the app (name, icon, Game Mode). Its starter is
+  a few lines of shell embedded in the Python tool (the log, then `exec`): the only shell in the repository, because an
+  app's executable must be something macOS runs directly.
+- Not the cross-platform launcher (`launcher/`): it has its own windowing and renderer per OS (Win32 / X11 + Wayland,
+  D3D11 / Vulkan) - a Cocoa port is a project of its own. Would change when players without a terminal need the setup
+  steps (disc, tools, build) on a Mac.

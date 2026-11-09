@@ -133,6 +133,11 @@ def main():
         move_from_old_place()
         iso = remember_iso(iso_arg or None)
         write_build_info(iso)
+        if tc.IS_MACOS and not os.environ.get("VCS_NO_APP"):
+            # the Dock / Launchpad app (tools/macos_app.py, docs/MACOS.md): made again so it starts this build
+            import macos_app
+            macos_app.make_app(os.path.realpath(tc.VCS_EXE))
+            print("[build] app: " + macos_app.install())
         print("[build] ok: " + tc.show(tc.VCS_EXE) + " (" + built_opt() + ")")
         tc.event(result="ok", exe=tc.show(tc.VCS_EXE).replace(os.sep, "/"), opt=built_opt())
 

@@ -17,6 +17,8 @@
 #elif defined(__linux__)
 #include <fcntl.h>    // AT_FDCWD
 #include <sys/stat.h> // statx: the birth time
+#elif defined(__APPLE__) // [gta-recomp] macOS: stat's st_birthtimespec (APFS / HFS+ keep a birth time)
+#include <sys/stat.h>
 #endif
 
 namespace ps2_stubs
@@ -394,6 +396,13 @@ namespace ps2_stubs
             if (statx(AT_FDCWD, entry.path().c_str(), 0, STATX_BTIME | STATX_MTIME, &st) == 0)
             {
                 const statx_timestamp &t = (st.stx_mask & STATX_BTIME) ? st.stx_btime : st.stx_mtime;
+                return static_cast<uint64_t>(t.tv_sec) * 1000000000ull + t.tv_nsec;
+            }
+#elif defined(__APPLE__)
+            struct stat st{};
+            if (stat(entry.path().c_str(), &st) == 0)
+            {
+                const struct timespec &t = st.st_birthtimespec.tv_sec > 0 ? st.st_birthtimespec : st.st_mtimespec;
                 return static_cast<uint64_t>(t.tv_sec) * 1000000000ull + t.tv_nsec;
             }
 #endif
@@ -924,6 +933,16 @@ namespace ps2_stubs
             {
                 const double m = static_cast<double>(st.stx_mtime.tv_sec) + st.stx_mtime.tv_nsec / 1e9;
                 const double b = (st.stx_mask & STATX_BTIME) ? static_cast<double>(st.stx_btime.tv_sec) + st.stx_btime.tv_nsec / 1e9 : m;
+                return {b, m};
+            }
+#elif defined(__APPLE__)
+            struct stat st{};
+            if (stat(path.c_str(), &st) == 0)
+            {
+                const double m = static_cast<double>(st.st_mtimespec.tv_sec) + st.st_mtimespec.tv_nsec / 1e9;
+                const double b = st.st_birthtimespec.tv_sec > 0
+                                     ? static_cast<double>(st.st_birthtimespec.tv_sec) + st.st_birthtimespec.tv_nsec / 1e9
+                                     : m;
                 return {b, m};
             }
 #endif

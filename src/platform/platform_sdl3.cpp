@@ -1,5 +1,6 @@
 // SDL3 implementation of platform.h.
 #include "platform/platform.h"
+#include "util/vulkan_loader_path.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -363,6 +364,9 @@ namespace platform
 
     bool init(const WindowDesc &desc)
     {
+        // macOS: SDL loads the Vulkan loader for the window by name, which misses Homebrew's (docs/MACOS.md)
+        if (const std::string loader = vcs::vulkanLoaderPath(); desc.vulkan && !loader.empty())
+            SDL_SetHint(SDL_HINT_VULKAN_LIBRARY, loader.c_str());
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
         {
             std::fprintf(stderr, "[platform] SDL_Init: %s\n", SDL_GetError());
@@ -372,8 +376,13 @@ namespace platform
             std::fprintf(stderr, "[platform] no audio: %s\n", SDL_GetError());
 
         // created hidden, placed, then shown: no flash at the default place
-        g_window = SDL_CreateWindow(desc.title, desc.width, desc.height,
-                                    SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | (desc.vulkan ? SDL_WINDOW_VULKAN : 0));
+        SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | (desc.vulkan ? SDL_WINDOW_VULKAN : 0);
+#if defined(__APPLE__)
+        // Retina: the drawable at the display's pixels, not the window's points scaled up by macOS (windowSize and the
+        // mouse are in drawable pixels already; docs/MACOS.md)
+        flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
+        g_window = SDL_CreateWindow(desc.title, desc.width, desc.height, flags);
         if (!g_window)
         {
             std::fprintf(stderr, "[platform] SDL_CreateWindow: %s\n", SDL_GetError());

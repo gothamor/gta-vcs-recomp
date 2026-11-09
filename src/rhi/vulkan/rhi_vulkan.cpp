@@ -17,8 +17,12 @@
 // - New render targets and depth textures start cleared to zero (D3D drivers hand them out that way).
 // - Objects freed while the GPU may still use them are destroyed when their frame's fence has passed.
 #include "rhi/rhi.h"
+#include "util/vulkan_loader_path.h"
 
 #include <volk.h>
+#if !defined(_WIN32)
+#include <dlfcn.h> // the loader by full path (macOS)
+#endif
 
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
@@ -467,6 +471,30 @@ namespace rhi
             return VK_FALSE;
         }
 
+        // The loader by full path when volk can't find it by name: Homebrew's on macOS (util/vulkan_loader_path.h).
+        bool initializeFromPath()
+        {
+#if defined(_WIN32)
+            return false;
+#else
+            const std::string path = vcs::vulkanLoaderPath();
+            if (path.empty())
+                return false;
+            void *lib = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (!lib)
+            {
+                std::fprintf(stderr, "[rhi] %s: %s\n", path.c_str(), dlerror());
+                return false;
+            }
+            auto getProc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(lib, "vkGetInstanceProcAddr"));
+            if (!getProc)
+                return false;
+            volkInitializeCustom(getProc);
+            std::fprintf(stderr, "[rhi] Vulkan loader %s\n", path.c_str());
+            return true;
+#endif
+        }
+
         class VulkanDevice final : public Device
         {
         public:
@@ -474,9 +502,13 @@ namespace rhi
 
             bool create(const DeviceDesc &desc, std::string &error)
             {
-                if (volkInitialize() != VK_SUCCESS)
+                if (volkInitialize() != VK_SUCCESS && !initializeFromPath())
                 {
+#if defined(__APPLE__)
+                    error = "no Vulkan loader: brew install vulkan-loader molten-vk (docs/MACOS.md)";
+#else
                     error = "no Vulkan loader (libvulkan.so.1 / vulkan-1.dll): install the GPU's Vulkan driver";
+#endif
                     return false;
                 }
                 if (volkGetInstanceVersion() < VK_API_VERSION_1_3)
@@ -1236,11 +1268,19 @@ namespace rhi
                 vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
                 std::vector<VkExtensionProperties> available(count);
                 vkEnumerateInstanceExtensionProperties(nullptr, &count, available.data());
+                bool portability = false;
                 for (const VkExtensionProperties &e : available)
+                {
                     if (std::strcmp(e.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0)
                         m_debugUtils = true;
+                    if (std::strcmp(e.extensionName, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) == 0)
+                        portability = true;
+                }
                 if (m_debugUtils)
                     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+                // MoltenVK (macOS) is a portability driver: the loader lists it only when asked to (docs/MACOS.md)
+                if (portability)
+                    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
                 std::vector<const char *> layers;
                 if (desc.debug)
                 {
@@ -1259,6 +1299,8 @@ namespace rhi
                 app.apiVersion = VK_API_VERSION_1_3;
                 VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
                 ci.pApplicationInfo = &app;
+                if (portability)
+                    ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
                 ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
                 ci.ppEnabledExtensionNames = extensions.data();
                 ci.enabledLayerCount = static_cast<uint32_t>(layers.size());
@@ -1432,6 +1474,9 @@ namespace rhi
                 std::vector<const char *> extensions{VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
                 if (!m_offscreen)
                     extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+                // a portability driver (MoltenVK) must have this one enabled when it lists it (the Vulkan spec)
+                if (deviceHas("VK_KHR_portability_subset"))
+                    extensions.push_back("VK_KHR_portability_subset"); // vulkan_beta.h's name
                 // GPU time on the CPU's clock (the input delay, PS2X_RHI_STATS): CLOCK_MONOTONIC is steady_clock on Linux
                 if (statsOn() && deviceHas(VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME))
                 {

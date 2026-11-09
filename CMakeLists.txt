@@ -9,8 +9,13 @@ set(VCS_GENERATED_DIR "${CMAKE_SOURCE_DIR}/generated/ee" CACHE PATH "Recompiled 
 
 set(PS2X_LTO "THIN" CACHE STRING "Link-time optimisation for the game: THIN (default, the game to play), OFF (quick dev builds), FULL")
 set(PS2X_PGO "" CACHE STRING "Profile-guided optimisation: empty (off), GEN (instrumented), or a .profdata path (tools/build.py --opt)")
-set(PS2X_CPU "AVX2" CACHE STRING "The CPU the build runs on: AVX2 (Haswell / Zen and newer, the default), AVX (Sandy / Ivy Bridge, Bulldozer) or SSE4 (no AVX); tools/build.py picks it from this PC")
-set_property(CACHE PS2X_CPU PROPERTY STRINGS AVX2 AVX SSE4)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
+    set(_vcs_cpu_default "ARM64")
+else()
+    set(_vcs_cpu_default "AVX2")
+endif()
+set(PS2X_CPU "${_vcs_cpu_default}" CACHE STRING "The CPU the build runs on: AVX2 (Haswell / Zen and newer, the default), AVX (Sandy / Ivy Bridge, Bulldozer), SSE4 (no AVX) or ARM64 (Apple silicon); tools/build.py picks it from this PC")
+set_property(CACHE PS2X_CPU PROPERTY STRINGS AVX2 AVX SSE4 ARM64)
 option(VCS_BUILD_TOOLS "Build the PS2Recomp recompiler/analyzer" ON)
 
 set(PS2X_BUILD_RECOMP ${VCS_BUILD_TOOLS} CACHE BOOL "" FORCE)
@@ -26,6 +31,22 @@ if(NOT MSVC)
                             "python tools/build.py picks it up (docs/LINUX.md; Windows: llvm-mingw, downloaded)")
     endif()
     add_link_options(-fuse-ld=lld)
+endif()
+# macOS (docs/MACOS.md): clang 23 calls Objective-C class methods through objc_msgSendClass$ stubs that only Apple's
+# linker makes; ld64.lld leaves them undefined (SDL's Cocoa / GameController code). The plain call instead.
+if(APPLE)
+    add_compile_options($<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:-fno-objc-msgsend-class-selector-stubs>)
+    # LLVM's archiver next to the compiler, not Xcode's /usr/bin/ar: Apple's silently leaves out bitcode from a newer
+    # LLVM, so a ThinLTO build's static libraries came out nearly empty ("undefined symbol" for the whole runtime).
+    # Here and not only in tools/toolchain.py: CMake picks the archiver once, when the build tree is made.
+    get_filename_component(_vcs_llvm_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    if(EXISTS "${_vcs_llvm_bin}/llvm-ar" AND EXISTS "${_vcs_llvm_bin}/llvm-ranlib")
+        set(CMAKE_AR "${_vcs_llvm_bin}/llvm-ar" CACHE FILEPATH "Archiver (LLVM's: macOS, ThinLTO)" FORCE)
+        set(CMAKE_RANLIB "${_vcs_llvm_bin}/llvm-ranlib" CACHE FILEPATH "ranlib (LLVM's)" FORCE)
+        # the compiler detection's own variables hide the cache entries in this scope (and so in the subdirectories)
+        set(CMAKE_AR "${_vcs_llvm_bin}/llvm-ar")
+        set(CMAKE_RANLIB "${_vcs_llvm_bin}/llvm-ranlib")
+    endif()
 endif()
 # llvm-mingw: mingw-w64's headers default to Windows 7, the Windows SDK's to Windows 10 - the same APIs as clang-cl's
 # build. Every program is linked -static: libc++, libunwind and winpthread inside, only the system's UCRT left.
@@ -79,6 +100,9 @@ if(VCS_HAVE_GENERATED)
     add_subdirectory(src/render)
     add_library(vcs_host INTERFACE)
     target_link_libraries(vcs_host INTERFACE vcs_platform vcs_render)
+    # The window and the renderer without the game: a check for a new platform (docs/MACOS.md). Not built by default.
+    add_executable(vcs_window_smoke EXCLUDE_FROM_ALL tests/window_smoke/main.cpp)
+    target_link_libraries(vcs_window_smoke PRIVATE vcs_platform vcs_rhi)
     set(PS2X_HOST_PLATFORM_TARGET vcs_host CACHE STRING "" FORCE)
 endif()
 add_subdirectory(third_party/PS2Recomp)
