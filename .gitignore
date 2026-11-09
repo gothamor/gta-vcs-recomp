@@ -33,3 +33,6 @@ __pycache__/
 .vcs-build-dir
 /VCSLauncher
 /VCSLauncher.old
+
+# --- macOS Finder metadata ---
+.DS_Store
