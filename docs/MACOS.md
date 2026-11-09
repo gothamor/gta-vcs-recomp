@@ -2,7 +2,7 @@
 
 The native macOS build for Apple silicon: the same source and the same `python3 tools/build.py` pipeline as Linux
 (docs/LINUX.md), built with Homebrew's LLVM, drawing with the Vulkan RHI backend on MoltenVK (Vulkan on Metal).
-Decision: DECISIONS.md, 2026-11-09. Status: in bring-up (work list below).
+Decision: DECISIONS.md, 2026-11-09. Status: boots and plays the title flyover; bit-exact checks match x86 (work list below).
 
 ## Building
 
@@ -25,6 +25,10 @@ python3 tools/run.py 0 play                            # play (window; build/run
 - SDL3 is built from source as elsewhere; on macOS it needs nothing from Homebrew (Cocoa, Core Audio, GameController
   are the system's). Its Objective-C is compiled with `-fno-objc-msgsend-class-selector-stubs`: clang 23's
   `objc_msgSendClass$` stubs are made only by Apple's linker, and ld64.lld leaves them undefined.
+- **Static libraries are archived with `llvm-ar`** (CMakeLists.txt, and `tools/toolchain.py` for new trees): Xcode's
+  `/usr/bin/ar` silently drops bitcode from Homebrew's newer LLVM, so a ThinLTO build's `libps2_runtime.a` held 3 of
+  60 objects and the link failed with "undefined symbol" for the whole runtime. (SDL3's archive still uses Apple's: it
+  isn't LTO-compiled.)
 - The game is `build/vcs`, its settings `build/vcs.ini`. Saves and caches go to `~/Library/Application Support/VCSRecomp`
   (`VCS_DATA_DIR` works as elsewhere).
 
@@ -53,17 +57,19 @@ python3 tools/run.py 0 play                            # play (window; build/run
 | Write watch | userfaultfd, opt-in | none (the default path) | No userfaultfd |
 | Card creation time | `statx` birth time | `stat`'s `st_birthtimespec` | |
 | Exe folder | `/proc/self/exe` | `_NSGetExecutablePath` | |
+| Window | at the window's size | `SDL_WINDOW_HIGH_PIXEL_DENSITY`: Retina pixels | macOS scales a 1x drawable up (soft) |
 
 ## Work list
 
 | Step | Status |
 |---|---|
-| Toolchain: Homebrew LLVM, `--check-deps` with the brew command, `PS2X_CPU=ARM64` | done (2026-11-09): recompiler builds on an M5 (macOS 27) |
+| Toolchain: Homebrew LLVM, `--check-deps` with the brew command, `PS2X_CPU=ARM64` | done (2026-11-09): recompiler builds on an M5 (macOS 27); quick and ThinLTO builds link |
+| Performance: `tools/bench.py`, the uncapped frame rate, `cruise.py` | to do. ThinLTO flyover at the original 30 fps: game thread 6.5-7 ms, worker 2 ms, GS 1.6 ms (a glance, not a benchmark) |
 | Runtime, IOP, platform, RHI, renderer and `src/` compile for arm64 (checked against stand-in generated code) | done |
 | Window + Vulkan on MoltenVK (`vcs_window_smoke`: swapchain, present, read-back) | done: Apple M5, MoltenVK 1.4.2 |
-| Recompile from the disc, link the game, boot to the title screen | to do (needs the disc) |
-| The game's shaders on MoltenVK (SPIR-V -> MSL at pipeline creation) | to do |
-| Bit-exact checks on ARM: `PS2X_HLE_VERIFY=1`, `PS2X_VU0_VERIFY=1`, `--iop-tests` | to do |
-| Retina: the window at the display's pixel density (`SDL_WINDOW_HIGH_PIXEL_DENSITY`) | to do: drawn at 1x and scaled by macOS today |
+| Recompile from the disc, link the game, boot to the title screen | done (2026-11-09): 10,386 generated files, quick build links in minutes; flyover at 30 fps (original timing), game thread ~4 ms, no crashes; hidden and windowed runs, the control channel and screenshots work |
+| The game's shaders on MoltenVK (SPIR-V -> MSL at pipeline creation) | done: the flyover draws right (sky, world, cars, post effects); validation layer run to do |
+| Bit-exact checks on ARM: `PS2X_HLE_VERIFY=1`, `PS2X_VU0_VERIFY=1`, `--iop-tests` | done (90 s flyover): VU0 every program 0 differed (millions of runs); setup programs, re-draws, C++ clipper, env pass exact; world fast path 11 within 1 / 14 off of 2.0 M - the same as Windows' llvm-mingw reference (11 / 14, docs/LINUX.md); SPU2 tests 0 failures. sse2neon's `_mm_setcsr` rounding and `-ffp-contract=off` give x86's numbers |
+| Retina: the window at the display's pixel density (`SDL_WINDOW_HIGH_PIXEL_DENSITY`, macOS only) | done: a 640x448-point window is a 1280x896 swapchain; the mouse was already in drawable pixels |
 | Sampling profiler on macOS (`thread_get_state`) | to do |
 | The launcher (Cocoa window, Metal or Vulkan) and an .app bundle with the loader + MoltenVK inside | to do |

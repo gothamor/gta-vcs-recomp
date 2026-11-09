@@ -376,8 +376,13 @@ namespace platform
             std::fprintf(stderr, "[platform] no audio: %s\n", SDL_GetError());
 
         // created hidden, placed, then shown: no flash at the default place
-        g_window = SDL_CreateWindow(desc.title, desc.width, desc.height,
-                                    SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | (desc.vulkan ? SDL_WINDOW_VULKAN : 0));
+        SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | (desc.vulkan ? SDL_WINDOW_VULKAN : 0);
+#if defined(__APPLE__)
+        // Retina: the drawable at the display's pixels, not the window's points scaled up by macOS (windowSize and the
+        // mouse are in drawable pixels already; docs/MACOS.md)
+        flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
+        g_window = SDL_CreateWindow(desc.title, desc.width, desc.height, flags);
         if (!g_window)
         {
             std::fprintf(stderr, "[platform] SDL_CreateWindow: %s\n", SDL_GetError());

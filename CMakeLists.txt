@@ -36,6 +36,17 @@ endif()
 # linker makes; ld64.lld leaves them undefined (SDL's Cocoa / GameController code). The plain call instead.
 if(APPLE)
     add_compile_options($<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:-fno-objc-msgsend-class-selector-stubs>)
+    # LLVM's archiver next to the compiler, not Xcode's /usr/bin/ar: Apple's silently leaves out bitcode from a newer
+    # LLVM, so a ThinLTO build's static libraries came out nearly empty ("undefined symbol" for the whole runtime).
+    # Here and not only in tools/toolchain.py: CMake picks the archiver once, when the build tree is made.
+    get_filename_component(_vcs_llvm_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    if(EXISTS "${_vcs_llvm_bin}/llvm-ar" AND EXISTS "${_vcs_llvm_bin}/llvm-ranlib")
+        set(CMAKE_AR "${_vcs_llvm_bin}/llvm-ar" CACHE FILEPATH "Archiver (LLVM's: macOS, ThinLTO)" FORCE)
+        set(CMAKE_RANLIB "${_vcs_llvm_bin}/llvm-ranlib" CACHE FILEPATH "ranlib (LLVM's)" FORCE)
+        # the compiler detection's own variables hide the cache entries in this scope (and so in the subdirectories)
+        set(CMAKE_AR "${_vcs_llvm_bin}/llvm-ar")
+        set(CMAKE_RANLIB "${_vcs_llvm_bin}/llvm-ranlib")
+    endif()
 endif()
 # llvm-mingw: mingw-w64's headers default to Windows 7, the Windows SDK's to Windows 10 - the same APIs as clang-cl's
 # build. Every program is linked -static: libc++, libunwind and winpthread inside, only the system's UCRT left.

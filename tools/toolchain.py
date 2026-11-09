@@ -1324,7 +1324,13 @@ def compiler_defines(env):
                  "python3 tools/build.py --check-deps" % MIN_CLANG, "no_clang")
         if not _which("ld64.lld", env):
             fail("ld64.lld not found (the LLVM linker): brew install lld", "no_clang")
-        return ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx] + ninja
+        # LLVM's archiver, not Xcode's /usr/bin/ar: Apple's can't index this clang's bitcode, so a ThinLTO link finds
+        # nothing in the static libraries ("undefined symbol" for everything the runtime defines)
+        tools = {name: _which(name, env) for name in ("llvm-ar", "llvm-ranlib")}
+        if not all(tools.values()):
+            fail("llvm-ar / llvm-ranlib not found next to Homebrew's clang: brew reinstall llvm", "no_clang")
+        return ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx,
+                "-DCMAKE_AR=" + tools["llvm-ar"], "-DCMAKE_RANLIB=" + tools["llvm-ranlib"]] + ninja
     clang, clangxx = _which("clang", env), _which("clang++", env)
     if not clang or not clangxx or clang_version(clang) < MIN_CLANG:
         fail("clang %d or newer not found - install it (docs/LINUX.md; e.g. sudo apt install clang-20 lld-20 llvm-20), "
