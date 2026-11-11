@@ -127,3 +127,63 @@ prompt) or opens a terminal with the command. `VCS_LAUNCHER_VIDEO=x11|wayland`, 
 | The Windows stutter work (PERFORMANCE.md 21-24) on Linux | done (2026-11-02, PERFORMANCE.md 25): portable, in; Vulkan's free-threaded texture creation added, off by default (no gain on the laptop; `PS2X_HW_EARLY_TEXTURES=1`); `cruise.py` from a copy of the player's card |
 | Hitches driving in the city on the laptop (PERFORMANCE.md 26) | measured: the main thread's driver CPU per draw and the GPU, both at the 60 Hz budget in dense views. Done: no shader depth on Vulkan (early Z), constants written only when they change, redundant Vulkan state not recorded (GPU -10%, main thread -10-15%); then (PERFORMANCE.md 27) depth as dynamic state (pipeline binds -60 to -70%) and vertex uploads of the written bytes only: main thread -12 to -16%, its frames over 20 ms 61 -> 24 |
 | Performance on this laptop (i5 Skylake, HD 520: the "modest hardware" target) in PERFORMANCE.md | 30 locked (original timing), 60 locked at a 60 cap, ~83 shown fps uncapped (frame-rate independent; PERFORMANCE.md 16-18) |
+
+## Immutable distributions (Bazzite, Fedora Silverblue/Kinoite, SteamOS)
+
+On image-based distributions the system can't install the build dependencies directly. Build and run the game inside a [Distrobox](https://distrobox.it/) container instead. It shares your home folder, display, sound and GPU with the host, so the game runs natively. Tested on Bazzite with a Fedora 43 container (AMD RX 9060 XT, RADV).
+
+1. Create and enter the container (on the host):
+
+   ```
+   distrobox create --name vcsbox --image registry.fedoraproject.org/fedora-toolbox:43
+   distrobox enter vcsbox
+   ```
+
+2. Get the source (inside the container):
+
+   ```
+   git clone --recursive https://github.com/gothamor/gta-vcs-recomp.git ~/games/vcs-recomp
+   cd ~/games/vcs-recomp
+   ```
+
+3. Install the dependencies. `python3 tools/build.py --check-deps` lists them; on Fedora 43 it is the following, plus `cmake`/`ninja-build` (so the build doesn't download its own) and the Vulkan driver and tools for the container:
+
+   ```
+   sudo dnf install -y pkgconf-pkg-config glslang ffmpeg-free-devel libX11-devel libXext-devel \
+       libXrandr-devel libXcursor-devel libXi-devel libXfixes-devel libXScrnSaver-devel \
+       wayland-devel wayland-protocols-devel libxkbcommon-devel libdecor-devel pipewire-devel \
+       pulseaudio-libs-devel alsa-lib-devel systemd-devel dbus-devel clang lld llvm \
+       vulkan-headers vulkan-loader-devel freetype-devel fontconfig-devel \
+       cmake ninja-build mesa-vulkan-drivers vulkan-tools
+   ```
+
+4. Check that the container sees your GPU:
+
+   ```
+   vulkaninfo --summary
+   ```
+
+   Your GPU should be listed (not only `llvmpipe`). Loader warnings about `libvulkan_dzn.so` can be ignored.
+
+5. Build, giving the path to your disc (your home folder is shared, so it can stay where it is, e.g. in `~/Downloads`):
+
+   ```
+   python3 tools/build.py --recompile ~/Downloads/"Grand Theft Auto - Vice City Stories (USA).iso"
+   ```
+
+6. Play from inside the container with `./build/vcs`, or from the host's application menu with a launcher in `~/.local/share/applications/gta-vcs.desktop`:
+
+   ```
+   [Desktop Entry]
+   Type=Application
+   Name=GTA Vice City Stories
+   Exec=distrobox enter vcsbox -- /home/YOUR_USER/games/vcs-recomp/build/vcs
+   Path=/home/YOUR_USER/games/vcs-recomp/build
+   Icon=applications-games
+   Terminal=false
+   Categories=Game;
+   ```
+
+   Replace `YOUR_USER` with your user name.
+
+To update later: `distrobox enter vcsbox`, then `cd ~/games/vcs-recomp && git pull && python3 tools/build.py --recompile-if-needed`.
