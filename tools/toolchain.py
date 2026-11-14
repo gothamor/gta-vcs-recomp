@@ -717,6 +717,14 @@ def build_env():
                 loaded = data["env"]
         except (OSError, ValueError, KeyError):
             loaded = None
+    if loaded is not None:
+        # Check if the cached environment is missing clang-cl; if so, invalidate it
+        # so newly installed tools (e.g. C++ Clang tools) can be picked up.
+        env_test = {k.upper(): v for k, v in loaded.items()}
+        front_test, _ = _scoop_paths()
+        env_test["PATH"] = os.pathsep.join(front_test + [env_test.get("PATH", "")])
+        if not _which("clang-cl", env_test):
+            loaded = None
     if loaded is None:
         vcvars = os.path.join(vs, "VC", "Auxiliary", "Build", "vcvars64.bat")
         # one string: CreateProcess passes it to cmd as written (cmd's own quoting rules, no list escaping)

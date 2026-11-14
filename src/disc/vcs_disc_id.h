@@ -9,7 +9,13 @@ namespace vcs::disc
 {
     constexpr const char *kElfName = "SLUS_215.90";
     constexpr const char *kElfSha1 = "d1832508caf0990c2291c0f255c96a889cce9f88";
+    constexpr const char *kElfSha1Alt = "6199669ada4fe3442ac5702d985b399df99db8f5";
     constexpr const char *kTitle = "GTA: Vice City Stories - USA (SLUS-21590) v1.00";
+
+    inline bool isSupportedElfSha1(std::string_view sha1)
+    {
+        return sha1 == kElfSha1 || sha1 == kElfSha1Alt;
+    }
 
     // vcs.exe's exit codes for a start that never reached the game (the launcher names the reason)
     enum ExitCode : int

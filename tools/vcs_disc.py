@@ -19,9 +19,10 @@ import sys
 
 SECTOR = 2048
 
-# The one supported build. The recompiled code only matches this executable.
+# The supported builds of the executable.
 KNOWN_BUILDS = {
     "d1832508caf0990c2291c0f255c96a889cce9f88": "SLUS-21590 (USA) v1.00",
+    "6199669ada4fe3442ac5702d985b399df99db8f5": "SLUS-21590 (USA/Localized) v1.00",
 }
 ELF_NAME = "SLUS_215.90"
 
