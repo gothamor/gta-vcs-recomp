@@ -28,6 +28,7 @@
 #include "game/vcs_movie.h"
 #include "game/vcs_hud.h"
 #include "game/vcs_input.h"
+#include "game/vcs_dualsense.h"
 #include "game/vcs_prompts.h"
 #include "game/vcs_volume.h"
 #include "game/vcs_world_detail.h"
@@ -728,6 +729,7 @@ namespace
         }
 
         vcs::input::registerSettings(); // the Keyboard & mouse and Gamepad pages (game/vcs_input.h)
+        vcs::dualsense::registerSettings(); // the Gamepad page's DualSense section (game/vcs_dualsense.h)
         vcs::prompts::registerSettings(); // the Enhancements page: button prompts by device (game/vcs_prompts.h)
         vcs::world::registerSettings();   // Enhancements > World: density, draw distance (game/vcs_world_detail.h)
         vcs::driveby::registerSettings(); // Enhancements > Combat: drive-by fire rate (game/vcs_driveby.h)
@@ -928,6 +930,7 @@ int main(int argc, char *argv[])
                                         ui::drawTrainerMenu();
                                         ps2control::setGameInputBlocked(ui::settingsMenuBlocksInput() || ui::trainerMenuBlocksInput());
                                         vcs::input::onHostFrame(ui::settingsMenuOpen() || ui::trainerMenuBlocksInput());
+                                        vcs::dualsense::onHostFrame(ui::settingsMenuOpen() || ui::trainerMenuBlocksInput());
                                         vcs::volume::onHostFrame();
                                         vcs::prompts::onHostFrame();
                                         drawFrameRateCounter();
@@ -954,6 +957,7 @@ int main(int argc, char *argv[])
         vcs::rig::install(runtime); // control-channel automation commands (debug/rig.h)
         vcs::trainer::install(runtime); // the trainer's control-channel command (game/vcs_trainer.h)
         vcs::input::install(runtime);   // the player's bindings feed the pad (game/vcs_input.h)
+        vcs::dualsense::install(runtime); // the DualSense light bar / adaptive triggers (game/vcs_dualsense.h)
         vcs::volume::install(runtime);  // the game's music / effects levels follow the settings (game/vcs_volume.h)
         vcs::gameinfo::install(runtime); // the F3 overlay's game-state panel, the `gameinfo` command (debug/game_info.h)
         // setting <key> [value] -> ok <value>: a setting read or changed (a hidden run never writes vcs.ini)
@@ -987,6 +991,7 @@ int main(int argc, char *argv[])
         vcs::startWatchdog(runtime);
         vcs::startProfiler(runtime);
         runtime.run();
+        vcs::dualsense::reset(); // dark light bar, triggers released (game/vcs_dualsense.h)
 #if defined(PS2X_PGO_GEN)
         __llvm_profile_write_file(); // instrumented build: _Exit skips the atexit handler that writes the profile
 #endif
