@@ -216,6 +216,13 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
   read by the game's own save code.
 - Every setting kept in `vcs.ini` next to the game.
 
+**Extras** (off by default, in F2 > Enhancements)
+- **GPS route** (*Radar > GPS route*: Off / In a vehicle / Always; `VCS_GPS=0/1/2`): a line along the roads to the
+  mission's target on the radar and on the pause menu's map, as in the later games and the remasters, in the
+  target blip's colour. A second, red line leads to your own target (the red square you place on the pause map).
+  It avoids water, picks the right level where roads run over each other, and recomputes as you drive
+  ([docs/mods/GPS_ROUTE.md](docs/mods/GPS_ROUTE.md)).
+
 ## Updating
 
 - **A release** (the launcher): *Check for updates*, then *Update now*: it puts the new release in place (keeping
