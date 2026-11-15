@@ -2121,7 +2121,7 @@ below (e.g. 0x0023 terminates, 0x0289 loads a mission, 0x0238 names a script).
 `MAIN.SCM` (root of the disc, 1,876,562 bytes):
 - Header: u32 main-section size (0x3CAE3), u32 largest mission size (0x96A9).
 - From file offset 8 the script itself; segments are separated by `GOTO` (opcode 0x0002, int32 target):
-  globals (file 0x0F..0x63F4) -> segment 2: u8 0, u32 count 1092, 1092 x u16 (a model-id table; searched by
+  globals (file 0x0F..0x63F4) -> segment 2: u8 0, u32 count 1092, 1092 x u16 (the byte offsets of the globals a save restores - read before as a model-id table; searched by
   `FUN_00255188`) -> segment 3: u8 0, u16 0x14E2, u16 0x0419, u32 0x96A9, u32 **101 missions**, 101 x u32 mission
   start IPs -> main code from file 0x7814 (`SCRIPT_NAME "MAIN"`).
 - Missions follow the main section in the file; mission n is IP `table[n]`..`table[n+1]` (file offset = IP + 8),
@@ -2169,7 +2169,7 @@ bytecode does not come back**: the return IP of code in a slot's locals lies out
 game loop stopped answering. To run a main-script subroutine the host starts a script at it with a GOSUB stack of one
 entry, a TERMINATE_THIS_SCRIPT of the main script (`vcs::rig::startScriptAt`).
 
-`FUN_00255188(id)` returns the index of `id` in that model-id table (count at 0x4CD3CC, table at *0x487420) or -1, by a
+`FUN_00255188(id)` returns the index of `id` in that table - **the globals a save keeps** (2026-11-15, docs/mods/QUICKSAVE.md: the scripts block's load `FUN_0025A348` copies a saved global only when its offset is listed, zeroes the others; running scripts are not saved at all) (count at 0x4CD3CC, table at *0x487420) or -1, by a
 linear scan; `FUN_0025A348` calls it for each entry of a list every 30 s of game time (millions of iterations: a
 frame held ~14 ms by the EE clock's charge for them until it ran natively, PERFORMANCE.md 14).
 

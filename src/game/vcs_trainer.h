@@ -99,4 +99,5 @@ namespace vcs::trainer
     std::vector<Notice> notices(double maxAgeSeconds);
     double now(); // the notices' clock
     void notifyScreenshot(const std::string &text); // the screenshot key's notice (src/main.cpp); any thread
+    void notify(const std::string &text);           // a notice of another feature (the quick save); any thread
 }
