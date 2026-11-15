@@ -1507,3 +1507,15 @@ takes a zip given by hand). Choices:
 - **`python -B` for the bundle's own scripts**: the first start's `update.py install` runs from inside the app and
   wrote `__pycache__` there, breaking the app's signature (found when the image's check refused the app). The launcher
   passes `-B` when the script is the release's own copy (macOS bundle or AppImage).
+
+## 2026-11-15 - Button prompts with a translated GXT: controls by key (GitHub issue 108, the user's request)
+
+A fan translation in place of ENGLISH.GXT kept every `C<n><ACTION>` key but the prompts stayed words: the expander
+found controls by English phrases ("L1 button"). The issue's comment asked for the keys to decide instead, and for the
+joining "or" to be moddable. The controls each key names in the game's own ENGLISH.GXT are now a table in
+vcs_prompts.cpp (61 actions x 4 configurations; game-internals.md 6n). The phrases still run first: when they find
+the table's controls (the English text, or a translation that kept `~X~`), the game's words stay, so English is
+exactly as before. Otherwise the text is the table's controls, joined by the GXT's PRMOR / PRMAND / PRMPLUS when the
+translation adds them, else " / " and " + " - signs any language reads, rather than an English word in a translated
+sentence. A file next to vcs.exe was the other way to mod the joiners; GXT keys travel with the translation itself.
+`prompts_check.py` checks it ("translated", through `prompts settext`).

@@ -13,6 +13,8 @@ PRINT_HELP_FOREVER, and screenshots taken in each set. Checks:
   automatic  Automatic: a gamepad button makes it the gamepad's glyphs, a key press the keyboard's - with the help box
              still up
   menu       the pause menu's help-bar buttons (back / select / move) are drawn as glyphs
+  translated the same actions with a translation's words in their GXT keys (GitHub issue 108; `prompts settext`): the
+             controls still become tokens, joined by a sign or the GXT's own PRMOR
   original   Original: no glyph found or drawn, the help text in the PS2's words
 Screenshots go to OUT (default build/prompts_check); OUT/results.json holds the checks. Exit code 1 when one fails.
 """
@@ -77,6 +79,22 @@ def main():
         }
         got = {a: g.cmd("prompts expand " + a) for a in expected}
         ok("expand", all(got[a] == e for a, e in expected.items()), got)
+
+        # translated: the same keys with a translation's words (GitHub issue 108) - the controls from the table, the
+        # joiner a sign, or the GXT's PRMOR when it has one; a translation that kept ~X~ keeps its words
+        texts = {"C0TGSUB": "R3 tusu", "C0AMMOV": "sol analog cubuk veya yon tuslari", "C0VELB": "L2 tusu + R2 tusu",
+                 "C0SNZO": "~X~ tusu"}
+        for key, text in texts.items():
+            g.cmd("prompts settext %s %s" % (key, text))
+        want = {"TGSUB": "{R3@foot}", "AMMOV": "{LS@foot} / {DPAD@foot}", "VELB": "{L2@vehicle} + {R2@vehicle}",
+                "SNZO": "{X@foot} tusu"}
+        got = {a: g.cmd("prompts expand " + a) for a in want}
+        g.cmd("prompts settext PRMOR -veya-")
+        got["AMMOV+PRMOR"] = g.cmd("prompts expand AMMOV")
+        want["AMMOV+PRMOR"] = "{LS@foot}-veya-{DPAD@foot}"
+        for key in list(texts) + ["PRMOR"]:
+            g.cmd("prompts settext " + key)
+        ok("translated", all(got[a] == e for a, e in want.items()), got)
 
         # sets: Xbox (from the start), PlayStation, Keyboard & mouse
         sets_ok, detail = True, {}
