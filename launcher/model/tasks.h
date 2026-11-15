@@ -55,6 +55,35 @@ namespace launcher
         std::string theme = "system";         // system (Windows' app mode), light, dark
     };
 
+    struct GameSettings
+    {
+        // Display / Graphics
+        int windowMode = 0;       // display.window: 0 = Windowed, 1 = Full screen
+        int aspect = 43;          // display.aspect: 43 (4:3), 1610 (16:10), 169 (16:9), 219 (21:9), 329 (32:9), 0 (Match window)
+        int hud = 0;              // display.hud: 0 = Keep 4:3, 2 = Screen edges, 1 = Stretch
+        int scale = 1;            // display.scale: 1, 2, 3, 4, 6, 8, 0 (Match window)
+        int windowWidth = 960;    // window.width
+        int windowHeight = 720;   // window.height
+
+        // Controls - Mouse
+        int mouseCamera = 1;        // mouse.camera: 0 / 1
+        int mouseSensitivity = 100; // mouse.sensitivity: 10..400 %
+        int mouseInvertY = 0;       // mouse.invert_y: 0 / 1
+        int mouseFreeAim = 0;       // mouse.free_aim: 0 / 1
+        int mouseWheel = 1;         // mouse.wheel: 0 / 1
+
+        // Controls - Gamepad
+        int padFreeAim = 0;         // pad.free_aim: 0 / 1
+        int padSwapSticks = 0;      // pad.swap_sticks: 0 / 1
+        int padInvertX = 0;         // pad.invert_x: 0 / 1
+        int padInvertY = 0;         // pad.invert_y: 0 / 1
+        int padVibration = 100;     // pad.vibration: 0..200 %
+        int padCameraSpeed = 100;   // pad.camera_speed: 25..300 %
+        int padDeadzoneLeft = 12;   // pad.deadzone_left: 0..40 %
+        int padDeadzoneRight = 12;  // pad.deadzone_right: 0..40 %
+        int padTrigger = 30;        // pad.trigger: 5..95 %
+    };
+
     class App
     {
     public:
@@ -130,6 +159,10 @@ namespace launcher
 
         Settings settings;
         void saveSettings();
+
+        GameSettings gameSettings;
+        void loadGameSettings();
+        void saveGameSettings();
 
         std::string toast; // a short message under the buttons
         double toastTime = 0;
