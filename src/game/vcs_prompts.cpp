@@ -152,9 +152,138 @@ namespace vcs::prompts
             return any ? s : s + "0";
         }
 
+        // The PC control scheme (Keyboard > Control scheme, keys.scheme 1: vcs_input.cpp's pc_* actions): the action that
+        // presses this PS2 button in this context, whose keys the glyph shows. The menu's Enter / Escape stay as below.
+        // Fighting has no context of its own here: UCBT's text (PUHA / PUBL / PUGR) shows the on-foot keys.
+        const char *pcAction(int ctx, int ctl)
+        {
+            if (ctx == Vehicle)
+                switch (ctl)
+                {
+                case Cross: return "pc_accelerate";
+                case Square: return "pc_brake";
+                case Circle: return "pc_vehicle_fire";
+                case Triangle: return "pc_enter_exit";
+                case R1: return "pc_handbrake";
+                case L1: return "pc_radio";
+                case L2: return "pc_look_left";
+                case R2: return "pc_look_right";
+                case L3: return "pc_horn";
+                case R3: return "pc_submission";
+                case Select: return "pc_camera_view";
+                case Start: return "pc_pause";
+                case DUp: return "pc_forks_up";
+                case DDown: return "pc_forks_down";
+                case DLeft: return "pc_play_dpad_left";
+                case DRight: return "pc_play_dpad_right";
+                case LSUp: return "pc_lean_forward";
+                case LSDown: return "pc_lean_back";
+                case LSLeft: return "pc_steer_left";
+                case LSRight: return "pc_steer_right";
+                default: break;
+                }
+            else if (ctx == Menu)
+                switch (ctl)
+                {
+                case Cross: return "pc_menu_select";
+                case Triangle: return "pc_menu_back";
+                case Start: return "pc_pause";
+                case DUp: return "pc_dpad_up";
+                case DDown: return "pc_dpad_down";
+                case DLeft: return "pc_dpad_left";
+                case DRight: return "pc_dpad_right";
+                default: break;
+                }
+            else
+                switch (ctl)
+                {
+                case Cross: return "pc_sprint";
+                case Square: return "pc_jump";
+                case Circle: return "pc_fire";
+                case Triangle: return "pc_enter_exit";
+                case R1: return "pc_target";
+                case L1: return "pc_action";
+                case L2: return "pc_prev_weapon";
+                case R2: return "pc_next_weapon";
+                case L3: return "pc_crouch";
+                case R3: return "pc_look_behind";
+                case Select: return "pc_camera_view";
+                case Start: return "pc_pause";
+                case DUp: return "pc_play_dpad_up";
+                case DDown: return "pc_play_dpad_down";
+                case DLeft: return "pc_play_dpad_left";
+                case DRight: return "pc_play_dpad_right";
+                case LSUp: return "pc_forward";
+                case LSDown: return "pc_backward";
+                case LSLeft: return "pc_left";
+                case LSRight: return "pc_right";
+                default: break;
+                }
+            switch (ctl) // both contexts
+            {
+            case RSUp: return "pc_cam_up";
+            case RSDown: return "pc_cam_down";
+            case RSLeft: return "pc_cam_left";
+            case RSRight: return "pc_cam_right";
+            default: return nullptr;
+            }
+        }
+
+        std::string keyboardSpecPC(int ctx, int ctl)
+        {
+            using namespace platform;
+            if (ctx == Menu && ctl == Cross)
+                return keysSpec({KEY_ENTER});
+            if (ctl == Start || (ctx == Menu && ctl == Triangle))
+                return keysSpec({KEY_ESCAPE}); // the fixed pause key, the menu's back
+            auto k = [&](int c) {
+                const char *id = pcAction(ctx, c);
+                return id ? boundKey(id, c == Circle || c == R1) : 0;
+            };
+            if (ctl < DPad)
+                return keysSpec({k(ctl)});
+            switch (ctl)
+            {
+            case DPad: return keysSpec({k(DUp), k(DLeft), k(DDown), k(DRight)});
+            case DPadUD: return keysSpec({k(DUp), k(DDown)});
+            case DPadLR: return keysSpec({k(DLeft), k(DRight)});
+            default: break;
+            }
+            if (ctl >= RS)
+            {
+                if (setting("mouse.camera"))
+                    return "mouse:move";
+                switch (ctl)
+                {
+                case RSUp:
+                case RSDown:
+                case RSLeft:
+                case RSRight: return keysSpec({k(ctl)});
+                case RSUD: return keysSpec({k(RSUp), k(RSDown)});
+                case RSLR: return keysSpec({k(RSLeft), k(RSRight)});
+                default: return keysSpec({k(RSUp), k(RSLeft), k(RSDown), k(RSRight)});
+                }
+            }
+            switch (ctl)
+            {
+            case LSUp:
+            case LSDown:
+            case LSLeft:
+            case LSRight: return keysSpec({k(ctl)});
+            case LSUD: return keysSpec({k(LSUp), k(LSDown)});
+            case LS:
+                if (ctx == Vehicle) // the left stick steers
+                    return keysSpec({k(LSLeft), k(LSRight)});
+                return keysSpec({k(LSUp), k(LSLeft), k(LSDown), k(LSRight)});
+            default: return keysSpec({k(LSLeft), k(LSRight)}); // LSLR
+            }
+        }
+
         std::string keyboardSpec(int ctx, int ctl)
         {
             using namespace platform;
+            if (setting("keys.scheme") != 0)
+                return keyboardSpecPC(ctx, ctl);
             if (ctl < DPad)
             {
                 if (ctx == Menu && ctl == Cross)

@@ -224,6 +224,14 @@ namespace platform
     bool mouseCaptured();
     // Mouse motion since the last call, in mouse counts (any thread; one consumer).
     void takeMouseMotion(float &dx, float &dy);
+    // Drops the wheel notches not played out yet (any thread; done at the next event pump): the notch being pressed
+    // finishes, the ones queued behind it are gone. For a wheel whose meaning just changed (out of a scope: its zoom
+    // notches must not become weapon changes).
+    void discardWheelNotches();
+    // The wheel's notches since the last call as they came, not played out as presses (up +, down -; any thread, one
+    // consumer): for a use that takes any number at once (a scope's zoom). A notch the other way also drops the
+    // presses still queued the old way.
+    int takeWheelSteps();
 
     // A key's name for menus ("A", "F2", "Left Shift", "Mouse 4", "Wheel up"); "?" for codes without one.
     const char *keyName(int key);

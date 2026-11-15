@@ -93,6 +93,8 @@ namespace platform
             bool down = false;
         };
         WheelPulses g_wheel[2]; // up, down
+        std::atomic<bool> g_wheelDiscard{false}; // discardWheelNotches: drop the queued notches at the next pump
+        std::atomic<int> g_wheelSteps{0};        // takeWheelSteps: notches as they came (up +), not played out
         constexpr uint64_t kWheelHalfNs = 50000000ull;
 
         // vibration (gamepadRumble): wanted motor levels 0..65535, applied by pumpEvents
@@ -565,6 +567,9 @@ namespace platform
                 {
                     WheelPulses &p = g_wheel[notches > 0 ? 0 : 1];
                     p.pending = std::min(8, p.pending + std::abs(notches));
+                    // turning the other way: the notches still queued the old way are not wanted any more
+                    g_wheel[notches > 0 ? 1 : 0].pending = 0;
+                    g_wheelSteps.fetch_add(notches, std::memory_order_relaxed);
                 }
                 break;
             }
@@ -634,6 +639,9 @@ namespace platform
         pseudo[KEY_MOUSE_X1] = (mouse & SDL_BUTTON_X1MASK) != 0;
         pseudo[KEY_MOUSE_X2] = (mouse & SDL_BUTTON_X2MASK) != 0;
         const uint64_t nowNs = SDL_GetTicksNS();
+        if (g_wheelDiscard.exchange(false, std::memory_order_relaxed))
+            for (WheelPulses &p : g_wheel)
+                p.pending = 0;
         for (int w = 0; w < 2; ++w)
         {
             WheelPulses &p = g_wheel[w];
@@ -808,6 +816,9 @@ namespace platform
 
     void setMouseCaptured(bool on) { g_wantCapture = on && !g_hiddenWindow; }
     bool mouseCaptured() { return g_captured; }
+
+    void discardWheelNotches() { g_wheelDiscard.store(true, std::memory_order_relaxed); }
+    int takeWheelSteps() { return g_wheelSteps.exchange(0, std::memory_order_relaxed); }
 
     void takeMouseMotion(float &dx, float &dy)
     {

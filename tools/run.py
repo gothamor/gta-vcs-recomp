@@ -44,6 +44,7 @@ def main():
         tc.test_window(env, visible=not a.hidden)
         if a.control:
             env["PS2X_CONTROL"] = "1"
+            tc.test_keys(env)  # driven by the tools' key presses
         proc = subprocess.Popen([tc.VCS_EXE, iso], cwd=rundir, stdout=f, stderr=subprocess.STDOUT, env=env)
         try:
             code = proc.wait(timeout=a.seconds if a.seconds > 0 else None)
