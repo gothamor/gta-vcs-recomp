@@ -241,6 +241,9 @@ elseif(APPLE AND NOT VCS_FFMPEG STREQUAL "system")
         URL_HASH SHA256=089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         PREFIX "${FFMPEG_PREFIX_DIR}"
+        # [gta-recomp] in the source folder: FFmpeg refuses an out-of-tree configure when the path has a space
+        # (~/Library/Application Support, GitHub issue 179); in-tree it has no such check
+        BUILD_IN_SOURCE TRUE
         CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env SDKROOT=${_ffmpeg_sdk} <SOURCE_DIR>/configure --prefix=${FFMPEG_INSTALL_DIR} --cc=${CMAKE_C_COMPILER}
             --arch=aarch64 --enable-static --disable-shared --enable-pic
             --disable-everything --enable-decoder=mpeg2video --enable-parser=mpegvideo --enable-swscale
