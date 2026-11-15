@@ -253,3 +253,4 @@ source with a `[gta-recomp]` comment and listed here.
 | `ps2xRuntime/src/lib/ps2_runtime.cpp`, `src/lib/ps2_render_worker.cpp` | MXCSR reads / writes through `ps2x::fpControl`; the game, render worker and GS stage threads are `ps2x::Thread`s with 16 MB stacks | Same |
 | `ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp` | macOS: card creation times from `st_birthtimespec` | The card's directory order (as Windows / Linux) |
 | `ps2xRuntime/src/lib/gs/gs_hw.cpp` | early (helper-thread) texture creation on by default with Metal too | A new texture's contents are written in place there |
+| `ps2xRuntime/CMakeLists.txt` | macOS: the FFmpeg `ExternalProject` builds in its source folder (`BUILD_IN_SOURCE`) | FFmpeg's configure refuses an out-of-tree build when the path has a space, and the release unpacks to `~/Library/Application Support` (#179) |
