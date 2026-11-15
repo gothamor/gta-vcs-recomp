@@ -420,6 +420,18 @@ PSOut ps_main(VSOut i)
     float3 rgb = c.rgb;
     if (blendCPremul.y == 1) rgb *= cf;
     else if (blendCPremul.y == 2) rgb *= (1.0 + cf);
+    // PS2X_HW_CULL_NOOP=verify (w): geometry the cull removed - a pixel of it that would have added a colour is magenta
+    if (blendCPremul.w == 1)
+    {
+        if (all(rgb == 0.0)) discard;
+        o.color = float4(1.0, 0.0, 1.0, 1.0);
+#if DUAL_SOURCE
+        o.blend = float4(1.0, 1.0, 1.0, 1.0);
+#endif
+        return o;
+    }
+    // additive blend, no depth write (gs_hw.cpp sets z): a source of 0 leaves the colour as it is - no blend, no write
+    if (blendCPremul.z == 1 && all(rgb == 0.0)) discard;
     o.color = float4(rgb / 255.0, c.a / 255.0);
     if (g_gatherMismatch)
         o.color = float4(1.0, 0.0, 1.0, 1.0);

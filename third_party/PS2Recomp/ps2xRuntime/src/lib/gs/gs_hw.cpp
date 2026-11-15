@@ -664,6 +664,27 @@ namespace
         }();
         return on;
     }
+    // [gta-recomp] PS2X_HW_CULL_NOOP=0: additive draws keep the primitives and pixels whose source colour is 0 (they change
+    // only the frame's alpha, which nothing reads)
+    bool hwCullNoOp()
+    {
+        static const bool on = [] {
+            const char *e = std::getenv("PS2X_HW_CULL_NOOP");
+            return !(e && e[0] == '0');
+        }();
+        return on;
+    }
+    // PS2X_HW_CULL_NOOP=verify: what was removed is drawn too, through the same shader, a pixel of it that would have added a
+    // colour painted magenta (none: nothing removed changed the picture)
+    bool hwCullVerify()
+    {
+        static const bool on = [] {
+            const char *e = std::getenv("PS2X_HW_CULL_NOOP");
+            return e && e[0] == 'v';
+        }();
+        return on;
+    }
+
     // [gta-recomp] PS2X_GPU_TIMING (the RHI's GPU timer): a marker around each draw, named by its kind and target
     bool gpuTimingMarkers()
     {
@@ -2628,6 +2649,11 @@ namespace
             if (layer && layer->opaque)
                 mask &= 7u; // the shown picture stays opaque (the GS writes the source alpha, the window would show it)
             bool zwrite = depthOn && !s.zmsk;
+            // [gta-recomp] the recorder's additive cull (recordPrimitive): filterSpare 2 - the shader discards a pixel whose
+            // source colour is 0 (the blend and the target's unread alpha checked there); 1 - PS2X_HW_CULL_NOOP=verify's
+            // removed geometry
+            c.blendCPremul[2] = (s.filterSpare == 2u && b.enable && !zwrite) ? 1 : 0;
+            c.blendCPremul[3] = s.filterSpare == 1u ? 1 : 0;
 
             // pass 1: pixels passing the alpha test (or all of them)
             auto submit = [&](rhi::Pipeline &pipeline)
@@ -3244,6 +3270,45 @@ namespace
                     return;
                 noteTarget(s.fbp, s.fbw, s.fpsm, out, n, s.scy1);
             }
+            // [gta-recomp] Additive pixels that add nothing (PS2X_HW_CULL_NOOP=0: all drawn as before). An additive draw
+            // (Cs * C + Cd) without fog, alpha test or depth write leaves the colour unchanged wherever its source colour
+            // is 0; such a pixel still writes the target's alpha (As), so this is done only where that alpha is never
+            // read: the alpha write masked off, or a 640-wide frame target no draw has read the alpha of (alphaRead).
+            // - a primitive with colour 0 on every vertex (untextured or modulated) is not drawn;
+            // - a textured one is scissored to the pixels whose texels can give a non-zero colour (litScissor): the
+            //   triangle itself is drawn unchanged, so every pixel it still draws is computed as before;
+            // - the shader discards a pixel whose source colour comes out 0 (filterSpare bit 2).
+            // The hovercraft's glow: 918 sprites of a 32x32 texture lit in ~12x10 texels, colours 0..4, 173 screens of
+            // blending a frame.
+            noteAlphaReads(s);
+            if (cullNoOp() && additiveNoOpBlend(s) && alphaUnread(s))
+            {
+                if (addsNothing(s, out, n))
+                {
+                    if (hwCullVerify())
+                        appendVerify(s, source, out, n);
+                    return;
+                }
+                s.filterSpare = 2u;
+                if (n == 3u)
+                {
+                    HwVertex removed[3u * 32u];
+                    int removedCount = 0;
+                    uint16_t rect[4];
+                    const int r = litScissor(s, out, rect, hwCullVerify() ? removed : nullptr, &removedCount);
+                    if (removedCount > 0)
+                        appendVerify(s, source, removed, static_cast<uint32_t>(removedCount));
+                    if (r == 0)
+                        return;
+                    if (r > 0)
+                    {
+                        s.scx0 = rect[0];
+                        s.scy0 = rect[1];
+                        s.scx1 = rect[2];
+                        s.scy1 = rect[3];
+                    }
+                }
+            }
             Frame &f = *m_frame;
             const CmdType cmdType = hud ? CmdType::HudDraw : CmdType::Draw;
             if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != cmdType || f.draws.back().source != source ||
@@ -3263,6 +3328,274 @@ namespace
         // (sampleRtFull) - otherwise every copy brought the picture back to 640x448 and a higher internal resolution
         // was lost. Resampling reads (the bloom and trails downsamples, their blends back) keep PS2-texel sampling, so
         // those effects look as at 640x448. PS2X_HW_RT_FULL=0 = PS2-texel sampling everywhere.
+        static bool cullNoOp() { return hwCullNoOp(); }
+
+        // PS2X_HW_CULL_NOOP=verify: removed geometry as a draw of its own, marked (filterSpare 1: the shader paints a pixel
+        // with a non-zero source colour magenta and discards the rest)
+        void appendVerify(HwState s, uint32_t source, const HwVertex *v, uint32_t n)
+        {
+            s.filterSpare = 1u;
+            Frame &f = *m_frame;
+            if (f.draws.empty() || f.cmds.empty() || f.cmds.back().type != CmdType::Draw || f.draws.back().source != source ||
+                std::memcmp(&f.draws.back().s, &s, sizeof(HwState)) != 0)
+            {
+                f.cmds.push_back({CmdType::Draw, static_cast<uint32_t>(f.draws.size())});
+                f.draws.push_back({s, static_cast<uint32_t>(f.vertices.size()), 0u, source, 0.0f, 1.0f});
+            }
+            f.vertices.insert(f.vertices.end(), v, v + n);
+            f.draws.back().count += n;
+        }
+
+        // Per small texture: each texel's brightest colour channel (litScissor). Kept from the decode; dropped with the
+        // texture.
+        struct TexPeak
+        {
+            uint16_t w = 0, h = 0;
+            std::vector<uint8_t> peak;
+        };
+        std::unordered_map<uint64_t, TexPeak> m_texPeak;
+
+        void notePeak(uint64_t key, uint32_t w, uint32_t h, const std::vector<uint32_t> &pixels)
+        {
+            if (!cullNoOp() || w == 0u || h == 0u || w > 256u || h > 256u || pixels.size() != size_t(w) * h)
+                return;
+            if (m_texPeak.size() > 4096u)
+                m_texPeak.clear();
+            TexPeak &p = m_texPeak[key];
+            p.w = static_cast<uint16_t>(w);
+            p.h = static_cast<uint16_t>(h);
+            p.peak.resize(pixels.size());
+            for (size_t i = 0; i < pixels.size(); ++i)
+            {
+                const uint32_t c = pixels[i];
+                p.peak[i] = static_cast<uint8_t>(std::max({c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu}));
+            }
+        }
+
+        // Cs * C + Cd without fog, alpha test or depth write: a pixel whose source colour is 0 changes no colour
+        static bool additiveNoOpBlend(const HwState &s)
+        {
+            return s.abe && s.ba == 0u && s.bb == 2u && s.bd == 1u && !s.fge && !s.ate && !(s.zte && !s.zmsk) && s.mode == 0u &&
+                   (!s.tme || s.tfx == 0u);
+        }
+
+        // Targets whose alpha a draw has used: skipped pixels would have written that alpha, so nothing is skipped into
+        // them from then on. A use: a blend with Ad into the target; a read of it as a texture (TCC) whose alpha the draw
+        // uses - a blend with As or an alpha test. A read that only carries the alpha into its own target (a copy) makes
+        // that target's alpha depend on it (m_alphaFrom): a use of the copy is a use of the source.
+        std::unordered_set<uint32_t> m_alphaRead;
+        std::unordered_map<uint32_t, std::unordered_set<uint32_t>> m_alphaFrom; // target -> targets its alpha came from
+
+        void noteAlphaRead(uint32_t fbp, const char *how, const HwState &s)
+        {
+            if (!m_alphaRead.insert(fbp).second)
+                return;
+            std::fprintf(stderr, "[gs-hw] cull: the alpha of fbp %u is used (%s: fbp %u tex fbp %u tfx %u abe %u blend %u%u%u%u "
+                                 "ate %u atst %u) - additive pixels into it are drawn in full\n",
+                         fbp, how, s.fbp, s.texIsRt ? s.rtFbp : 0u, s.tfx, s.abe, s.ba, s.bb, s.bc, s.bd, s.ate, s.atst);
+            if (auto from = m_alphaFrom.find(fbp); from != m_alphaFrom.end())
+            {
+                const std::unordered_set<uint32_t> sources = from->second;
+                for (uint32_t src : sources)
+                    noteAlphaRead(src, "copied into a target whose alpha is used", s);
+            }
+        }
+
+        void noteAlphaReads(const HwState &s)
+        {
+            if (s.abe && s.bc == 1u)
+                noteAlphaRead(s.fbp, "a blend with Ad", s);
+            if (!(s.tme && s.texIsRt && s.tcc))
+                return;
+            const bool used = (s.abe && s.bc == 0u) || (s.ate && s.atst != 1u);
+            if (used)
+                noteAlphaRead(s.rtFbp, "a texture read whose As is used", s);
+            else if ((s.fbmsk & 0xFF000000u) != 0xFF000000u && s.rtFbp != s.fbp)
+            {
+                if (m_alphaFrom[s.fbp].insert(s.rtFbp).second)
+                    std::fprintf(stderr, "[gs-hw] cull: the alpha of fbp %u is copied into fbp %u (tfx %u abe %u blend %u%u%u%u)\n",
+                                 s.rtFbp, s.fbp, s.tfx, s.abe, s.ba, s.bb, s.bc, s.bd);
+                if (m_alphaRead.count(s.fbp))
+                    noteAlphaRead(s.rtFbp, "copied into a target whose alpha is used", s);
+            }
+        }
+
+        // The alpha this draw writes is never read: masked off, or a 640-wide frame target nothing has read the alpha of
+        bool alphaUnread(const HwState &s) const
+        {
+            if ((s.fbmsk & 0xFF000000u) == 0xFF000000u)
+                return true;
+            return s.fbw == 10u && !m_alphaRead.count(s.fbp);
+        }
+
+        static bool addsNothing(const HwState &s, const HwVertex *v, uint32_t n)
+        {
+            for (uint32_t i = 0; i < n; ++i)
+                if (v[i].r | v[i].g | v[i].b)
+                    return false;
+            return true;
+        }
+
+        // A textured additive triangle limited by a scissor to the pixels whose texels can give a non-zero source colour.
+        // floor(Ct * Cv / 128) > 0 needs a filtered texel >= ceil(128 / the largest vertex colour) (Gouraud colours stay
+        // within the vertices'), and a filtered texel is at most the largest texel it reads. The lit texels' box, widened by
+        // the bilinear reach and two texels more, is cut out of the triangle in texture space (u, v linear on screen: q the
+        // same on every vertex, or FST) and its screen bounds, rounded out by a pixel, become the scissor. The triangle is
+        // drawn unchanged inside it - the same pixels with the same values. Only where the bound holds: the texture
+        // magnified (at most a texel per PS2 pixel: its base level, the filter's footprint within a texel), plain REPEAT /
+        // CLAMP inside the texture, the lit texels away from its edges (no wrapped reads). Returns -1: as it is; 0: nothing
+        // to draw; 1: rect = scx0, scy0, scx1, scy1. With `removed` (verify) the parts left out, as triangles.
+        int litScissor(const HwState &s, const HwVertex *v, uint16_t rect[4], HwVertex *removed, int *removedCount)
+        {
+            *removedCount = 0;
+            auto removeAll = [&] {
+                if (removed)
+                {
+                    std::copy(v, v + 3, removed);
+                    *removedCount = 3;
+                }
+                return 0;
+            };
+            if (!s.tme || s.texIsRt || s.wms > 1u || s.wmt > 1u || !s.tw || !s.th)
+                return -1;
+            const auto found = m_texPeak.find(s.texKey);
+            if (found == m_texPeak.end() || found->second.w != s.tw || found->second.h != s.th)
+                return -1;
+            const TexPeak &tp = found->second;
+            if (!s.fst && !(v[0].q == v[1].q && v[1].q == v[2].q && v[0].q != 0.0f))
+                return -1;
+            uint32_t vmax = 0;
+            for (int i = 0; i < 3; ++i)
+                vmax = std::max<uint32_t>({vmax, v[i].r, v[i].g, v[i].b});
+            if (vmax == 0u)
+                return removeAll();
+            const uint32_t thr = (128u + vmax - 1u) / vmax;
+            int a = tp.w, b = -1, c = tp.h, d = -1; // the lit texels' box
+            for (int y = 0; y < tp.h; ++y)
+                for (int x = 0; x < tp.w; ++x)
+                    if (tp.peak[size_t(y) * tp.w + x] >= thr)
+                    {
+                        a = std::min(a, x); b = std::max(b, x);
+                        c = std::min(c, y); d = std::max(d, y);
+                    }
+            if (b < 0)
+                return removeAll();
+            float uu[3], vv[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                uu[i] = s.fst ? v[i].s : v[i].s / v[i].q * s.tw;
+                vv[i] = s.fst ? v[i].t : v[i].t / v[i].q * s.th;
+                if (!(uu[i] >= 0.0f && uu[i] <= float(s.tw) && vv[i] >= 0.0f && vv[i] <= float(s.th)))
+                    return -1;
+            }
+            const float x10 = v[1].x - v[0].x, y10 = v[1].y - v[0].y, x20 = v[2].x - v[0].x, y20 = v[2].y - v[0].y;
+            const float det = x10 * y20 - x20 * y10;
+            if (std::fabs(det) < 1e-3f)
+                return -1;
+            const float dudx = ((uu[1] - uu[0]) * y20 - (uu[2] - uu[0]) * y10) / det;
+            const float dudy = ((uu[2] - uu[0]) * x10 - (uu[1] - uu[0]) * x20) / det;
+            const float dvdx = ((vv[1] - vv[0]) * y20 - (vv[2] - vv[0]) * y10) / det;
+            const float dvdy = ((vv[2] - vv[0]) * x10 - (vv[1] - vv[0]) * x20) / det;
+            if (std::max({std::fabs(dudx), std::fabs(dudy), std::fabs(dvdx), std::fabs(dvdy)}) > 1.0f)
+                return -1;
+            // PS2X_HW_CULL_MARGIN=<texels> (2): a negative one cuts into the lit texels - verify's positive control
+            static const float kMargin = std::getenv("PS2X_HW_CULL_MARGIN") ? static_cast<float>(std::atof(std::getenv("PS2X_HW_CULL_MARGIN"))) : 2.0f;
+            const bool cutU = a > 0 && b < tp.w - 1, cutV = c > 0 && d < tp.h - 1;
+            if (!cutU && !cutV)
+                return -1;
+
+            // Sutherland-Hodgman on one linear quantity per vertex: k[0..1] u, v; k[2..3] x, y
+            struct P { HwVertex vx; float k[4]; };
+            auto lerp = [](const P &p, const P &q, float t) {
+                P r = p;
+                auto L = [t](float x, float y) { return x + (y - x) * t; };
+                r.vx.x = L(p.vx.x, q.vx.x); r.vx.y = L(p.vx.y, q.vx.y); r.vx.z = L(p.vx.z, q.vx.z);
+                r.vx.s = L(p.vx.s, q.vx.s); r.vx.t = L(p.vx.t, q.vx.t); r.vx.fog = L(p.vx.fog, q.vx.fog);
+                for (int j = 0; j < 4; ++j)
+                    r.k[j] = L(p.k[j], q.k[j]);
+                return r; // colours: verify only (their pieces' colours as the corner they came from)
+            };
+            // keeps the part with k[idx] >= bound (ge) or <= bound; `cut` gets the rest
+            auto clip = [&](P *poly, int count, int idx, float bound, bool ge, P *cut, int *cutCount) {
+                P tmp[16];
+                int m = 0, o = 0;
+                for (int i = 0; i < count; ++i)
+                {
+                    const P &p = poly[i], &q = poly[(i + 1) % count];
+                    const bool ip = ge ? p.k[idx] >= bound : p.k[idx] <= bound, iq = ge ? q.k[idx] >= bound : q.k[idx] <= bound;
+                    if (ip)
+                        tmp[m++] = p;
+                    else if (cut)
+                        cut[o++] = p;
+                    if (ip != iq)
+                    {
+                        const P x = lerp(p, q, (bound - p.k[idx]) / (q.k[idx] - p.k[idx]));
+                        tmp[m++] = x;
+                        if (cut)
+                            cut[o++] = x;
+                    }
+                }
+                std::copy(tmp, tmp + m, poly);
+                if (cutCount)
+                    *cutCount = o;
+                return m;
+            };
+            P poly[16];
+            for (int i = 0; i < 3; ++i)
+                poly[i] = {v[i], {uu[i], vv[i], v[i].x, v[i].y}};
+            int count = 3;
+            const float lo[2] = {a - 0.5f - kMargin, c - 0.5f - kMargin}, hi[2] = {b + 1.5f + kMargin, d + 1.5f + kMargin};
+            for (int axis = 0; axis < 2 && count >= 3; ++axis)
+                if (axis == 0 ? cutU : cutV)
+                {
+                    count = clip(poly, count, axis, lo[axis], true, nullptr, nullptr);
+                    if (count >= 3)
+                        count = clip(poly, count, axis, hi[axis], false, nullptr, nullptr);
+                }
+            if (count < 3)
+                return removeAll();
+            float x0 = poly[0].vx.x, x1 = x0, y0 = poly[0].vx.y, y1 = y0;
+            for (int i = 1; i < count; ++i)
+            {
+                x0 = std::min(x0, poly[i].vx.x); x1 = std::max(x1, poly[i].vx.x);
+                y0 = std::min(y0, poly[i].vx.y); y1 = std::max(y1, poly[i].vx.y);
+            }
+            // the scissor passes geometry x in [scx0 - o, scx1 + 1 - o) (draw(): edges scx0 - o, scx1 + 1 - o); a pixel more
+            // each way
+            const float o = gsPixelCentreOffset();
+            const float rx0 = std::max<float>(s.scx0, std::floor(x0 + o) - 1.0f), rx1 = std::min<float>(s.scx1, std::ceil(x1 + o) + 1.0f);
+            const float ry0 = std::max<float>(s.scy0, std::floor(y0 + o) - 1.0f), ry1 = std::min<float>(s.scy1, std::ceil(y1 + o) + 1.0f);
+            if (rx1 < rx0 || ry1 < ry0)
+                return removeAll();
+            rect[0] = static_cast<uint16_t>(rx0);
+            rect[1] = static_cast<uint16_t>(ry0);
+            rect[2] = static_cast<uint16_t>(rx1);
+            rect[3] = static_cast<uint16_t>(ry1);
+            if (rect[0] == s.scx0 && rect[1] == s.scy0 && rect[2] == s.scx1 && rect[3] == s.scy1)
+                return -1;
+            if (removed) // verify: the triangle outside the rectangle, side by side
+            {
+                P rest[16];
+                for (int i = 0; i < 3; ++i)
+                    rest[i] = {v[i], {uu[i], vv[i], v[i].x, v[i].y}};
+                int n = 3;
+                const float bound[4][2] = {{rx0 - o, 1}, {rx1 + 1.0f - o, 0}, {ry0 - o, 1}, {ry1 + 1.0f - o, 0}};
+                for (int side = 0; side < 4 && n >= 3; ++side)
+                {
+                    P cut[16];
+                    int cutCount = 0;
+                    n = clip(rest, n, side < 2 ? 2 : 3, bound[side][0], bound[side][1] != 0, cut, &cutCount);
+                    for (int i = 1; i + 1 < cutCount && *removedCount + 3 <= 3 * 32; ++i)
+                    {
+                        removed[(*removedCount)++] = cut[0].vx;
+                        removed[(*removedCount)++] = cut[i].vx;
+                        removed[(*removedCount)++] = cut[i + 1].vx;
+                    }
+                }
+            }
+            return 1;
+        }
+
         static bool rtFullScale()
         {
             static const bool on = [] {
@@ -4989,6 +5322,7 @@ namespace
                                  d.textureHeight, m_pendingUploads.empty() ? "nothing queued" : "not one queued upload's");
 
             }
+            notePeak(key, tc.w, tc.h, tc.pixels); // [gta-recomp] litScissor
             // [gta-recomp] anisotropic filtering samples a mip chain: built here, on the GS stage, not on the main thread's
             // GPU queue (PS2X_HW_CPU_MIPS=0: a render-target texture and GenerateMips each, as before)
             static const bool cpuMips = [] {
@@ -5103,6 +5437,7 @@ namespace
                 f.cmds.push_back({CmdType::TexDelete, static_cast<uint32_t>(f.texDeletes.size())});
                 f.texDeletes.push_back(byAge[i].first);
                 ++m_texStateVersion;
+                m_texPeak.erase(byAge[i].first);
                 m_texLru.erase(byAge[i].first);
             }
         }
