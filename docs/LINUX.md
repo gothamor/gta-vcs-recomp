@@ -145,3 +145,63 @@ prompt) or opens a terminal with the command. `VCS_LAUNCHER_VIDEO=x11|wayland`, 
 | The GitHub issues round of 2026-11-10 (0.2.5's changes: Purple Haze, the radio wheel, rotor damage, F12, the graphics card) | done (2026-11-10; PROGRESS.md milestone 9 has the numbers): first behind a locked desktop on the null renderer, then on the HD 520 with the window shown - all pass (`haze_check.py` with its picture, `controls_check.py` 75 of 75, `shakedown.py`), 57.5 fps at a 60 cap as before; the Vulkan backend got its `[rhi] graphics cards` line. 2026-11-12: merged with the setting's list of cards by name; the list, the "(integrated)" mark and the one log line seen on the HD 520. Not checked: a ThinLTO build, two cards |
 | The changes of 2026-11-10 - 11-14 (RSL memory limit, the on-foot wall fix, the macOS port's shared code, full screen by default, the motion blur's history, the MMI fixes, the radio off the air) | done (2026-11-14, quick build, HD 520, window shown): the recompile changed no generated file (#80: VCS uses none of the seven); `VCS_SELFTEST=1` all ok (the seven MMI macros included); `controls_check.py` 77 of 77; a night drive at 60 fps: `[gs-hw] motion blur` ghost 34-35 ms behind, 4 pictures kept, as on Windows; `[music-timing]` hooked; `[rsl-world] memory` lines; `saves.py`, `shakedown.py`, the launcher's `--self-test` pass. `controls_check`'s wall check now runs in god mode: Vic died in 2 of 10 rounds there and respawned at a hospital, where the mouse's turn measured nothing. Not checked: `memcheck.py`'s full run, a ThinLTO build |
 | Performance on this laptop (i5 Skylake, HD 520: the "modest hardware" target) in PERFORMANCE.md | 30 locked (original timing), 60 locked at a 60 cap, ~83 shown fps uncapped (frame-rate independent; PERFORMANCE.md 16-18) |
+
+## Immutable distributions (Bazzite, Fedora Silverblue/Kinoite, SteamOS)
+
+On image-based distributions the system can't install the build dependencies directly. Build and run the game inside a [Distrobox](https://distrobox.it/) container instead. It shares your home folder, display, sound and GPU with the host, so the game runs natively. Tested on Bazzite with a Fedora 43 container (AMD RX 9060 XT, RADV).
+
+1. Create and enter the container (on the host):
+
+   ```
+   distrobox create --name vcsbox --image registry.fedoraproject.org/fedora-toolbox:43
+   distrobox enter vcsbox
+   ```
+
+2. Get the source (inside the container):
+
+   ```
+   git clone --recursive https://github.com/gothamor/gta-vcs-recomp.git ~/games/vcs-recomp
+   cd ~/games/vcs-recomp
+   ```
+
+3. Install the dependencies. `python3 tools/build.py --check-deps` lists them; on Fedora 43 it is the following, plus `cmake`/`ninja-build` (so the build doesn't download its own) and the Vulkan driver and tools for the container:
+
+   ```
+   sudo dnf install -y pkgconf-pkg-config glslang ffmpeg-free-devel libX11-devel libXext-devel \
+       libXrandr-devel libXcursor-devel libXi-devel libXfixes-devel libXScrnSaver-devel \
+       wayland-devel wayland-protocols-devel libxkbcommon-devel libdecor-devel pipewire-devel \
+       pulseaudio-libs-devel alsa-lib-devel systemd-devel dbus-devel clang lld llvm \
+       vulkan-headers vulkan-loader-devel freetype-devel fontconfig-devel \
+       cmake ninja-build mesa-vulkan-drivers vulkan-tools
+   ```
+
+4. Check that the container sees your GPU:
+
+   ```
+   vulkaninfo --summary
+   ```
+
+   Your GPU should be listed (not only `llvmpipe`). Loader warnings about `libvulkan_dzn.so` can be ignored.
+
+5. Build, giving the path to your disc (your home folder is shared, so it can stay where it is, e.g. in `~/Downloads`):
+
+   ```
+   python3 tools/build.py --recompile ~/Downloads/"Grand Theft Auto - Vice City Stories (USA).iso"
+   ```
+
+6. Play from inside the container with `./build/vcs`, or from the host's application menu with a launcher in `~/.local/share/applications/gta-vcs.desktop`:
+
+   ```
+   [Desktop Entry]
+   Type=Application
+   Name=GTA Vice City Stories
+   Exec=distrobox enter vcsbox -- /home/YOUR_USER/games/vcs-recomp/build/vcs
+   Path=/home/YOUR_USER/games/vcs-recomp/build
+   Icon=applications-games
+   Terminal=false
+   Categories=Game;
+   ```
+
+   Replace `YOUR_USER` with your user name.
+
+To update later: `distrobox enter vcsbox`, then `cd ~/games/vcs-recomp && git pull && python3 tools/build.py --recompile-if-needed`.
