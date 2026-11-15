@@ -1653,8 +1653,12 @@ search of the generated code for a function comparing with both `~` (0x7E) and `
 through the rig (font objects, the menu's help-bar items, and every `C<n><ACTION>` text out of the running game's table:
 `vcs.exe`'s `prompts text <KEY>` command). **`build/analysis/text/american.txt` is not the PS2's text**: 26 of the 244
 control texts differ from the game's table in RAM (C*VEWE2 is "~S~ + ~X~" there and "R1 button" in the game, C*DOARM
-"L1 and R1" / "L2 and R2", C*FLUP "left analog stick up" / "up directional button" ...) - read text from the game. A
-prompt reaches the screen by one of three paths:
+"L1 and R1" / "L2 and R2", C*FLUP "left analog stick up" / "up directional button" ...) - read text from the game.
+**Why (2026-11-15): the US disc has both AMERICAN.GXT and ENGLISH.GXT, and the game reads ENGLISH.GXT.** american.txt
+is AMERICAN.GXT; all 244 C* texts of ENGLISH.GXT (read off the disc with an ISO9660 reader: GXT `TABL`, MAIN's `TKEY`
+of {u32 offset, key[8]} sorted, then `TDAT` UTF-16) are what `prompts text` reads in RAM. The disc also holds
+FRENCH / GERMAN / ITALIAN / SPANISH.GXT. A translation (GitHub issue 108: a fan GXT in place of ENGLISH.GXT) keeps the
+keys and changes the words. A prompt reaches the screen by one of three paths:
 
 **1. Text: `~k~ ~ACTION~` -> the controller configuration's text.** GXT strings name a control by action, never by
 button: `Press~h~ ~k~ ~TGSUB~ ~w~to ...` (149 uses). **`FUN_003aff20`** (re3's InsertPlayerControlKeysInString; a
@@ -1704,6 +1708,12 @@ btn_triangle_psp, btn_square_psp, btn_up_psp, btn_down_psp, btn_left_psp, btn_ri
   0x40 + control `~` (context: on foot, in a vehicle - actions VE*, FL*, HE*, TAXJU, CVEIW, FIREH -, the menu). The font
   takes any 16-bit character for a token (`FUN_00262370`) and looks it up in the glyph table as a 16-bit compare
   (`FUN_003e5e58`); `FUN_00261af8` tests only the low byte for X / O / T / S (a 1.33 texel scale - harmless here).
+- **By key when the words are not English** (2026-11-15, issue 108): the phrases only find English, so a translated
+  GXT's controls stayed words. `kActionControls` holds, for each of the 61 actions and 4 configurations, the controls
+  ENGLISH.GXT names (its texts through the phrase list; all 244 matched): `{LS}[or]{DPAD}`, `{L2}[+]{R2}`... When the
+  phrases don't find those controls in the game's text, the text is made from the table instead; the joiners are the
+  GXT's own `PRMOR` / `PRMAND` / `PRMPLUS` when a translation adds them, else " / " and " + ". English text (and a
+  translation that kept `~X~`) goes through the phrases as before.
 - The glyph table moved: font +0xC pointed at a copy in the EE kernel's area (0x61000; free aim uses 0x60000) with the
   four originals and 99 token entries (height 23, u = 2 x index, v = 255 - no glyph of the 256x256 atlas starts in that
   row), font +2 its count. Widths are written per glyph set at the frame kick; the game lays out with them.

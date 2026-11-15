@@ -163,6 +163,11 @@ Automatic follows the device used last - the keys and mouse buttons bound on the
 buttons (PlayStation or Xbox glyphs, from the pad's maker) as mapped on the Gamepad page. PlayStation, Xbox and
 Keyboard & mouse fix a set; Original is the PS2's text. game-internals.md 6n, DECISIONS.md 2026-11-07.
 
+**Translations** (GitHub issue 108): a translated ENGLISH.GXT gets the glyphs too - the controls come from the text's
+key (`C0VECRS`...), not its words. Where a control text names two controls, they are joined by " / " (or " + " for two
+held together); a translation can give its own words by adding the GXT keys **PRMOR**, **PRMAND** and **PRMPLUS**
+(spaces included, e.g. `PRMOR` = " veya ").
+
 ## Menus
 
 F2 (or Back + Start on a gamepad) opens the settings, F5 (or Back + RB) the trainer (docs/TRAINER.md), F6 (or Back + LB)

@@ -601,9 +601,19 @@ namespace vcs::prompts
             return out;
         }
 
+        // `prompts settext`: texts in place of the game's (tests only)
+        std::mutex g_textOverrideMutex;
+        std::map<std::string, std::u16string> g_textOverride;
+
         // the text of a key in the game's text table (MAIN), "" when it has none
         std::u16string gameText(const std::string &key)
         {
+            {
+                std::lock_guard<std::mutex> lock(g_textOverrideMutex);
+                if (!g_textOverride.empty())
+                    if (const auto it = g_textOverride.find(key); it != g_textOverride.end())
+                        return it->second;
+            }
             const uint32_t table = rd32(kTextTable);
             if (!inRam(table, 8))
                 return {};
@@ -637,6 +647,156 @@ namespace vcs::prompts
             return {};
         }
 
+        // Each action's controls by configuration, language-free (GitHub issue 108): what the game's own ENGLISH.GXT says
+        // for C<n><ACTION> (the US disc's text, the one in RAM - AMERICAN.GXT on the disc is not used: game-internals.md
+        // 6n), put through phrases() above. {CTL} is a control, [or] / [and] / [+] a joiner. A translated GXT keeps the
+        // keys and the controls and changes the words, so its words find no phrase: then the text is made from these.
+        struct ActionControls
+        {
+            const char *action;
+            const char *tpl[4]; // C0..C3
+        };
+        constexpr ActionControls kActionControls[] = {
+            {"AMBUY", {"{X}", "{X}", "{X}", "{X}"}},
+            {"AMEXI", {"{T}", "{T}", "{T}", "{T}"}},
+            {"AMLEF", {"{DL}", "{LSL}", "{DL}", "{LSL}"}},
+            {"AMMOV", {"{LS}[or]{DPAD}", "{LS}[or]{DPAD}", "{LS}[or]{DPAD}", "{LS}[or]{DPAD}"}},
+            {"AMRIG", {"{DR}", "{LSR}", "{DR}", "{LSR}"}},
+            {"ANS", {"{L1}", "{L1}", "{L1}", "{L1}"}},
+            {"CVEIW", {"{SELECT}", "{DPADUD}", "{SELECT}", "{SELECT}"}},
+            {"DOARM", {"{L2}[and]{R2}", "{L2}[and]{R2}", "{L2}[and]{R2}", "{L2}[and]{R2}"}},
+            {"DOSIN", {"{X}", "{X}", "{X}", "{X}"}},
+            {"DOSLR", {"{LSLR}", "{LSLR}", "{LSLR}", "{LSLR}"}},
+            {"DOSUD", {"{LSUD}", "{LSUD}", "{LSUD}", "{LSUD}"}},
+            {"FIREH", {"{RS}", "{RS}", "{RS}", "{RS}"}},
+            {"FLDN", {"{DD}", "{DD}", "{DD}", "{DD}"}},
+            {"FLUP", {"{DU}", "{DU}", "{DU}", "{DU}"}},
+            {"FREE1", {"{L3}", "{L3}", "{L3}", "{L3}"}},
+            {"FREE2", {"{LS}", "{LS}", "{LS}", "{LS}"}},
+            {"GOLFU", {"{X}", "{X}", "{X}", "{X}"}},
+            {"HEPI", {"{LSLR}", "{LSLR}", "{LSLR}", "{LSLR}"}},
+            {"HERO", {"{L2}[and]{R2}", "{L2}[and]{R2}", "{L2}[and]{R2}", "{L2}[and]{R2}"}},
+            {"PDBAK", {"{R3}", "{R3}", "{R3}", "{R3}"}},
+            {"PDCTL", {"{L2}[and]{R2}", "{L2}[and]{R2}", "{L2}[and]{R2}", "{L2}[and]{R2}"}},
+            {"PDCWE", {"{L2}[and]{R2}", "{L2}[and]{R2}", "{L2}[and]{R2}", "{L2}[and]{R2}"}},
+            {"PDFW", {"{O}", "{O}", "{O}", "{O}"}},
+            {"PDLO1", {"{L1}", "{L1}", "{L1}", "{L1}"}},
+            {"PDLO2", {"{LS}", "{DPAD}", "{LS}", "{DPAD}"}},
+            {"PDLOO", {"{RS}", "{RS}", "{RS}", "{RS}"}},
+            {"PDLT", {"{R1}", "{R1}", "{R1}", "{L1}"}},
+            {"PDSPR", {"{X}", "{X}", "{X}", "{X}"}},
+            {"PUBL", {"{S}", "{S}", "{S}", "{S}"}},
+            {"PUCF", {"{L1}", "{L1}", "{T}", "{O}"}},
+            {"PUGR", {"{T}", "{T}", "{T}", "{T}"}},
+            {"PUHA", {"{X}", "{X}", "{X}", "{X}"}},
+            {"PUNA", {"{O}", "{O}", "{O}", "{O}"}},
+            {"PUTE", {"{R1}", "{R1}", "{R1}", "{R1}"}},
+            {"SNSLO", {"{L1}", "{L1}", "{L1}", "{L1}"}},
+            {"SNZI", {"{S}", "{S}", "{S}", "{S}"}},
+            {"SNZO", {"{X}", "{X}", "{X}", "{X}"}},
+            {"SWIMD", {"{LS}[or]{DPAD}", "{LS}", "{LS}[or]{DPAD}", "{LS}"}},
+            {"SWIMF", {"{X}", "{X}", "{X}", "{X}"}},
+            {"SWIMO", {"{S}", "{S}", "{S}", "{S}"}},
+            {"TAXJU", {"{L3}", "{L1}", "{DD}", "{LSU}"}},
+            {"TGSUB", {"{R3}", "{R3}", "{R3}", "{R3}"}},
+            {"VEACC", {"{X}", "{X}", "{X}", "{X}"}},
+            {"VEBRK", {"{S}", "{S}", "{S}", "{S}"}},
+            {"VECRS", {"{L1}", "{SELECT}", "{L3}", "{O}"}},
+            {"VEEE", {"{T}", "{T}", "{T}", "{T}"}},
+            {"VEHB", {"{R1}", "{R1}", "{R1}", "{R1}"}},
+            {"VEHN", {"{L3}", "{L1}", "{DD}", "{LSU}"}},
+            {"VELB", {"{L2}[+]{R2}", "{L2}[+]{R2}", "{L2}[+]{R2}", "{L2}[+]{R2}"}},
+            {"VELL", {"{L2}", "{L2}", "{L2}", "{L2}"}},
+            {"VELR", {"{R2}", "{R2}", "{R2}", "{R2}"}},
+            {"VEMAG", {"{O}", "{O}", "{O}", "{O}"}},
+            {"VESTR", {"{LS}", "{LS}", "{LS}", "{LS}"}},
+            {"VETD", {"{LSD}", "{DD}", "{LSD}", "{DD}"}},
+            {"VETU", {"{LSU}", "{DU}", "{LSU}", "{DU}"}},
+            {"VEWE2", {"{R1}", "{R1}", "{R1}", "{R1}"}},
+            {"VEWEA", {"{RS}", "{RS}", "{RS}", "{DPAD}"}},
+            {"VEWEI", {"{LSUD}", "{LSUD}", "{LSUD}", "{LSUD}"}},
+            {"VEWEL", {"{DL}[and]{DR}", "{LSL}[and]{LSR}", "{DL}[and]{DR}", "{LSL}[and]{LSR}"}},
+            {"VEWEP", {"{O}", "{O}", "{O}", "{O}"}},
+            {"VEWEU", {"{LSU}[and]{LSD}", "{DU}[and]{DD}", "{LSU}[and]{LSD}", "{DU}[and]{DD}"}},
+        };
+
+        const char *actionTemplate(const std::string &action, uint16_t mode)
+        {
+            if (mode > 3)
+                return nullptr;
+            for (const ActionControls &a : kActionControls)
+                if (action == a.action)
+                    return a.tpl[mode];
+            return nullptr;
+        }
+
+        // The words between two controls when the text is made from the table: the GXT's own PRMOR / PRMAND / PRMPLUS
+        // when a translation adds them (so it can say "veya", "ou"...), else signs any language reads.
+        std::u16string joiner(const std::string &name)
+        {
+            const char *key = name == "or" ? "PRMOR" : name == "and" ? "PRMAND" : "PRMPLUS";
+            std::u16string s = gameText(key);
+            if (!s.empty())
+                return s;
+            return name == "+" ? u" + " : u" / ";
+        }
+
+        std::u16string fromTemplate(const char *tpl, int ctx)
+        {
+            std::u16string out;
+            for (const char *c = tpl; *c;)
+            {
+                const char open = *c, close = open == '{' ? '}' : ']';
+                const char *end = std::strchr(c, close);
+                if ((open != '{' && open != '[') || !end)
+                {
+                    out.push_back(static_cast<char16_t>(*c++));
+                    continue;
+                }
+                const std::string name(c + 1, end);
+                if (open == '{')
+                {
+                    const int ctl = ctlByName(name);
+                    out.push_back(u'~');
+                    out.push_back(static_cast<char16_t>(tokenChar(ctx, ctl < 0 ? Cross : ctl)));
+                    out.push_back(u'~');
+                }
+                else
+                    out += joiner(name);
+                c = end + 1;
+            }
+            return out;
+        }
+
+        // the tokens of an expanded text, in order
+        std::u16string tokensOf(const std::u16string &s)
+        {
+            std::u16string t;
+            for (char16_t c : s)
+                if (c >= kTokenBase && c < kTokenBase + kCtxCount * 0x40)
+                    t.push_back(c);
+            return t;
+        }
+
+        // The action's text with its controls as tokens. The game's words where the phrases find the controls the
+        // game's own text names (the English text, a translation that kept ~X~ or the English names); the table's
+        // otherwise, so a translated GXT gets the glyphs too. "" when the GXT has no such key.
+        std::u16string controlText(const std::string &action, uint16_t mode)
+        {
+            const std::u16string text = gameText("C" + std::to_string(mode) + action);
+            if (text.empty())
+                return {};
+            const int ctx = actionContext(action);
+            std::u16string t = translate(text, ctx);
+            if (const char *tpl = actionTemplate(action, mode))
+            {
+                std::u16string made = fromTemplate(tpl, ctx);
+                if (tokensOf(t) != tokensOf(made))
+                    return made;
+            }
+            return t;
+        }
+
         std::atomic<uint32_t> g_expanded{0};
 
         // FUN_003afd78(src, out): src points past "~k~ " at "~ACTION~"; the text of C<configuration><ACTION> goes into
@@ -655,11 +815,9 @@ namespace vcs::prompts
                 for (p += 2; inRam(p, 2) && rd16(p) != '~' && action.size() < 16; p += 2)
                     action.push_back(static_cast<char>(rd16(p)));
             const uint16_t mode = rd16(kPad0Mode);
-            const std::u16string text = mode <= 9 && !action.empty() && inRam(out, 512) ? gameText("C" + std::to_string(mode) + action)
-                                                                                         : std::u16string();
-            if (text.empty())
+            const std::u16string t = mode <= 9 && !action.empty() && inRam(out, 512) ? controlText(action, mode) : std::u16string();
+            if (t.empty())
                 return g_origExpand(rdram, ctx, runtime);
-            const std::u16string t = translate(text, actionContext(action));
             const size_t n = std::min<size_t>(t.size(), 255);
             for (size_t i = 0; i < n; ++i)
                 wr16(out + static_cast<uint32_t>(i) * 2u, static_cast<uint16_t>(t[i]));
@@ -1100,6 +1258,20 @@ namespace vcs::prompts
         // prompts -> ok setting= shown= device= pad= expanded= glyphs= buttons= drawn= atlas=WxH
         // prompts expand <ACTION> -> ok <its text for the configuration, tokens as {CTL@ctx}>
         ps2control::addCommand("prompts", [](const std::string &args, ps2control::Reply reply) {
+            // prompts settext <KEY> [TEXT]: a GXT key's text as a translation would have it (tests: a translated GXT
+            // without a disc of one); no text: the game's own again
+            if (args.rfind("settext ", 0) == 0)
+            {
+                const std::string rest = args.substr(8);
+                const size_t space = rest.find(' ');
+                const std::string key = rest.substr(0, space);
+                std::lock_guard<std::mutex> lock(g_textOverrideMutex);
+                if (space == std::string::npos)
+                    g_textOverride.erase(key);
+                else
+                    g_textOverride[key] = std::u16string(rest.begin() + static_cast<std::ptrdiff_t>(space) + 1, rest.end());
+                return reply("ok");
+            }
             if (args.rfind("text ", 0) == 0) // a text key's own text (non-ASCII as ?)
             {
                 std::string s;
@@ -1111,7 +1283,7 @@ namespace vcs::prompts
             {
                 const std::string action = args.substr(7);
                 const uint16_t mode = rd16(kPad0Mode);
-                const std::u16string text = translate(gameText("C" + std::to_string(mode) + action), actionContext(action));
+                const std::u16string text = controlText(action, mode);
                 std::string s;
                 for (char16_t c : text)
                     if (c >= kTokenBase && c < kTokenBase + kCtxCount * 0x40)
