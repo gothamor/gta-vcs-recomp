@@ -9,7 +9,7 @@
 // camera back, fades in and clears the flags. A bare ACTIVATE_SAVE_MENU (the first auto save) left G4 = 0: such a save
 // loads as a new game.
 // - Only outside missions (u8 0x4CD3E7: the story missions and the side jobs, which the game launches as missions), with
-//   the camera on the player (TheCamera +0x888: no cutscene), the player alive and not wanted (ped +0x920), and the game
+//   the camera on the player (TheCamera +0x888: no cutscene), the player alive (wanted or not: the stars are kept), and the game
 //   not saving already. Refused with a notice (the trainer's notices).
 // - In a vehicle: the game's ACTIVATE_SAVE_MENU handler (FUN_002D38C8) does nothing there (FUN_00219D50); for our script
 //   it is replaced by what it does otherwise (0x48A65C = 1, the stat 0x4CD480 + 1). The vehicle is stopped first
@@ -28,14 +28,20 @@
 //   it the live game gets its own values back.
 // - The rest in G1106, one word: the load (FUN_0025A348) restores only the globals listed in MAIN.SCM's segment 2 (1092
 //   byte offsets, the table FUN_00255188 searches - read before as a model-id table) and zeroes the others; of those
-//   1092, G1106 is the only one no script uses (and 0 in every save looked at). Bits 31..28 0xA (a quick save), 27..26
-//   the vehicle, 25..17 its model, 16..9 / 8..1 the parked vehicle's place from the player (signed, 0.8 m units: +-100 m),
-//   bit 0 free. The vehicle's colours and health do not fit: it comes back as the same model, the game picks a colour.
+//   1092, G1106 is the only one no script uses (and 0 in every save looked at). Bits 31..28 0xB (a quick save; 0xA: the
+//   first ones, without the fraction below), 27..26 the vehicle, 25..17 its model, 16..9 / 8..1 the parked vehicle's
+//   place from the player (signed, 0.8 m units: +-100 m), bit 0 free.
+// - In the fraction of G177 (the player's heading, kept to the whole degree; 15 bits, / 32768): 14..12 the stars,
+//   11..7 the parked vehicle's height from the player's (0.8 m, 16 = the same, 0 = not within +-12 m), 6..0 its heading.
+//   The vehicle's colours and health do not fit: it comes back as the same model, the game picks a colour.
 // Vehicle: 0 none, 1 the player sits in it, 2 near: the last one he drove, still there, within 100 m.
 //
 // THE LOAD (Load Game, or the newest save at boot). INITSAV puts the player back as above. Once it is done (G4 = G684
-// = 0) and G1106 marks a quick save: G1106 to 0, and with a vehicle REQUEST_MODEL, CREATE_CAR (in it: at the player, his
-// heading; parked: at its place, on the ground), the player WARPed into it when he was in it, MARK_CAR_AS_NO_LONGER_NEEDED.
+// = 0) and G1106 marks a quick save: G1106 to 0; outdoors the player placed once more (LOAD_SCENE first: at boot he fell
+// through the ground); the stars (ALTER_WANTED_LEVEL_NO_DROP); with a vehicle REQUEST_MODEL, CREATE_CAR, the player
+// WARPed into it when he was in it, MARK_CAR_AS_NO_LONGER_NEEDED. The heights come from where the player stands then
+// (G680 is no longer the saved height: 1.8 m lower in a car): in it, under him; parked, the ground found there unless it
+// is not the saved height (a bridge over it).
 // G678..680 / G177 keep the quick save's place until the next save sets them (only a save and INITSAV read them).
 // Quick saves in other interiors (shops...) are refused: nothing would put the game back in them.
 //
@@ -95,8 +101,12 @@ namespace vcs::quicksave
         constexpr char kScriptName[] = "quicksav";
         constexpr uint32_t G_HEADING = 177;
         constexpr uint32_t G_DATA = 1106; // saved, used by no script (see above)
-        constexpr uint32_t kMark = 0xAu;  // bits 31..28
+        constexpr uint32_t kMark = 0xBu;    // bits 31..28; with the extra data in G177's fraction
+        constexpr uint32_t kMarkOld = 0xAu; // the first quick saves: without it
+        constexpr float kFraction = 32768.0f; // G177's fraction: 15 bits, exact for a heading below 512
         constexpr float kNearVehicle = 100.0f;
+        constexpr float kParkedDzUnit = 0.8f;    // the parked vehicle's height from the player's: 5 bits, +-12 m
+        constexpr float kGroundTolerance = 0.6f; // the ground CREATE_CAR found is the saved one when this close
         constexpr uint32_t kStartTimeoutMs = 3000u, kModelTimeoutMs = 10000u;
 
         enum : uint16_t
@@ -111,6 +121,7 @@ namespace vcs::quicksave
             MARK_MODEL_AS_NO_LONGER_NEEDED = 0x0162,
             RESTORE_CAMERA_JUMPCUT = 0x01CF,
             WARP_CHAR_INTO_CAR = 0x021C,
+            ALTER_WANTED_LEVEL_NO_DROP = 0x0099,
             SET_CAMERA_BEHIND_PLAYER = 0x0221,
             STORE_CAR_CHAR_IS_IN_NO_SAVE = 0x024B,
             LOAD_SCENE = 0x0253,
@@ -156,8 +167,9 @@ namespace vcs::quicksave
         struct Data // what a quick save keeps (G1106, the player's place in G678..680 and G177)
         {
             float x = 0, y = 0, z = 0, heading = 0;
-            uint32_t area = 0, vehicle = 0, model = 0;
+            uint32_t area = 0, vehicle = 0, model = 0, stars = 0;
             float vx = 0, vy = 0, vz = 0, vheading = 0;
+            bool vzKnown = false; // vz is the vehicle's own height (its matrix), not the ground's
             uint32_t spawn[4] = {}; // the game's G678..680, G177 (raw words)
         };
 
@@ -313,8 +325,6 @@ namespace vcs::quicksave
             const uint32_t state = rd32(ram, ped + kPedState);
             if (state == 0x39u || state == 0x3Au || !(rdf(ram, ped + kPedHealth) > 0.0f))
                 return refuse("dead", "Quick save: not now");
-            if (rd32(ram, ped + kPedWanted) != 0)
-                return refuse("wanted", "Quick save: lose the police first");
             const int32_t inSafehouse = static_cast<int32_t>(global(ram, G_IN_SAFEHOUSE));
             const int32_t inEmpire = static_cast<int32_t>(global(ram, G_IN_EMPIRE));
             const uint32_t area = rd32(ram, kArea);
@@ -329,6 +339,7 @@ namespace vcs::quicksave
                 d.x = rdf(ram, at + kPos), d.y = rdf(ram, at + kPos + 4), d.z = rdf(ram, at + kPos + 8) + 1.0f;
             d.heading = headingOf(ram, at);
             d.area = area;
+            d.stars = std::min(rd32(ram, ped + kPedWanted), 6u); // the wanted level (stars)
             uint32_t car = vehicle;
             if (vehicle)
                 d.vehicle = 1;
@@ -366,7 +377,24 @@ namespace vcs::quicksave
             const uint32_t word = kMark << 28 | (d.vehicle & 3u) << 26 | (d.model & 0x1FFu) << 17 |
                                   (d.vehicle == 2 ? unit(d.vx - d.x) << 9 | unit(d.vy - d.y) << 1 : 0u);
             setGlobal(ram, G_DATA, word);
-            const float place[4] = {d.x, d.y, d.z, d.heading};
+            // in the fraction of the player's heading (kept to the whole degree): the stars, the parked vehicle's
+            // height from the player's and its heading
+            uint32_t extra = (d.stars & 7u) << 12;
+            if (d.vehicle == 2)
+            {
+                const long units = std::lround((d.vz - d.z) / kParkedDzUnit);
+                const uint32_t dz = units < -15 || units > 15 ? 0u : static_cast<uint32_t>(units + 16); // 0: did not fit
+                float vh = std::fmod(d.vheading, 360.0f);
+                if (vh < 0)
+                    vh += 360.0f;
+                const uint32_t h = static_cast<uint32_t>(std::lround(vh * 128.0f / 360.0f)) & 0x7Fu;
+                extra |= dz << 7 | h;
+            }
+            float heading = std::fmod(d.heading, 360.0f);
+            if (heading < 0)
+                heading += 360.0f;
+            heading = std::floor(heading) + static_cast<float>(extra) / kFraction;
+            const float place[4] = {d.x, d.y, d.z, heading};
             for (uint32_t k = 0; k < 4; ++k)
                 setGlobal(ram, kSpawnGlobals[k], bitsOf(place[k]));
             if (area == 0) // outdoors: no interior to put him in (the two can be left over from one)
@@ -376,8 +404,8 @@ namespace vcs::quicksave
             g_sawSaving = false;
             std::memcpy(g_clockAtSave, ram + kClock, 2);
             g_state = State::Saving;
-            std::fprintf(stderr, "[quicksave] at %.1f %.1f %.1f area %u vehicle %u (model %u), clock %02u:%02u\n", d.x, d.y,
-                         d.z, d.area, d.vehicle, d.model, g_clockAtSave[0], g_clockAtSave[1]);
+            std::fprintf(stderr, "[quicksave] at %.1f %.1f %.1f heading %.5f area %u vehicle %u (model %u) stars %u, clock %02u:%02u\n",
+                         d.x, d.y, d.z, heading, d.area, d.vehicle, d.model, d.stars, g_clockAtSave[0], g_clockAtSave[1]);
         }
 
         // the live game's own values back after the quick save was written
@@ -393,15 +421,27 @@ namespace vcs::quicksave
         bool takeData(uint8_t *ram, Data &d)
         {
             const uint32_t w = global(ram, G_DATA);
-            if ((w >> 28) != kMark)
+            if ((w >> 28) != kMark && (w >> 28) != kMarkOld)
                 return false;
+            const bool extra = (w >> 28) == kMark; // the fraction of the heading carries the extra data
             const auto metres = [](uint32_t u) { return static_cast<int8_t>(u & 0xFFu) * 0.8f; };
             d = {};
             d.x = globalf(ram, 678), d.y = globalf(ram, 679), d.z = globalf(ram, 680), d.heading = globalf(ram, G_HEADING);
             d.vehicle = (w >> 26) & 3u, d.model = (w >> 17) & 0x1FFu;
             d.vx = d.x, d.vy = d.y, d.vz = d.z - 1.0f, d.vheading = d.heading;
+            const uint32_t code =
+                extra ? static_cast<uint32_t>(std::lround((d.heading - std::floor(d.heading)) * kFraction)) & 0x7FFFu : 0u;
+            d.stars = code >> 12;
             if (d.vehicle == 2)
+            {
                 d.vx = d.x + metres(w >> 9), d.vy = d.y + metres(w >> 1), d.vz = -100.0f; // on the ground there
+                if (extra)
+                {
+                    d.vheading = static_cast<float>(code & 0x7Fu) * 360.0f / 128.0f;
+                    if (const uint32_t dz = (code >> 7) & 0x1Fu) // 0: its height did not fit, the ground there
+                        d.vz = d.z + (static_cast<int>(dz) - 16) * kParkedDzUnit, d.vzKnown = true;
+                }
+            }
             setGlobal(ram, G_DATA, 0);
             return true;
         }
@@ -466,9 +506,21 @@ namespace vcs::quicksave
                     return;
                 }
                 const Data &d = g_data;
-                std::fprintf(stderr, "[quicksave] loaded a quick save at %.1f %.1f %.1f area %u vehicle %u\n", d.x, d.y, d.z,
-                             d.area, d.vehicle);
+                std::fprintf(stderr, "[quicksave] loaded a quick save at %.1f %.1f %.1f heading %.5f area %u vehicle %u stars %u\n",
+                             d.x, d.y, d.z, d.heading, d.area, d.vehicle, d.stars);
                 g_restores.fetch_add(1, std::memory_order_relaxed);
+                // outdoors: the player once more at his place, after LOAD_SCENE (its collision). At boot INITSAV put
+                // him there before the ground around was loaded and he fell through the map
+                if (static_cast<int32_t>(global(ram, G_IN_SAFEHOUSE)) == -1 &&
+                    static_cast<int32_t>(global(ram, G_IN_EMPIRE)) == -1)
+                    place(ram, d.x, d.y, d.z, d.heading, true);
+                if (d.stars) // the wanted level as saved
+                {
+                    Code c;
+                    c.op(ALTER_WANTED_LEVEL_NO_DROP).player().i(static_cast<int32_t>(d.stars));
+                    const std::vector<uint8_t> bytes = c.done();
+                    vcs::rig::startCodeScript(ram, bytes.data(), bytes.size(), kScriptName);
+                }
                 if (d.vehicle && d.model)
                 {
                     Code c;
@@ -495,8 +547,20 @@ namespace vcs::quicksave
                     }
                     return;
                 }
+                // the heights from where the player stands now: G680 is not the saved height any more (the save /
+                // INITSAV rewrite it: 1.8 m lower in a car, and the car created there fell through the road). The
+                // player stands on the ground (his centre 1 m up), put there with LOAD_SCENE.
+                const float pz = rdf(ram, rd32(ram, kPlayerPed) + kPos + 8);
+                // CREATE_CAR raises z by the model's height above its centre (a car ~1 m, a bike ~0.6): z = the
+                // ground. In it: under the player. Parked: -100 (the highest ground there), its height set right after
+                // (Restore::Car) when that is not the saved one (a bridge over it)
+                float cz = -100.0f;
+                if (d.vehicle == 1)
+                    cz = pz - 1.0f, g_data.vzKnown = false;
+                else if (d.vzKnown)
+                    g_data.vz = pz + (d.vz - d.z);
                 Code c;
-                c.op(CREATE_CAR).i(static_cast<int32_t>(d.model)).f(d.vx).f(d.vy).f(d.vz).local(0);
+                c.op(CREATE_CAR).i(static_cast<int32_t>(d.model)).f(d.vx).f(d.vy).f(cz).local(0);
                 c.op(SET_CAR_HEADING).local(0).f(d.vheading);
                 if (d.vehicle == 1)
                     c.op(WARP_CHAR_INTO_CAR).player().local(0);
@@ -532,6 +596,13 @@ namespace vcs::quicksave
                 const uint32_t car = vehicleAt(ram, handle);
                 if (car)
                 {
+                    // the saved height: the ground found is the right one when it is close (exact), else (a bridge over
+                    // it, a roof, the ground not loaded yet) the saved height, a little up
+                    const float z = rdf(ram, car + kPos + 8);
+                    if (g_data.vzKnown && !(std::fabs(z - g_data.vz) < kGroundTolerance))
+                        wr32(ram, car + kPos + 8, bitsOf(g_data.vz + 2.0f * kParkedDzUnit));
+                    std::fprintf(stderr, "[quicksave] the vehicle at z %.2f (saved %.2f%s)\n", rdf(ram, car + kPos + 8),
+                                 g_data.vz, g_data.vzKnown ? "" : ", not kept");
                     Code c;
                     c.op(MARK_CAR_AS_NO_LONGER_NEEDED).i(static_cast<int32_t>(handle));
                     const std::vector<uint8_t> bytes = c.done();

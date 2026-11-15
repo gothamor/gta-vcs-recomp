@@ -27,7 +27,6 @@ Ten mod zastąpił „autozapis po misji” (jego historia jest niżej).
 - trwa misja: u8 `0x4CD3E7`. Zlecenia poboczne (Paramedic, Vigilante, straż, taksówka, wyścigi) gra też uruchamia
   jako misje, więc też się liczą,
 - przerywnik albo kamera skryptowa (`TheCamera+0x888` ≠ 1), gracz martwy, gra już zapisuje,
-- **list gończy** (ped +0x920): „lose the police first”,
 - **wnętrze, którego gra nie umie odtworzyć**, czyli obszar ≠ 0, a gracz nie jest ani w kryjówce (G171), ani w
   budynku Empire (G172), np. sklep. Nic by go tam z powrotem nie wstawiło.
 - otwarte menu ustawień albo trenera, pauza.
@@ -87,15 +86,34 @@ Dlatego dane są w miejscach, które gra sama zapisuje:
 
   | bity | znaczenie |
   |---|---|
-  | 31..28 | 0xA: szybki zapis |
+  | 31..28 | 0xB: szybki zapis (0xA: pierwsze szybkie zapisy, bez danych w ułamku G177) |
   | 27..26 | pojazd: 0 brak, 1 gracz w nim siedzi, 2 zaparkowany obok (ostatni prowadzony, istnieje, ≤ 100 m) |
   | 25..17 | model pojazdu |
   | 16..9 / 8..1 | miejsce zaparkowanego pojazdu względem gracza, ze znakiem, jednostki 0,8 m (±100 m) |
   | 0 | wolny |
 
-  Po wczytaniu, gdy `INITSAV` skończy (G4 = G684 = 0), mod czyta G1106, zeruje je i odtwarza pojazd:
-  `REQUEST_MODEL`, `CREATE_CAR` (gdy gracz w nim siedział: w miejscu gracza i z jego kierunkiem; gdy auto stało
-  obok: w jego miejscu, na ziemi), `WARP_CHAR_INTO_CAR`, `MARK_CAR_AS_NO_LONGER_NEEDED`.
+  **Ułamek G177.** Kierunek gracza jest zapisywany z dokładnością do pełnego stopnia, a ułamek (15 bitów,
+  wartość / 32768, dokładnie dla kierunku < 512) niesie:
+
+  | bity | znaczenie |
+  |---|---|
+  | 14..12 | gwiazdki (ped +0x920, 0..6); po wczytaniu `ALTER_WANTED_LEVEL_NO_DROP` |
+  | 11..7 | wysokość zaparkowanego pojazdu względem gracza, jednostki 0,8 m, 16 = ta sama, 0 = poza ±12 m |
+  | 6..0 | kierunek zaparkowanego pojazdu (360° / 128) |
+
+  Po wczytaniu, gdy `INITSAV` skończy (G4 = G684 = 0), mod czyta G1106, zeruje je, na zewnątrz stawia gracza
+  jeszcze raz (`LOAD_SCENE`, `SET_CHAR_COORDINATES`: przy starcie gry `INITSAV` stawiał go, zanim ziemia się
+  wczytała, i spadał pod mapę), oddaje gwiazdki i odtwarza pojazd: `REQUEST_MODEL`, `CREATE_CAR`,
+  `WARP_CHAR_INTO_CAR`, `MARK_CAR_AS_NO_LONGER_NEEDED`.
+
+  **Wysokość pojazdu.** `CREATE_CAR` podnosi podane z o wysokość modelu nad jego środkiem (auto ok. 1 m, motor
+  0,6 m), więc z ma być ziemią. G680 po wczytaniu nie jest już zapisaną wysokością (w aucie o 1,8 m niżej:
+  auto stworzone na tej wysokości lądowało pod drogą i spadało pod mapę), dlatego wysokości liczę od miejsca, w
+  którym gracz stoi po wczytaniu (jego środek 1 m nad ziemią):
+  - gracz w aucie: `CREATE_CAR` na z gracza − 1,
+  - auto zaparkowane: `CREATE_CAR` na z = −100 (najwyższa ziemia w tym miejscu). Gdy wynik różni się od zapisanej
+    wysokości (z gracza + różnica z ułamka G177) o 0,6 m lub więcej (most nad autem, dach, ziemia jeszcze
+    niewczytana), mod ustawia autu zapisaną wysokość.
 - **Czego nie da się zapisać**: kolorów i stanu technicznego pojazdu. W zapisie gry nie ma na nie wolnego
   miejsca, więc auto wraca jako ten sam model, w kolorze wybranym przez grę.
 

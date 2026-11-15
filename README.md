@@ -220,7 +220,7 @@ Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded
 - **Quick save** (*Saving > Quick save*; the key: Keyboard > Menus, F12; `VCS_QUICKSAVE=0/1`): the key opens the
   game's own Save menu anywhere outside a mission, on foot or in a vehicle - choose a slot or Cancel. The save keeps
   where you are (inside a safehouse or an Empire building too), your vehicle (the same model) or the one you left
-  parked nearby, and the time of day; Load Game brings you back there. A normal save in the usual slots and format
+  parked nearby, your wanted level and the time of day; Load Game brings you back there. A normal save in the usual slots and format
   ([docs/mods/QUICKSAVE.md](docs/mods/QUICKSAVE.md)).
 
 ## Updating

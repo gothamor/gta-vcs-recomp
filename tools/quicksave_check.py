@@ -146,8 +146,16 @@ class Session:
             d = math.hypot(p[0] - pos[0], p[1] - pos[1])
             if d <= radius:
                 out.append({"model": struct.unpack("<H", g.peek(v + 0x56, 2))[0], "colours": g.peek(v + 0x224, 8).hex(),
-                            "dist": round(d, 1)})
+                            "dist": round(d, 1), "z": round(p[2], 2)})
         return out
+
+    def vehicle_logs(self):
+        """the game's '[quicksave] the vehicle at z ...' lines so far: the height it was given on a load"""
+        try:
+            log = os.path.join(os.environ.get("VCS_BUILD_DIR") or os.path.join(ROOT, "build"), "run", "quicksave.log")
+            return [l.strip() for l in open(log, errors="replace") if "[quicksave] the vehicle at z" in l]
+        except OSError:
+            return []
 
     def quick_save(self, tag, slot):
         """the key -> the Save menu -> slot `slot` (an empty one) -> Yes -> OK"""
@@ -242,6 +250,7 @@ def main():
 
         # 6. each quick save through Load Game
         for slot, tag in ((3, "foot"), (4, "vehicle"), (5, "near"), (2, "interior")):
+            logs = len(s.vehicle_logs())
             s.load_slot("load_" + tag, slot)
             now = s.state()
             want = saved[slot]
@@ -257,11 +266,16 @@ def main():
                 ok = ok and 0 <= s.clock() - want["clock"] <= 60 and now["car"] is None
             elif tag == "vehicle":
                 # the model (the colours do not fit in the save: the game picks them)
-                ok = ok and now["car"] is not None and now["car"]["model"] == want["car"]["model"]
+                # and at its height: given it at once (no drop from 1 m up), still there once settled
+                given = s.vehicle_logs()[logs:]
+                extra = {"given": given}
+                ok = ok and now["car"] is not None and now["car"]["model"] == want["car"]["model"] and                     abs(now["pos"][2] - want["pos"][2]) < 0.3 and len(given) == 1 and                     abs(float(given[0].split()[5]) - want["pos"][2]) < 0.3
             elif tag == "near":
                 cars = s.cars_near(want["car_pos"], 3.0)
-                extra = {"cars_at_saved_car_pos": cars}
-                ok = ok and now["car"] is None and any(c["model"] == want["near_car"][0]["model"] for c in cars)
+                given = s.vehicle_logs()[logs:]
+                extra = {"cars_at_saved_car_pos": cars, "given": given}
+                ok = ok and now["car"] is None and len(given) == 1 and                     abs(float(given[0].split()[5]) - want["near_car"][0]["z"]) < 0.3 and                     any(c["model"] == want["near_car"][0]["model"] and abs(c["z"] - want["near_car"][0]["z"]) < 0.3
+                        for c in cars)
             elif tag == "interior":
                 ok = ok and now["g171"] == 0
             checks["load_" + tag] = {"ok": ok and s.visible("load_%s_screen" % tag), "now": now, "saved": want,
@@ -305,7 +319,7 @@ def main():
             st = s.status()
             if drop6:
                 want = saved[5]
-                ok = close(now["pos"][:2], want["pos"][:2], 6.0) and st["restores"] == "1"
+                ok = close(now["pos"][:2], want["pos"][:2], 6.0) and abs(now["pos"][2] - want["pos"][2]) < 1.5 and                     st["restores"] == "1"
             else:
                 ok = st["restores"] == "0" and now["area"] != 0 and now["g171"] == 0  # the barracks, as a normal save
             checks[tag] = {"ok": ok and s.visible(tag), "now": now, "status": st}
