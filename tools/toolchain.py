@@ -23,6 +23,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # or kept in .vcs-build-dir (tools/build_dir.py, the launcher's Folder step). The built game, its vcs.ini, the CMake
 # trees and the logs live there; the source and generated/ stay here. The test tools keep their output in build/.
 DEFAULT_BUILD = os.path.join(ROOT, "build")
+if platform.system() == "Darwin" and " " in DEFAULT_BUILD:  # FFmpeg's configure (built from source on macOS) can't run in a path with a space
+    DEFAULT_BUILD = os.path.expanduser("~/VCSRecomp-build")
 BUILD_POINTER = os.path.join(ROOT, ".vcs-build-dir")
 
 
@@ -1189,6 +1191,9 @@ def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
         defines = dict(defines or {}, PS2X_CPU=level)
     if configured and not force and not defines:
         return
+    if IS_MACOS and " " in build_dir:
+        fail("the build folder has a space in its path (%s): FFmpeg can't build there. Choose another folder "
+             "(python tools/build_dir.py set ~/vcs-build)" % build_dir, "configure_failed")
     cmd = ["cmake", "-S", ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
     cmd += ["-D%s=%s" % (k, v) for k, v in (defines or {}).items()]
     cmd += compiler_defines(env) + deps_defines() + python_defines()
