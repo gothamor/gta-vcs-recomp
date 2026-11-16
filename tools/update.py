@@ -48,7 +48,8 @@ import toolchain as tc  # noqa: E402
 RELEASE_JSON = os.path.join(tc.ROOT, "RELEASE.json")
 UPDATE_DIR = os.path.join(tc.BUILD, "update")
 KEEP = ("build/", "generated/")  # never replaced or removed
-ASSET_SUFFIX = "-windows.zip" if tc.IS_WINDOWS else "-macos-arm64.dmg" if tc.IS_MACOS else "-x86_64.AppImage"
+ASSET_SUFFIX = ("-windows.zip" if tc.IS_WINDOWS else "-macos-%s.dmg" % tc.macos_arch() if tc.IS_MACOS
+                else "-x86_64.AppImage")
 
 
 def this_release():

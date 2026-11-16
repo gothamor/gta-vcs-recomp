@@ -1,8 +1,31 @@
 # macOS
 
 The native macOS build: the same source, the same `python3 tools/build.py` pipeline and the same game as on Windows
-and Linux, for **Apple Silicon** (M1 and newer). The game and the launcher draw with **Metal** (`src/rhi/metal`,
-`launcher/render/metal`). Decisions: DECISIONS.md, 2026-11-12. Intel Macs are not supported.
+and Linux, for **Apple Silicon** (M1 and newer) and **Intel Macs** (x86-64, a Metal 3 GPU: see "Intel Macs" below).
+The game and the launcher draw with **Metal** (`src/rhi/metal`, `launcher/render/metal`). Decisions: DECISIONS.md,
+2026-11-12 and 2026-11-16.
+
+## Intel Macs
+
+An Intel Mac builds for its own CPU like a Windows / Linux PC: `toolchain.cpu_level` reads `machdep.cpu.features` /
+`leaf7_features` (AVX2 = AVX2 + FMA + BMI1/2, else AVX, else SSE4; `VCS_CPU` forces one) and
+`toolchain.macos_arch` gives `CMAKE_OSX_ARCHITECTURES=x86_64` (`hw.optional.arm64` tells Apple Silicon also under
+Rosetta). Everything x86-specific is the Windows / Linux path: native SSE (no sse2neon), MXCSR, `preserve_none`.
+What differs from Apple Silicon:
+
+| Area | Apple Silicon | Intel Mac | Why |
+|---|---|---|---|
+| CPU flags | `-mcpu=apple-m1`, sse2neon | `-march=x86-64-v3` / `sandybridge` / `x86-64-v2` (PS2X_CPU) | The x86 SSE code runs as it is |
+| Textures the CPU fills | `MTLStorageModeShared` | `MTLStorageModeManaged` (`cpuTextureStorage`, `rhi_metal.mm`; the launcher's atlas) | Intel / AMD GPUs refuse Shared textures; Shared buffers are fine |
+| FFmpeg | `--arch=aarch64` | `--arch=x86_64 --disable-x86asm` | The Command Line Tools have no nasm; the C MPEG-2 decoder is enough for the movies |
+| Profiler | `ARM_THREAD_STATE64` | `x86_THREAD_STATE64` (`__rip`) | Mach thread state per architecture |
+| Release | `-macos-arm64.dmg` | `-macos-x86_64.dmg` (`release.py`, `update.py`) | One image per architecture; the game is built on the player's Mac anyway |
+| Window bars (4:3 menus / loading screens in a wider window) | the pass's clear | drawn black (`fillBars`, `presenter.cpp`; Metal only, `VCS_FILL_BARS=0` turns it off) | Full screen on an Intel Mac showed thin red / black stripes in the bars of the pause menu: the clear alone didn't reach the display there (the game's off-screen capture of the same frame was black). Drawn pixels are always right. Confirmed fixed by the player on an Iris Plus MacBook Pro, 2026-11-16 |
+
+Checked on a 13" MacBook Pro 2020 (Core i5-1038NG7, Iris Plus G7, macOS 26): `--check-deps`, the launcher
+(`--self-test`, `--screenshot`, with `MTL_DEBUG_LAYER=1`: no validation errors), `--iop-tests` (0 failures), and the
+runtime / platform / RHI / renderer libraries against a stub `generated/` (no disc). Not checked yet: a recompile from
+a disc and play.
 
 ## Building
 

@@ -49,7 +49,7 @@ def show(path):
         return path
     return path if rel.startswith("..") else rel
 IS_WINDOWS = platform.system() == "Windows"
-# macOS: Apple Silicon only, Apple's clang and linker from the Command Line Tools (docs/MACOS.md, DECISIONS.md 2026-11-12)
+# macOS: Apple Silicon or Intel (x86-64, the same SSE code as Windows / Linux), Apple's clang and linker from the Command Line Tools (docs/MACOS.md, DECISIONS.md 2026-11-12)
 IS_MACOS = platform.system() == "Darwin"
 
 # our progress lines and the tools' output interleave in order even when stdout is a pipe. UTF-8 whatever the
@@ -438,12 +438,47 @@ CPU_TEXT = {"AVX2": "AVX2 (Haswell / Zen and newer)", "AVX": "AVX (Sandy Bridge 
             "SSE4": "SSE4.2 (no AVX)", "ARM64": "Apple Silicon (arm64)"}
 
 
+def macos_is_arm():
+    """An Apple Silicon Mac, also when this Python runs under Rosetta (platform.machine() then says x86_64)."""
+    if platform.machine().lower() in ("arm64", "aarch64"):
+        return True
+    try:
+        r = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() == "1"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def macos_arch():
+    """CMAKE_OSX_ARCHITECTURES for this Mac: arm64 on Apple Silicon, x86_64 on an Intel Mac."""
+    return "arm64" if macos_is_arm() else "x86_64"
+
+
 def cpu_features():
     """What this CPU and OS run: a set of "sse4.2", "avx", "avx2" (AVX2 also means FMA and BMI2 here), or None when
     it can't be told (not x86-64, or a Windows that doesn't know the feature flags)."""
     machine = platform.machine().lower()
     if machine not in ("amd64", "x86_64", "x64"):
         return None
+    if IS_MACOS:
+        # Intel Mac: machdep.cpu.features (CPUID leaf 1: "SSE4.2 ... FMA ... AVX1.0") and leaf7_features ("AVX2 BMI1
+        # BMI2"); macOS always saves the AVX registers on CPUs that have them
+        try:
+            r = subprocess.run(["sysctl", "-n", "machdep.cpu.features", "machdep.cpu.leaf7_features"],
+                               capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        flags = set(r.stdout.upper().split())
+        if not flags:
+            return None
+        found = set()
+        if "SSE4.2" in flags:
+            found.add("sse4.2")
+        if "AVX1.0" in flags or "AVX" in flags:
+            found.add("avx")
+        if {"AVX2", "FMA", "BMI1", "BMI2"} <= flags:
+            found.add("avx2")
+        return found
     if IS_WINDOWS:
         import ctypes
         present = ctypes.windll.kernel32.IsProcessorFeaturePresent
@@ -471,8 +506,8 @@ def cpu_level():
     """The PS2X_CPU this PC builds for: "AVX2", "AVX" or "SSE4"; None for a CPU without SSE4.2 (not supported).
     VCS_CPU=AVX2|AVX|SSE4 chooses (e.g. to build and test an older CPU's build on a newer one). When the features can't
     be read the default stays (AVX2)."""
-    if IS_MACOS:  # Apple Silicon only (an Intel Mac: check_cpu stops)
-        return "ARM64" if platform.machine().lower() in ("arm64", "aarch64") else None
+    if IS_MACOS and macos_is_arm():  # Apple Silicon; an Intel Mac takes the x86-64 levels below
+        return "ARM64"
     forced = os.environ.get("VCS_CPU", "").strip().upper()
     if forced:
         if forced not in CPU_LEVELS:
@@ -518,9 +553,6 @@ def cpu_name():
 def check_cpu():
     """The CPU level, or stop: a CPU without SSE4.2 can't run the game (code cpu_unsupported)."""
     level = cpu_level()
-    if level is None and IS_MACOS:
-        fail("this Mac's processor (%s) is an Intel one: the macOS build is for Apple Silicon only (M1 or newer)"
-             % (cpu_name() or "unknown"), "cpu_unsupported")
     if level is None:
         fail("this PC's processor (%s) has no SSE4.2: the game needs a CPU from 2008 or later (Intel Core i / AMD "
              "Bulldozer or newer)" % (cpu_name() or "unknown"), "cpu_unsupported")
@@ -1412,11 +1444,11 @@ def macos_compiler_defines():
     if missing:
         fail("%s not found: run %s" % (missing[0][0], missing[0][1]), "no_clt")
     clang, clangxx = xcrun_find("clang"), xcrun_find("clang++")
-    return ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx, "-DCMAKE_OSX_ARCHITECTURES=arm64",
+    return ["-DCMAKE_C_COMPILER=" + clang, "-DCMAKE_CXX_COMPILER=" + clangxx, "-DCMAKE_OSX_ARCHITECTURES=" + macos_arch(),
             "-DCMAKE_OSX_DEPLOYMENT_TARGET=" + MACOS_DEPLOYMENT_TARGET]
 
 
-MACOS_DEPLOYMENT_TARGET = "13.0"  # Metal 3 on every Apple Silicon Mac
+MACOS_DEPLOYMENT_TARGET = "13.0"  # Metal 3: every Apple Silicon Mac; Intel Macs from 2017 on (Kaby Lake / AMD Vega)
 
 
 def llvm_profdata(env):

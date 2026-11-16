@@ -28,7 +28,7 @@ appimagetool with the type 2 runtime (static: no libfuse2 needed), both pinned b
 
     python3 tools/release.py --platform macos [--ref TAG | --worktree] [--launcher APP]
 
-Writes build/dist/VCS-Recomp-<version>-macos-arm64.dmg and its .sha256 (docs/MACOS.md): a disk image that opens as
+Writes build/dist/VCS-Recomp-<version>-macos-<arm64 or x86_64>.dmg and its .sha256 (docs/MACOS.md): a disk image that opens as
 a Finder window with VCSLauncher.app next to a link to Applications, to drag it there (tools/dmg.py; DECISIONS.md
 2026-11-14). The app is signed ad-hoc (DECISIONS.md 2026-11-12), with the release's files in
 Contents/Resources/release - the source, VERSION, RELEASE.json, deps/ for macOS (FFmpeg's source and the shader
@@ -400,7 +400,7 @@ def self_test_app(app):
 
 
 def release_macos(a, ref, version):
-    name = "VCS-Recomp-%s-macos-arm64" % version
+    name = "VCS-Recomp-%s-macos-%s" % (version, tc.macos_arch())  # [intel-mac] arm64 or x86_64
     stage = os.path.join(DIST, name)
     if os.path.isdir(stage):
         shutil.rmtree(stage)

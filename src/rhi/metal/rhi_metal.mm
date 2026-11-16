@@ -48,6 +48,14 @@ namespace rhi
         constexpr uint32_t kTextureSlots = 8;       // t0..t7 / s0..s7
         constexpr uint32_t kVertexBufferIndex = 30; // tools/hlsl_msl.py
         constexpr size_t kRingChunk = 8u << 20;
+
+        // [intel-mac] The storage of a texture the CPU fills with replaceRegion: Shared needs an Apple GPU; Intel and AMD
+        // GPUs (Intel Macs) refuse a Shared texture, so they take Managed - replaceRegion writes the CPU copy and
+        // Metal synchronises the GPU's. Nothing reads these textures back on the CPU (readTexture blits to a buffer).
+        inline MTLStorageMode cpuTextureStorage(id<MTLDevice> device)
+        {
+            return [device supportsFamily:MTLGPUFamilyApple1] ? MTLStorageModeShared : MTLStorageModeManaged;
+        }
         constexpr size_t kRingAlign = 256u;
 
         MTLPixelFormat pixelFormat(Format f)
@@ -268,7 +276,7 @@ namespace rhi
                                                                                               width:1
                                                                                              height:1
                                                                                           mipmapped:NO];
-                td.storageMode = MTLStorageModeShared;
+                td.storageMode = cpuTextureStorage(device);
                 td.usage = MTLTextureUsageShaderRead;
                 m_dummyTexture = [device newTextureWithDescriptor:td];
                 const uint32_t black = 0;
@@ -336,7 +344,7 @@ namespace rhi
                 td.usage = MTLTextureUsageShaderRead;
                 if (target || mips)
                     td.usage |= MTLTextureUsageRenderTarget;
-                td.storageMode = (target || msaa) ? MTLStorageModePrivate : MTLStorageModeShared;
+                td.storageMode = (target || msaa) ? MTLStorageModePrivate : cpuTextureStorage(m_device);
                 t->texture = [m_device newTextureWithDescriptor:td];
                 if (!t->texture)
                 {
@@ -496,7 +504,7 @@ namespace rhi
                                                                                           mipmapped:NO];
                 td.mipmapLevelCount = sized.mipLevels;
                 td.usage = MTLTextureUsageShaderRead;
-                td.storageMode = MTLStorageModeShared;
+                td.storageMode = cpuTextureStorage(m_device);
                 t->texture = [m_device newTextureWithDescriptor:td];
                 if (!t->texture)
                     return nullptr;

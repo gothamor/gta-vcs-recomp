@@ -555,6 +555,7 @@ namespace vcs
 #if defined(__APPLE__)
             if (thread_suspend(thread) != KERN_SUCCESS)
                 return false;
+#if defined(__aarch64__)
             arm_thread_state64_t state{};
             mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
             if (thread_get_state(thread, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state), &count) == KERN_SUCCESS)
@@ -562,6 +563,15 @@ namespace vcs
                 pc = static_cast<uintptr_t>(arm_thread_state64_get_pc(state));
                 got = true;
             }
+#else // [intel-mac] Intel Macs: the same Mach sampling, x86-64 thread state
+            x86_thread_state64_t state{};
+            mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
+            if (thread_get_state(thread, x86_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state), &count) == KERN_SUCCESS)
+            {
+                pc = static_cast<uintptr_t>(state.__rip);
+                got = true;
+            }
+#endif
             thread_resume(thread);
             return true;
 #else

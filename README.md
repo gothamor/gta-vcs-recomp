@@ -58,8 +58,9 @@ what changed is rebuilt. Without FUSE (some containers and minimal systems), sta
 
 ## Install on macOS: the launcher (easiest)
 
-1. Download the newest `VCS-Recomp-<version>-macos-arm64.dmg` from the [Releases](../../releases) page. It needs a Mac
-   with Apple Silicon (M1 or later) and macOS 13 or newer.
+1. Download the newest `VCS-Recomp-<version>-macos-arm64.dmg` (Apple Silicon) or `-macos-x86_64.dmg` (Intel Macs) from
+   the [Releases](../../releases) page. It needs macOS 13 or newer; an Intel Mac needs a Metal 3 GPU (2017 or later:
+   Intel Kaby Lake graphics or newer, AMD Vega / Radeon Pro 5000 / 6000).
 2. Open it and drag **VCSLauncher** onto the **Applications** folder next to it, then eject the disk image.
 3. Start it from Applications. The launcher isn't signed by an Apple developer yet, so the first time macOS refuses
    it: open *System Settings > Privacy & Security* and choose *Open Anyway* (once). The first start puts the game's
