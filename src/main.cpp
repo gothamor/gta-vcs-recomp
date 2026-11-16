@@ -23,6 +23,7 @@
 #include "disc/vcs_disc_id.h"
 #include "game/vcs_display.h"
 #include "game/vcs_driveby.h"
+#include "game/vcs_quicksave.h"
 #include "game/vcs_effects_timing.h"
 #include "game/vcs_framerate.h"
 #include "game/vcs_movie.h"
@@ -731,6 +732,7 @@ namespace
         vcs::prompts::registerSettings(); // the Enhancements page: button prompts by device (game/vcs_prompts.h)
         vcs::world::registerSettings();   // Enhancements > World: density, draw distance (game/vcs_world_detail.h)
         vcs::driveby::registerSettings(); // Enhancements > Combat: drive-by fire rate (game/vcs_driveby.h)
+        vcs::quicksave::registerSettings(); // Enhancements > Saving + Keyboard > Menus: quick save, F12 (game/vcs_quicksave.h)
         vcs::registerEffectsSettings();   // Enhancements > Effects: Reduce Post Processing Effects (game/vcs_effects_timing.h)
 
         s = {};
@@ -923,6 +925,8 @@ int main(int argc, char *argv[])
                                     [](PS2Runtime &, void *) {
                                         altEnter();
                                         screenshotKey();
+                                        vcs::quicksave::onHostFrame(ui::settingsMenuOpen() || ui::trainerMenuBlocksInput() ||
+                                                                    ui::settingsMenuWaitingForKey()); // the quick save key
                                         followWindowAspect();
                                         ui::drawSettingsMenu();
                                         ui::drawTrainerMenu();

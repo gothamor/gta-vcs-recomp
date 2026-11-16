@@ -13,6 +13,7 @@
 #include "debug/rsl_trace.h"
 #include "game/vcs_display.h"
 #include "game/vcs_driveby.h"
+#include "game/vcs_quicksave.h"
 #include "game/vcs_framerate.h"
 #include "game/vcs_movie.h"
 #include "game/vcs_input.h"
@@ -1106,6 +1107,7 @@ namespace
         vcs::rig::onGameFrame(rdram, ctx, runtime); // automation rig jobs (debug/rig.h)
         vcs::input::holdInBackground(runtime);      // paused while the window is in the background (game/vcs_input.h)
         vcs::trainer::onGameFrame(rdram);           // the trainer's actions and held toggles (game/vcs_trainer.h)
+        vcs::quicksave::onGameFrame(rdram);         // the quick save and its restore after a load (game/vcs_quicksave.h)
         vcs::volume::onGameFrame(rdram);            // the music / effects levels and the pause menu's (game/vcs_volume.h)
         vcs::world::onGameFrame(rdram);             // density, draw distance and their guards (game/vcs_world_detail.h)
         vcs::gameinfo::onGameFrame(rdram);          // the F3 game-state panel's snapshot (debug/game_info.h)
@@ -1196,6 +1198,7 @@ namespace
         vcs::carcam::install(runtime);     // the mouse on the camera behind a vehicle (game/vcs_carcam.h)
         vcs::world::install(runtime);      // density and draw distance (game/vcs_world_detail.h)
         vcs::driveby::install(runtime);    // the NPC drive-by's fire rate (game/vcs_driveby.h)
+        vcs::quicksave::install(runtime);  // the quick save key: the game's Save menu anywhere (game/vcs_quicksave.h)
         vcs::installFrameRateHooks(runtime); // 30 / 60 fps (game/vcs_framerate.h)
         vcs::installScriptTimingHooks(runtime); // per-frame mission meters on the time step (game/vcs_script_timing.h)
         vcs::installPhysicsTimingHooks(runtime); // per-frame vehicle pushes on the time step (game/vcs_physics_timing.h)
