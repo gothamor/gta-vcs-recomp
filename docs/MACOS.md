@@ -20,6 +20,7 @@ What differs from Apple Silicon:
 | FFmpeg | `--arch=aarch64` | `--arch=x86_64 --disable-x86asm` | The Command Line Tools have no nasm; the C MPEG-2 decoder is enough for the movies |
 | Profiler | `ARM_THREAD_STATE64` | `x86_THREAD_STATE64` (`__rip`) | Mach thread state per architecture |
 | Release | `-macos-arm64.dmg` | `-macos-x86_64.dmg` (`release.py`, `update.py`) | One image per architecture; the game is built on the player's Mac anyway |
+| Window bars (4:3 menus / loading screens in a wider window) | the pass's clear | drawn black (`fillBars`, `presenter.cpp`; Metal only, `VCS_FILL_BARS=0` turns it off) | Full screen on an Intel Mac showed thin red / black stripes in the bars of the pause menu: the clear alone didn't reach the display there (the game's off-screen capture of the same frame was black). Drawn pixels are always right. Confirmed fixed by the player on an Iris Plus MacBook Pro, 2026-11-16 |
 
 Checked on a 13" MacBook Pro 2020 (Core i5-1038NG7, Iris Plus G7, macOS 26): `--check-deps`, the launcher
 (`--self-test`, `--screenshot`, with `MTL_DEBUG_LAYER=1`: no validation errors), `--iop-tests` (0 failures), and the

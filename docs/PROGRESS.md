@@ -1115,6 +1115,7 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `VCS_CPU=AVX2\|AVX\|SSE4` | build tools: the CPU the build is for (default: this PC's, `toolchain.cpu_level`); an older one's build runs here (tests) |
 | `VCS_TOOLCHAIN=mingw\|msvc` | build tools, Windows: llvm-mingw (default; no Visual Studio) or Visual Studio's clang-cl; switching sets the build tree up again (everything rebuilt) |
 | `VCS_LLVM_MINGW=<folder>` | build tools, Windows: an llvm-mingw to use instead of the one in `build/build-tools` (clang 19+) |
+| `VCS_FILL_BARS=0` | macOS: leave the window's bars around a 4:3 picture to the clear instead of drawing them black (docs/MACOS.md "Intel Macs": the stripes on Intel Macs in full screen) |
 | `-DVCS_DXBC_CHECK_FXC=<fxc.exe>` | CMake: every D3D11 shader from `tools/hlsl_dxbc.py` also compiled by that fxc, the build failing on any byte that differs |
 | `VCS_FPS_LOG=1` | VBlanks and flips per second (was `VCS_FPS=1`; `VCS_FPS` is the frame rate cap) |
 | `VCS_TIMING=0\|1`, `VCS_FPS=30\|60\|120\|144\|-1\|0` | game timing original / frame-rate independent; frame rate cap (-1 display refresh, 0 unlimited) |

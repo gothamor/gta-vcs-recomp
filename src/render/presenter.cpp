@@ -31,6 +31,7 @@ namespace present
         std::unique_ptr<rhi::Sampler> g_nearest, g_linear;
         std::unique_ptr<rhi::Texture> g_captureTarget;
         std::unique_ptr<rhi::Texture> g_lumaTarget; // frameLuma
+        std::unique_ptr<rhi::Texture> g_black;      // 1x1 opaque black: the window's bars (fillBars)
         std::vector<uint8_t> g_captureRgba;
         // Dear ImGui: the backend's own renderer (D3D11) or render::UiRenderer through the RHI (Vulkan)
         std::unique_ptr<render::UiRenderer> g_ui;
@@ -89,6 +90,34 @@ namespace present
             g_device->draw(4);
             g_device->setTexture(0, nullptr, nullptr);
         }
+
+        // [intel-mac] The bars around a picture that doesn't fill the window (4:3 menus and loading screens in a wide
+        // window), drawn black instead of left to the pass's clear. On Intel Macs in full screen the clear alone left
+        // the bars full of stale memory - thin red / black stripes (an Intel fast clear that the display, reading the
+        // drawable directly, doesn't see); pixels actually drawn are always right. Metal only: D3D11 / Vulkan never
+        // showed it, and Apple GPUs don't need it but take no harm. docs/MACOS.md "Intel Macs".
+        void fillBars(const Picture &picture, int srcWidth, int srcHeight, float aspect, int targetWidth, int targetHeight,
+                      float frameAspect)
+        {
+            static const bool off = [] { // VCS_FILL_BARS=0: leave the bars to the clear (as before, to compare)
+                const char *e = std::getenv("VCS_FILL_BARS");
+                return e && *e == '0';
+            }();
+            if (off || !g_black || g_device->backend() != rhi::Backend::Metal || !picture.texture || srcWidth <= 0 ||
+                srcHeight <= 0 || targetWidth <= 0 || targetHeight <= 0 || aspect <= 0.0f)
+                return;
+            float x0 = 0.0f, y0 = 0.0f, w = 0.0f, h = 0.0f;
+            fitRect(aspect, frameAspect, static_cast<float>(targetWidth), static_cast<float>(targetHeight), x0, y0, w, h);
+            if (x0 < 0.5f && y0 < 0.5f)
+                return; // the picture covers the window: no bars
+            const Params params{{-1.0f, 1.0f, 1.0f, -1.0f}, {1.0f, 1.0f}, {0.0f, 0.0f}};
+            g_device->updateBuffer(*g_params, &params, sizeof(params));
+            g_device->setPipeline(*g_pipeline);
+            g_device->setConstants(0, *g_params);
+            g_device->setTexture(0, g_black.get(), g_nearest.get());
+            g_device->draw(4);
+            g_device->setTexture(0, nullptr, nullptr);
+        }
     }
 
     void setBackend(int backend) { g_backendSetting = backend; }
@@ -140,6 +169,13 @@ namespace present
         g_params = g_device->createBuffer({sizeof(Params), rhi::BufferUsage::Constant, true, "present params"});
         g_nearest = g_device->createSampler({rhi::Filter::Nearest, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
         g_linear = g_device->createSampler({rhi::Filter::Linear, rhi::Wrap::Clamp, rhi::Wrap::Clamp});
+        {
+            rhi::TextureDesc bd;
+            bd.width = bd.height = 1;
+            bd.name = "bars";
+            const uint32_t black = 0xFF000000u; // RGBA8: 0, 0, 0, 255
+            g_black = g_device->createTexture(bd, &black, 4);
+        }
         if (!g_pipeline || !g_params || !g_nearest || !g_linear)
         {
             std::fprintf(stderr, "[present] could not create the present pipeline\n");
@@ -164,6 +200,7 @@ namespace present
         g_ui.reset();
         g_captureTarget.reset();
         g_lumaTarget.reset();
+        g_black.reset();
         g_pipeline.reset();
         g_params.reset();
         g_nearest.reset();
@@ -241,6 +278,7 @@ namespace present
         pass.clearColor = true;
         pass.name = "window";
         g_device->beginPass(pass);
+        fillBars(picture, srcWidth, srcHeight, aspect, static_cast<int>(w), static_cast<int>(h), frameAspect);
         drawPicture(picture, srcWidth, srcHeight, aspect, static_cast<int>(w), static_cast<int>(h), frameAspect);
         uiRender(ImGui::GetDrawData());
         g_device->endPass();
