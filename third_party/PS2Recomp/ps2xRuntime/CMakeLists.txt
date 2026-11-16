@@ -235,14 +235,27 @@ elseif(APPLE AND NOT VCS_FFMPEG STREQUAL "system")
     if(NOT _ffmpeg_sdk)
         execute_process(COMMAND xcrun --show-sdk-path OUTPUT_VARIABLE _ffmpeg_sdk OUTPUT_STRIP_TRAILING_WHITESPACE)
     endif()
-    set(_ffmpeg_flags "-arch arm64 -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET} -isysroot ${_ffmpeg_sdk}")
+    # [gta-recomp] the Mac's own architecture: arm64 (Apple Silicon) or x86_64 (Intel Macs). On x86_64 FFmpeg's
+    # assembly needs nasm, which the Command Line Tools don't have: the C decoder is fast enough for the movies.
+    set(_ffmpeg_osx_arch "${CMAKE_OSX_ARCHITECTURES}")
+    if(NOT _ffmpeg_osx_arch)
+        set(_ffmpeg_osx_arch "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+    endif()
+    if(_ffmpeg_osx_arch MATCHES "x86_64")
+        set(_ffmpeg_arch_args --arch=x86_64 --disable-x86asm)
+        set(_ffmpeg_osx_arch "x86_64")
+    else()
+        set(_ffmpeg_arch_args --arch=aarch64)
+        set(_ffmpeg_osx_arch "arm64")
+    endif()
+    set(_ffmpeg_flags "-arch ${_ffmpeg_osx_arch} -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET} -isysroot ${_ffmpeg_sdk}")
     ExternalProject_Add(ffmpeg_external
         URL "${FFMPEG_SOURCE_URL}"
         URL_HASH SHA256=089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         PREFIX "${FFMPEG_PREFIX_DIR}"
         CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env SDKROOT=${_ffmpeg_sdk} <SOURCE_DIR>/configure --prefix=${FFMPEG_INSTALL_DIR} --cc=${CMAKE_C_COMPILER}
-            --arch=aarch64 --enable-static --disable-shared --enable-pic
+            ${_ffmpeg_arch_args} --enable-static --disable-shared --enable-pic
             --disable-everything --enable-decoder=mpeg2video --enable-parser=mpegvideo --enable-swscale
             --disable-avformat --disable-avdevice --disable-avfilter --disable-swresample
             --disable-programs --disable-doc --disable-network --disable-autodetect --disable-debug

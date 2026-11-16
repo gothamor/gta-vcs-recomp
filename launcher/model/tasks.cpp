@@ -168,8 +168,8 @@ namespace launcher
                                   "macOS runs an app straight from a download in a read-only copy, which can't be "
                                   "updated. Drag VCSLauncher.app to Applications in Finder, start it from there, then "
                                   "update again."}},
-            {"cpu_unsupported", {"This Mac has an Intel processor",
-                                 "The macOS version of the game is for Apple Silicon Macs (M1 and newer)."}},
+            {"cpu_unsupported", {"This Mac's processor is too old for the game",
+                                 "The game needs an Apple Silicon Mac, or an Intel Mac with SSE4.2 (2009 or newer)."}},
         };
 #endif
         const ErrorHelp kUnknown = {"Something went wrong", "Open the log for the details, or copy a report for help."};

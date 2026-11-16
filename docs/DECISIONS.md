@@ -1507,3 +1507,12 @@ takes a zip given by hand). Choices:
 - **`python -B` for the bundle's own scripts**: the first start's `update.py install` runs from inside the app and
   wrote `__pycache__` there, breaking the app's signature (found when the image's check refused the app). The launcher
   passes `-B` when the script is the release's own copy (macOS bundle or AppImage).
+
+## 2026-11-16 - macOS on Intel Macs too (a fork's request)
+
+Intel Macs build and run the game as x86-64, like Windows and Linux: the same SSE code and CPU levels (AVX2 / AVX /
+SSE4 from `machdep.cpu.*`), Apple's clang with `CMAKE_OSX_ARCHITECTURES=x86_64`, Metal as on Apple Silicon. The one GPU
+difference is texture storage: Intel / AMD GPUs refuse `MTLStorageModeShared` textures, so textures the CPU fills are
+Managed there (Apple GPUs keep Shared). Releases are one disk image per architecture rather than a universal app: the
+game is compiled on the player's Mac anyway, so only the launcher would gain from being universal. Details: MACOS.md
+"Intel Macs".

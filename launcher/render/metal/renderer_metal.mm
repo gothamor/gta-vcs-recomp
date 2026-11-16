@@ -204,7 +204,8 @@ namespace render
                                                                                              height:NSUInteger(atlas.size)
                                                                                           mipmapped:NO];
                 td.usage = MTLTextureUsageShaderRead;
-                td.storageMode = MTLStorageModeShared;
+                // [intel-mac] Shared textures are for Apple GPUs only; Intel / AMD take Managed (replaceRegion syncs it)
+                td.storageMode = [mtl.device supportsFamily:MTLGPUFamilyApple1] ? MTLStorageModeShared : MTLStorageModeManaged;
                 mtl.atlas = [mtl.device newTextureWithDescriptor:td];
                 mtl.atlasGeneration = atlas.generation;
                 mtl.atlasSize = atlas.size;
