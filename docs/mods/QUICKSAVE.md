@@ -3,7 +3,8 @@
 **Stan: działa** (`src/game/vcs_quicksave.cpp`).
 
 **Ustawienia:**
-- F2 → Enhancements → Saving → **Quick save**: Off / On, domyślnie **Off**; `VCS_QUICKSAVE=0/1`.
+- F2 → Enhancements → Saving → **Quick save**: Off / Enabled / Enabled + prompt after mission, domyślnie **Off**;
+  `VCS_QUICKSAVE=0/1/2`.
   `VCS_QUICKSAVE_HOOKS=0` nie instaluje haków.
 - Klawisz: F2 → Keyboard → Menus → **Quick save**, domyślnie **F12**. Gra nie używała F12; diagnostyka renderera
   (`PS2X_HW_DUMP_KEY=1`) też, ale F12 to zrzut ekranu w Steamie i Bandicamie, dlatego klawisz da się zmienić.
@@ -18,6 +19,11 @@
   - we wnętrzu kryjówki albo budynku Empire, jeśli tam stałeś,
   - z tym samym pojazdem (siedzisz w nim albo stoi tam, gdzie go zostawiłeś).
 - **Zegar się nie przesuwa** (zapis w kryjówce przesuwa go o 6 h).
+- **Enabled + prompt after mission**: to samo menu otwiera się też samo po zaliczonej misji, żeby nie zapomnieć
+  zapisać. Hak na handlerze `REGISTER_MISSION_PASSED` (opcode 0x01EB, `FUN_00184D18`) zaznacza zaliczenie, a menu
+  otwiera się, gdy „Mission passed” jest na ekranie od 5 s, skrypt misji skończył się 1,5 s temu, kamera jest na
+  graczu i gra nie zapisuje. Zapis jest w miejscu końca misji. Gdy wcześniej zacznie się następna misja albo gra
+  zostanie wczytana, menu się nie otwiera. Test: komenda `quicksave prompt` (jak zaliczenie misji).
 
 Ten mod zastąpił „autozapis po misji” (jego historia jest niżej).
 

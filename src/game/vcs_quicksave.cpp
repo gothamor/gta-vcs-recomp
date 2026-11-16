@@ -1,4 +1,7 @@
-// Enhancements > Saving: "Quick save" (docs/mods/QUICKSAVE.md has the addresses and what was checked in the game).
+// Enhancements > Saving: "Quick save" (docs/mods/QUICKSAVE.md has the addresses and what was checked in the game):
+// Off / Enabled (the key) / Enabled + prompt after mission (the key, and the same Save menu by itself after a mission is
+// passed - REGISTER_MISSION_PASSED, opcode 0x01EB, handler FUN_00184D18 - once "Mission passed" has been on screen for
+// 5 s and the mission's script has ended for 1.5 s; dropped when the next mission starts first or a game is loaded).
 //
 // THE SAVE. The quick save key (Keyboard > Menus, F12) runs the game's own safehouse save: the main script's save
 // subroutine (IP 0xC646; each save point CALLs it, 0x1222B) as a new script of the game's VM (vcs::rig::startScriptAt,
@@ -173,8 +176,25 @@ namespace vcs::quicksave
             uint32_t spawn[4] = {}; // the game's G678..680, G177 (raw words)
         };
 
+        enum Mode
+        {
+            Off = 0,
+            Enabled = 1,      // the key
+            AfterMission = 2, // the key, and the Save menu by itself after a mission is passed
+        };
         std::atomic<bool> g_enabled{false};
+        std::atomic<int> g_mode{Off};
         std::atomic<bool> g_keyRequest{false};
+        std::atomic<bool> g_passed{false};       // REGISTER_MISSION_PASSED ran (the script pass; read at the frame kick)
+        std::atomic<bool> g_promptRequest{false}; // tests: as if a mission had just been passed
+        PS2Runtime::RecompiledFunction g_origPassed = nullptr;
+        constexpr uint32_t kMissionPassed = 0x00184D18u; // REGISTER_MISSION_PASSED's handler (opcode 0x01EB)
+        constexpr uint32_t kShowPassedMs = 5000u;        // "Mission passed" and its jingle
+        constexpr uint32_t kAfterEndMs = 1500u;          // the mission's script gone this long (its clean-up, the fade)
+        // the prompt after a mission: pending from the pass until a safe moment
+        bool g_prompt = false, g_promptSawEnd = false;
+        uint32_t g_promptAt = 0, g_promptEndAt = 0;
+        std::atomic<int> g_prompts{0}, g_promptDrops{0};
         std::atomic<bool> g_savePointRequest{false}; // tests: the save point's own code (a normal safehouse save)
         constexpr uint32_t kSavePointCode = 0x00012213u; // main script: G678.. = G2293.., CALL 0xC646 (L0 0), fade in
         PS2Runtime::RecompiledFunction g_origActivate = nullptr, g_origClock = nullptr;
@@ -310,6 +330,14 @@ namespace vcs::quicksave
                 return;
             }
             g_origClock(rdram, ctx, runtime);
+        }
+
+        // REGISTER_MISSION_PASSED: mark it, then the handler as it is
+        PS2_GUEST_CC void missionPassed(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_mode.load(std::memory_order_relaxed) == AfterMission)
+                g_passed.store(true, std::memory_order_relaxed);
+            g_origPassed(rdram, ctx, runtime);
         }
 
         void startSave(uint8_t *ram, uint32_t time, uint32_t ped)
@@ -637,6 +665,8 @@ namespace vcs::quicksave
         {
             g_restore = Restore::Armed;
             g_haveData = false;
+            if (g_prompt)
+                g_prompt = false, g_promptDrops.fetch_add(1, std::memory_order_relaxed);
             g_lastVehicle = 0;
             if (g_state == State::Saving)
                 g_state = State::Idle, g_saveScript = 0;
@@ -653,6 +683,46 @@ namespace vcs::quicksave
         if (g_savePointRequest.exchange(false, std::memory_order_relaxed) && inGame)
             vcs::rig::startScriptAt(ram, kSavePointCode, "savepnt", kTerminateIp);
         const bool key = g_keyRequest.exchange(false, std::memory_order_relaxed);
+        const bool passed = g_passed.exchange(false, std::memory_order_relaxed);
+        const bool promptTest = g_promptRequest.exchange(false, std::memory_order_relaxed);
+        const bool mission = inGame && ram[kMissionRunning] != 0;
+        if ((passed || promptTest) && inGame)
+        {
+            std::fprintf(stderr, "[quicksave] %s: the Save menu when it is safe\n", passed ? "mission passed" : "test");
+            g_prompt = true;
+            g_promptAt = promptTest ? time - kShowPassedMs : time;
+            g_promptSawEnd = promptTest && !mission;
+            g_promptEndAt = promptTest ? time - kAfterEndMs : time;
+        }
+        if (g_prompt)
+        {
+            const auto drop = [](const char *why) {
+                std::fprintf(stderr, "[quicksave] no Save menu after the mission: %s\n", why);
+                g_promptDrops.fetch_add(1, std::memory_order_relaxed);
+                g_prompt = false;
+            };
+            if (g_mode.load(std::memory_order_relaxed) != AfterMission)
+                drop("turned off");
+            else if (inGame && time < g_promptAt)
+                drop("a game was loaded");
+            else if (inGame && running)
+            {
+                if (mission && g_promptSawEnd)
+                    drop("the next mission started");
+                else if (!mission && !g_promptSawEnd)
+                    g_promptSawEnd = true, g_promptEndAt = time;
+                const uint32_t state = rd32(ram, ped + kPedState);
+                const bool dead = state == 0x39u || state == 0x3Au || !(rdf(ram, ped + kPedHealth) > 0.0f);
+                if (g_prompt && g_state == State::Idle && g_promptSawEnd && time - g_promptAt >= kShowPassedMs &&
+                    time - g_promptEndAt >= kAfterEndMs && !dead && rd32(ram, kLookingAtPlayer) == 1 &&
+                    !global(ram, G_SAVING) && !global(ram, G_SAVING2) && g_restore == Restore::Idle)
+                {
+                    g_prompt = false;
+                    g_prompts.fetch_add(1, std::memory_order_relaxed);
+                    startSave(ram, time, ped);
+                }
+            }
+        }
         switch (g_state)
         {
         case State::Idle:
@@ -693,15 +763,21 @@ namespace vcs::quicksave
         s.page = "Enhancements";
         s.section = "Saving";
         s.label = "Quick save";
-        s.help = "The quick save key (Keyboard > Menus, F12) opens the game's Save menu anywhere outside a mission, on foot "
-                 "or in a vehicle: choose a slot, or Cancel. The save keeps where you are (in a safehouse or an Empire "
-                 "building too), your vehicle - or the last one you drove, if it is near - and the time of day; Load Game "
-                 "brings you back there. Not during a mission, a cutscene or with the police after you. Off: as the "
-                 "original game, saving only at safehouses.";
-        s.type = settings::Type::Toggle;
-        s.defaultValue = 0;
+        s.help = "Enabled: the quick save key (Keyboard > Menus, F12) opens the game's Save menu anywhere outside a "
+                 "mission, on foot or in a vehicle: choose a slot, or Cancel. The save keeps where you are (in a safehouse "
+                 "or an Empire building too), your vehicle - or the last one you drove, if it is near - your wanted level "
+                 "and the time of day; Load Game brings you back there. Not during a mission or a cutscene. "
+                 "Enabled + prompt after mission: the same, and the Save menu also comes up by itself a few seconds after "
+                 "a mission is passed, so you do not forget to save. Off: as the original game, saving only at "
+                 "safehouses.";
+        s.type = settings::Type::Choice;
+        s.choices = {{"Off", Off}, {"Enabled", Enabled}, {"Enabled + prompt after mission", AfterMission}};
+        s.defaultValue = Off;
         s.env = "VCS_QUICKSAVE";
-        s.onChange = [](int v) { g_enabled.store(v != 0, std::memory_order_relaxed); };
+        s.onChange = [](int v) {
+            g_mode.store(v, std::memory_order_relaxed);
+            g_enabled.store(v != Off, std::memory_order_relaxed);
+        };
         settings::add(s);
 
         s = {};
@@ -727,16 +803,26 @@ namespace vcs::quicksave
             runtime.replaceFunction(kActivateSaveMenu, &activateSaveMenu);
             runtime.replaceFunction(kAdvanceClock, &advanceClock);
             g_installed = true;
+            if ((g_origPassed = runtime.lookupFunction(kMissionPassed)))
+                runtime.replaceFunction(kMissionPassed, &missionPassed);
+            else
+                std::fprintf(stderr, "[quicksave] REGISTER_MISSION_PASSED's handler not found: no prompt after a mission\n");
         }
         else
             std::fprintf(stderr, "[quicksave] the game's functions not found: no quick save\n");
 
-        // quicksave -> ok state; quicksave now = the key; quicksave savepoint = a normal safehouse save, the barracks'
+        // quicksave -> ok state; quicksave now = the key; quicksave prompt = as if a mission had just been passed;
+        // quicksave savepoint = a normal safehouse save, the barracks'
         // save point's own code (main script 0x12213), as walking onto its disk does (tests)
         ps2control::addCommand("quicksave", [](const std::string &args, ps2control::Reply reply) {
             if (args.find("now") != std::string::npos)
             {
                 g_keyRequest.store(true, std::memory_order_relaxed);
+                return reply("ok");
+            }
+            if (args.find("prompt") != std::string::npos)
+            {
+                g_promptRequest.store(true, std::memory_order_relaxed);
                 return reply("ok");
             }
             if (args.find("savepoint") != std::string::npos)
@@ -745,13 +831,14 @@ namespace vcs::quicksave
                 return reply("ok");
             }
             const uint32_t clock = g_lastSavedClock.load();
-            char text[256];
+            char text[384];
             std::snprintf(text, sizeof(text),
                           "ok hooked=%d on=%d saving=%d saves=%d refused=%d last_refusal=%s restores=%d legacy_fixes=%d "
-                          "clock_skips=%d last_clock=%02u:%02u",
+                          "clock_skips=%d last_clock=%02u:%02u mode=%d prompts=%d prompt_drops=%d pending=%d",
                           g_installed ? 1 : 0, g_enabled.load() ? 1 : 0, g_state == State::Saving ? 1 : 0, g_saves.load(),
                           g_refused.load(), g_lastRefusal.load(), g_restores.load(), g_legacyFixes.load(),
-                          g_clockSkips.load(), clock & 0xFFu, (clock >> 8) & 0xFFu);
+                          g_clockSkips.load(), clock & 0xFFu, (clock >> 8) & 0xFFu, g_mode.load(), g_prompts.load(),
+                          g_promptDrops.load(), g_prompt ? 1 : 0);
             reply(text);
         });
     }
