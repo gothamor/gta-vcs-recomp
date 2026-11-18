@@ -1122,7 +1122,11 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `VCS_SKIP_MOVIES=0\|1` | play / skip the intro movies (Display > Skip intro movies); test tools default to 1 |
 | `PS2X_MC_BACKUP=0` | no automatic card backup (`<data>/backups/auto-*.zip`) before the game deletes or overwrites a card file |
 | `VCS_MOVIE_LOG=1` | movie playback: sound pushed / queued / played vs the pictures, every second |
-| `VCS_NATIVE_STREAM=0`, `VCS_STREAM_LOG=1` | disc streaming through the IOP (the reference); native read stats every 5 s |
+| `VCS_NATIVE_STREAM=0`, `VCS_STREAM_LOG=1` | disc streaming through the IOP (the reference); native read stats every 5 s: reads, MB, the time in them, the longest one, and the polls answered "busy" after the 20 ms wait (a frame lost each) |
+| `VCS_CHD_DECODERS=<n>`, `VCS_CHD_CACHE_HUNKS=<n>` | a .chd's decoders (default: half the cores, at most 4; 1: the single-threaded reader) / its cache in hunks (tests; default ~16 MB). `[disc] chd: decoders N, cache M hunks` at the start (docs/DISC.md "CHD images") |
+| `VCS_DISC_COMPARE=<image>` | every sector of the disc against another image, then the other image read again from 4 threads at scattered ranges; `[disc] compare` lines, exit 0 when equal, before the game starts (`tools/tests/test_disc_backends.py`) |
+| `VCS_DISC_FIND=<folder>` | the disc a folder search takes there (an .iso before a .chd), one `[disc] find` line, then exit (`tools/tests/test_disc_backends.py`) |
+| `VCS_DISC_TIME=<s>` | for each window of s seconds with reads (from the disc's opening): the disc reads, their MB, the time in them, the longest one and how many took over 4 ms (`[disc-time]`; an .iso against a .chd, docs/DISC.md "CHD images") |
 | `VCS_NATIVE_SOUND=0` | sound through the emulated IOP's CDSTREAM / LIBSD (the reference) |
 | `VCS_SKID_LOG=1` | the skid-sound function's inputs for the player's vehicle (type, drive type, speed, wheel states, surface) |
 | `PS2X_SPU2_VOICE_LOG=1` | SPU2 key-ons (address, pitch, ADSR, volume) and every sounding voice's address / envelope / output peak each 0.1 s |

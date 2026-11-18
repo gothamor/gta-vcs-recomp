@@ -37,6 +37,7 @@ set(VCS_LAUNCHER_COMMON
     model/disc_check.cpp
     model/json.cpp
     "${VCS_ROOT}/src/disc/iso_image.cpp"
+    "${VCS_ROOT}/src/disc/disc_source.cpp" # .iso only here: no VCS_DISC_CHD, no libchdr (no third-party code)
 )
 
 if(WIN32)

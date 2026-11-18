@@ -1,17 +1,7 @@
 #include "iso_image.h"
 
 #include <cstring>
-
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#else
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
+#include <vector>
 
 namespace vcs
 {
@@ -66,54 +56,16 @@ namespace vcs
     bool IsoImage::open(const std::filesystem::path &path)
     {
         close();
-#if defined(_WIN32)
-        HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, nullptr);
-        if (file == INVALID_HANDLE_VALUE)
-        {
-            m_error = "cannot open " + path.string();
+        return adopt(openDiscSource(path, m_error));
+    }
+
+    bool IsoImage::adopt(std::unique_ptr<DiscSource> source)
+    {
+        m_source = std::move(source);
+        if (!m_source)
             return false;
-        }
-        LARGE_INTEGER size{};
-        GetFileSizeEx(file, &size);
-        HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
-        if (!mapping)
-        {
-            CloseHandle(file);
-            m_error = "cannot map " + path.string();
-            return false;
-        }
-        void *view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
-        if (!view)
-        {
-            CloseHandle(mapping);
-            CloseHandle(file);
-            m_error = "cannot map view of " + path.string();
-            return false;
-        }
-        m_file = file;
-        m_mapping = mapping;
-        m_data = static_cast<const uint8_t *>(view);
-        m_size = static_cast<uint64_t>(size.QuadPart);
-#else
-        int fd = ::open(path.c_str(), O_RDONLY);
-        if (fd < 0)
-        {
-            m_error = "cannot open " + path.string();
-            return false;
-        }
-        struct stat st{};
-        fstat(fd, &st);
-        void *view = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-        ::close(fd);
-        if (view == MAP_FAILED)
-        {
-            m_error = "cannot map " + path.string();
-            return false;
-        }
-        m_data = static_cast<const uint8_t *>(view);
-        m_size = static_cast<uint64_t>(st.st_size);
-#endif
+        m_data = m_source->data();
+        m_size = m_source->size();
 
         if (m_size < 17 * kSectorSize)
         {
@@ -121,8 +73,9 @@ namespace vcs
             close();
             return false;
         }
-        const uint8_t *pvd = m_data + 16 * kSectorSize;
-        if (pvd[0] != 1 || std::memcmp(pvd + 1, "CD001", 5) != 0)
+        uint8_t pvd[kSectorSize];
+        if (!m_source->read(16 * uint64_t(kSectorSize), kSectorSize, pvd) || pvd[0] != 1 ||
+            std::memcmp(pvd + 1, "CD001", 5) != 0)
         {
             m_error = "not an ISO 9660 image";
             close();
@@ -139,12 +92,18 @@ namespace vcs
 
     bool IsoImage::indexDirectory(uint32_t lba, uint32_t size, const std::string &prefix, int depth)
     {
-        if (depth > 16 || uint64_t(lba) * kSectorSize + size > m_size)
+        if (depth > 16 || size > (16u << 20) || uint64_t(lba) * kSectorSize + size > m_size)
         {
             m_error = "corrupt directory tree";
             return false;
         }
-        const uint8_t *dir = m_data + uint64_t(lba) * kSectorSize;
+        std::vector<uint8_t> buffer(size);
+        if (!m_source->read(uint64_t(lba) * kSectorSize, size, buffer.data()))
+        {
+            m_error = "cannot read a directory";
+            return false;
+        }
+        const uint8_t *dir = buffer.data();
         Children &kids = m_children[normalizePath(prefix)];
         uint32_t pos = 0;
         while (pos < size)
@@ -157,6 +116,12 @@ namespace vcs
                 continue;
             }
             const uint8_t *rec = dir + pos;
+            // a player's file may be anything: a record must hold its fixed part and its name, inside the buffer
+            if (length < 34 || uint64_t(pos) + length > size || 33u + rec[32] > length)
+            {
+                m_error = "corrupt directory record";
+                return false;
+            }
             pos += length;
             const uint8_t nameLen = rec[32];
             if (nameLen == 1 && (rec[33] == 0 || rec[33] == 1))
@@ -183,28 +148,8 @@ namespace vcs
 
     void IsoImage::close()
     {
-#if defined(_WIN32)
-        if (m_data)
-        {
-            UnmapViewOfFile(m_data);
-        }
-        if (m_mapping)
-        {
-            CloseHandle(static_cast<HANDLE>(m_mapping));
-        }
-        if (m_file)
-        {
-            CloseHandle(static_cast<HANDLE>(m_file));
-        }
-#else
-        if (m_data)
-        {
-            munmap(const_cast<uint8_t *>(m_data), m_size);
-        }
-#endif
+        m_source.reset();
         m_data = nullptr;
-        m_mapping = nullptr;
-        m_file = nullptr;
         m_size = 0;
         m_entries.clear();
         m_children.clear();
@@ -229,14 +174,20 @@ namespace vcs
 
     bool IsoImage::readBytes(uint64_t offset, size_t byteCount, void *dst) const
     {
-        if (!m_data || offset >= m_size)
+        if (!m_source || offset >= m_size)
         {
             std::memset(dst, 0, byteCount);
             return false;
         }
         const uint64_t available = m_size - offset;
         const size_t n = available < byteCount ? static_cast<size_t>(available) : byteCount;
-        std::memcpy(dst, m_data + offset, n);
+        if (m_data)
+            std::memcpy(dst, m_data + offset, n); // mapped: the hot path as before
+        else if (!m_source->read(offset, n, dst))
+        {
+            std::memset(dst, 0, byteCount);
+            return false;
+        }
         if (n < byteCount)
         {
             std::memset(static_cast<uint8_t *>(dst) + n, 0, byteCount - n);

@@ -17,6 +17,8 @@ import re
 import struct
 import sys
 
+import chd
+
 SECTOR = 2048
 
 # The one supported build. The recompiled code only matches this executable.
@@ -33,17 +35,44 @@ OTHER_RELEASES = {
 
 
 class IsoImage:
+    """An ISO 9660 disc from an .iso, or from a .chd through tools/chd.py (both kinds of CHD)."""
+
     def __init__(self, path):
         self.f = open(path, "rb")
-        pvd = self.read_sectors(16, 1)
-        if len(pvd) < SECTOR:
-            raise ValueError("too small for a disc image")
-        if pvd[0] != 1 or pvd[1:6] != b"CD001":
-            raise ValueError("not an ISO 9660 image (no primary volume descriptor)")
-        self.volume_id = pvd[40:72].decode("ascii", "replace").strip()
-        self.root = self._parse_record(pvd[156:190])
+        self.chd = None
+        if self.f.read(8) == chd.MAGIC:
+            self.f.close()
+            try:
+                self.chd = chd.ChdImage(path)
+            except chd.ChdError as e:
+                raise ValueError(str(e))
+        try:
+            pvd = self.read_sectors(16, 1)
+            if len(pvd) < SECTOR:
+                raise ValueError("too small for a disc image")
+            if pvd[0] != 1 or pvd[1:6] != b"CD001":
+                raise ValueError("not an ISO 9660 image (no primary volume descriptor)")
+            self.volume_id = pvd[40:72].decode("ascii", "replace").strip()
+            self.root = self._parse_record(pvd[156:190])
+        except Exception:
+            self.close()
+            raise
+
+    def close(self):
+        (self.chd or self.f).close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
     def read_sectors(self, lba, count):
+        if self.chd is not None:
+            try:
+                return self.chd.read_sectors(lba, count)
+            except chd.ChdError as e:
+                raise ValueError(str(e))
         self.f.seek(lba * SECTOR)
         return self.f.read(count * SECTOR)
 
@@ -96,6 +125,19 @@ class IsoImage:
         return self.read_sectors(rec["lba"], (rec["size"] + SECTOR - 1) // SECTOR)[:rec["size"]]
 
 
+def chd_advice(path):
+    """The player's message for a .chd (the launcher's disc_check.cpp says the same)."""
+    kind = chd.kind(path)
+    head = "a .chd file that can't be read here. "
+    if kind == "cd":
+        return head + ("This CHD was made from a CD image (chdman createcd); convert it with "
+                       "chdman extractcd -i game.chd -o game.cue -ob game.iso")
+    if kind == "dvd":
+        return head + "Convert it with chdman extractdvd -i game.chd -o game.iso"
+    return head + ("Convert it with chdman: extractdvd -i game.chd -o game.iso for a DVD CHD, or "
+                   "extractcd -i game.chd -o game.cue -ob game.iso for one made from a CD image")
+
+
 def check(iso):
     """Is `iso` the supported disc? {"ok": bool, "code": ..., "message": ..., "boot": "SLUS_215.90", "title": ...}.
     Codes: ok, not_found, not_iso, not_ps2, other_release, unsupported_build. Reads SYSTEM.CNF and the ELF only (a
@@ -104,13 +146,20 @@ def check(iso):
     if not os.path.isfile(iso):
         return {"ok": False, "code": "not_found", "message": "file not found: " + iso}
     ext = os.path.splitext(iso)[1].lower()
-    if ext in (".bin", ".cue", ".chd", ".cso", ".zso", ".zip", ".7z", ".rar", ".gz", ".mdf", ".nrg", ".img"):
-        return {"ok": False, "code": "not_iso", "message": "a %s file: the game reads .iso images only. "
-                "Extract or convert it to .iso first (7-Zip for archives; chdman extractdvd for .chd; maxcso for .cso)" % ext}
+    if ext in (".bin", ".cue", ".cso", ".zso", ".zip", ".7z", ".rar", ".gz", ".mdf", ".nrg", ".img"):
+        return {"ok": False, "code": "not_iso", "message": "a %s file: the game reads .iso and .chd images only. "
+                "Extract or convert it to .iso first (7-Zip for archives; maxcso for .cso)" % ext}
     try:
-        img = IsoImage(iso)
+        img = IsoImage(iso)  # an .iso, or a .chd through tools/chd.py
     except (OSError, ValueError) as e:
+        if ext == ".chd":  # one this reader can't read: the way to an .iso
+            return {"ok": False, "code": "not_iso", "message": "%s (%s)" % (chd_advice(iso), e)}
         return {"ok": False, "code": "not_iso", "message": "not a readable ISO image (%s)" % e}
+    with img:
+        return _check_disc(img)
+
+
+def _check_disc(img):
     cnf = img.find("SYSTEM.CNF")
     boot = ""
     if cnf and not cnf["dir"]:

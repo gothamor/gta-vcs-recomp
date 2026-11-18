@@ -50,3 +50,48 @@ Ends at `0x0074DF54`; the rest of 32 MB is heap.
 | `ICONS/` | 1 | | memory card icon |
 
 Use `python tools/vcs_disc.py ls <iso>` for the full list with LBAs.
+
+## CHD images
+
+The game reads the disc from an `.iso` or from a `.chd` (MAME's compressed disc image), the form many players keep
+their discs in, without a conversion. `src/disc/disc_source.cpp` reads the sectors through libchdr (v0.3.0, BSD-3,
+pinned in `tools/deps.py`); `tools/chd.py` reads them in Python (standard library) for `vcs_disc.py` and the
+recompile.
+
+- **Two kinds.** `chdman createdvd` makes DVD CHDs (2048-byte sectors, metadata tag `DVD `), by default with the
+  hard-disk codecs `lzma` / `zlib` / `huff` / `flac` (MAME `chdman.cpp`: `s_default_hd_compression`). Many PS2
+  CHDs were made with `chdman createcd` instead: one `TYPE:MODE1` track (`CHT2` tag), 2448-byte frames (2048 bytes
+  of data, then padding and subcode), codecs `cdlz` / `cdzl` / `cdfl`. The user's disc is one of these (2,025,968
+  frames, hunks of 8 frames: 117,922 `cdlz`, 9,533 `cdzl`, 1 `cdfl` and 125,790 `self` hunks). Both kinds read, in
+  the game and in `tools/chd.py`. A stored pregap (`PGTYPE:V...`) is refused: PS2 discs have none, and where sector 0
+  then sits is not checked against chdman.
+- **The launcher takes `.iso` only** (it has no third-party code). For a `.chd` it gives the `chdman` command by the
+  CHD's kind: `extractcd` for a CD-mode CHD, `extractdvd` for a DVD CHD (`launcher/model/disc_check.cpp`;
+  `tools/vcs_disc.py` the same). For a `MODE1` track (2048 data bytes per sector, as in the user's disc) the CUE's
+  `.bin` is then the ISO. A `MODE1_RAW` / `MODE2_RAW` track comes out as 2352-byte sectors, which is no ISO; the
+  advice cannot tell, because it reads only the CHD's first metadata tag, not the track type.
+- **The reader.** `IsoImage` reads through a `DiscSource`: the mapped `.iso` as before, or the `.chd` with a cache of
+  decoded hunks (~16 MB). libchdr sits in the `vcs_disc` library of its own, so its include folder reaches no other
+  compile command. The launcher compiles the same file without CHD support. When a read fails, the emulated IOP reads
+  the image file itself as raw sectors (`iop_cdvd.cpp` `readSectors`); the game gives it the path of an `.iso` only,
+  never a `.chd`'s compressed bytes (the `[disc] raw fallback:` line at the start; `VCS_SELFTEST` compares the
+  file's sector 16, the volume descriptor, with the disc's).
+  Without one, that path goes on to upstream's pseudo-ISO of the `cdrom0:` folder (`buildVirtualIso`), as a read past
+  the end of an `.iso` always did: a damaged `.chd` hunk can then come back as that pseudo-ISO's bytes on the
+  emulated streaming path (`VCS_NATIVE_STREAM=0`, not the default) - left as it is, since it is upstream's own path.
+  Without an argument or `iso=` in vcs.ini, the game searches the exe's folder, then the current one; in each, an
+  `.iso` comes before a `.chd` (`VCS_DISC_FIND=<folder>` prints the choice for one folder). So a `.chd` next to
+  vcs.exe comes before an `.iso` in the current folder.
+- **Parallel decoding.** The hunks of one read decode on several decoders at once: libchdr handles on the same file,
+  each reading at its own position (`pread`, or `ReadFile` with an offset). The reading thread decodes with the first;
+  `VCS_CHD_DECODERS` - 1 worker threads hold the rest (default: half the cores, at most 4; 1 is the single-threaded
+  reader, the reference). A decoded hunk is shared by the cache and every read that waits for it, so an eviction never
+  takes a hunk from a read that still needs it.
+- **What a .chd costs** (Windows, i5-10210U, `VCS_DISC_TIME=1`, from the boot through the title flyover, the movies
+  skipped, one decoder): the game reads ~23 MB while the loading screen is up, then 0.3-2 MB every few seconds. The
+  boot's reads took 26 ms from the `.iso` and 1.4 s from the `.chd`. With 4 decoders, a compare of the whole disc took
+  121 s instead of 212 s (a quick build).
+- **Checks.** `VCS_DISC_COMPARE=<image>` compares every sector with another image, then reads the other image again
+  from 4 threads at scattered ranges, before the game starts. `tools/tests/test_disc_backends.py` runs it on DVD and
+  CD-mode CHDs from a test-only writer (`tools/tests/chd_build.py`): 1 and 4 decoders, a cache of 3 hunks, a damaged
+  hunk. With `VCS_TEST_PLAYER_DISC=1` it compares the player's whole CHD with its ISO.

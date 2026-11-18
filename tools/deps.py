@@ -32,6 +32,7 @@ import toolchain as tc  # noqa: E402
 # which is off; not sse2neon, ARM only; not the Vulkan backend's, off on Windows). The launcher downloads nothing.
 CMAKE_FILES = [
     "src/platform/CMakeLists.txt",
+    "src/disc/CMakeLists.txt",  # libchdr: .chd discs (docs/DISC.md)
     "third_party/PS2Recomp/ps2xRecomp/CMakeLists.txt",
     "third_party/PS2Recomp/ps2xAnalyzer/CMakeLists.txt",
 ]

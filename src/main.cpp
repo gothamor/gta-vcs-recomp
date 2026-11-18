@@ -1,12 +1,12 @@
 // GTA: Vice City Stories (PS2) native launcher.
 //
-// Finds the user's disc image, checks it holds the supported executable,
-// maps it as cdrom0: and boots the recompiled game.
+// Finds the user's disc image (.iso or .chd), checks it holds the supported executable,
+// routes cdrom0: through it and boots the recompiled game.
 //
-//   vcs.exe [path\to\Grand Theft Auto - Vice City Stories (USA).iso]
+//   vcs.exe [path\to\Grand Theft Auto - Vice City Stories (USA).iso|.chd]
 //
-// Without an argument it uses "iso=" from vcs.ini next to the exe, then the
-// first *.iso in the exe's folder or the current folder.
+// Without an argument it uses "iso=" from vcs.ini next to the exe, then the exe's
+// folder, then the current one: in each, the first *.iso, else the first *.chd.
 #include "ps2_runtime.h"
 #include "runtime/gs/gs_hw.h"
 #include "runtime/ps2_disc_image.h"
@@ -48,16 +48,20 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_WIN32)
@@ -82,10 +86,116 @@ namespace
     using vcs::disc::kElfName;
     using vcs::disc::kElfSha1;
 
-    class MappedDisc final : public IPS2DiscImage
+    // VCS_DISC_COMPARE's other image; null after a "[disc] compare" line that says why
+    std::unique_ptr<vcs::DiscSource> openOther(const fs::path &path)
+    {
+        std::string error;
+        std::unique_ptr<vcs::DiscSource> other = vcs::openDiscSource(path, error);
+        if (!other)
+            std::printf("[disc] compare: cannot open %s: %s\n", vcs::pathText(path).c_str(), error.c_str());
+        return other;
+    }
+
+    // VCS_DISC_COMPARE's second pass: the other image opened again (a cold cache), read from 4 threads at once at
+    // scattered ranges - a CHD's decoders and cache under several readers (docs/DISC.md "CHD images").
+    bool compareScattered(const vcs::IsoImage &disc, const fs::path &otherPath)
+    {
+        const std::unique_ptr<vcs::DiscSource> other = openOther(otherPath);
+        if (!other)
+            return false;
+        constexpr int kThreads = 4, kReadsEach = 64;
+        constexpr uint64_t kMostSectors = 64;
+        const uint64_t sectors = disc.totalSectors();
+        if (sectors == 0)
+            return true;
+        std::atomic<int64_t> firstBad{-1};
+        std::vector<std::thread> threads;
+        for (int t = 0; t < kThreads; ++t)
+            threads.emplace_back([&, t] {
+                uint32_t seed = 12345u + uint32_t(t) * 7919u;
+                const auto next = [&seed] {
+                    seed = seed * 1664525u + 1013904223u;
+                    return seed >> 8;
+                };
+                std::vector<uint8_t> ours, theirs;
+                for (int i = 0; i < kReadsEach; ++i)
+                {
+                    const uint64_t lba = next() % sectors;
+                    const uint32_t count = 1 + uint32_t(next() % std::min(kMostSectors, sectors - lba));
+                    const size_t bytes = size_t(count) * vcs::IsoImage::kSectorSize;
+                    ours.resize(bytes);
+                    theirs.resize(bytes);
+                    if (!disc.readSectors(static_cast<uint32_t>(lba), count, ours.data()) ||
+                        !other->read(lba * vcs::IsoImage::kSectorSize, bytes, theirs.data()) ||
+                        std::memcmp(ours.data(), theirs.data(), bytes) != 0)
+                    {
+                        int64_t none = -1;
+                        firstBad.compare_exchange_strong(none, static_cast<int64_t>(lba));
+                        return;
+                    }
+                }
+            });
+        for (std::thread &t : threads)
+            t.join();
+        if (firstBad.load() >= 0)
+        {
+            std::printf("[disc] compare: a scattered read from sector %lld differs or failed\n",
+                        static_cast<long long>(firstBad.load()));
+            return false;
+        }
+        std::printf("[disc] compare: %d threads, %d scattered reads equal\n", kThreads, kThreads * kReadsEach);
+        return true;
+    }
+
+    // VCS_DISC_COMPARE=<other image>: every sector of the disc against the other image (an .iso against a .chd of it;
+    // tools/tests/test_disc_backends.py), then scattered reads from several threads; "[disc] compare" lines, exit 0
+    // when equal. Before the game starts.
+    int compareDiscs(const vcs::IsoImage &disc, const fs::path &otherPath)
+    {
+        const std::unique_ptr<vcs::DiscSource> other = openOther(otherPath);
+        if (!other)
+            return 1;
+        const uint64_t sectors = disc.totalSectors();
+        const uint64_t otherSectors = other->size() / vcs::IsoImage::kSectorSize;
+        if (sectors != otherSectors)
+        {
+            std::printf("[disc] compare: %llu sectors against %llu\n", static_cast<unsigned long long>(sectors),
+                        static_cast<unsigned long long>(otherSectors));
+            return 1;
+        }
+        constexpr uint32_t kChunk = 512;
+        std::vector<uint8_t> ours(size_t(kChunk) * vcs::IsoImage::kSectorSize), theirs(ours.size());
+        for (uint64_t lba = 0; lba < sectors; lba += kChunk)
+        {
+            const uint32_t count = static_cast<uint32_t>(std::min<uint64_t>(kChunk, sectors - lba));
+            const size_t bytes = size_t(count) * vcs::IsoImage::kSectorSize;
+            const bool readOurs = disc.readSectors(static_cast<uint32_t>(lba), count, ours.data());
+            const bool readTheirs = other->read(lba * vcs::IsoImage::kSectorSize, bytes, theirs.data());
+            if (!readOurs || !readTheirs)
+            {
+                std::printf("[disc] compare: cannot read sectors %llu-%llu\n", static_cast<unsigned long long>(lba),
+                            static_cast<unsigned long long>(lba + count - 1));
+                return 1;
+            }
+            if (std::memcmp(ours.data(), theirs.data(), bytes) != 0)
+            {
+                uint32_t i = 0;
+                while (std::memcmp(ours.data() + size_t(i) * vcs::IsoImage::kSectorSize,
+                                   theirs.data() + size_t(i) * vcs::IsoImage::kSectorSize, vcs::IsoImage::kSectorSize) == 0)
+                    ++i;
+                std::printf("[disc] compare: sector %llu differs\n", static_cast<unsigned long long>(lba + i));
+                return 1;
+            }
+        }
+        std::printf("[disc] compare: %llu sectors equal\n", static_cast<unsigned long long>(sectors));
+        return compareScattered(disc, otherPath) ? 0 : 1;
+    }
+
+    // The disc as the runtime sees it (IPS2DiscImage): cdrom0: lookups and sector reads through the IsoImage
+    class GameDisc final : public IPS2DiscImage
     {
     public:
-        explicit MappedDisc(const vcs::IsoImage &iso) : m_iso(iso) {}
+        explicit GameDisc(const vcs::IsoImage &iso) : m_iso(iso) {}
 
         bool findFile(std::string_view ps2Path, uint32_t &lsn, uint32_t &sizeBytes, bool &isDirectory) const override
         {
@@ -167,7 +277,7 @@ namespace
         return exeDirectory() / "userdata";
     }
 
-    fs::path isoFromIni(const fs::path &ini)
+    fs::path discFromIni(const fs::path &ini)
     {
         std::ifstream in(ini);
         std::string line;
@@ -794,29 +904,35 @@ namespace
         });
     }
 
-    fs::path firstIsoIn(const fs::path &dir)
+    // The first .iso in the folder, else the first .chd (src/disc/disc_source): an .iso next to its .chd wins
+    fs::path firstDiscIn(const fs::path &dir)
     {
         std::error_code ec;
+        fs::path chd;
         for (const auto &entry : fs::directory_iterator(dir, ec))
         {
             std::string ext = entry.path().extension().string();
             for (char &c : ext)
                 c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (entry.is_regular_file() && ext == ".iso")
+            if (!entry.is_regular_file())
+                continue;
+            if (ext == ".iso")
                 return entry.path();
+            if (ext == ".chd" && chd.empty())
+                chd = entry.path();
         }
-        return {};
+        return chd;
     }
 
-    fs::path locateIso(int argc, char *argv[])
+    fs::path locateDisc(int argc, char *argv[])
     {
         if (argc >= 2 && argv[1] && argv[1][0])
             return fs::u8path(argv[1]);
-        if (fs::path p = isoFromIni(exeDirectory() / "vcs.ini"); !p.empty())
+        if (fs::path p = discFromIni(exeDirectory() / "vcs.ini"); !p.empty())
             return p;
-        if (fs::path p = firstIsoIn(exeDirectory()); !p.empty())
+        if (fs::path p = firstDiscIn(exeDirectory()); !p.empty())
             return p;
-        return firstIsoIn(fs::current_path());
+        return firstDiscIn(fs::current_path());
     }
 
     // Writes the guest ELF from the disc into the cache folder (runtime loads it from a file). 0, or vcs.exe's exit
@@ -869,20 +985,39 @@ int main(int argc, char *argv[])
             settings::keepFile();
         settings::applyAll();
         restoreWindowPlacement();
-        const fs::path isoPath = locateIso(argc, argv);
-        if (isoPath.empty())
+        // VCS_DISC_FIND=<folder>: the disc a folder search takes there, then exit (tools/tests/test_disc_backends.py)
+        if (const char *folder = std::getenv("VCS_DISC_FIND"); folder && *folder)
         {
-            std::cerr << "No disc image found. Pass your Vice City Stories (USA) .iso as the first argument,\n"
-                         "put iso=<path> in vcs.ini next to vcs.exe, or place the .iso next to vcs.exe."
+            const fs::path found = firstDiscIn(fs::u8path(folder));
+            std::printf("[disc] find: %s\n", found.empty() ? "none" : vcs::pathText(found).c_str());
+            std::fflush(stdout);
+            return 0;
+        }
+        const fs::path discPath = locateDisc(argc, argv);
+        if (discPath.empty())
+        {
+            std::cerr << "No disc image found. Pass your Vice City Stories (USA) .iso or .chd as the first argument,\n"
+                         "put iso=<path> in vcs.ini next to vcs.exe, or place the .iso or .chd next to vcs.exe."
                       << std::endl;
             return vcs::disc::kExitNoDisc;
         }
 
         vcs::IsoImage iso;
-        if (!iso.open(isoPath))
+        if (!iso.open(discPath))
         {
-            std::cerr << "Cannot read disc image " << isoPath.string() << ": " << iso.error() << std::endl;
+            std::cerr << "Cannot read disc image " << vcs::pathText(discPath) << ": " << iso.error() << std::endl;
             return vcs::disc::kExitDiscUnreadable;
+        }
+        std::printf("[disc] %s, %u sectors: %s\n", iso.kind(), iso.totalSectors(), vcs::pathText(discPath).c_str());
+        // After a failed read the emulated IOP reads this file as raw sectors (iop_cdvd.cpp readSectors): an .iso
+        // only, never a .chd's compressed bytes (VCS_SELFTEST checks the bytes)
+        const fs::path rawFallback = iso.plainSectors() ? discPath : fs::path();
+        std::printf("[disc] raw fallback: %s\n", rawFallback.empty() ? "none" : vcs::pathText(rawFallback).c_str());
+        if (const char *other = std::getenv("VCS_DISC_COMPARE"); other && *other)
+        {
+            const int code = compareDiscs(iso, fs::u8path(other));
+            std::fflush(stdout);
+            return code;
         }
 
         const fs::path data = dataDirectory();
@@ -894,7 +1029,7 @@ int main(int argc, char *argv[])
             return code;
         }
 
-        MappedDisc disc(iso);
+        GameDisc disc(iso);
         ps2_disc::setImage(&disc);
 
         // the trainer's mission list names each mission from MAIN.SCM (game/vcs_trainer.h)
@@ -944,10 +1079,10 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        // loadELF points every root at the cache folder; keep saves in our data folder
-        // and route cdrom0: through the mapped disc (cdImage is used by the IOP fallback).
+        // loadELF points every root at the cache folder; keep saves in our data folder. cdrom0: goes through the disc
+        // above; cdImage is the emulated IOP's raw fallback (rawFallback).
         PS2Runtime::IoPaths paths = PS2Runtime::getIoPaths();
-        paths.cdImage = isoPath;
+        paths.cdImage = rawFallback;
         paths.mcRoot = data / "mc0";
         PS2Runtime::setIoPaths(paths);
 

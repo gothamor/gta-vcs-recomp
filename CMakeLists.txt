@@ -75,6 +75,7 @@ file(GLOB_RECURSE VCS_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/*.cpp"
 )
 list(REMOVE_ITEM VCS_SOURCES "${CMAKE_SOURCE_DIR}/src/main.cpp")
+list(REMOVE_ITEM VCS_SOURCES "${CMAKE_SOURCE_DIR}/src/disc/disc_source.cpp") # the vcs_disc library (src/disc)
 # The platform layer, RHI and renderer are their own libraries (src/*/CMakeLists.txt), linked into the runtime.
 list(FILTER VCS_SOURCES EXCLUDE REGEX "/src/(platform|rhi|render)/")
 # VU1 microprograms compiled to C++ by tools/vu1_recomp.py (from the user's ELF; see game/vcs/vu1_uploads.txt)
@@ -140,6 +141,10 @@ if(VCS_HAVE_GENERATED)
     set_source_files_properties(${VCS_SOURCES} "${CMAKE_SOURCE_DIR}/src/main.cpp"
         TARGET_DIRECTORY ps2EntryRunner
         PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE SKIP_PRECOMPILE_HEADERS TRUE)
+    # .chd discs: disc_source.cpp is the vcs_disc library with libchdr behind it (src/disc/CMakeLists.txt says why a
+    # library: libchdr's usage requirements must not reach the generated code's compile commands)
+    add_subdirectory(src/disc)
+    target_link_libraries(ps2EntryRunner PRIVATE vcs_disc)
 else()
     message(STATUS "No generated code in ${VCS_GENERATED_DIR}: building tools only. Run python tools/build.py --recompile.")
 endif()

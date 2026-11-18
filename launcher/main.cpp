@@ -42,8 +42,10 @@
 #include "ui/ui.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -171,6 +173,40 @@ namespace
             check(!missing.ok && missing.code == "not_found", "disc check refuses a missing file");
             const DiscResult text = checkDisc(app.root / "README.md");
             check(!text.ok && text.code == "not_iso", "disc check refuses a text file: " + text.message);
+            {
+                // .chd advice by kind (docs/DISC.md "CHD images"; tools/tests/test_vcs_disc.py the same):
+                // headers built here, no game data
+                std::error_code ec;
+                // a folder of its own per run: two self-tests at once must not share one
+                const fs::path dir = fs::temp_directory_path(ec) /
+                                     ("vcs-launcher-selftest-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+                fs::create_directories(dir, ec);
+                auto writeChd = [&](const char *name, const char *tag) {
+                    std::string bytes(124, '\0');
+                    bytes.replace(0, 8, "MComprHD");
+                    bytes[11] = 124;    // header length, big-endian
+                    bytes[15] = 5;      // version 5
+                    bytes[55] = 124;    // metadata offset (big-endian u64 at 48): right after the header
+                    bytes += std::string(tag, 4);
+                    bytes += std::string(12, '\0'); // flags / length, next entry
+                    const fs::path path = dir / name;
+                    std::ofstream(path, std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+                    return path;
+                };
+                const DiscResult cd = checkDisc(writeChd("cd.chd", "CHT2"));
+                check(cd.code == "not_iso" && cd.message.find("extractcd -i game.chd -o game.cue -ob game.iso") !=
+                          std::string::npos && cd.message.find("extractdvd") == std::string::npos,
+                      "disc check: a CD-mode .chd gets extractcd: " + cd.message);
+                const DiscResult dvd = checkDisc(writeChd("dvd.chd", "DVD "));
+                check(dvd.code == "not_iso" && dvd.message.find("extractdvd -i game.chd -o game.iso") != std::string::npos &&
+                          dvd.message.find("extractcd") == std::string::npos,
+                      "disc check: a DVD .chd gets extractdvd: " + dvd.message);
+                const DiscResult other = checkDisc(writeChd("other.chd", "GDDD"));
+                check(other.code == "not_iso" && other.message.find("extractdvd") != std::string::npos &&
+                          other.message.find("extractcd") != std::string::npos,
+                      "disc check: another .chd names both commands");
+                fs::remove_all(dir, ec);
+            }
             // the renderer and the fonts, offscreen (a GPU, or WARP without one)
             std::string renderError;
             const bool rendered = render::rendererInit(nullptr, 64, 64, renderError) && render::fontsInit(renderError);

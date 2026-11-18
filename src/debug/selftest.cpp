@@ -10,10 +10,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <utility>
 #include <vector>
 
 #include "runtime/gs/gs_cpu_backend.h"
+#include "runtime/ps2_disc_image.h"
 
 namespace vcs
 {
@@ -33,6 +35,27 @@ namespace vcs
             ctx->pc = pc;
             fn(rdram, ctx, &runtime);
             return GPR_U64(ctx, 2);
+        }
+
+        // The emulated IOP reads the CD image file as raw 2048-byte sectors when a disc read fails (iop_cdvd.cpp
+        // readSectors). That file must hold what the disc holds - the primary volume descriptor (sector 16) the same -
+        // or there must be none: a .chd is compressed (docs/DISC.md "CHD images").
+        int checkRawDiscFallback()
+        {
+            const std::filesystem::path image = PS2Runtime::getIoPaths().cdImage;
+            IPS2DiscImage *disc = ps2_disc::image();
+            if (image.empty() || !disc)
+            {
+                std::fprintf(stderr, "[selftest] ok   raw disc fallback: none\n");
+                return 0;
+            }
+            std::vector<char> raw(2048), sector(2048);
+            std::ifstream file(image, std::ios::binary);
+            const bool readRaw = file.seekg(16 * 2048) && file.read(raw.data(), static_cast<std::streamsize>(raw.size()));
+            const bool same = readRaw && disc->readBytes(16 * 2048, sector.size(), sector.data()) && raw == sector;
+            std::fprintf(stderr, "[selftest] %s raw disc fallback: the image file %s the disc's sector 16\n",
+                         same ? "ok  " : "FAIL", same ? "holds" : "does not hold");
+            return same ? 0 : 1;
         }
 
         // The MMI macros the recompiler emits for PADDUH, PSUBUH, PABSW, PABSH, PSLLVW, PSRLVW and PSRAVW against a
@@ -250,6 +273,7 @@ namespace vcs
             }
         }
         failures += checkMmi();
+        failures += checkRawDiscFallback();
         std::fprintf(stderr, "[selftest] %d failure(s)\n", failures);
         return failures == 0;
     }

@@ -8,6 +8,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
 
 namespace fs = std::filesystem;
 
@@ -26,6 +29,53 @@ namespace launcher
         {
             return {false, code, std::move(message), std::move(boot)};
         }
+
+        uint64_t be64(const unsigned char *p)
+        {
+            uint64_t v = 0;
+            for (int i = 0; i < 8; ++i)
+                v = (v << 8) | p[i];
+            return v;
+        }
+
+        // What made a .chd: "cd" (chdman createcd: CD frames, extractcd), "dvd" (createdvd: extractdvd) or "" (not a
+        // CHD, or another kind). The header and the first metadata entry only; tools/chd.py kind() is the same.
+        std::string chdKind(const fs::path &path)
+        {
+            std::ifstream f(path, std::ios::binary);
+            unsigned char h[124] = {};
+            if (!f.read(reinterpret_cast<char *>(h), 56) || std::memcmp(h, "MComprHD", 8) != 0)
+                return {};
+            const uint32_t version = (uint32_t(h[12]) << 24) | (uint32_t(h[13]) << 16) | (uint32_t(h[14]) << 8) | h[15];
+            const uint64_t meta = version == 5 ? be64(h + 48) : (version == 3 || version == 4) ? be64(h + 36) : 0;
+            if (!meta)
+                return {};
+            char tag[4] = {};
+            f.clear();
+            if (!f.seekg(static_cast<std::streamoff>(meta)) || !f.read(tag, 4))
+                return {};
+            const std::string t(tag, 4);
+            if (t == "CHT2" || t == "CHTR" || t == "CHCD" || t == "CHGD")
+                return "cd";
+            if (t == "DVD ")
+                return "dvd";
+            return {};
+        }
+
+        std::string chdAdvice(const fs::path &path)
+        {
+            const std::string kind = chdKind(path);
+            // the game reads .chd (src/disc/disc_source.cpp); the launcher cannot check one (no libchdr here: no
+            // third-party code)
+            const std::string head = "this is a .chd; the launcher takes .iso files only for now. ";
+            if (kind == "cd")
+                return head + "This CHD was made from a CD image (chdman createcd); convert it with "
+                              "chdman extractcd -i game.chd -o game.cue -ob game.iso";
+            if (kind == "dvd")
+                return head + "Convert it with chdman extractdvd -i game.chd -o game.iso";
+            return head + "Convert it with chdman: extractdvd -i game.chd -o game.iso for a DVD CHD, or "
+                          "extractcd -i game.chd -o game.cue -ob game.iso for one made from a CD image";
+        }
     }
 
     DiscResult checkDisc(const fs::path &path)
@@ -38,8 +88,7 @@ namespace launcher
             return fail("not_iso", "this is a " + ext + " image; the game reads .iso files only. Convert it to .iso first "
                                    "(for a PS2 DVD the .bin is usually an ISO already: try renaming it to .iso)");
         if (ext == ".chd")
-            return fail("not_iso", "this is a .chd; the game reads .iso files only. Convert it with chdman: "
-                                   "chdman extractdvd -i game.chd -o game.iso");
+            return fail("not_iso", chdAdvice(path));
         if (ext == ".cso" || ext == ".zso")
             return fail("not_iso", "this is a compressed " + ext + "; the game reads .iso files only. Decompress it "
                                    "first (maxcso --decompress)");

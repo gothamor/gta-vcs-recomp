@@ -1507,3 +1507,36 @@ takes a zip given by hand). Choices:
 - **`python -B` for the bundle's own scripts**: the first start's `update.py install` runs from inside the app and
   wrote `__pycache__` there, breaking the app's signature (found when the image's check refused the app). The launcher
   passes `-B` when the script is the release's own copy (macOS bundle or AppImage).
+
+## 2026-11-15 - CHD discs (Claude's choices)
+
+- **The game reads .chd** (both kinds: DVD and CD-mode): `src/disc/disc_source.*` on libchdr v0.3.0. It is the
+  `vcs_disc` library because libchdr's usage requirements must reach no other compile command (linking it to the game
+  target leaked its include folder into the generated code's commands - `LINK_ONLY` there needs CMake 3.24, we allow
+  3.21 - and rebuilt everything).
+- **The launcher stays .iso only for now**: it has no third-party code, and its disc check runs inside a UI frame, so
+  a check of a .chd through `tools/vcs_disc.py` needs an asynchronous check, planned for later. Its message gives the
+  right `chdman` command by the CHD's kind.
+- **`VCS_DISC_COMPARE`** (every sector against another image, before the game starts) instead of a sector-hash log of
+  the flyover: the game's read order follows frame timing, so a log is not deterministic.
+- **The Python CHD reader** (`tools/chd.py`) refuses a stored pregap instead of guessing where sector 0 sits, and
+  reads raw-track hunks whose ECC chdman removed without their CRC check (the data bytes are before the ECC). The game's
+  libchdr regenerates the ECC and checks every CRC. libchdr is pinned by tag, like every library (`deps.py` clones
+  with `--branch`).
+
+## 2026-11-18 - A .chd's hunks decode in parallel (Claude's choice, from measurements)
+
+A .chd read of 0.3 MB decodes 15-20 CD hunks; on one core of a slower CPU that took up to 34 ms, and the boot's reads
+over a second. The stream poll waits 20 ms for a read before the game asks again a frame later (docs/DISC.md "CHD
+images").
+
+- **Faster reads, not a longer wait.** A longer poll wait holds the game thread for longer. Decoding the hunks of one
+  read on several cores makes the read itself shorter.
+- **Several libchdr handles, not a changed libchdr.** A `chd_file` has its own buffers and codec state, so one handle
+  per decoder needs no change to the library. Each handle reads the file at its own position (positional reads), so
+  they never share a file offset. The cost: one decompressed map per handle (a few MB for a 4 GB disc); the workers
+  open theirs on their own threads, beside the boot's first reads.
+- **Up to 4 decoders, half the cores**: the game thread, the render thread and the sound need theirs.
+  `VCS_CHD_DECODERS=1` keeps the single-threaded reader as the reference.
+- **No read-ahead yet.** Parallel decoding alone took those reads under 20 ms. Read-ahead would decode hunks the game
+  may never ask for.

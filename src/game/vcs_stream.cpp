@@ -52,7 +52,8 @@ namespace vcs
             uint8_t *rdram = nullptr;
             bool started = false;
             // statistics
-            std::atomic<uint64_t> reads{0}, bytes{0}, nanoseconds{0};
+            std::atomic<uint64_t> reads{0}, bytes{0}, nanoseconds{0}, longestNs{0};
+            std::atomic<uint64_t> busyPolls{0}; // polls answered "busy" after the 20 ms wait: a frame lost each
         };
 
         Reader &reader()
@@ -81,9 +82,11 @@ namespace vcs
                     std::fprintf(stderr, "[stream] read of %u bytes at LSN 0x%x failed\n", bytes, request.lsn);
                 r.reads.fetch_add(1, std::memory_order_relaxed);
                 r.bytes.fetch_add(bytes, std::memory_order_relaxed);
-                r.nanoseconds.fetch_add(static_cast<uint64_t>(
-                                            std::chrono::duration_cast<std::chrono::nanoseconds>(ps2x::hostNow() - start).count()),
-                                        std::memory_order_relaxed);
+                const uint64_t ns = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(ps2x::hostNow() - start).count());
+                r.nanoseconds.fetch_add(ns, std::memory_order_relaxed);
+                if (ns > r.longestNs.load(std::memory_order_relaxed))
+                    r.longestNs.store(ns, std::memory_order_relaxed); // one reader thread: no lost maximum
                 {
                     std::lock_guard<std::mutex> lock(r.mutex);
                     r.pending[request.channel % kChannels].fetch_sub(1, std::memory_order_release); // the data before "done"
@@ -100,9 +103,11 @@ namespace vcs
                 return;
             last = ps2x::hostNow();
             Reader &r = reader();
-            std::fprintf(stderr, "[stream] %llu reads, %.1f MB, %.1f ms reading (last 5 s)\n",
+            std::fprintf(stderr, "[stream] %llu reads, %.1f MB, %.1f ms reading, longest %.1f ms, %llu busy polls "
+                                 "(last 5 s)\n",
                          static_cast<unsigned long long>(r.reads.exchange(0)), r.bytes.exchange(0) / 1048576.0,
-                         r.nanoseconds.exchange(0) / 1e6);
+                         r.nanoseconds.exchange(0) / 1e6, r.longestNs.exchange(0) / 1e6,
+                         static_cast<unsigned long long>(r.busyPolls.exchange(0)));
         }
 
         // FUN_00221818(channel, dest, lsn, size)
@@ -141,6 +146,8 @@ namespace vcs
                 std::unique_lock<std::mutex> lock(r.mutex);
                 busy = !ps2x::waitFor(r.doneCv, lock, std::chrono::milliseconds(20),
                                           [&] { return pending.load(std::memory_order_acquire) == 0u; });
+                if (busy)
+                    r.busyPolls.fetch_add(1, std::memory_order_relaxed);
             }
             SET_GPR_U64(ctx, 2, busy ? kBusy : 0u);
             ctx->pc = GPR_U32(ctx, 31);

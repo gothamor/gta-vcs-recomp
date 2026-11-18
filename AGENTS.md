@@ -15,7 +15,7 @@ detailed knowledge lives in `docs/`:
 | [docs/FULLY_NATIVE.md](docs/FULLY_NATIVE.md) | The steps left until a normal frame is fully native, with their status - the working list |
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | Frame rate well past 100 fps everywhere: how it is measured, what was done (numbers), what is next |
 | [docs/RSL_SUBMISSION.md](docs/RSL_SUBMISSION.md) | Plan: render submission at the RSL level (milestone 7) - draws from the game's render calls instead of DMA packets |
-| [docs/DISC.md](docs/DISC.md), [docs/CONTROLS.md](docs/CONTROLS.md) | Disc layout; keyboard / gamepad mapping |
+| [docs/DISC.md](docs/DISC.md), [docs/CONTROLS.md](docs/CONTROLS.md) | Disc layout, .chd images; keyboard / gamepad mapping |
 | [docs/TRAINER.md](docs/TRAINER.md) | The trainer (F5): what it does, how (the game's script commands), its check |
 | [docs/LINUX.md](docs/LINUX.md) | The Linux build: packages, flags, the Vulkan backend, what differs from Windows, the work list |
 | [docs/MACOS.md](docs/MACOS.md) | The macOS build (Apple Silicon): Apple's tools only, the Metal backend, sse2neon, what differs, the work list |
@@ -43,7 +43,8 @@ choices).
 
 | Path | What |
 |---|---|
-| `src/main.cpp` | Launcher: ISO, settings registration, runtime start |
+| `src/main.cpp` | Launcher: the disc (.iso or .chd), settings registration, runtime start |
+| `src/disc/` | The disc: `IsoImage` (the ISO 9660 directory) over a `DiscSource` - the mapped .iso, or a .chd through libchdr (the `vcs_disc` library; docs/DISC.md "CHD images") |
 | `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`), frame timing (`vcs_framerate.cpp`, per-frame mission meters `vcs_script_timing.cpp`, particles `vcs_particle_timing.cpp`, lightning / clouds / shake / other effects `vcs_effects_timing.cpp`), the player's controls (`vcs_input.cpp`; free aim `vcs_aim.cpp`; the pause menu's keys and mouse `vcs_frontend.cpp`), the game's music / effects levels as settings (`vcs_volume.cpp`), button prompts by device (`vcs_prompts.cpp`, its glyphs `vcs_glyph_art.cpp`), traffic / pedestrian density and draw distance (`vcs_world_detail.cpp`), the NPC drive-by's fire rate (`vcs_driveby.cpp`), mission scripts stuck above 30 fps (`vcs_script_fixes.cpp`) |
 | `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders (HLSL; DXBC by fxc, SPIR-V by `tools/hlsl_spirv.py`, MSL by `tools/hlsl_msl.py`), the RHI (backends `d3d11/`, `vulkan/`, `metal/`, `null/`; only they see a graphics API), SDL3 platform layer |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
@@ -88,6 +89,9 @@ python tools/setup_vs.py status|install [--dry-run]   # Visual Studio Build Tool
 python tools/hlsl_dxbc.py ... [--check-fxc FXC]       # HLSL -> DXBC through Windows' d3dcompiler_47.dll (no Windows SDK)
 python tools/update.py check|apply [--zip F]  # a release folder to the newest GitHub release (not a clone)
 python tools/rip_disc.py list|rip E: OUT.iso  # a PS2 disc in a DVD drive to an .iso; report.py zips logs for bug reports
+python tools/chd.py info|iso X.chd [OUT.iso]  # a .chd disc (both kinds; the game and vcs_disc.py read them directly)
+python -m unittest discover tools/tests       # the regression tests (Python; some start build/vcs.exe; no game data -
+                                             # VCS_TEST_PLAYER_DISC=1 adds the checks on the player's own disc)
 python tools/framerate_audit.py [--steps 15,30,60,100]   # behaviour per simulated second at forced time steps
 python tools/run.py 60 name                 # run 60 s with the window, log to build/run/name.log (0 s: until it exits; --hidden for tests)
 python tools/run.py 60 name --control       # + control channel for tools/gamectl.py

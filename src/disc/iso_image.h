@@ -1,11 +1,14 @@
 // Read-only access to the user's PS2 disc image (ISO 9660, 2048-byte sectors).
-// The whole image is memory-mapped once; reads are plain memcpy, so the game's
-// sector streaming costs nothing beyond page faults.
+// The sectors come from a DiscSource (disc_source.h): an .iso, memory-mapped once (reads are plain memcpy, so the
+// game's sector streaming costs nothing beyond page faults), or in the game a .chd through libchdr.
 #pragma once
+
+#include "disc_source.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -24,17 +27,22 @@ namespace vcs
     class IsoImage
     {
     public:
-        static constexpr uint32_t kSectorSize = 2048;
+        static constexpr uint32_t kSectorSize = DiscSource::kSectorSize;
 
         IsoImage() = default;
         ~IsoImage();
         IsoImage(const IsoImage &) = delete;
         IsoImage &operator=(const IsoImage &) = delete;
 
-        // Maps the image and indexes every file. Returns false with error() set on failure.
+        // Opens the image (.iso, or .chd where this build reads them) and indexes every file. Returns false with
+        // error() set on failure.
         bool open(const std::filesystem::path &path);
         void close();
-        bool isOpen() const { return m_data != nullptr; }
+        bool isOpen() const { return m_source != nullptr; }
+        // "iso", "chd (DVD)", "chd (CD)": for the log
+        const char *kind() const { return m_source ? m_source->kind() : ""; }
+        // The image file can be read raw at lba * 2048 (an .iso; DiscSource::plainSectors)
+        bool plainSectors() const { return m_source && m_source->plainSectors(); }
         const std::string &error() const { return m_error; }
 
         // Path lookup is case-insensitive, accepts '/' or '\', an optional
@@ -50,7 +58,7 @@ namespace vcs
         // Copies byteCount bytes starting at a byte offset into the image.
         bool readBytes(uint64_t offset, size_t byteCount, void *dst) const;
 
-        // Direct pointer into the mapping (valid while open).
+        // Direct pointer into the mapping (valid while open); null when the image is not mapped (a .chd).
         const uint8_t *sectorPtr(uint32_t lba) const;
 
         const std::unordered_map<std::string, IsoEntry> &entries() const { return m_entries; }
@@ -63,11 +71,11 @@ namespace vcs
 
     private:
         bool indexDirectory(uint32_t lba, uint32_t size, const std::string &prefix, int depth);
+        bool adopt(std::unique_ptr<DiscSource> source); // open: the checks and the index
 
-        const uint8_t *m_data = nullptr;
+        std::unique_ptr<DiscSource> m_source;
+        const uint8_t *m_data = nullptr; // m_source->data(): the mapping, or null
         uint64_t m_size = 0;
-        void *m_file = nullptr;
-        void *m_mapping = nullptr;
         std::string m_error;
         std::unordered_map<std::string, IsoEntry> m_entries; // key: normalizePath()
         std::unordered_map<std::string, Children> m_children; // key: normalizePath() of the directory, "" = root
