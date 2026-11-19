@@ -13,7 +13,9 @@
 #include <utility>
 #include <vector>
 
+#include "game/vcs_hud.h"
 #include "runtime/gs/gs_cpu_backend.h"
+#include "runtime/gs/gs_hw.h"
 
 namespace vcs
 {
@@ -33,6 +35,48 @@ namespace vcs
             ctx->pc = pc;
             fn(rdram, ctx, &runtime);
             return GPR_U64(ctx, 2);
+        }
+
+        // The native HUD layer's classifier (vcs::classifyHudPrimitive; docs/NATIVE_RENDERER.md "HUD layer"): a
+        // full-width triangle goes into the layer only in a colour that a full-width HUD primitive of the frame had.
+        int checkHudClassifier()
+        {
+            vcs::HudAnchors anchors;
+            for (const auto &p : {std::pair<int, int>{0, 0}, {640, 0}, {640, 448}, {0, 448}}) // the fade: black, full screen
+                anchors.positions[vcs::hudPositionKey(p.first, p.second)] = GSHwAnchorStretch;
+            anchors.fullWidthColours.push_back(0x000000u);
+            for (const auto &p : {std::pair<int, int>{10, 10}, {50, 10}, {50, 30}}) // a HUD element on the left
+                anchors.positions[vcs::hudPositionKey(p.first, p.second)] = GSHwAnchorLeft;
+            const float screen[] = {-0.5f, 447.5f, 639.5f, 447.5f, 639.5f, -0.5f}; // the GS's view: half a pixel up-left
+            const float element[] = {9.5f, 9.5f, 49.5f, 9.5f, 49.5f, 29.5f};
+            const float elsewhere[] = {99.5f, 9.5f, 149.5f, 9.5f, 149.5f, 29.5f};
+            const uint8_t black[] = {0, 0, 0, 0, 0, 0, 0, 0, 0}, sky[] = {0x72, 0xac, 0xdd, 0x72, 0xac, 0xdd, 0x72, 0xac, 0xdd};
+            const uint8_t mixed[] = {0, 0, 0, 0x72, 0xac, 0xdd, 0, 0, 0}, white[] = {255, 255, 255, 255, 255, 255, 255, 255, 255};
+            int bad = 0;
+            auto check = [&](const char *what, bool ok) {
+                bad += ok ? 0 : 1;
+                std::fprintf(stderr, "[selftest] %s hud classifier: %s\n", ok ? "ok  " : "FAIL", what);
+            };
+            check("the fade quad, full screen in its own colour: the layer, stretched",
+                  vcs::classifyHudPrimitive(anchors, screen, black, 3) == GSHwAnchorStretch);
+            check("the sky quad on the fade's corners: not the layer",
+                  vcs::classifyHudPrimitive(anchors, screen, sky, 3) == GSHwAnchorNone);
+            check("one vertex in another colour: not the layer", vcs::classifyHudPrimitive(anchors, screen, mixed, 3) == GSHwAnchorNone);
+            check("a HUD element: its anchor, whatever its colour",
+                  vcs::classifyHudPrimitive(anchors, element, white, 3) == GSHwAnchorLeft);
+            check("positions no HUD primitive had: not the layer",
+                  vcs::classifyHudPrimitive(anchors, elsewhere, white, 3) == GSHwAnchorNone);
+            anchors.fullWidthColours.clear();
+            check("no full-width HUD primitive in the frame: no full-width triangle in the layer",
+                  vcs::classifyHudPrimitive(anchors, screen, black, 3) == GSHwAnchorNone);
+            // a loading screen's picture: white in Im2D, 7f7f7f on the GS (RenderWare's textured 2D, 0x80 = 1.0)
+            vcs::addHudFullWidthColour(anchors, 0xffffffu);
+            const uint8_t halfWhite[] = {0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f};
+            check("a textured full-screen picture, its colour halved on the GS: the layer",
+                  vcs::classifyHudPrimitive(anchors, screen, halfWhite, 3) == GSHwAnchorStretch);
+            check("... and as drawn", vcs::classifyHudPrimitive(anchors, screen, white, 3) == GSHwAnchorStretch);
+            check("... but not the sky", vcs::classifyHudPrimitive(anchors, screen, sky, 3) == GSHwAnchorNone);
+            return bad;
         }
 
         // The MMI macros the recompiler emits for PADDUH, PSUBUH, PABSW, PABSH, PSLLVW, PSRLVW and PSRAVW against a
@@ -250,6 +294,7 @@ namespace vcs
             }
         }
         failures += checkMmi();
+        failures += checkHudClassifier();
         std::fprintf(stderr, "[selftest] %d failure(s)\n", failures);
         return failures == 0;
     }

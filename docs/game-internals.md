@@ -961,6 +961,47 @@ end, Im2D primitives drawn with the depth test off get the HUD's z (`VCS_HUD_RW=
 **From Im2D to the screen (2026-10-23, F12 draw dumps at 16:9, `PS2X_HW_DUMP`; `VCS_TRACE_HUDKEY=<n>`).**
 - The GS sees an Im2D vertex at (x - 0.5, y - 0.5) (the 2D code's pixel-centre bias) for most HUD draws, within 1/16 of
   (x, y) for others (the zone name, fades): a vertex's whole-pixel position finds it again with either rounding.
+- **Colours** (2026-11-18, `VCS_TRACE_HUDCOLOUR`): the GS gets an untextured Im2D vertex's RGB as it is (the fade's
+  000000), a textured one's halved (the loading screen's picture: Im2D ffffff, GS 7f7f7f - 0x80 is 1.0 on the GS).
+- **The sky is Im2D too.** The 2D pass (FUN_0021f348) draws it before CHud::Draw as full-width quads in screen pixels:
+  a gray base (202020 over 0..852 x 0..736), the horizon's bands, and above them the top colour (72acdd at 06:30 in
+  the flyover) up to y 0. When the camera looks up (the flyover's palm shot), the horizon is below the screen and the
+  top quad is the whole screen: the same four corners as a fade's quad. Positions alone put it in the HUD layer; the
+  fade-in then showed the gray base for the whole fade and the sky in one frame (seen on every platform and with
+  `PS2X_HLE=0`; AetherSX2 fades the blue sky in with the rest). `vcs_hud.cpp` checks the colours of full-width
+  primitives too (docs/NATIVE_RENDERER.md "HUD layer").
+- **The sky top's colour** (2026-11-19, the time cycle dumped with the rig's `peek`, FUN_001CCF20 read in the generated
+  code): the time cycle `*0x486838` (0x4E7200) holds each colour as u8 arrays [24 hours][8 weathers], 192 bytes each:
+  sky top R / G / B at +0xDC0 / +0xE80 / +0xF40, the current value at +0x32BC / +0x32C0 / +0x32C4 (int each),
+  interpolated by FUN_001CCD00. Weather column 6 is the **extra colours**: FUN_001CE6A0(timecycle, index, fade) sets
+  +0x3370 index (the hour row), +0x3374 on, +0x3378 the blend towards it. Their sky top is 000000 in every row but 4
+  (151515), and **000000 means "keep the weather's sky"**: before blending the sky (0x1CD9FC..0x1CDA20) the code tests
+  the row's three bytes and skips the blend when all are 0. Measured: PHI_A1 / PHI_A2's cutscenes run with index 5 on
+  at 1.00 and the sky top stays the weather's (3492fe sunny at 15:00, 415056..8d9297 in PHI_A2). No hour of a real
+  weather is black either (the darkest is 000009, 21:00 sunny): **the sky top is never black** - 151515 (index 4) is
+  the darkest the extra colours give.
+  - Who sets them: script opcode 0x0313 (FUN_001E31F0), almost always through the main script's "enter interior N"
+    routine (IP 69937: N 0 = outdoors, and 0x0314 turns them off; area 4 for N 5, 1 for 1, 2 for the rest; then the
+    routine at IP 69300 maps N to an index: only N 10 and 22 get index 4). The `.CUT` loader (FUN_00426220) reads an
+    `extracol` section, but none of the 49 `.CUT` files has one. The main script's mission table (one entry per
+    cutscene: name, mission, start position, local 9 = the interior) puts JER_A* in interior 10 (the opening office
+    cutscene ran with index 4, 151515: measured); PHI_A* 11 (index 5), LOU_A* 13, LAN_B2/5/6 14, BRY_B1 15, UMB_B* 16,
+    DIA_C1-4 17, MEN_C* 18, REN_C7 19, REN_C1-3/5/6 20, REN_C4 21, MAR_A1 26, MAR_A2 12 - all with a 000000 sky top, so
+    the weather's sky; LAN_B1/B4, MAR_A5, DIA_C5 0 (outdoors); LAN_C* give none.
+  - **The fade's colours** (2026-11-19): SET_FADING_COLOUR is opcode 0x00C8 (handler FUN_00287A48) ->
+    CCamera::SetFadeColour FUN_0037C3F8, colour at bytes 0x48748C..E. MAIN.SCM sets only 000000 (206 times), 000001
+    (21: JER_A3, PHI_A2, REN_C5, LAN_C10, GON_C2, GON_C4, E_SM, main) and ffffff (11: JER_A1, PHI_A2, UMB_B4, MEN_C6,
+    DIA_C5; LAN_C10's computed colour is called once, with ffffff). With their halved forms the classifier accepts
+    000000, 000001, ffffff and 7f7f7f.
+  - From boot to gameplay the only full-width primitive in the HUD context is the fade (`VCS_TRACE_HUDANCHOR`,
+    `VCS_TRACE_IM2D`). Before the HUD, every frame, the camera (FUN_00376D90, returns 0x376D20 / 0x376D70) draws the
+    closed cinematic bars as two black full-width quads of zero height on y 0 and y 448: the screen's corners, so they
+    join the layer during a black fade (as before the fix, during any fade) and draw nothing either way.
+  - Reachable sky tops (the time cycle model above, checked against the game: 72acdd at 06:30, weather 4): never
+    000000, 000001 or ffffff at any hour, weather pair, second or blend. 7f7f7f only while extra colour 4 (Fort Baxter,
+    interiors 10 / 22) blends in or out over a gray morning sky (07:00, a blend towards weather 5): an amount window of
+    about 0.0001, while the game steps it by time step / 120 a frame (0.0139 at 30 fps, 0.0069 at 60). Forced in the
+    intro (the fade poked to 72acdd), the sky does leave the picture again: the mechanism is real, its colours are not.
 - The game draws the frame into the buffer at FBP 140 and copies it into the displayed one (FBP 0, DISPFB DBY = 2)
   with a plain full-screen copy in 40 strips (decal, no blending) at the start of the **next** frame. So what is shown
   is the previous frame's FBP 140, HUD included.

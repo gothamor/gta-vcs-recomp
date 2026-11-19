@@ -1263,7 +1263,8 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `PS2X_HW_DECODE_FROM_UPLOAD=0`, `PS2X_HW_DECODE_VERIFY=1` | textures decoded from emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] textures from upload`) |
 | `PS2X_HW_CLUT_FROM_UPLOAD=0`, `PS2X_HW_CLUT_VERIFY=1` | CLUT loads read emulated VRAM (writing the queued uploads there first) instead of the queued upload's data; both, compared (`[gs-hw] clut from upload`) |
 | `VCS_TRACE_IM2D_DELAY=s`, `VCS_TRACE_IM2D_STACK=1` | start the Im2D trace after s seconds (default 30); print the guest stack's return addresses per call |
-| `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier did not find (positions) |
+| `VCS_TRACE_HUDKEY=n` | log n 2D primitives the HUD classifier refused, by position or colour (the first vertex's position) |
+| `VCS_TRACE_HUDCOLOUR=n` | log n full-width triangles on HUD positions that the classifier kept out for their colour (the sky's quads; NATIVE_RENDERER.md "HUD layer") |
 | `VCS_TRACE_HUDANCHOR=n` | log n frames of HUD elements (box, part: 1 radar / 2 centred text, anchor) and each text line's justify and rect, from `VCS_TRACE_IM2D_DELAY` on (`tools/hud_check.py`) |
 | `PS2X_HW_OUTPUT=WxH` | the renderer's output size whatever the window (full-screen sizes in test runs; with `PS2X_CAPTURE_SIZE`) |
 | `PS2X_HW_DUMP_TEX=<key hex>` | write that decoded texture (colour + alpha PPM, keys from the F12 draw log) - analysis only, never commit |

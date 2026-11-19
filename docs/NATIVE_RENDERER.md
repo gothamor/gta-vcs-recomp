@@ -363,6 +363,14 @@ The HUD, text and radar are drawn over the shown picture at the window's size in
   kick), groups them into elements and anchors each one (game-internals.md 6f). The renderer asks it about every 2D
   primitive into a 640-wide target while 3D is shown (`gsHwSetHudClassifier`, by vertex positions); a named one is
   squeezed towards its anchor (widescreen) and recorded as a `HudDraw`, not a `Draw`.
+- **Full-width draws need the colours too** (2026-11-18). Their corners are the screen's, and the sky's top quad has
+  them when the camera looks up: it went into the layer, and the flyover's fade-in showed gray, then the sky at once.
+  A full-width triangle is the HUD's only if its vertex colours are those of a full-width HUD primitive of the frame,
+  as drawn or halved (RenderWare's textured 2D; game-internals.md 6f "Colours").
+  `classifyHudPrimitive` is pure (`VCS_SELFTEST`); `VCS_TRACE_HUDCOLOUR=<n>` logs the triangles kept out by colour.
+  Left: a sky top of the fade's own colour. The game's fades are 000000, 000001 and ffffff, and no sky top is any of
+  them; only white's halved 7f7f7f is reachable, in an extra-colour blend window too narrow for the game's steps
+  (game-internals.md 6f "The sky top's colour").
 - **Menus** go the same way: from the menu draw (FUN_003b53f8) to the frame kick, the 2D primitives are named too,
   always anchored in the middle (never to the screen edges), also in frames without 3D (the pause menu; the
   squeeze stays for 3D frames). `VCS_MENU_NATIVE=0` = menus into the frame buffer.

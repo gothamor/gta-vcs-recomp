@@ -77,7 +77,8 @@ enum : uint8_t
     // once (the pause menu), not after the half-second the 3D history takes.
     GSHwAnchorMenu = 0x80,
 };
-using GSHwAnchorFn = uint8_t (*)(const float *xy, uint32_t count);
+// [gta-recomp] rgb: r, g, b per vertex (a sky quad can have a fade's corners; only the colours tell them apart)
+using GSHwAnchorFn = uint8_t (*)(const float *xy, const uint8_t *rgb, uint32_t count);
 void gsHwSetHudClassifier(GSHwAnchorFn fn);
 
 // [gta-recomp] Button prompt glyphs (src/game/vcs_prompts.cpp): a 2D primitive the game drew as a button glyph is drawn

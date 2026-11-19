@@ -16,8 +16,10 @@
 // elements and anchored (resolveAnchors); at the frame kick their vertex positions go to the renderer, which asks
 // classify() about each 2D primitive it gets. Named ones are squeezed towards their anchor in widescreen (HUD "Screen
 // edges"; otherwise all to the middle) and drawn over the picture at the window's size (VCS_HUD_NATIVE=0: into the
-// frame buffer as before). VCS_TRACE_HUDKEY=<n> logs n primitives that were not found; VCS_TRACE_HUDANCHOR=<n> the
-// elements and their anchors for n frames.
+// frame buffer as before). A full-width one also needs a full-width HUD colour (classifyHudPrimitive).
+// VCS_TRACE_HUDKEY=<n> logs n primitives that were not found;
+// VCS_TRACE_HUDCOLOUR=<n> n full-width ones kept out for their colour; VCS_TRACE_HUDANCHOR=<n> the elements and their
+// anchors for n frames.
 //
 // VCS_TRACE_IM2D=<n>: log n Im2D calls (caller, primitive, vertex count, the first vertices' raw words) and markers at
 // the 2D pass's calls (VCS_TRACE_IM2D_MARKERS=<1..6>), from 30 s on.
@@ -39,6 +41,7 @@
 #include <cstring>
 #include <memory>
 #include <numeric>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include "runtime/ps2_host_std.h"
@@ -193,14 +196,14 @@ namespace vcs
         std::atomic<bool> g_hooked{false}, g_layer{false}; // the HUD context is known; the native HUD layer is on
         std::atomic<uint32_t> g_hudDraws{0};                // CHud::Draw calls let through (Hide HUD's check)
         std::vector<Prim> g_prims;                       // this frame's HUD primitives (one per Im2D call); game thread
-        std::vector<uint32_t> g_primKeys;                // their vertex positions (positionKey)
-        using AnchorMap = std::unordered_map<uint32_t, uint8_t>;
-        // the kicked frame's vertex positions -> anchor: built here at the kick, handed to the GS side (the render worker,
-        // runtime/ps2_render_worker.h) in order with the frame's display list, read there by classify
-        std::shared_ptr<const AnchorMap> g_anchors = std::make_shared<AnchorMap>();
+        std::vector<uint32_t> g_primKeys;                // their vertex positions (hudPositionKey)
+        std::vector<uint32_t> g_primRgb;                 // their vertex colours (0xRRGGBB), as g_primKeys
+        // the kicked frame's HUD vertex positions -> anchor, and its full-width colours: built here at the kick, handed to
+        // the GS side (the render worker, runtime/ps2_render_worker.h) in order with the frame's display list, read there
+        // by classify
+        std::shared_ptr<const HudAnchors> g_anchors = std::make_shared<HudAnchors>();
         int g_traceKeys = 0;                             // VCS_TRACE_HUDKEY=<n>
-
-        uint32_t positionKey(int x, int y) { return uint32_t(uint16_t(x)) | (uint32_t(uint16_t(y)) << 16); } // whole pixels
+        int g_traceColours = 0;                          // VCS_TRACE_HUDCOLOUR=<n>
 
         void capture(uint8_t *rdram, R5900Context *ctx)
         {
@@ -238,10 +241,15 @@ namespace vcs
                 p.x1 = std::max<float>(p.x1, xy[0]);
                 p.y0 = std::min<float>(p.y0, xy[1]);
                 p.y1 = std::max<float>(p.y1, xy[1]);
-                g_primKeys.push_back(positionKey(xy[0], xy[1]));
+                g_primKeys.push_back(hudPositionKey(xy[0], xy[1]));
+                const uint8_t *rgba = rdram + verts + i * 16u + 4u;
+                g_primRgb.push_back(uint32_t(rgba[0]) << 16 | uint32_t(rgba[1]) << 8 | rgba[2]);
             }
             g_prims.push_back(p);
         }
+
+        // across the 640-wide target: fades, letterbox bars, the sky's quads
+        bool fullWidth(float x0, float x1) { return x0 <= 1.0f && x1 >= 639.0f; }
 
         // The frame's HUD primitives grouped into elements (boxes closer than a word gap merge: a line of text, the
         // clock / weapon / money cluster), each anchored by where it sits on the 4:3 screen: the left or right edge when
@@ -251,7 +259,7 @@ namespace vcs
         // map turned - the text, and with it the radar, jumped across the screen.
         void resolveAnchors()
         {
-            auto anchors = std::make_shared<AnchorMap>();
+            auto anchors = std::make_shared<HudAnchors>();
             const uint32_t n = static_cast<uint32_t>(g_prims.size());
             std::vector<uint32_t> parent(n), order(n);
             std::iota(parent.begin(), parent.end(), 0u);
@@ -261,7 +269,7 @@ namespace vcs
                     i = parent[i] = parent[parent[i]];
                 return i;
             };
-            auto full = [](const Prim &p) { return p.x0 <= 1.0f && p.x1 >= 639.0f; };
+            auto full = [](const Prim &p) { return fullWidth(p.x0, p.x1); };
             // menus are laid out as a whole: never grouped with the HUD, never moved to an edge
             auto apart = [&](const Prim &p) { return full(p) || p.menu || p.part != Part::Other; };
             constexpr float gapX = 12.0f, gapY = 3.0f;
@@ -307,7 +315,11 @@ namespace vcs
                                        : centre > 360.0f && b.x1 > 480.0f            ? GSHwAnchorRight
                                                                                      : GSHwAnchorCentre;
                 for (uint32_t k = 0; k < p.keyCount; ++k)
-                    (*anchors)[g_primKeys[p.firstKey + k]] = static_cast<uint8_t>(anchor | (p.menu ? GSHwAnchorMenu : 0u));
+                {
+                    anchors->positions[g_primKeys[p.firstKey + k]] = static_cast<uint8_t>(anchor | (p.menu ? GSHwAnchorMenu : 0u));
+                    if (full(p))
+                        addHudFullWidthColour(*anchors, g_primRgb[p.firstKey + k]);
+                }
                 if (traceFrame && find(i) == i)
                     std::fprintf(stderr, "[hud-anchor]   x %4.0f..%4.0f y %4.0f..%4.0f prims %3u part %d%s -> %s\n", b.x0, b.x1,
                                  b.y0, b.y1, b.keyCount, static_cast<int>(p.part), p.menu ? " menu" : "",
@@ -318,36 +330,36 @@ namespace vcs
             }
             g_prims.clear();
             g_primKeys.clear();
+            g_primRgb.clear();
             ps2_render_worker::post([anchors] { ps2_render_worker::runOnGsStage([anchors] { g_anchors = anchors; }); });
         }
 
-        // gsHwSetHudClassifier: a primitive whose every vertex is a HUD vertex of the kicked frame takes its anchor
-        uint8_t classify(const float *xy, uint32_t count)
+        // gsHwSetHudClassifier: the kicked frame's HUD primitives decide (classifyHudPrimitive)
+        uint8_t classify(const float *xy, const uint8_t *rgb, uint32_t count)
         {
-            const AnchorMap &anchors = *g_anchors;
-            if (anchors.empty())
-                return GSHwAnchorNone;
-            // The GS sees the game's whole-pixel positions half a pixel up-left (the 2D drawing's pixel-centre bias) or
-            // within a sixteenth of them: either rounding finds the pixel.
-            uint8_t anchor = GSHwAnchorNone;
-            for (uint32_t i = 0; i < count; ++i)
+            const uint8_t anchor = classifyHudPrimitive(*g_anchors, xy, rgb, count);
+            if (anchor != GSHwAnchorNone || count == 0)
+                return anchor;
+            if (g_traceKeys > 0)
             {
-                const float x = xy[2 * i], y = xy[2 * i + 1];
-                const int xs[2] = {static_cast<int>(std::lround(x)), static_cast<int>(std::lround(x + 0.5f))};
-                const int ys[2] = {static_cast<int>(std::lround(y)), static_cast<int>(std::lround(y + 0.5f))};
-                auto it = anchors.end();
-                for (int k = 0; k < 4 && it == anchors.end(); ++k)
-                    it = anchors.find(positionKey(xs[k & 1], ys[k >> 1]));
-                if (it == anchors.end())
+                --g_traceKeys;
+                std::fprintf(stderr, "[hud-key] miss %.4f,%.4f (%u vertices)\n", xy[0], xy[1], count);
+            }
+            // HUD positions, refused for its colour
+            if (g_traceColours > 0 && hudPositionsAnchor(*g_anchors, xy, count) != GSHwAnchorNone)
+            {
+                --g_traceColours;
+                std::string hudColours;
+                for (uint32_t c : g_anchors->fullWidthColours)
                 {
-                    if (g_traceKeys > 0)
-                    {
-                        --g_traceKeys;
-                        std::fprintf(stderr, "[hud-key] miss %.4f,%.4f (vertex %u of %u)\n", x, y, i, count);
-                    }
-                    return GSHwAnchorNone;
+                    char hex[8];
+                    std::snprintf(hex, sizeof(hex), " %06x", c);
+                    hudColours += hex;
                 }
-                anchor = it->second;
+                std::fprintf(stderr, "[hud-key] full width on HUD corners, not a HUD colour: rgb %02x%02x%02x %02x%02x%02x "
+                             "%02x%02x%02x (the HUD's:%s)\n", rgb[0], rgb[1], rgb[2], count > 1 ? rgb[3] : 0,
+                             count > 1 ? rgb[4] : 0, count > 1 ? rgb[5] : 0, count > 2 ? rgb[6] : 0, count > 2 ? rgb[7] : 0,
+                             count > 2 ? rgb[8] : 0, hudColours.c_str());
             }
             return anchor;
         }
@@ -514,6 +526,62 @@ namespace vcs
         }
     }
 
+    uint32_t hudPositionKey(int x, int y) { return uint32_t(uint16_t(x)) | (uint32_t(uint16_t(y)) << 16); }
+
+    void addHudFullWidthColour(HudAnchors &anchors, uint32_t rgb)
+    {
+        std::vector<uint32_t> &colours = anchors.fullWidthColours;
+        for (const uint32_t c : {rgb, (rgb >> 1) & 0x7f7f7fu}) // as drawn, and halved
+            if (std::find(colours.begin(), colours.end(), c) == colours.end())
+                colours.push_back(c);
+    }
+
+    // A triangle whose vertices are all HUD vertices of the kicked frame takes their anchor. A full-width one also
+    // needs a full-width HUD colour: the sky's quads, drawn before CHud::Draw, can have the fades' corners
+    // (game-internals.md 6f).
+    uint8_t classifyHudPrimitive(const HudAnchors &anchors, const float *xy, const uint8_t *rgb, uint32_t count)
+    {
+        if (count == 0)
+            return GSHwAnchorNone;
+        float x0 = xy[0], x1 = xy[0];
+        for (uint32_t i = 1; i < count; ++i)
+        {
+            x0 = std::min(x0, xy[2 * i]);
+            x1 = std::max(x1, xy[2 * i]);
+        }
+        if (fullWidth(x0, x1))
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const uint32_t c = uint32_t(rgb[3 * i]) << 16 | uint32_t(rgb[3 * i + 1]) << 8 | rgb[3 * i + 2];
+                if (std::find(anchors.fullWidthColours.begin(), anchors.fullWidthColours.end(), c) ==
+                    anchors.fullWidthColours.end())
+                    return GSHwAnchorNone;
+            }
+        return hudPositionsAnchor(anchors, xy, count);
+    }
+
+    uint8_t hudPositionsAnchor(const HudAnchors &anchors, const float *xy, uint32_t count)
+    {
+        if (anchors.positions.empty() || count == 0)
+            return GSHwAnchorNone;
+        // The GS sees the game's whole-pixel positions half a pixel up-left (the 2D drawing's pixel-centre bias) or
+        // within a sixteenth of them: either rounding finds the pixel.
+        uint8_t anchor = GSHwAnchorNone;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const float x = xy[2 * i], y = xy[2 * i + 1];
+            const int xs[2] = {static_cast<int>(std::lround(x)), static_cast<int>(std::lround(x + 0.5f))};
+            const int ys[2] = {static_cast<int>(std::lround(y)), static_cast<int>(std::lround(y + 0.5f))};
+            auto it = anchors.positions.end();
+            for (int k = 0; k < 4 && it == anchors.positions.end(); ++k)
+                it = anchors.positions.find(hudPositionKey(xs[k & 1], ys[k >> 1]));
+            if (it == anchors.positions.end())
+                return GSHwAnchorNone;
+            anchor = it->second;
+        }
+        return anchor;
+    }
+
     void onFrameKick()
     {
         if (traceNow())
@@ -543,6 +611,8 @@ namespace vcs
         const bool on = !(rw && rw[0] == '0');
         if (const char *keys = std::getenv("VCS_TRACE_HUDKEY"))
             g_traceKeys = std::atoi(keys);
+        if (const char *colours = std::getenv("VCS_TRACE_HUDCOLOUR"))
+            g_traceColours = std::atoi(colours);
         if (const char *frames = std::getenv("VCS_TRACE_HUDANCHOR"))
             g_traceAnchors = std::atoi(frames);
         const char *traceEnv = std::getenv("VCS_TRACE_IM2D");

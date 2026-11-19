@@ -3194,13 +3194,17 @@ namespace
                 if (classify && batch && gsDrawSourcePath(source) == 2u)
                 {
                     float xy[2 * 8];
+                    uint8_t rgb[3 * 8];
                     const uint32_t count = std::min<uint32_t>(batch->vertexCount, 8u);
                     for (uint32_t i = 0; i < count; ++i)
                     {
                         xy[2 * i] = batch->vertices[i].x - ofx;
                         xy[2 * i + 1] = batch->vertices[i].y - ofy;
+                        rgb[3 * i] = batch->vertices[i].r;
+                        rgb[3 * i + 1] = batch->vertices[i].g;
+                        rgb[3 * i + 2] = batch->vertices[i].b;
                     }
-                    anchor = classify(xy, count);
+                    anchor = classify(xy, rgb, count);
                     if (anchor & GSHwAnchorMenu) // [gta-recomp] the game's menu: the frame may switch to 4:3 at once
                     {
                         m_frame->menu = true;
