@@ -359,6 +359,35 @@ float4 sampleTex(float2 uv)
 #endif
 }
 
+// v / 255, the same float as the division for v = 0 and 2^-100 <= v < 2^20. The Metal shaders are compiled with
+// MTLMathModeSafe (the PS2's numbers: no reassociation, no flushing), where a division is the IEEE one - several times
+// the cost of this; on an M1 Pro the two below were ~25% of a 3x frame's GPU time (docs/PERFORMANCE.md 33). The
+// reciprocal's product and one fused correction were checked against the division for every float in [0, 2^20], on the
+// CPU (all equal) and on the M1 Pro's GPU compiled as the game's shaders are (equal from 2^-100 up; below ~2e-31 the
+// GPU flushes the correction's denormal). The values here are 0 or at least 1/128: the output reaches 510, the fog's
+// numerator 65025. D3D11's mad needn't be fused: there, and in Vulkan, the division as before.
+float3 div255(float3 v)
+{
+#if VCS_MSL
+    const float inv = 0.003921568859368563; // RN(1 / 255)
+    const float3 q = v * inv;
+    return mad(mad(-q, 255.0, v), inv, q);
+#else
+    return v / 255.0;
+#endif
+}
+
+float div255(float v)
+{
+#if VCS_MSL
+    const float inv = 0.003921568859368563;
+    const float q = v * inv;
+    return mad(mad(-q, 255.0, v), inv, q);
+#else
+    return v / 255.0;
+#endif
+}
+
 struct PSOut
 {
     float4 color : SV_Target0;
@@ -398,7 +427,7 @@ PSOut ps_main(VSOut i)
     if (linearIipFgeAte.z == 1)
     {
         const float f = floor(i.fog * 255.0 + 0.5);
-        c.rgb = floor((c.rgb * f + fogColor.rgb * (255.0 - f)) / 255.0);
+        c.rgb = floor(div255(c.rgb * f + fogColor.rgb * (255.0 - f)));
     }
     bool passed = true;
     if (linearIipFgeAte.w == 1)
@@ -420,7 +449,7 @@ PSOut ps_main(VSOut i)
     float3 rgb = c.rgb;
     if (blendCPremul.y == 1) rgb *= cf;
     else if (blendCPremul.y == 2) rgb *= (1.0 + cf);
-    o.color = float4(rgb / 255.0, c.a / 255.0);
+    o.color = float4(div255(rgb), div255(c.a));
     if (g_gatherMismatch)
         o.color = float4(1.0, 0.0, 1.0, 1.0);
 #if DUAL_SOURCE

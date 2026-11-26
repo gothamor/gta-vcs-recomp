@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -246,6 +247,8 @@ namespace rhi
                 m_width = std::max(1u, desc.width);
                 m_height = std::max(1u, desc.height);
                 logGpus(all, device);
+                if (std::getenv("PS2X_RHI_GPU_TIME") || std::getenv("PS2X_GPU_TIMING"))
+                    timerInit();
 
                 if (desc.metalLayer && !desc.offscreen)
                 {
@@ -470,6 +473,8 @@ namespace rhi
                 }
                 ensureCommandBuffer();
                 endEncoders();
+                if (m_timer.on)
+                    timeRender(rp, "msaa resolve " + labelOf(s.texture, "texture"));
                 [[m_cmd renderCommandEncoderWithDescriptor:rp] endEncoding];
                 ++m_suspendsThisFrame;
             }
@@ -859,8 +864,18 @@ namespace rhi
                 ++m_drawsThisFrame;
             }
 
-            void pushMarker(const char *) override {}
-            void popMarker() override {}
+            // PS2X_GPU_TIMING=1: gs_hw puts a marker around each draw and ends the pass after it, so each encoder is one
+            // draw, named by its marker (the innermost)
+            void pushMarker(const char *name) override
+            {
+                if (m_timer.on)
+                    m_markers.emplace_back(name ? name : "");
+            }
+            void popMarker() override
+            {
+                if (m_timer.on && !m_markers.empty())
+                    m_markers.pop_back();
+            }
 
             // ---- swapchain ----------------------------------------------------------------------------------------
             void backbufferSize(uint32_t &width, uint32_t &height) const override
@@ -900,7 +915,11 @@ namespace rhi
                         [m_cmd presentDrawable:m_drawable];
                 }
                 dispatch_semaphore_t sem = m_frameSemaphore;
+                const uint32_t slot = m_frameIndex;
+                const bool timed = m_timer.on;
                 [m_cmd addCompletedHandler:^(id<MTLCommandBuffer>) {
+                  if (timed)
+                      timerCollect(slot); // before the slot is free for another frame
                   dispatch_semaphore_signal(sem);
                 }];
                 [m_cmd commit];
@@ -968,8 +987,202 @@ namespace rhi
                     m_rings[m_frameIndex].reset();
                     m_vertexDirty = true;
                     m_constantsDirty = (1u << kUniformSlots) - 1u;
+                    if (m_timer.on)
+                    {
+                        m_timer.slots[m_frameIndex].buffer = m_timer.slots[m_frameIndex].used = 0;
+                        m_timer.slots[m_frameIndex].spans.clear();
+                    }
                 }
                 m_cmd = [m_queue commandBuffer];
+                if (m_stats || m_timer.on)
+                {
+                    std::atomic<uint64_t> *gpuNs = &m_gpuNs;
+                    [m_cmd addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+                      const double s = cb.GPUEndTime - cb.GPUStartTime;
+                      if (s > 0.0)
+                          gpuNs->fetch_add(static_cast<uint64_t>(s * 1e9), std::memory_order_relaxed);
+                    }];
+                }
+            }
+
+            // ---- PS2X_RHI_GPU_TIME=1 (or PS2X_GPU_TIMING=1): the GPU time of each encoder, summed by what it draws into
+            // and reported every 5 s as ms per frame, as the Vulkan backend does. Apple GPUs sample timestamps only at
+            // stage boundaries, not per draw: PS2X_GPU_TIMING=1 makes gs_hw end the pass after every draw (each encoder then
+            // one draw, named by its marker), which loads and stores the frame per draw - the rows rank the draws, the
+            // total is far above a normal frame's; =gs splits only the GS draws (effects, 2D), keeping the world's native
+            // draws in their passes. Per-encoder times include any wait for earlier work. A tile-based GPU runs the
+            // vertex stages of the frame's encoders ahead, side by side, and their fragment stages one after another
+            // (each starts where the last ended): so a row is its fragment stage - what it costs the frame - with its
+            // vertex stage beside it; a blit is its start .. end. "(frame)" is the frame's command buffers, GPUStartTime ..
+            // GPUEndTime. The timestamps are nanoseconds on Apple GPUs (checked against the steady clock) -----------------
+            static constexpr uint32_t kTimerSamples = 4096; // per counter sample buffer (it holds up to 32 KB)
+            static constexpr uint32_t kTimerBuffers = 8;    // per frame slot: PS2X_GPU_TIMING's encoder per draw needs several
+
+            struct TimerSpan
+            {
+                std::string name;
+                uint32_t buffer;
+                uint32_t first;
+                uint32_t count; // 4: vertex start / end, fragment start / end; 2: a blit's start / end
+            };
+
+            struct TimerSlot
+            {
+                std::array<id<MTLCounterSampleBuffer>, kTimerBuffers> samples{};
+                uint32_t buffer = 0, used = 0; // the buffer being filled, and samples used in it
+                std::vector<TimerSpan> spans;
+            };
+
+            struct Timer
+            {
+                bool on = false;
+                std::array<TimerSlot, kFrames> slots;
+                std::mutex lock; // the totals: completion handlers run on Metal's threads
+                struct Total
+                {
+                    double fragment = 0.0, vertex = 0.0; // ticks
+                    uint64_t encoders = 0;
+                };
+                std::unordered_map<std::string, Total> totals;
+                uint64_t frames = 0;
+                uint64_t gpuNsAtReport = 0;
+                MTLTimestamp cpu0 = 0, gpu0 = 0;
+                std::chrono::steady_clock::time_point wall0{}, lastReport{};
+            };
+
+            void timerInit()
+            {
+                if (![m_device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary])
+                {
+                    std::fprintf(stderr, "[gpu-timing] this GPU has no stage-boundary timestamps\n");
+                    return;
+                }
+                id<MTLCounterSet> timestamps = nil;
+                for (id<MTLCounterSet> set in m_device.counterSets)
+                    if ([set.name isEqualToString:MTLCommonCounterSetTimestamp])
+                        timestamps = set;
+                if (!timestamps)
+                {
+                    std::fprintf(stderr, "[gpu-timing] no timestamp counter set\n");
+                    return;
+                }
+                for (TimerSlot &slot : m_timer.slots)
+                    for (auto &buffer : slot.samples)
+                    {
+                        MTLCounterSampleBufferDescriptor *d = [MTLCounterSampleBufferDescriptor new];
+                        d.counterSet = timestamps;
+                        d.sampleCount = kTimerSamples;
+                        d.storageMode = MTLStorageModeShared;
+                        NSError *error = nil;
+                        buffer = [m_device newCounterSampleBufferWithDescriptor:d error:&error];
+                        if (!buffer)
+                        {
+                            std::fprintf(stderr, "[gpu-timing] counter sample buffer failed: %s\n",
+                                         error ? [[error localizedDescription] UTF8String] : "?");
+                            return;
+                        }
+                    }
+                // GPU ticks to nanoseconds: measured against the steady clock between reports
+                [m_device sampleTimestamps:&m_timer.cpu0 gpuTimestamp:&m_timer.gpu0];
+                m_timer.wall0 = m_timer.lastReport = std::chrono::steady_clock::now();
+                m_timer.on = true;
+                std::fprintf(stderr, "[gpu-timing] on: GPU time per encoder (stage boundaries), every 5 s\n");
+            }
+
+            static std::string labelOf(id<MTLTexture> t, const char *fallback)
+            {
+                std::string s = t.label ? [t.label UTF8String] : fallback;
+                return s + " " + std::to_string([t width]) + "x" + std::to_string([t height]);
+            }
+
+            // the next samples of this frame's slot for an encoder named `name` (false: the slot is full)
+            bool timerSpan(std::string name, uint32_t count, uint32_t &first)
+            {
+                if (!m_timer.on)
+                    return false;
+                TimerSlot &slot = m_timer.slots[m_frameIndex];
+                if (slot.used + count > kTimerSamples)
+                {
+                    if (slot.buffer + 1 >= kTimerBuffers)
+                        return false;
+                    ++slot.buffer;
+                    slot.used = 0;
+                }
+                first = slot.used;
+                slot.used += count;
+                slot.spans.push_back({std::move(name), slot.buffer, first, count});
+                return true;
+            }
+
+            void timeRender(MTLRenderPassDescriptor *rp, std::string name)
+            {
+                uint32_t i;
+                if (!timerSpan(std::move(name), 4, i))
+                    return;
+                MTLRenderPassSampleBufferAttachmentDescriptor *a = rp.sampleBufferAttachments[0];
+                a.sampleBuffer = m_timer.slots[m_frameIndex].samples[m_timer.slots[m_frameIndex].buffer];
+                a.startOfVertexSampleIndex = i;
+                a.endOfVertexSampleIndex = i + 1;
+                a.startOfFragmentSampleIndex = i + 2;
+                a.endOfFragmentSampleIndex = i + 3;
+            }
+
+            // a frame slot's encoders, once its last command buffer has completed
+            void timerCollect(uint32_t index)
+            {
+                TimerSlot &slot = m_timer.slots[index];
+                if (slot.spans.empty())
+                    return;
+                std::array<NSData *, kTimerBuffers> data{};
+                for (uint32_t b = 0; b <= slot.buffer; ++b)
+                    data[b] = [slot.samples[b] resolveCounterRange:NSMakeRange(0, b < slot.buffer ? kTimerSamples : slot.used)];
+                std::lock_guard<std::mutex> guard(m_timer.lock);
+                // a stage's start .. end, when both were sampled (a pass without draws has no vertex stage)
+                auto stage = [&](uint32_t buffer, uint32_t k) -> double {
+                    NSData *d = data[buffer];
+                    const NSUInteger n = d ? [d length] / sizeof(MTLCounterResultTimestamp) : 0;
+                    if (k + 1 >= n)
+                        return 0.0;
+                    const auto *t = static_cast<const MTLCounterResultTimestamp *>([d bytes]);
+                    const uint64_t a = t[k].timestamp, b = t[k + 1].timestamp;
+                    const bool valid = a && b && a != MTLCounterErrorValue && b != MTLCounterErrorValue && b >= a;
+                    return valid ? static_cast<double>(b - a) : 0.0;
+                };
+                for (const TimerSpan &sp : slot.spans)
+                {
+                    auto &total = m_timer.totals[sp.name];
+                    if (sp.count == 4)
+                    {
+                        total.vertex += stage(sp.buffer, sp.first);
+                        total.fragment += stage(sp.buffer, sp.first + 2);
+                    }
+                    else
+                        total.fragment += stage(sp.buffer, sp.first);
+                    ++total.encoders;
+                }
+                ++m_timer.frames;
+                const auto now = std::chrono::steady_clock::now();
+                if (now - m_timer.lastReport < std::chrono::seconds(5))
+                    return;
+                m_timer.lastReport = now;
+                MTLTimestamp cpu1 = 0, gpu1 = 0;
+                [m_device sampleTimestamps:&cpu1 gpuTimestamp:&gpu1];
+                const double wallNs = std::chrono::duration<double, std::nano>(now - m_timer.wall0).count();
+                const double nsPerTick = gpu1 > m_timer.gpu0 ? wallNs / static_cast<double>(gpu1 - m_timer.gpu0) : 1.0;
+                const uint64_t gpuNs = m_gpuNs.load(std::memory_order_relaxed);
+                const double f = static_cast<double>(m_timer.frames);
+                std::vector<std::pair<std::string, Timer::Total>> rows(m_timer.totals.begin(), m_timer.totals.end());
+                std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) { return a.second.fragment > b.second.fragment; });
+                std::fprintf(stderr, "[gpu-timing] %llu frames, GPU ms per frame by encoder: fragment stage, vertex stage, encoders "
+                                     "per frame\n",
+                             static_cast<unsigned long long>(m_timer.frames));
+                std::fprintf(stderr, "[gpu-timing]   %7.3f           (frame)\n", static_cast<double>(gpuNs - m_timer.gpuNsAtReport) / 1e6 / f);
+                for (const auto &[name, total] : rows)
+                    std::fprintf(stderr, "[gpu-timing]   %7.3f %7.3f   %s (%.1f)\n", total.fragment * nsPerTick / 1e6 / f,
+                                 total.vertex * nsPerTick / 1e6 / f, name.c_str(), static_cast<double>(total.encoders) / f);
+                m_timer.totals.clear();
+                m_timer.frames = 0;
+                m_timer.gpuNsAtReport = gpuNs;
             }
 
             void endEncoders()
@@ -996,7 +1209,19 @@ namespace rhi
                     ++m_suspendsThisFrame;
                 }
                 if (!m_blit)
-                    m_blit = [m_cmd blitCommandEncoder];
+                {
+                    uint32_t i;
+                    if (timerSpan("copies / uploads", 2, i))
+                    {
+                        MTLBlitPassDescriptor *bp = [MTLBlitPassDescriptor blitPassDescriptor];
+                        bp.sampleBufferAttachments[0].sampleBuffer = m_timer.slots[m_frameIndex].samples[m_timer.slots[m_frameIndex].buffer];
+                        bp.sampleBufferAttachments[0].startOfEncoderSampleIndex = i;
+                        bp.sampleBufferAttachments[0].endOfEncoderSampleIndex = i + 1;
+                        m_blit = [m_cmd blitCommandEncoderWithDescriptor:bp];
+                    }
+                    else
+                        m_blit = [m_cmd blitCommandEncoder];
+                }
                 return m_blit;
             }
 
@@ -1033,6 +1258,8 @@ namespace rhi
                     rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
                     rp.colorAttachments[0].storeAction = MTLStoreActionStore;
                 }
+                if (m_timer.on)
+                    timeRender(rp, "clear new " + labelOf(t.texture, "texture"));
                 [[m_cmd renderCommandEncoderWithDescriptor:rp] endEncoding];
             }
 
@@ -1064,6 +1291,16 @@ namespace rhi
                     rp.depthAttachment.loadAction = first && m_pass.clearDepth ? MTLLoadActionClear : MTLLoadActionLoad;
                     rp.depthAttachment.clearDepth = m_pass.clearDepthValue;
                     rp.depthAttachment.storeAction = MTLStoreActionStore;
+                }
+                if (m_timer.on)
+                {
+                    std::string name = m_pass.name ? m_pass.name : m_markers.empty() ? "pass" : m_markers.back();
+                    name += m_passColor ? " -> " + labelOf(m_passColor, m_drawable ? "drawable" : "colour") : " -> (depth only)";
+                    if (m_passDepth)
+                        name += " + depth";
+                    if (!first)
+                        name += " (resumed)";
+                    timeRender(rp, std::move(name));
                 }
                 m_enc = [m_cmd renderCommandEncoderWithDescriptor:rp];
                 if (m_pass.name)
@@ -1223,9 +1460,12 @@ namespace rhi
                 if (s < 5.0)
                     return;
                 const double f = std::max<double>(1.0, static_cast<double>(m_statFrames));
-                std::fprintf(stderr, "[rhi] metal per frame: %.0f draws, %.1f passes, %.1f suspended, %.1f KB uploaded; %.0f ms "
-                                     "compiling shaders so far\n",
-                             m_statDraws / f, m_statPasses / f, m_statSuspends / f, m_uploadBytes / f / 1024.0, m_compileMs);
+                const uint64_t gpuNs = m_gpuNs.load(std::memory_order_relaxed);
+                std::fprintf(stderr, "[rhi] metal per frame: %.0f draws, %.1f passes, %.1f suspended, %.1f KB uploaded, GPU %.2f ms; "
+                                     "%.0f ms compiling shaders so far\n",
+                             m_statDraws / f, m_statPasses / f, m_statSuspends / f, m_uploadBytes / f / 1024.0,
+                             static_cast<double>(gpuNs - m_statGpuNs) / 1e6 / f, m_compileMs);
+                m_statGpuNs = gpuNs;
                 m_statFrames = m_statDraws = m_statSuspends = m_statPasses = 0;
                 m_uploadBytes = 0;
                 m_statStart = now;
@@ -1287,6 +1527,12 @@ namespace rhi
             uint64_t m_statFrames = 0, m_statDraws = 0, m_statSuspends = 0, m_statPasses = 0;
             double m_uploadBytes = 0.0;
             std::chrono::steady_clock::time_point m_statStart{};
+            std::atomic<uint64_t> m_gpuNs{0}; // the command buffers' GPU time (completion handlers add to it)
+            uint64_t m_statGpuNs = 0;
+
+            // PS2X_RHI_GPU_TIME
+            Timer m_timer;
+            std::vector<std::string> m_markers;
         };
 
         MtlTexture::~MtlTexture() = default; // bound textures are held by id: nothing dangles

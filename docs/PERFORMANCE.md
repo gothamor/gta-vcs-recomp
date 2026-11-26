@@ -949,6 +949,44 @@ Retina window. `tools/bench.py` from a new game (this Mac has no Fort Baxter car
   the frame.
 - Not measured yet: `cruise.py` (needs a card), uncapped frame rates, a quick (no LTO) build.
 
+### 33. macOS: the GPU at 3x, and the shaders' divisions (2026-11-26)
+
+A player's M1 Pro (16-core GPU, 16 GB) got hot at 3x / 60 fps, where other games didn't. `tools/bench.py` (new game,
+4:3, hidden) with the process's CPU and the GPU's utilisation (`ioreg`) sampled: CPU ~44% of one core at every scale,
+GPU busy 37% at 1x, 62% at 2x, 85% at 3x (16x anisotropic filtering costs nothing). The GPU, not the CPU.
+
+**Measuring it on Metal.** `PS2X_RHI_STATS` now adds the frame's GPU time (its command buffers' GPUStartTime ..
+GPUEndTime) and `PS2X_RHI_GPU_TIME=1` the time per encoder, by target, from stage-boundary counter samples - Apple GPUs
+have no per-draw timestamps. A tile-based GPU runs the frame's vertex stages ahead, side by side, and the fragment
+stages one after another, so a row's cost is its fragment stage. `PS2X_GPU_TIMING=1` splits a pass per draw, which on
+Metal loads and stores the frame ~1000 times for the world alone (a frame at ~700 ms: the rows rank, the totals don't);
+`=gs` splits only the GS draws. Per-encoder times can include waits for earlier work (a clear of 1536x1536 showed 1-2 ms),
+so costs were taken from A/B runs of the whole frame's GPU time (bench, 3x, 60 fps; ~+-1 ms run to run, and the machine
+drifts as it warms: compare runs made back to back).
+
+**Where 13.2 ms a frame goes** (3x, 60 fps; uncapped the game reaches only ~60 fps, GPU-bound at 13-16 ms, so it is
+work, not a low clock): the world (4 passes into the frame with depth) ~2.6 ms; dropping effects for a measurement -
+trails -3.1 ms, bloom -1.3 ms, motion blur -1.0 ms, the three -4.5 ms; the effect buffers' per-frame clears 0, depth
+stores `DontCare` worse. A full-screen pass at 1920x1344 cost ~1 ms: far more than its loads, stores or texel reads.
+
+**The shaders' maths.** The MSL is compiled with `MTLMathModeSafe` (the PS2's numbers: no reassociation, no flushing,
+NaN / infinity kept). Fast maths on the pixel shaders alone: 9.05 ms (vertex shaders alone: no change); relaxed 9.45.
+Safe mode makes every division the correctly rounded one, several times D3D11's and Vulkan's (2.5 ulp there): Metal's
+`fast::divide` for the pixel shader's divisions gave 10.9 ms - the texel reads' (`fetchRtFull`, gather) nothing, the
+output's `/ 255` most of it, the texture coordinates' `stq / q` ~1 ms. Not taken: fast or reciprocal division changes
+pixels (a fog `floor(510 / 255)` can become 1).
+
+**Done: `div255`** (gs_draw.hlsl, Metal only): `v / 255` as `q = v * RN(1/255); fma(fma(-q, 255, v), RN(1/255), q)`,
+for the output colour and alpha and the fog. Checked against the division for every float in [0, 2^20]: on the CPU all
+1,233,125,377 equal; on the M1 Pro's GPU, compiled as the game's shaders are (Safe, Metal 3), equal from 2^-100 up
+(below ~2e-31 the GPU flushes the correction's denormal; the shader's values are 0 or at least 1/128, the output up to
+510, the fog's numerator up to 65,025). So the same pixels. **13.3 -> 11.3-11.5 ms a frame at 3x** (A/B/A, back to
+back: 11.27 / 15.08 baseline / 11.51 - the baseline had drifted up with the machine's heat; ~25%). D3D11 / Vulkan keep
+the plain division (D3D11's `mad` needn't be fused).
+
+Left: the texture coordinates' division (~1 ms; a variable divisor, so no exact shortcut as cheap), and the effects'
+full-screen passes themselves (trails ~3 ms: its 103 warped strips plus the tint).
+
 ## Next
 
 - **The heavy views (~120 fps)**: the game thread's chain submission there (1.4-1.6 ms: the VIF1 chain copy, the walker
