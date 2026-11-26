@@ -195,7 +195,7 @@ kicks would, so the picture is the VU's and the cost is close to GPU clipping. G
 The user's choices on the roadmap's open questions:
 - Start with milestone 1 (automation / coverage rig), then milestone 2 (correctness sweep), and
   carry the roadmap out autonomously, committing at milestones and major changes.
-- Movies: FFmpeg as the decoder.
+- Movies: FFmpeg as the decoder. (Replaced by our own MPEG-2 decoder on 2026-11-26, below.)
 - 60 fps: a settings-menu option, off by default (30 fps stays the authentic default). (Superseded 2026-10-30: 60 fps
   with frame-rate independent timing is the default.)
 - IOP retirement (milestone 6): do it.
@@ -1507,3 +1507,30 @@ takes a zip given by hand). Choices:
 - **`python -B` for the bundle's own scripts**: the first start's `update.py install` runs from inside the app and
   wrote `__pycache__` there, breaking the app's signature (found when the image's check refused the app). The launcher
   passes `-B` when the script is the release's own copy (macOS bundle or AppImage).
+
+## 2026-11-26 - No FFmpeg: the movies have their own MPEG-2 decoder (the user's request, plan approved; details Claude's)
+
+FFmpeg (2026-10-22, "Movies: FFmpeg as the decoder") did one job: the MPEG-2 video of STINGS.PSS and INTRO.PSS. The
+demuxer, the sound, the clock and the skip were ours already. For that one job every platform paid: Windows a 35 MB
+prebuilt download (and in a release's `deps/`) plus 28 DLLs (51 MB) beside vcs.exe; Linux five `-dev` packages for
+players to install and Fedora's FFmpeg / RPMFusion conflict (issue 63); macOS a build of FFmpeg from source in every
+build tree. `src/video/mpeg2.cpp` replaces it.
+
+- **Written from ISO/IEC 13818-2, not ported**: no FFmpeg or libmpeg2 code. The VLC tables are the standard's, typed as
+  its bit strings and expanded at start (a code that overlaps another aborts: a typo can't go unnoticed).
+- **Main Profile frame pictures, 4:2:0**, with field / dual-prime motion and field DCT though the disc uses neither
+  (`tools/pss_survey.py`: frame prediction only, game-internals.md 3) - they are small and keep a different encode
+  from breaking it. **Field pictures and MPEG-1 are refused** with a message instead: real work, never on the disc.
+- **IDCT from the definition** (separable, 13-bit cosines, 64-bit columns), not FFmpeg's simple IDCT: pictures are
+  not bit-identical to FFmpeg's (nor were FFmpeg's to the PS2's IPU), within 6 of 255 and visually the same.
+- **Colour**: BT.601 studio range with each chroma sample on its 2x2 luma samples - what swscale with `SWS_POINT`
+  gave, and the IPU's conversion.
+- **Checked before FFmpeg went** (Rule 1): `VCS_MOVIE_VERIFY` compared every picture of both decoders in the game
+  (commit "Movies: our own MPEG-2 decoder, checked against FFmpeg"); the numbers are in PROGRESS.md milestone 5. No
+  switch back: FFmpeg was a library, not the emulated path (the game's own libmpeg / IPU player, still bypassed as
+  before). That commit is the reference if a doubt comes up; `tools/movie_check.py` compares with pictures FFmpeg
+  dumped.
+- **The runtime's own sceMpeg HLE** (`Stubs/MPEG.cpp`, upstream) used FFmpeg too; VCS never reaches it (CMoviePlayer
+  is replaced first). `PS2X_ENABLE_FFMPEG` is off, so it falls back to upstream's stub - not ported to our decoder.
+- Cost: ~1,500 lines to keep (decoder, tables, colour); decoding ~2 ms a picture against FFmpeg's ~0.8 on the dev PC,
+  of 33 ms. Updating rebuilds everything once (FFmpeg's include folders left every compile command).

@@ -26,7 +26,7 @@ Updated 2026-10-26 (the table below the "When the roadmap was written" heading i
 | Sound output / mixer | The SPU2 core (C++) behind the native libsd, mixed to SDL3 - the chosen "native mixer" (DECISIONS.md 2026-10-24) | yes |
 | IOP | Off: no IRX module loaded or run (`PS2X_IOP=1` brings it back) | retired |
 | Memory card, pad | EE-side HLE (`sceMc*`, pad stubs) | yes |
-| Movies (`INTRO.PSS`, `STINGS.PSS`) | FFmpeg, sound into the same audio output (milestone 5) | yes |
+| Movies (`INTRO.PSS`, `STINGS.PSS`) | Our own MPEG-2 decoder (`src/video/mpeg2.cpp`; FFmpeg until 2026-11-26), sound into the same audio output (milestone 5) | yes |
 | Frame rate | Independent timing, up to 240 fps as an option; authentic 30 fps by default | yes |
 
 ### When the roadmap was written (2026-10-22)
@@ -274,7 +274,8 @@ report after the rig's first full world tour (the map of problems) and after eac
 1. Start with the rig + correctness sweep (recommended), or go straight for the remaining native
    rendering (milestone 3)?
 2. Movie decoder: FFmpeg (LGPL build, large but proven) or a small MPEG-2-only decoder (e.g.
-   libmpeg2, GPL)? Both fit the GPL-3.0 licence.
+   libmpeg2, GPL)? Both fit the GPL-3.0 licence. *Answered: FFmpeg (2026-10-22); replaced by our own
+   MPEG-2 decoder on 2026-11-26 (DECISIONS.md).*
 3. 60 fps: a menu option that stays off by default (authentic), as the goals say - confirm.
 4. IOP retirement: worth the effort for "fully native" even though it costs ~0.6 ms today, or keep the
    emulated IOP as a permanent, isolated audio / streaming device?

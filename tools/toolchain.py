@@ -1258,8 +1258,8 @@ DEPS_DIR = os.path.join(ROOT, "deps")
 
 def deps_defines(deps_dir=DEPS_DIR):
     """A release carries the sources CMake would download (deps/, made by tools/deps.py): each folder there replaces
-    its FetchContent download (FETCHCONTENT_SOURCE_DIR_<NAME>), the FFmpeg archive its URL - no git, no internet.
-    Nothing when deps/ is absent: a clone downloads as before."""
+    its FetchContent download (FETCHCONTENT_SOURCE_DIR_<NAME>) - no git, no internet. Nothing when deps/ is absent: a
+    clone downloads as before."""
     if not os.path.isdir(deps_dir):
         return []
     defines = []
@@ -1267,10 +1267,6 @@ def deps_defines(deps_dir=DEPS_DIR):
         path = os.path.join(deps_dir, name)
         if os.path.isdir(path):
             defines.append("-DFETCHCONTENT_SOURCE_DIR_%s=%s" % (name.upper(), path.replace(os.sep, "/")))
-        elif name.startswith("ffmpeg-") and name.endswith(".zip"):
-            defines.append("-DFFMPEG_PREBUILT_URL=" + path.replace(os.sep, "/"))
-        elif name.startswith("ffmpeg-") and name.endswith(".tar.xz"):  # macOS: the source FFmpeg is built from
-            defines.append("-DFFMPEG_SOURCE_URL=" + path.replace(os.sep, "/"))
     if os.path.isfile(os.path.join(deps_dir, "manifest.json")):  # complete (tools/deps.py fetch): never download
         defines.append("-DFETCHCONTENT_FULLY_DISCONNECTED=ON")
     return defines
@@ -1365,7 +1361,7 @@ def _gcc_with_libstdcxx(clangxx):
 
 # ---- macOS: the Command Line Tools ------------------------------------------------------------------------------
 # Apple's clang, linker (ld64), make, git and python3 come with the Command Line Tools (or Xcode); nothing else is
-# installed: CMake / Ninja are downloaded, FFmpeg and the shader tools are built from pinned sources (DECISIONS.md
+# installed: CMake / Ninja are downloaded, the shader tools are built from pinned sources (DECISIONS.md
 # 2026-11-12). Apple clang 17 is LLVM 19 (preserve_none on arm64); CMakeLists.txt checks the attribute itself.
 MIN_APPLE_CLANG = 17
 CLT_INSTALL = ["xcode-select", "--install"]
@@ -1432,8 +1428,7 @@ LINUX_DEPS = [  # CMake and Ninja: build_tools (any new enough, else downloaded)
     ("git", "git", ("git", "git", "git")),
     ("pkg-config", "pkg-config", ("pkg-config", "pkgconf-pkg-config", "pkgconf")),
     ("glslangValidator", "glslangValidator", ("glslang-tools", "glslang", "glslang")),
-    ("FFmpeg (movies)", "pc:libavcodec libavformat libavutil libswscale libswresample",
-     ("libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev", "ffmpeg-free-devel", "ffmpeg")),
+    # (no FFmpeg since 2026-11-26: the movies have their own decoder, src/video/mpeg2.cpp)
     # SDL3 is built from source (src/platform): without these it builds, silently, without a video / audio / input backend
     ("X11 (SDL3)", "pc:x11 xext xrandr xcursor xi xfixes xscrnsaver",
      ("libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev",
@@ -1475,20 +1470,6 @@ LAUNCHER_LINUX_DEPS = [
 PACKAGE_MANAGERS = ("apt", "dnf", "pacman")  # by _linux_family()
 
 
-def _fedora_ffmpeg_devel(quiet=False):
-    """Fedora's FFmpeg headers for the FFmpeg that is installed: RPMFusion's ffmpeg-libs conflicts with Fedora's
-    libavcodec-free that ffmpeg-free-devel pulls in, and dnf then drops the whole install (issue 63). RPMFusion's own
-    ffmpeg-devel then; Fedora has no package called ffmpeg-libs (its libraries are libavcodec-free...), and
-    RPMFusion's libavcodec-freeworld sits beside ffmpeg-free, so the default stays right for both."""
-    try:
-        rpmfusion = subprocess.run(["rpm", "-q", "--quiet", "ffmpeg-libs"], timeout=60).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        rpmfusion = False
-    if rpmfusion and not quiet:
-        print("[deps] RPMFusion's FFmpeg is installed: its headers are ffmpeg-devel (not Fedora's ffmpeg-free-devel)")
-    return "ffmpeg-devel" if rpmfusion else "ffmpeg-free-devel"
-
-
 def linux_missing(env, deps=None, quiet=False):
     """The missing Linux build dependencies: a list of (label, packages for this distro). deps: LINUX_DEPS (the game,
     the default) or LAUNCHER_LINUX_DEPS. CMake / Ninja / LLVM are checked with the game's list only."""
@@ -1503,10 +1484,7 @@ def linux_missing(env, deps=None, quiet=False):
         else:
             ok = bool(_which(check, env))
         if not ok:
-            names = packages[family]
-            if names == "ffmpeg-free-devel":
-                names = _fedora_ffmpeg_devel(quiet)
-            missing.append((label, names))
+            missing.append((label, packages[family]))
     if deps is not None:
         return missing
     tools = build_tools(env, download=False)

@@ -38,7 +38,7 @@ Clang tools for Windows"; its environment is set up automatically).
 CMake 3.21+ and Ninja 1.10+: the first that runs on PATH or wherever installers put them (Visual Studio's, Kitware's,
 winget, scoop, Chocolatey, pip, CLion...), else downloaded once into build/build-tools (toolchain.build_tools);
 VCS_CMAKE / VCS_NINJA=<path> choose them.
-Linux: clang 19+ with lld, glslang and the development packages SDL3 and FFmpeg need (docs/LINUX.md); --check-deps
+Linux: clang 19+ with lld, glslang and the development packages SDL3 needs (docs/LINUX.md); --check-deps
 lists what is missing. The first configure checks them too.
 """
 import argparse

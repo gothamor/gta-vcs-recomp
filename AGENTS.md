@@ -46,6 +46,7 @@ choices).
 | `src/main.cpp` | Launcher: ISO, settings registration, runtime start |
 | `src/game/` | Game-specific code: overrides / hooks (`vcs_overrides.cpp`), native draw HLE (`vcs_hle_world.cpp`), display (`vcs_display.cpp`), the trainer (`vcs_trainer.cpp`), frame timing (`vcs_framerate.cpp`, per-frame mission meters `vcs_script_timing.cpp`, particles `vcs_particle_timing.cpp`, lightning / clouds / shake / other effects `vcs_effects_timing.cpp`), the player's controls (`vcs_input.cpp`; free aim `vcs_aim.cpp`; the pause menu's keys and mouse `vcs_frontend.cpp`), the game's music / effects levels as settings (`vcs_volume.cpp`), button prompts by device (`vcs_prompts.cpp`, its glyphs `vcs_glyph_art.cpp`), traffic / pedestrian density and draw distance (`vcs_world_detail.cpp`), the NPC drive-by's fire rate (`vcs_driveby.cpp`), mission scripts stuck above 30 fps (`vcs_script_fixes.cpp`) |
 | `src/render/`, `src/rhi/`, `src/platform/` | Presenter + shaders (HLSL; DXBC by fxc, SPIR-V by `tools/hlsl_spirv.py`, MSL by `tools/hlsl_msl.py`), the RHI (backends `d3d11/`, `vulkan/`, `metal/`, `null/`; only they see a graphics API), SDL3 platform layer |
+| `src/video/` | The movies' MPEG-2 decoder (`mpeg2.cpp`, ISO/IEC 13818-2; no FFmpeg since 2026-11-26) and YCbCr -> RGBA (`yuv.cpp`) |
 | `src/sound/` | Sony's libsd on the host (the native sound driver in `src/game/vcs_sound.cpp` drives the SPU2 through it) |
 | `src/settings/`, `src/ui/` | Settings registry + vcs.ini, the in-game settings menu (F2), the trainer menu (F5) |
 | `src/debug/` | Crash handler, watchdog, sampling profiler, self-test, memory watch, the F3 game-state panel (`game_info.cpp`, also `gamectl.py gameinfo`) |
@@ -116,6 +117,9 @@ python tools/menu_check.py [OUT]                              # the pause menu: 
                                                               # map drag), the gamepad as before
 python tools/prompts_check.py [OUT]                           # button prompts: each glyph set in help text and the menu, the
                                                               # device switch, Original unchanged
+python tools/movie_check.py [OUT]                             # the intro movies: every picture shown, in time with the
+                                                              # sound, matching the pictures FFmpeg decoded (baseline)
+python tools/pss_survey.py [ISO]                              # the MPEG-2 features the movies use (analysis only)
 python tools/irxdis.py --decompile X.IRX OUT.c                # an IOP module as C (headless Ghidra; analysis only)
 python tools/eedecomp.py 0x2f7d58 [...] [--out FILE]          # game functions as C (the analysed EE project; analysis only)
 ```

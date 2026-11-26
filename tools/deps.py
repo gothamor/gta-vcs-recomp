@@ -3,14 +3,13 @@
 
     python tools/deps.py list [--platform windows|linux|macos]   what that build fetches (read from the CMake files)
     python tools/deps.py fetch [DIR] [--platform P]        each one into DIR (default deps/): a shallow clone at its
-                                         pin without .git, on Windows the FFmpeg archive; DIR/manifest.json records the
-                                         pins and the platform
+                                         pin without .git; DIR/manifest.json records the pins and the platform
     python tools/deps.py check [DIR] [--platform P]        is DIR complete and at this source's pins? (exit 0 / 1)
-The platform is this machine's unless given: Linux adds the Vulkan backend's (headers, volk, VMA) and takes FFmpeg from
-the system instead of the prebuilt Windows archive; macOS adds sse2neon and FFmpeg's source release (built by CMake).
+The platform is this machine's unless given: Linux adds the Vulkan backend's (headers, volk, VMA); macOS adds sse2neon
+and the Metal shaders' compilers. (FFmpeg was one until 2026-11-26: the movies have their own decoder now.)
 
-With deps/ in the repository root, toolchain.configure points CMake at it (FETCHCONTENT_SOURCE_DIR_<NAME>, the FFmpeg
-URL, FETCHCONTENT_FULLY_DISCONNECTED): nothing is downloaded. tools/release.py runs `fetch` into the release.
+With deps/ in the repository root, toolchain.configure points CMake at it (FETCHCONTENT_SOURCE_DIR_<NAME>,
+FETCHCONTENT_FULLY_DISCONNECTED): nothing is downloaded. tools/release.py runs `fetch` into the release.
 The pins stay in the CMake files; this reads them, so there is one list.
 """
 import argparse
@@ -38,7 +37,7 @@ CMAKE_FILES = [
 # ... and on Linux the Vulkan backend's too (src/rhi: Vulkan-Headers, volk, VMA)
 CMAKE_FILES_LINUX = CMAKE_FILES + ["src/rhi/CMakeLists.txt"]
 # ... and on macOS sse2neon (Apple Silicon: the SSE code through NEON) and the Metal shaders' compilers (glslang,
-# SPIRV-Cross: tools/shader_tools.py); FFmpeg's source release, built by CMake
+# SPIRV-Cross: tools/shader_tools.py)
 CMAKE_FILES_MACOS = CMAKE_FILES + ["third_party/PS2Recomp/CMakeLists.txt", "tools/shader_tools/CMakeLists.txt"]
 PLATFORMS = ("windows", "linux", "macos")
 
@@ -49,7 +48,8 @@ def this_platform():
 
 def cmake_files(platform):
     return {"linux": CMAKE_FILES_LINUX, "macos": CMAKE_FILES_MACOS}.get(platform, CMAKE_FILES)
-FFMPEG_CMAKE = "third_party/PS2Recomp/ps2xRuntime/CMakeLists.txt"
+
+
 # a release archive instead of the repository where the repository carries far more than the build needs
 ARCHIVES = {
     "nlohmann_json": "https://github.com/nlohmann/json/releases/download/{tag}/json.tar.xz",  # 0.2 MB, not 188
@@ -57,8 +57,7 @@ ARCHIVES = {
 
 
 def declared(platform=None):
-    """[{name, repo, tag}] of every FetchContent_Declare the platform's build uses, plus the FFmpeg archive's
-    {name, url} (None on Linux: the system's FFmpeg)."""
+    """[{name, repo, tag}] of every FetchContent_Declare the platform's build uses."""
     platform = platform or this_platform()
     deps = {}
     for rel in cmake_files(platform):
@@ -76,16 +75,7 @@ def declared(platform=None):
                 tc.fail("%s is pinned twice, differently: %s %s and %s %s (%s)" % (name, other["repo"], other["tag"],
                                                                                 dep["repo"], dep["tag"], rel))
             deps[name.lower()] = dep
-    with open(os.path.join(tc.ROOT, FFMPEG_CMAKE), encoding="utf-8") as f:
-        text = f.read()
-    tag = re.search(r'set\(FFMPEG_PREBUILT_TAG "([^"]+)"\)', text).group(1)
-    url = re.search(r'"(https://[^"]*ffmpeg[^"]*\.zip)"', text).group(1).replace("${FFMPEG_PREBUILT_TAG}", tag)
-    ffmpeg = {"name": "ffmpeg", "url": url, "file": url.rsplit("/", 1)[1]} if platform == "windows" else None
-    if platform == "macos":
-        version = re.search(r'set\(FFMPEG_SOURCE_VERSION "([^"]+)"\)', text).group(1)
-        url = "https://ffmpeg.org/releases/ffmpeg-%s.tar.xz" % version
-        ffmpeg = {"name": "ffmpeg", "url": url, "file": url.rsplit("/", 1)[1]}
-    return sorted(deps.values(), key=lambda d: d["name"].lower()), ffmpeg
+    return sorted(deps.values(), key=lambda d: d["name"].lower())
 
 
 def _remove_tree(path):
@@ -115,13 +105,13 @@ def download(url, out):
 
 def fetch(out_dir, platform=None):
     platform = platform or this_platform()
-    deps, ffmpeg = declared(platform)
+    deps = declared(platform)
     os.makedirs(out_dir, exist_ok=True)
-    manifest = {"platform": platform, "deps": deps, "ffmpeg": ffmpeg}
+    manifest = {"platform": platform, "deps": deps}
     for i, dep in enumerate(deps):
         target = os.path.join(out_dir, dep["name"])
         tc.stage("dep_" + dep["name"], "Fetching " + dep["name"])
-        tc.event(progress=i, total=len(deps) + 1, eta=None, note=dep["name"])
+        tc.event(progress=i, total=len(deps), eta=None, note=dep["name"])
         if os.path.isdir(target):
             _remove_tree(target)
         archive = ARCHIVES.get(dep["name"].lower())
@@ -147,20 +137,20 @@ def fetch(out_dir, platform=None):
         if subprocess.run(cmd).returncode != 0:
             tc.fail("git clone of %s %s failed" % (dep["repo"], dep["tag"]), "download_failed")
         _remove_tree(os.path.join(target, ".git"))
-    if ffmpeg:
-        tc.stage("dep_ffmpeg", "Fetching FFmpeg")
-        print("[deps] ffmpeg (%s)" % ffmpeg["url"])
-        download(ffmpeg["url"], os.path.join(out_dir, ffmpeg["file"]))
+    # a folder fetched before 2026-11-26 has the FFmpeg archive the build no longer uses
+    for name in os.listdir(out_dir):
+        if name.startswith("ffmpeg-") and name.endswith((".zip", ".tar.xz")):
+            os.remove(os.path.join(out_dir, name))
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=1)
-    print("[deps] %d libraries%s in %s (%s)" % (len(deps), " and FFmpeg" if ffmpeg else "", out_dir, platform))
+    print("[deps] %d libraries in %s (%s)" % (len(deps), out_dir, platform))
     tc.event(result="ok", dir=os.path.abspath(out_dir))
 
 
 def check(out_dir, platform=None):
     """Problems with out_dir against this source's pins ([] = complete)."""
     platform = platform or this_platform()
-    deps, ffmpeg = declared(platform)
+    deps = declared(platform)
     try:
         with open(os.path.join(out_dir, "manifest.json"), encoding="utf-8") as f:
             manifest = json.load(f)
@@ -171,9 +161,7 @@ def check(out_dir, platform=None):
     have = {(d["name"], d["repo"], d["tag"]) for d in manifest.get("deps", [])}
     problems = ["%s %s missing or at another pin" % (d["name"], d["tag"]) for d in deps
                 if (d["name"], d["repo"], d["tag"]) not in have or not os.path.isdir(os.path.join(out_dir, d["name"]))]
-    if ffmpeg and not os.path.isfile(os.path.join(out_dir, ffmpeg["file"])):
-        problems.append(ffmpeg["file"] + " missing")
-    return problems
+    return problems  # (an older manifest's "ffmpeg" entry is ignored: nothing uses it)
 
 
 def main():
@@ -187,10 +175,8 @@ def main():
         p.add_argument("--platform", choices=PLATFORMS)
     a = ap.parse_args()
     if a.cmd == "list":
-        deps, ffmpeg = declared(a.platform)
-        for d in deps:
+        for d in declared(a.platform):
             print("%-22s %-28s %s" % (d["name"], d["tag"], d["repo"]))
-        print("%-22s %-28s %s" % ("ffmpeg", "", ffmpeg["url"] if ffmpeg else "(the system's)"))
     elif a.cmd == "fetch":
         fetch(a.dir, a.platform)
     else:

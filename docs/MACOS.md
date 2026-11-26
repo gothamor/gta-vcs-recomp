@@ -28,7 +28,6 @@ part of that check:
 |---|---|
 | CMake, Ninja | any on PATH (Homebrew's, CMake.app), else Kitware's universal tarball / Ninja's mac zip into `build/build-tools` |
 | glslang, SPIRV-Cross (the Metal shaders) | built once from `tools/shader_tools/CMakeLists.txt` into `build/build-tools/shader-tools` (`tools/shader_tools.py`, ~1 min). `VCS_GLSLANG` / `VCS_SPIRV_CROSS` take other copies |
-| FFmpeg (movies) | FFmpeg 7.1.2's source release with only the MPEG-2 decoder, its parser and swscale, static and LGPL (`ps2xRuntime/CMakeLists.txt`, ~1 min once per build tree). `-DVCS_FFMPEG=system` takes pkg-config's (Homebrew's) |
 | SDL3, Dear ImGui, zlib, sse2neon, ... | FetchContent, as on the other platforms |
 
 - **The compiler is Apple's clang only** (`toolchain.macos_compiler_defines`: `xcrun -f clang`). Homebrew's LLVM is
@@ -89,14 +88,13 @@ title bar. Its Build tools step installs the Command Line Tools (`build.py --ins
 | Rounding mode | MXCSR | MXCSR | FPCR | arm64 |
 | Write watch | `GetWriteWatch` | userfaultfd, opt-in | off | No gain measured on Linux; 16 KB pages here |
 | Card creation time | `GetFileAttributesExW` | `statx` | `st_birthtimespec` | The card's directory order |
-| FFmpeg | prebuilt (LGPL) | the distribution's | built from source (movie decoder only) | Nothing to install beyond Apple's tools |
 
 ## Work list
 
 | Step | Status |
 |---|---|
 | Toolchain: Apple clang + ld64, ARM64 CPU level, CMake / Ninja downloads, `--check-deps` / `--install-deps` | done (2026-11-12) |
-| FFmpeg and the shader tools from pinned sources | done |
+| The shader tools from pinned sources (FFmpeg too, until the movies got their own decoder on 2026-11-26) | done |
 | Recompile on macOS; the game builds (`--quick`) | done: 10,386 generated files, unchanged; only our own code needed the SSE include |
 | Runtime: FPCR, thread stacks, exe / data folders, card times, crash handler | done |
 | Bit-exact checks: `PS2X_VU0_VERIFY=1`, `PS2X_HLE_VERIFY=1` (150 s, flyover + intro) | done: VU0 0 differences in millions of runs; HLE setup programs, re-draws, C++ clipper, env pass exact; world fast path 11 within 1 / 14 off of 2.56 M - as Windows' llvm-mingw reference |

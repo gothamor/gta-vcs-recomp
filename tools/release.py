@@ -22,8 +22,8 @@ Every file in the zip is dated a day before the commit (zip_time): never in the 
 Writes build/dist/VCS-Recomp-<version>-x86_64.AppImage and its .sha256: one file that runs on any x86-64 desktop with
 glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and later; the launcher must be built on such a system - CI's
 ubuntu-22.04 - or the release refuses it, --allow-new-glibc for a test). Inside (AppDir): usr/bin/VCSLauncher, the
-desktop entry and icon, and usr/share/vcs-recomp/release/ - the same files as the zip but Python and FFmpeg (the
-system's) - which the launcher copies at start to the folder the game is built in (tools/update.py install). Made by
+desktop entry and icon, and usr/share/vcs-recomp/release/ - the same files as the zip but Python (the system's) -
+which the launcher copies at start to the folder the game is built in (tools/update.py install). Made by
 appimagetool with the type 2 runtime (static: no libfuse2 needed), both pinned below by version and SHA-256.
 
     python3 tools/release.py --platform macos [--ref TAG | --worktree] [--launcher APP]
@@ -31,8 +31,8 @@ appimagetool with the type 2 runtime (static: no libfuse2 needed), both pinned b
 Writes build/dist/VCS-Recomp-<version>-macos-arm64.dmg and its .sha256 (docs/MACOS.md): a disk image that opens as
 a Finder window with VCSLauncher.app next to a link to Applications, to drag it there (tools/dmg.py; DECISIONS.md
 2026-11-14). The app is signed ad-hoc (DECISIONS.md 2026-11-12), with the release's files in
-Contents/Resources/release - the source, VERSION, RELEASE.json, deps/ for macOS (FFmpeg's source and the shader
-compilers' included), licences; no Python (the Command Line Tools' is used). The launcher copies them at start to
+Contents/Resources/release - the source, VERSION, RELEASE.json, deps/ for macOS (the shader compilers' included),
+licences; no Python (the Command Line Tools' is used). The launcher copies them at start to
 ~/Library/Application Support/VCSRecomp/install, as the AppImage does. The image is checked once made: mounted, the
 app's signature verified inside it, the link and the window's layout there.
 """
@@ -122,11 +122,12 @@ def bundle_deps(stage, platform="windows"):
         if os.path.isdir(cached):
             shutil.rmtree(cached, onerror=lambda f, p, _: (os.chmod(p, 0o666), f(p)))
         deps.fetch(cached, platform)
-    shutil.copytree(cached, os.path.join(stage, "deps"))
+    # a cache fetched before 2026-11-26 still holds FFmpeg's archive, which no build uses now
+    shutil.copytree(cached, os.path.join(stage, "deps"), ignore=shutil.ignore_patterns("ffmpeg-*.zip", "ffmpeg-*.tar.xz"))
 
 
 def licenses(stage):
-    """THIRD_PARTY_LICENSES.txt from the bundled libraries' own licence files (and Python's, FFmpeg's)."""
+    """THIRD_PARTY_LICENSES.txt from the bundled libraries' own licence files (and Python's)."""
     parts = []
     for base in sorted(os.listdir(os.path.join(stage, "deps"))):
         folder = os.path.join(stage, "deps", base)
@@ -136,13 +137,7 @@ def licenses(stage):
             if re.match(r"(?i)(license|licence|copying)(\.(txt|md|rst))?$", f):
                 with open(os.path.join(folder, f), encoding="utf-8", errors="replace") as fh:
                     parts.append("=" * 78 + "\n%s (deps/%s/%s)\n" % (base, base, f) + "=" * 78 + "\n" + fh.read())
-    for z in (f for f in os.listdir(os.path.join(stage, "deps")) if f.endswith(".zip")):
-        with zipfile.ZipFile(os.path.join(stage, "deps", z)) as zf:
-            for n in zf.namelist():
-                if re.search(r"(?i)(^|/)(license|copying)[^/]*$", n) and not n.endswith("/"):
-                    parts.append("=" * 78 + "\nFFmpeg (deps/%s: %s)\n" % (z, n) + "=" * 78 + "\n"
-                                 + zf.read(n).decode("utf-8", "replace"))
-    py = os.path.join(stage, "python", "LICENSE.txt")
+    py =os.path.join(stage, "python", "LICENSE.txt")
     if os.path.isfile(py):
         with open(py, encoding="utf-8", errors="replace") as fh:
             parts.append("=" * 78 + "\nPython (python/LICENSE.txt)\n" + "=" * 78 + "\n" + fh.read())
@@ -338,7 +333,7 @@ def release_linux(a, ref, version):
     copy_source(payload, ref, a.worktree)
     with open(os.path.join(payload, "VERSION"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
-    print("[release] libraries (deps/, Linux: with the Vulkan backend's, FFmpeg from the system)")
+    print("[release] libraries (deps/, Linux: with the Vulkan backend's)")
     bundle_deps(payload, "linux")
     licenses(payload)
     with open(os.path.join(payload, "THIRD_PARTY_LICENSES.txt"), "a", encoding="utf-8") as f:
@@ -416,7 +411,7 @@ def release_macos(a, ref, version):
     copy_source(payload, ref, a.worktree)
     with open(os.path.join(payload, "VERSION"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
-    print("[release] libraries (deps/, macOS: with sse2neon, the shader compilers and FFmpeg's source)")
+    print("[release] libraries (deps/, macOS: with sse2neon and the shader compilers)")
     bundle_deps(payload, "macos")
     licenses(payload)
     files = sorted(os.path.relpath(os.path.join(d, f), payload).replace(os.sep, "/")

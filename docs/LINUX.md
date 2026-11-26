@@ -21,17 +21,13 @@ Needed (the `--check-deps` list, Debian / Ubuntu names):
 | Compiler: clang 19+, lld, llvm (`llvm-profdata`, `llvm-symbolizer`) | `clang-20 lld-20 llvm-20` (Ubuntu 24.04 / Mint 22; newer from apt.llvm.org) |
 | Build tools | `pkg-config git`; `cmake ninja-build` optional: without CMake 3.21+ / Ninja 1.10+ (Debian 11's 3.18, say) the build downloads Kitware's / Ninja's own x86-64 or aarch64 builds into `build/build-tools` (`toolchain.build_tools`) |
 | Vulkan shaders (HLSL -> SPIR-V) | `glslang-tools` |
-| Movies | `libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev` |
 | SDL3, built from source: window (X11, Wayland), audio, gamepads | `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev libpipewire-0.3-dev libpulse-dev libasound2-dev libudev-dev libdbus-1-dev` |
 | Optional: Vulkan validation (`PS2X_RHI_DEBUG=1`) | `vulkan-validationlayers` |
 | The launcher (`build.py --launcher`), on top of the above | `libvulkan-dev libfreetype-dev libfontconfig-dev` (X11, Wayland, xkbcommon, D-Bus: already listed) |
 
-Fedora / Arch get the right package names from `--check-deps`. On Fedora the movie headers follow the FFmpeg that is
-installed: `ffmpeg-free-devel` (Fedora's), or `ffmpeg-devel` when RPMFusion's `ffmpeg-libs` is there - Fedora's
-`libavcodec-free` conflicts with it, and dnf then refused the whole install (issue 63; `toolchain._fedora_ffmpeg_devel`).
-The check looks for the headers (`pkg-config`), so an FFmpeg installed without its `-devel` package still counts as
-missing. A Vulkan 1.3 driver is needed to play (Mesa's RADV /
-ANV, NVIDIA's driver): `vulkaninfo --summary` shows it. The Vulkan headers, volk (the loader) and VMA come with the
+Fedora / Arch get the right package names from `--check-deps`. The FFmpeg packages are no longer needed (2026-11-26:
+the movies have their own decoder, `src/video/mpeg2.cpp`; with them went Fedora's FFmpeg / RPMFusion conflict, issue
+63). A Vulkan 1.3 driver is needed to play (Mesa's RADV / ANV, NVIDIA's driver): `vulkaninfo --summary` shows it. The Vulkan headers, volk (the loader) and VMA come with the
 build (FetchContent), so no Vulkan SDK is needed.
 
 - **The compiler is clang only** (`tools/toolchain.py` takes the newest LLVM 19+ from `/usr/lib/llvm-<N>/bin` or

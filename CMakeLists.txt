@@ -17,6 +17,9 @@ set(PS2X_BUILD_RECOMP ${VCS_BUILD_TOOLS} CACHE BOOL "" FORCE)
 set(PS2X_BUILD_ANALYZER ${VCS_BUILD_TOOLS} CACHE BOOL "" FORCE)
 set(PS2X_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(PS2X_BUILD_STUDIO OFF CACHE BOOL "" FORCE)
+# No FFmpeg (DECISIONS.md 2026-11-26): the movies are decoded by src/video/mpeg2.cpp. The runtime's own sceMpeg HLE,
+# which VCS never reaches (CMoviePlayer::Play is replaced), falls back to its stub without it.
+set(PS2X_ENABLE_FFMPEG OFF CACHE BOOL "" FORCE)
 
 # Linux (docs/LINUX.md) and Windows' llvm-mingw (DECISIONS.md 2026-11-03): clang 19+ only - the same compiler as
 # clang-cl, and PS2_GUEST_CC needs its preserve_none. Linked with lld (ThinLTO).

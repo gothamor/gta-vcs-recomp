@@ -570,6 +570,15 @@ dropped on uploads (lazy render-target patching).
       Start during the logos ignored (as on the PS2), the intro skipped by Start, the game then loads the save.
 - [x] Display > Skip intro movies (`display.skip_intro`, `VCS_SKIP_MOVIES`; off = play them as on the PS2).
       Test tools (run.py, the rig, scenes) default to skipping them.
+- [x] **No FFmpeg (2026-11-26)**: our own MPEG-2 decoder (`src/video/mpeg2.cpp`, ~1,500 lines with the standard's
+      tables; `src/video/yuv.cpp` for the colour) replaces FFmpeg; FFmpeg is out of the build, the release and the
+      package lists (DECISIONS.md). Checked against FFmpeg picture by picture before it went: the same 321 / 2527
+      pictures and types, luma at least 61.5 dB (mean 68-72 dB), largest sample difference 6 - the IDCT's rounding, no
+      drift through a GOP; colour conversion within 3 of swscale (91% of samples equal). ~2 ms a picture on the dev
+      PC (FFmpeg ~0.8), 33 ms allowed. Played in the game: logos 321 / 321 and intro 2527 / 2527 pictures shown, none
+      dropped, the pictures within a frame of the sound. `tools/movie_check.py` keeps it so (baseline: pictures
+      dumped by FFmpeg, `build/regress/baseline/movies`). Found on the way: the intro is exactly 30 fps, the logos
+      29.97 (game-internals.md 3).
 ## Milestone 6 - retire the IOP (started 2026-10-24)
 - [x] Step 1, streaming: CDSTREAM's stream server (RPC 0x65686577) replaced on the EE side by host-thread reads from
       the disc image (`src/game/vcs_stream.cpp`, `VCS_NATIVE_STREAM=0` for the IOP's). Loading as fast as before
@@ -623,7 +632,7 @@ dropped on uploads (lazy render-target patching).
       missions (JER_A3, PHI_A1, MAR_A1, LOU_A1, LAN_B1, BRY_B1) run without problems with the IOP off.
 - [x] **Audio audit (2026-10-26)**: every sound path is native in the normal run. All 95 missions of the smoke test log
       the native sound driver and the emulated IOP off, with no sound / stream / libsd warning (libsd's one unported
-      case, `VoiceTrans` modes other than 0, never occurs). Movie sound goes through FFmpeg into the same output.
+      case, `VoiceTrans` modes other than 0, never occurs). Movie sound (PCM, demuxed by us) goes into the same output.
       `tools/soundcheck.py` again against the emulated IOP: MAR_A1's opening cutscene 99.89% of 23,875 SPU2 writes
       in the same second, loudness envelopes correlating 0.999, 9 of 10 sounding windows within -40 dB (most of them
       identical); an AI drive with radio station changes 99.42% of 34,658 writes, envelopes 0.949, each 5 s window
@@ -1122,6 +1131,7 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `VCS_SKIP_MOVIES=0\|1` | play / skip the intro movies (Display > Skip intro movies); test tools default to 1 |
 | `PS2X_MC_BACKUP=0` | no automatic card backup (`<data>/backups/auto-*.zip`) before the game deletes or overwrites a card file |
 | `VCS_MOVIE_LOG=1` | movie playback: sound pushed / queued / played vs the pictures, every second |
+| `VCS_MOVIE_DUMP=<dir>` | before each movie plays, every 30th picture into `<dir>/<MOVIE>_<n>.ppm` (`tools/movie_check.py`) |
 | `VCS_NATIVE_STREAM=0`, `VCS_STREAM_LOG=1` | disc streaming through the IOP (the reference); native read stats every 5 s |
 | `VCS_NATIVE_SOUND=0` | sound through the emulated IOP's CDSTREAM / LIBSD (the reference) |
 | `VCS_SKID_LOG=1` | the skid-sound function's inputs for the player's vehicle (type, drive type, speed, wheel states, surface) |

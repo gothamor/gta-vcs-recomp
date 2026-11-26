@@ -79,7 +79,7 @@ The release zip contains the full source: the steps below work in it too, and in
 **Windows**
 - **Python 3**: [python.org](https://www.python.org/downloads/). During setup, tick *Add python.exe to PATH*.
 - **Git**: [git-scm.com](https://git-scm.com/download/win) (the default options are fine). The first build uses it
-  to download the libraries the game needs (SDL3, FFmpeg, ...), so it also needs an internet connection.
+  to download the libraries the game needs (SDL3, ...), so it also needs an internet connection.
 
 That's all: there's no compiler to install. The first build downloads [llvm-mingw](https://github.com/mstorsjo/llvm-mingw)
 (clang, lld, libc++ and the Windows headers in one package; ~190 MB once, into `build\build-tools`). CMake and Ninja
@@ -96,11 +96,10 @@ With Visual Studio 2022 or newer installed (*Desktop development with C++* and *
   python3 tools/build.py --check-deps
   ```
   prints what is missing and the command that installs it (`apt`, `dnf` or `pacman`): clang 19 or newer with lld,
-  glslang, and the FFmpeg and SDL3 development packages (CMake and Ninja too if you like; without them, or with ones
+  glslang, and the SDL3 development packages (CMake and Ninja too if you like; without them, or with ones
   that are too old, the build downloads its own). On Ubuntu 24.04 / Linux Mint 22 that is
   ```bash
   sudo apt install clang-20 lld-20 llvm-20 cmake ninja-build pkg-config git glslang-tools \
-      libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
       libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
       libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev \
       libpipewire-0.3-dev libpulse-dev libasound2-dev libudev-dev libdbus-1-dev
@@ -160,7 +159,7 @@ go back.
 
 **Runs natively, on Windows and Linux.** The game's own code, recompiled to C++ and running on the PC, not in an
 emulator. The 3D world, characters, vehicles, HUD and menus are drawn by a native renderer - Direct3D 11 on Windows,
-Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded with FFmpeg.
+Vulkan on Linux -, sound and streaming run on the PC, and the movies are decoded by the port's own MPEG-2 decoder.
 
 **Frame rate**
 - Frame-rate independent timing: 60, 100, 120, 144, 165, 240 fps, your display's refresh rate or uncapped (up to

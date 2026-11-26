@@ -29,12 +29,12 @@ step loses players, and the README's *Problems* table is mostly those steps goin
 | `VCSLauncher.exe` | the launcher, one static exe (4 MB) |
 | `VERSION`, `RELEASE.json` | the release's number (the repository's `VERSION`, also built into VCSLauncher.exe's version information; a `v*` tag must match it); its repository, commit and file list (tools/update.py) |
 | `python/` | python.org's embeddable CPython (the version that made the release). Not on PATH: the build hands it to CMake (`-DPython3_EXECUTABLE`, `toolchain.python_defines`), which runs `tools/hlsl_dxbc.py` for the shaders - without it a PC with no Python of its own stopped at "Could NOT find Python3" (0.2.1, issues 67-73) |
-| `deps/` | the libraries CMake would download (tools/deps.py): SDL3, Dear ImGui, zlib, ELFIO, toml11, fmt, libdwarf, rabbitizer, nlohmann/json, and the FFmpeg LGPL build - 136 MB unpacked |
+| `deps/` | the libraries CMake would download (tools/deps.py): SDL3, Dear ImGui, zlib, ELFIO, toml11, fmt, libdwarf, rabbitizer, nlohmann/json (until 2026-11-26 also FFmpeg's LGPL build, a 35 MB archive: the movies have their own decoder now) |
 | `THIRD_PARTY_LICENSES.txt` | their licences, collected from the libraries themselves |
 | the source | the repository at the tag (`git archive`; `--worktree` for tests) |
 
 With `deps/` there, `toolchain.configure` points CMake at it (`FETCHCONTENT_SOURCE_DIR_<NAME>`,
-`-DFFMPEG_PREBUILT_URL=<zip>`, `FETCHCONTENT_FULLY_DISCONNECTED=ON`): the build needs neither git nor internet - except for
+`FETCHCONTENT_FULLY_DISCONNECTED=ON`): the build needs neither git nor internet - except for
 the compiler: the first build downloads llvm-mingw (~190 MB, once; DECISIONS.md 2026-11-03). Nothing is left to
 install (with `VCS_TOOLCHAIN=msvc` Visual Studio's compiler, which the launcher installs).
 
@@ -73,7 +73,7 @@ GitHub release as the Windows zip, and only when both were made (DECISIONS.md 20
 |---|---|
 | `AppRun` -> `usr/bin/VCSLauncher` | the launcher (2.4 MB: the C++ runtime linked in; needs glibc 2.35+) |
 | `gta-vcs-launcher.desktop`, `.png`, `.DirIcon` | the desktop entry and icon (the name is the Wayland app id) |
-| `usr/share/vcs-recomp/release/` | the release's files as in the zip, without Python (the system's `python3`) and FFmpeg (the system's): the source, `VERSION`, `RELEASE.json`, `deps/` (Linux's list: with Vulkan-Headers, volk and VMA; `deps.py --platform linux`), `THIRD_PARTY_LICENSES.txt` (with the AppImage runtime's) - 174 MB, 5,316 files unpacked |
+| `usr/share/vcs-recomp/release/` | the release's files as in the zip, without Python (the system's `python3`): the source, `VERSION`, `RELEASE.json`, `deps/` (Linux's list: with Vulkan-Headers, volk and VMA; `deps.py --platform linux`), `THIRD_PARTY_LICENSES.txt` (with the AppImage runtime's) - 174 MB, 5,316 files unpacked |
 
 - **The install folder.** The image is read-only and the game is built inside its release folder, so at start the
   launcher compares the image's `RELEASE.json` with the one in `$XDG_DATA_HOME/VCSRecomp/install` (`VCS_INSTALL_DIR`)
