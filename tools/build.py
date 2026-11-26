@@ -38,7 +38,7 @@ Clang tools for Windows"; its environment is set up automatically).
 CMake 3.21+ and Ninja 1.10+: the first that runs on PATH or wherever installers put them (Visual Studio's, Kitware's,
 winget, scoop, Chocolatey, pip, CLion...), else downloaded once into build/build-tools (toolchain.build_tools);
 VCS_CMAKE / VCS_NINJA=<path> choose them.
-Linux: clang 19+ with lld, glslang and the development packages SDL3 needs (docs/LINUX.md); --check-deps
+Linux: clang 19+ with lld and the development packages SDL3 needs (docs/LINUX.md); --check-deps
 lists what is missing. The first configure checks them too.
 """
 import argparse
@@ -92,6 +92,12 @@ def main():
     if a.install_deps:
         sys.exit(install_deps(env))
     tc.fix_future_files()  # else Ninja re-runs CMake until it gives up (a release zip from another time zone)
+    import shaders
+    changed = shaders.stale()
+    if changed:  # a shader edited: its committed SPIR-V / MSL made again (the compilers are built the first time)
+        print("[build] shaders changed (%s): compiling their SPIR-V / MSL - commit the compiled/ folders"
+              % ", ".join(changed))
+        shaders.build(changed)
     if a.launcher:  # its own packages, checked in build_launcher - not the game's (CI builds it on a bare system)
         sys.exit(0 if build_launcher(env, a.verbose) else 1)
     if not tc.IS_WINDOWS and not os.path.isfile(os.path.join(tc.BUILD_DIR, "build.ninja")) and not tc.check_linux_deps(env):
@@ -166,9 +172,6 @@ def build_launcher(env, verbose):
         cmd = ["cmake", "-S", os.path.join(tc.ROOT, "launcher"), "-B", LAUNCHER_BUILD, "-G", "Ninja",
                "-DCMAKE_BUILD_TYPE=Release"] + tc.launcher_compiler_defines(env) + tc.deps_defines() + \
               tc.python_defines()
-        if tc.IS_MACOS:  # its Metal shader's compilers (built once from pinned sources)
-            import shader_tools
-            cmd += shader_tools.cmake_defines(env)
         if os.environ.get("VCS_WAYLAND_PROTOCOLS_DIR"):  # a release built on an older distribution (CI)
             cmd.append("-DVCS_WAYLAND_PROTOCOLS_DIR=" + os.environ["VCS_WAYLAND_PROTOCOLS_DIR"])
         log = os.path.join(tc.BUILD, "configure_launcher.log")

@@ -1,6 +1,7 @@
-# The shader compilers the macOS build runs (docs/MACOS.md): glslang (HLSL -> SPIR-V) and SPIRV-Cross (SPIR-V -> MSL),
-# built from pinned sources into build/build-tools/shader-tools by tools/shader_tools.py - nothing to install. The pins
-# follow the Vulkan headers' (src/rhi). tools/deps.py bundles these sources for offline builds (deps/).
+# The shader compilers: glslang (HLSL -> SPIR-V) and SPIRV-Cross (SPIR-V -> MSL), built from pinned sources into
+# build/build-tools/shader-tools by tools/shader_tools.py. Only tools/shaders.py runs them - to make the committed
+# SPIR-V and MSL (src/render/shaders/compiled, launcher/render/compiled) after a shader changes: players' builds never
+# do (DECISIONS.md 2026-11-27). The pins follow the Vulkan headers' (src/rhi).
 cmake_minimum_required(VERSION 3.21)
 project(vcs_shader_tools LANGUAGES C CXX)
 
@@ -35,6 +36,12 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(glslang spirv_cross)
+
+# Windows (llvm-mingw): self-contained programs, without libc++ / libunwind DLLs beside them
+if(MINGW)
+    target_link_options(glslang-standalone PRIVATE -static)
+    target_link_options(spirv-cross PRIVATE -static)
+endif()
 
 # both programs next to each other at the top of the build folder
 set_target_properties(glslang-standalone spirv-cross PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")

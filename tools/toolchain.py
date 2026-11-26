@@ -1192,9 +1192,6 @@ def configure(env, force=False, build_dir=BUILD_DIR, defines=None):
     cmd = ["cmake", "-S", ROOT, "-B", build_dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF"]
     cmd += ["-D%s=%s" % (k, v) for k, v in (defines or {}).items()]
     cmd += compiler_defines(env) + deps_defines() + python_defines()
-    if IS_MACOS:  # the Metal shaders' compilers (built once from pinned sources)
-        import shader_tools
-        cmd += shader_tools.cmake_defines(env)
     if os.path.normcase(os.path.abspath(build_dir)) == os.path.normcase(BUILD_DIR):
         cmd.append("-DVCS_GAME_DIR=" + BUILD.replace(os.sep, "/"))  # vcs.exe at the top of the build folder
     print("[build] configuring " + show(build_dir) + "".join(" %s=%s" % kv for kv in (defines or {}).items()))
@@ -1361,8 +1358,8 @@ def _gcc_with_libstdcxx(clangxx):
 
 # ---- macOS: the Command Line Tools ------------------------------------------------------------------------------
 # Apple's clang, linker (ld64), make, git and python3 come with the Command Line Tools (or Xcode); nothing else is
-# installed: CMake / Ninja are downloaded, the shader tools are built from pinned sources (DECISIONS.md
-# 2026-11-12). Apple clang 17 is LLVM 19 (preserve_none on arm64); CMakeLists.txt checks the attribute itself.
+# installed: CMake / Ninja are downloaded (DECISIONS.md 2026-11-12); the Metal shaders are committed MSL (2026-11-27).
+# Apple clang 17 is LLVM 19 (preserve_none on arm64); CMakeLists.txt checks the attribute itself.
 MIN_APPLE_CLANG = 17
 CLT_INSTALL = ["xcode-select", "--install"]
 
@@ -1427,7 +1424,6 @@ def llvm_profdata(env):
 LINUX_DEPS = [  # CMake and Ninja: build_tools (any new enough, else downloaded) - not needed as packages
     ("git", "git", ("git", "git", "git")),
     ("pkg-config", "pkg-config", ("pkg-config", "pkgconf-pkg-config", "pkgconf")),
-    ("glslangValidator", "glslangValidator", ("glslang-tools", "glslang", "glslang")),
     # (no FFmpeg since 2026-11-26: the movies have their own decoder, src/video/mpeg2.cpp)
     # SDL3 is built from source (src/platform): without these it builds, silently, without a video / audio / input backend
     ("X11 (SDL3)", "pc:x11 xext xrandr xcursor xi xfixes xscrnsaver",

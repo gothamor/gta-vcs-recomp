@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""The shader compilers of the macOS build: glslang (HLSL -> SPIR-V) and SPIRV-Cross (SPIR-V -> MSL), built once from
-the pinned sources in tools/shader_tools/CMakeLists.txt into build/build-tools/shader-tools (about a minute) - nothing
-to install (DECISIONS.md 2026-11-12). tools/toolchain.py calls ensure() before configuring the game or the launcher on
-macOS and passes the two programs to CMake (VCS_GLSLANG, VCS_SPIRV_CROSS).
+"""The shader compilers: glslang (HLSL -> SPIR-V) and SPIRV-Cross (SPIR-V -> MSL), built once from the pinned sources in
+tools/shader_tools/CMakeLists.txt into build/build-tools/shader-tools (a minute or two) - nothing to install. Only
+tools/shaders.py runs them, to make the committed SPIR-V / MSL after a shader changed; a player's build never does
+(DECISIONS.md 2026-11-27; before, every macOS build tree built them and Linux needed glslang-tools).
 
-    python3 tools/shader_tools.py [--rebuild]     build them (or say where they are)
+    python tools/shader_tools.py [--rebuild]     build them (or say where they are)
 
 VCS_GLSLANG / VCS_SPIRV_CROSS take other copies (e.g. Homebrew's glslang and spirv-cross).
 """

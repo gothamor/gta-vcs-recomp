@@ -1,0 +1,6 @@
+# The launcher's shader: file entry profile name header (launcher/CMakeLists.txt and tools/shaders.py read it). D3D11
+# compiles it at build time (tools/hlsl_dxbc.py); the SPIR-V (Vulkan 1.1: older drivers) and MSL (Metal) are in
+# compiled/, made by `python tools/shaders.py build` - edit the shader, run that, commit compiled/ with it.
+target-env vulkan1.1
+d3d11/ui.hlsl vs_main vs_4_0 g_ui_vs ui_vs.h
+d3d11/ui.hlsl ps_main ps_4_0 g_ui_ps ui_ps.h

@@ -1,9 +1,12 @@
 # Renderer pieces on top of the RHI: the window presenter and the HW GS renderer's shaders (docs/NATIVE_RENDERER.md).
-# One HLSL source per shader, compiled at build time into headers for each backend that is built:
-#   D3D11: DXBC from D3DCompile (tools/hlsl_dxbc.py) -> shaders/dxbc/<header>, array <name>
-#   Vulkan: SPIR-V from glslang (tools/hlsl_spirv.py) -> shaders/spirv/<header>, array <name>_spv
-#   Metal: MSL text from glslang + SPIRV-Cross (tools/hlsl_msl.py) -> shaders/msl/<header>, array <name>_msl
+# One HLSL source per shader (the list: shaders/shaders.txt), as headers for each backend that is built:
+#   D3D11: DXBC compiled now by D3DCompile (tools/hlsl_dxbc.py) -> shaders/dxbc/<header>, array <name>
+#   Vulkan: the committed SPIR-V (shaders/compiled/spirv) -> shaders/spirv/<header>, array <name>_spv
+#   Metal: the committed MSL text (shaders/compiled/msl) -> shaders/msl/<header>, array <name>_msl
+# The SPIR-V and MSL are made once by `python tools/shaders.py build` (glslang + SPIRV-Cross) and committed: no shader
+# compiler on a player's machine (DECISIONS.md 2026-11-27).
 set(VCS_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+set(VCS_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 file(MAKE_DIRECTORY "${VCS_SHADER_OUT}/dxbc" "${VCS_SHADER_OUT}/spirv" "${VCS_SHADER_OUT}/msl")
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -11,25 +14,6 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 # byte for byte; DECISIONS.md 2026-11-03) - no Windows SDK. VCS_DXBC_CHECK_FXC=<fxc.exe> compares every shader with
 # that fxc's output and fails on a difference.
 set(VCS_DXBC_CHECK_FXC "" CACHE FILEPATH "fxc.exe to compare tools/hlsl_dxbc.py's DXBC with (empty: no check)")
-if(VCS_RHI_VULKAN)
-    find_program(VCS_GLSLANG NAMES glslangValidator glslang HINTS "$ENV{VULKAN_SDK}/bin")
-    if(NOT VCS_GLSLANG)
-        message(FATAL_ERROR "glslangValidator not found (Vulkan shaders): install glslang-tools (Debian / Ubuntu), "
-                            "glslang (Fedora / Arch) or the Vulkan SDK - docs/LINUX.md")
-    endif()
-endif()
-# macOS: glslang and SPIRV-Cross built from pinned sources by tools/shader_tools.py (toolchain.configure passes them)
-if(VCS_RHI_METAL)
-    if(NOT VCS_GLSLANG)
-        find_program(VCS_GLSLANG NAMES glslang glslangValidator)
-    endif()
-    find_program(VCS_SPIRV_CROSS NAMES spirv-cross)
-    if(NOT VCS_GLSLANG OR NOT VCS_SPIRV_CROSS)
-        message(FATAL_ERROR "glslang / spirv-cross not found (Metal shaders): python3 tools/shader_tools.py builds them "
-                            "(python3 tools/build.py does it for you) - docs/MACOS.md")
-    endif()
-endif()
-
 set(VCS_SHADER_HEADERS "")
 # vcs_shader(<file.hlsl> <entry> <profile> <array name> <output header> [NAME=VALUE defines...])
 function(vcs_shader source entry profile name header)
@@ -53,70 +37,75 @@ function(vcs_shader source entry profile name header)
             VERBATIM)
         list(APPEND VCS_SHADER_HEADERS "${out}")
     endif()
+    string(REGEX REPLACE "\\.h$" "" base "${header}")
     if(VCS_RHI_VULKAN)
         set(out "${VCS_SHADER_OUT}/spirv/${header}")
-        string(SUBSTRING "${profile}" 0 2 kind)
-        if(kind STREQUAL "vs")
-            set(stage vert)
-        else()
-            set(stage frag)
-        endif()
-        set(defines "")
-        foreach(d IN LISTS ARGN)
-            list(APPEND defines -D ${d})
-        endforeach()
+        set(compiled "${VCS_SHADER_DIR}/compiled/spirv/${base}.spv")
         add_custom_command(
             OUTPUT "${out}"
-            COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/hlsl_spirv.py" --glslang "${VCS_GLSLANG}"
-                    --stage ${stage} --entry ${entry} --name ${name}_spv --out "${out}" ${defines} "${src}"
-            DEPENDS "${src}" "${CMAKE_SOURCE_DIR}/tools/hlsl_spirv.py"
-            COMMENT "glslang ${source} ${entry}"
+            COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/shaders.py" header --spirv "${compiled}"
+                    --name ${name}_spv --source "${src}" --out "${out}"
+            DEPENDS "${compiled}" "${CMAKE_SOURCE_DIR}/tools/shaders.py" "${CMAKE_SOURCE_DIR}/tools/hlsl_spirv.py"
+            COMMENT "spirv ${header}"
             VERBATIM)
         list(APPEND VCS_SHADER_HEADERS "${out}")
     endif()
     if(VCS_RHI_METAL)
         set(out "${VCS_SHADER_OUT}/msl/${header}")
-        string(SUBSTRING "${profile}" 0 2 kind)
-        if(kind STREQUAL "vs")
-            set(stage vert)
-        else()
-            set(stage frag)
-        endif()
+        set(compiled "${VCS_SHADER_DIR}/compiled/msl/${base}.metal")
         set(defines "")
         foreach(d IN LISTS ARGN)
             list(APPEND defines -D ${d})
         endforeach()
         add_custom_command(
             OUTPUT "${out}"
-            COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/hlsl_msl.py" --glslang "${VCS_GLSLANG}"
-                    --spirv-cross "${VCS_SPIRV_CROSS}" --stage ${stage} --entry ${entry} --name ${name}_msl --out "${out}"
-                    ${defines} "${src}"
-            DEPENDS "${src}" "${CMAKE_SOURCE_DIR}/tools/hlsl_msl.py" "${CMAKE_SOURCE_DIR}/tools/hlsl_spirv.py"
-            COMMENT "msl ${source} ${entry}"
+            COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/shaders.py" header --msl "${compiled}"
+                    --name ${name}_msl --source "${src}" --entry ${entry} ${defines} --out "${out}"
+            DEPENDS "${compiled}" "${CMAKE_SOURCE_DIR}/tools/shaders.py" "${CMAKE_SOURCE_DIR}/tools/hlsl_msl.py"
+            COMMENT "msl ${header}"
             VERBATIM)
         list(APPEND VCS_SHADER_HEADERS "${out}")
     endif()
     set(VCS_SHADER_HEADERS ${VCS_SHADER_HEADERS} PARENT_SCOPE)
 endfunction()
-vcs_shader(shaders/present.hlsl vs_main vs_5_0 kPresentVS present_vs.h)
-vcs_shader(shaders/present.hlsl ps_main ps_5_0 kPresentPS present_ps.h)
-vcs_shader(shaders/gs_draw.hlsl vs_main vs_5_0 kGsDrawVS gs_draw_vs.h)
-vcs_shader(shaders/gs_draw.hlsl vs_world vs_5_0 kGsWorldVS gs_world_vs.h)
-vcs_shader(shaders/gs_draw.hlsl vs_lit vs_5_0 kGsLitVS gs_lit_vs.h)
-# the GS pixel shader per texture read (SAMPLE_MODE 0..6, gs_draw.hlsl) and with / without the dual-source output
-foreach(mode RANGE 0 6)
-    vcs_shader(shaders/gs_draw.hlsl ps_main ps_5_0 kGsDrawPS${mode} gs_draw_ps${mode}.h DUAL_SOURCE=0 SAMPLE_MODE=${mode})
-    vcs_shader(shaders/gs_draw.hlsl ps_main ps_5_0 kGsDrawPS${mode}Dual gs_draw_ps${mode}_dual.h DUAL_SOURCE=1 SAMPLE_MODE=${mode})
-    # ... and without writing the depth (SHADER_DEPTH=0: early depth rejection; docs/PERFORMANCE.md 26)
-    vcs_shader(shaders/gs_draw.hlsl ps_main ps_5_0 kGsDrawPS${mode}NoZ gs_draw_ps${mode}_noz.h DUAL_SOURCE=0 SAMPLE_MODE=${mode} SHADER_DEPTH=0)
-    vcs_shader(shaders/gs_draw.hlsl ps_main ps_5_0 kGsDrawPS${mode}DualNoZ gs_draw_ps${mode}_dual_noz.h DUAL_SOURCE=1 SAMPLE_MODE=${mode} SHADER_DEPTH=0)
+# the list (shaders/shaders.txt): file entry profile name header [DEFINE=VALUE ...]
+file(STRINGS "${VCS_SHADER_DIR}/shaders.txt" _vcs_shader_lines)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${VCS_SHADER_DIR}/shaders.txt")
+foreach(line IN LISTS _vcs_shader_lines)
+    string(REGEX REPLACE "#.*$" "" line "${line}")
+    string(STRIP "${line}" line)
+    if(line STREQUAL "" OR line MATCHES "^target-env ")
+        continue()
+    endif()
+    separate_arguments(parts UNIX_COMMAND "${line}")
+    list(GET parts 0 file)
+    list(GET parts 1 entry)
+    list(GET parts 2 profile)
+    list(GET parts 3 name)
+    list(GET parts 4 header)
+    set(defines "")
+    list(LENGTH parts _count)
+    if(_count GREATER 5)
+        list(SUBLIST parts 5 -1 defines)
+    endif()
+    vcs_shader(shaders/${file} ${entry} ${profile} ${name} ${header} ${defines})
 endforeach()
-vcs_shader(shaders/gs_util.hlsl vs_main vs_5_0 kGsQuadVS gs_quad_vs.h)
-vcs_shader(shaders/gs_util.hlsl ps_blit ps_5_0 kGsBlitPS gs_blit_ps.h)
-vcs_shader(shaders/gs_util.hlsl ps_fill_color ps_5_0 kGsFillColorPS gs_fill_color_ps.h)
-vcs_shader(shaders/gs_util.hlsl ps_fill_depth ps_5_0 kGsFillDepthPS gs_fill_depth_ps.h)
-vcs_shader(shaders/ui.hlsl vs_main vs_5_0 kUiVS ui_vs.h)
-vcs_shader(shaders/ui.hlsl ps_main ps_5_0 kUiPS ui_ps.h)
+
+# The committed SPIR-V / MSL against the HLSL they were made from: a warning when a shader changed without
+# `python tools/shaders.py build` (tools/build.py runs it itself when it sees the change)
+file(GLOB _vcs_hlsl CONFIGURE_DEPENDS "${VCS_SHADER_DIR}/*.hlsl")
+set(_vcs_shader_stamp "${VCS_SHADER_OUT}/compiled_check.txt")
+add_custom_command(
+    OUTPUT "${_vcs_shader_stamp}"
+    COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/shaders.py" check --warn
+            --manifest src/render/shaders/shaders.txt --stamp "${_vcs_shader_stamp}"
+    DEPENDS ${_vcs_hlsl} "${VCS_SHADER_DIR}/shaders.txt" "${VCS_SHADER_DIR}/compiled/manifest.json"
+            "${CMAKE_SOURCE_DIR}/tools/hlsl_spirv.py" "${CMAKE_SOURCE_DIR}/tools/hlsl_msl.py"
+            "${CMAKE_SOURCE_DIR}/tools/shader_tools/CMakeLists.txt"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "shaders.py check"
+    VERBATIM)
+list(APPEND VCS_SHADER_HEADERS "${_vcs_shader_stamp}")
 
 add_library(vcs_render STATIC
     presenter.cpp

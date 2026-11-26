@@ -14,6 +14,9 @@ set(VCS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 set(VCS_LAUNCHER_SHADERS "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 file(MAKE_DIRECTORY "${VCS_LAUNCHER_SHADERS}")
 set(VCS_UI_HLSL "${CMAKE_CURRENT_SOURCE_DIR}/render/d3d11/ui.hlsl")
+# Vulkan / Metal: the shader's SPIR-V and MSL, compiled once and committed (render/shaders.txt, render/compiled; made by
+# python tools/shaders.py build) - no shader compiler here (DECISIONS.md 2026-11-27)
+set(VCS_UI_COMPILED "${CMAKE_CURRENT_SOURCE_DIR}/render/compiled")
 
 set(VCS_LAUNCHER_COMMON
     main.cpp
@@ -73,26 +76,18 @@ if(WIN32)
     endif()
 elseif(APPLE)
     # macOS (docs/LAUNCHER.md "macOS"): Cocoa, Metal, Core Text - the system's frameworks, nothing downloaded.
-    # VCSLauncher.app in the repository root. The shader is the one ui.hlsl as MSL (tools/hlsl_msl.py, the compilers
-    # tools/shader_tools.py builds), compiled by the OS when the launcher starts.
+    # VCSLauncher.app in the repository root. The shader is the one ui.hlsl as committed MSL (render/compiled/msl),
+    # compiled by the OS when the launcher starts.
     enable_language(OBJCXX)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
-    if(NOT VCS_GLSLANG OR NOT VCS_SPIRV_CROSS)
-        message(FATAL_ERROR "VCS_GLSLANG / VCS_SPIRV_CROSS not set: python3 tools/build.py --launcher builds them")
-    endif()
     foreach(stage vs ps)
-        if(stage STREQUAL "vs")
-            set(_msl_stage vert)
-        else()
-            set(_msl_stage frag)
-        endif()
         add_custom_command(
             OUTPUT "${VCS_LAUNCHER_SHADERS}/ui_${stage}.msl.h"
-            COMMAND "${Python3_EXECUTABLE}" -I "${VCS_ROOT}/tools/hlsl_msl.py" --glslang "${VCS_GLSLANG}"
-                    --spirv-cross "${VCS_SPIRV_CROSS}" --stage ${_msl_stage} --entry ${stage}_main
-                    --name g_ui_${stage}_msl --out "${VCS_LAUNCHER_SHADERS}/ui_${stage}.msl.h" "${VCS_UI_HLSL}"
-            DEPENDS "${VCS_UI_HLSL}" "${VCS_ROOT}/tools/hlsl_msl.py" "${VCS_ROOT}/tools/hlsl_spirv.py"
-            COMMENT "msl ui.hlsl ${stage}_main"
+            COMMAND "${Python3_EXECUTABLE}" -I "${VCS_ROOT}/tools/shaders.py" header
+                    --msl "${VCS_UI_COMPILED}/msl/ui_${stage}.metal" --name g_ui_${stage}_msl --source "${VCS_UI_HLSL}"
+                    --entry ${stage}_main --out "${VCS_LAUNCHER_SHADERS}/ui_${stage}.msl.h"
+            DEPENDS "${VCS_UI_COMPILED}/msl/ui_${stage}.metal" "${VCS_ROOT}/tools/shaders.py" "${VCS_ROOT}/tools/hlsl_msl.py"
+            COMMENT "msl ui_${stage}"
             VERBATIM)
     endforeach()
     # the app's icon, drawn by make_icon.py
@@ -129,7 +124,7 @@ elseif(APPLE)
 else()
     # Linux. Everything comes from the distribution (python3 tools/build.py --check-deps lists the packages):
     # pkg-config modules for the window systems, fonts and D-Bus; Vulkan headers (the loader is opened at run time);
-    # glslang for the shader; wayland-scanner for the Wayland protocols.
+    # wayland-scanner for the Wayland protocols. The shader is committed SPIR-V (render/compiled/spirv).
     find_package(PkgConfig REQUIRED)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     pkg_check_modules(VCS_LAUNCHER_LIBS REQUIRED IMPORTED_TARGET
@@ -147,26 +142,15 @@ else()
         message(FATAL_ERROR "the Vulkan headers were not found: install libvulkan-dev (Debian / Ubuntu), "
                             "vulkan-headers (Fedora / Arch) - docs/LINUX.md")
     endif()
-    find_program(VCS_GLSLANG NAMES glslangValidator glslang HINTS "$ENV{VULKAN_SDK}/bin")
-    if(NOT VCS_GLSLANG)
-        message(FATAL_ERROR "glslangValidator not found (the launcher's shader): install glslang-tools (Debian / "
-                            "Ubuntu), glslang (Fedora / Arch) - docs/LINUX.md")
-    endif()
-
-    # the one ui.hlsl, as SPIR-V for Vulkan 1.1 (tools/hlsl_spirv.py: the D3D registers' bindings)
+    # the one ui.hlsl as SPIR-V for Vulkan 1.1 (committed; tools/hlsl_spirv.py's D3D register bindings)
     foreach(stage vs ps)
-        if(stage STREQUAL "vs")
-            set(_glsl_stage vert)
-        else()
-            set(_glsl_stage frag)
-        endif()
         add_custom_command(
             OUTPUT "${VCS_LAUNCHER_SHADERS}/ui_${stage}.spv.h"
-            COMMAND "${Python3_EXECUTABLE}" -I "${VCS_ROOT}/tools/hlsl_spirv.py" --glslang "${VCS_GLSLANG}"
-                    --target-env vulkan1.1 --stage ${_glsl_stage} --entry ${stage}_main --name g_ui_${stage}_spv
-                    --out "${VCS_LAUNCHER_SHADERS}/ui_${stage}.spv.h" "${VCS_UI_HLSL}"
-            DEPENDS "${VCS_UI_HLSL}" "${VCS_ROOT}/tools/hlsl_spirv.py"
-            COMMENT "glslang ui.hlsl ${stage}_main"
+            COMMAND "${Python3_EXECUTABLE}" -I "${VCS_ROOT}/tools/shaders.py" header
+                    --spirv "${VCS_UI_COMPILED}/spirv/ui_${stage}.spv" --name g_ui_${stage}_spv --source "${VCS_UI_HLSL}"
+                    --out "${VCS_LAUNCHER_SHADERS}/ui_${stage}.spv.h"
+            DEPENDS "${VCS_UI_COMPILED}/spirv/ui_${stage}.spv" "${VCS_ROOT}/tools/shaders.py" "${VCS_ROOT}/tools/hlsl_spirv.py"
+            COMMENT "spirv ui_${stage}"
             VERBATIM)
     endforeach()
 

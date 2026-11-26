@@ -1,0 +1,46 @@
+# The game's shaders: one line each - file entry profile name header [DEFINE=VALUE ...] (src/render/CMakeLists.txt and
+# tools/shaders.py read it). D3D11 compiles them at build time with Windows' own d3dcompiler (tools/hlsl_dxbc.py); the
+# SPIR-V (Vulkan) and MSL (Metal) are in compiled/, made by `python tools/shaders.py build` from the pinned glslang and
+# SPIRV-Cross - edit a shader, run that (tools/build.py does when it sees the change), commit compiled/ with it.
+target-env vulkan1.3
+present.hlsl vs_main vs_5_0 kPresentVS present_vs.h
+present.hlsl ps_main ps_5_0 kPresentPS present_ps.h
+gs_draw.hlsl vs_main vs_5_0 kGsDrawVS gs_draw_vs.h
+gs_draw.hlsl vs_world vs_5_0 kGsWorldVS gs_world_vs.h
+gs_draw.hlsl vs_lit vs_5_0 kGsLitVS gs_lit_vs.h
+# the GS pixel shader per texture read (SAMPLE_MODE 0..6, gs_draw.hlsl), with / without the dual-source output, and
+# without writing the depth (SHADER_DEPTH=0: early depth rejection; docs/PERFORMANCE.md 26)
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS0 gs_draw_ps0.h DUAL_SOURCE=0 SAMPLE_MODE=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS0Dual gs_draw_ps0_dual.h DUAL_SOURCE=1 SAMPLE_MODE=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS0NoZ gs_draw_ps0_noz.h DUAL_SOURCE=0 SAMPLE_MODE=0 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS0DualNoZ gs_draw_ps0_dual_noz.h DUAL_SOURCE=1 SAMPLE_MODE=0 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS1 gs_draw_ps1.h DUAL_SOURCE=0 SAMPLE_MODE=1
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS1Dual gs_draw_ps1_dual.h DUAL_SOURCE=1 SAMPLE_MODE=1
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS1NoZ gs_draw_ps1_noz.h DUAL_SOURCE=0 SAMPLE_MODE=1 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS1DualNoZ gs_draw_ps1_dual_noz.h DUAL_SOURCE=1 SAMPLE_MODE=1 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS2 gs_draw_ps2.h DUAL_SOURCE=0 SAMPLE_MODE=2
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS2Dual gs_draw_ps2_dual.h DUAL_SOURCE=1 SAMPLE_MODE=2
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS2NoZ gs_draw_ps2_noz.h DUAL_SOURCE=0 SAMPLE_MODE=2 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS2DualNoZ gs_draw_ps2_dual_noz.h DUAL_SOURCE=1 SAMPLE_MODE=2 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS3 gs_draw_ps3.h DUAL_SOURCE=0 SAMPLE_MODE=3
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS3Dual gs_draw_ps3_dual.h DUAL_SOURCE=1 SAMPLE_MODE=3
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS3NoZ gs_draw_ps3_noz.h DUAL_SOURCE=0 SAMPLE_MODE=3 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS3DualNoZ gs_draw_ps3_dual_noz.h DUAL_SOURCE=1 SAMPLE_MODE=3 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS4 gs_draw_ps4.h DUAL_SOURCE=0 SAMPLE_MODE=4
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS4Dual gs_draw_ps4_dual.h DUAL_SOURCE=1 SAMPLE_MODE=4
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS4NoZ gs_draw_ps4_noz.h DUAL_SOURCE=0 SAMPLE_MODE=4 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS4DualNoZ gs_draw_ps4_dual_noz.h DUAL_SOURCE=1 SAMPLE_MODE=4 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS5 gs_draw_ps5.h DUAL_SOURCE=0 SAMPLE_MODE=5
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS5Dual gs_draw_ps5_dual.h DUAL_SOURCE=1 SAMPLE_MODE=5
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS5NoZ gs_draw_ps5_noz.h DUAL_SOURCE=0 SAMPLE_MODE=5 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS5DualNoZ gs_draw_ps5_dual_noz.h DUAL_SOURCE=1 SAMPLE_MODE=5 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS6 gs_draw_ps6.h DUAL_SOURCE=0 SAMPLE_MODE=6
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS6Dual gs_draw_ps6_dual.h DUAL_SOURCE=1 SAMPLE_MODE=6
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS6NoZ gs_draw_ps6_noz.h DUAL_SOURCE=0 SAMPLE_MODE=6 SHADER_DEPTH=0
+gs_draw.hlsl ps_main ps_5_0 kGsDrawPS6DualNoZ gs_draw_ps6_dual_noz.h DUAL_SOURCE=1 SAMPLE_MODE=6 SHADER_DEPTH=0
+gs_util.hlsl vs_main vs_5_0 kGsQuadVS gs_quad_vs.h
+gs_util.hlsl ps_blit ps_5_0 kGsBlitPS gs_blit_ps.h
+gs_util.hlsl ps_fill_color ps_5_0 kGsFillColorPS gs_fill_color_ps.h
+gs_util.hlsl ps_fill_depth ps_5_0 kGsFillDepthPS gs_fill_depth_ps.h
+ui.hlsl vs_main vs_5_0 kUiVS ui_vs.h
+ui.hlsl ps_main ps_5_0 kUiPS ui_ps.h

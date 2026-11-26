@@ -99,24 +99,29 @@ def main():
     ap.add_argument("-D", dest="defines", action="append", default=[])
     ap.add_argument("source")
     a = ap.parse_args()
+    words = compile_spirv(a.glslang, a.stage, a.entry, a.defines, a.source, a.target_env,
+                          os.path.dirname(os.path.abspath(a.out)))
+    write_header(a.out, a.name, words, a.source)
 
-    fd, spv = tempfile.mkstemp(suffix=".spv", dir=os.path.dirname(os.path.abspath(a.out)))
+
+def compile_spirv(glslang, stage, entry, defines, source, target_env, workdir):
+    """The SPIR-V words of one entry point of `source`, the dual-source output patched (tools/shaders.py uses it)."""
+    fd, spv = tempfile.mkstemp(suffix=".spv", dir=workdir)
     os.close(fd)
     try:
-        cmd = [a.glslang, "-D", "-V", "--target-env", a.target_env, "--shift-texture-binding", "16",
+        cmd = [glslang, "-D", "-V", "--target-env", target_env, "--shift-texture-binding", "16",
                "--shift-sampler-binding", "32"]
-        cmd += ["-DVCS_SPIRV=1"] + ["-D" + d for d in a.defines]
+        cmd += ["-DVCS_SPIRV=1"] + ["-D" + d for d in defines]
         # the entry point is called "main" in every module (the device needs no name per shader)
-        cmd += ["-S", a.stage, "-e", "main", "--source-entrypoint", a.entry, "-o", spv, a.source]
+        cmd += ["-S", stage, "-e", "main", "--source-entrypoint", entry, "-o", spv, source]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             sys.stderr.write(result.stdout + result.stderr)
-            sys.exit("hlsl_spirv: glslang failed on %s %s" % (a.source, a.entry))
+            sys.exit("hlsl_spirv: glslang failed on %s %s" % (source, entry))
         with open(spv, "rb") as f:
-            words = patch_dual_source(words_of(f.read()))
+            return patch_dual_source(words_of(f.read()))
     finally:
         os.remove(spv)
-    write_header(a.out, a.name, words, a.source)
 
 
 if __name__ == "__main__":

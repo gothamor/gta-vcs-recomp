@@ -5,8 +5,8 @@
     python tools/deps.py fetch [DIR] [--platform P]        each one into DIR (default deps/): a shallow clone at its
                                          pin without .git; DIR/manifest.json records the pins and the platform
     python tools/deps.py check [DIR] [--platform P]        is DIR complete and at this source's pins? (exit 0 / 1)
-The platform is this machine's unless given: Linux adds the Vulkan backend's (headers, volk, VMA); macOS adds sse2neon
-and the Metal shaders' compilers. (FFmpeg was one until 2026-11-26: the movies have their own decoder now.)
+The platform is this machine's unless given: Linux adds the Vulkan backend's (headers, volk, VMA); macOS adds sse2neon.
+(FFmpeg was one until 2026-11-26; zlib, the recompiler's libraries and the shader compilers until 2026-11-27: DECISIONS.md.)
 
 With deps/ in the repository root, toolchain.configure points CMake at it (FETCHCONTENT_SOURCE_DIR_<NAME>,
 FETCHCONTENT_FULLY_DISCONNECTED): nothing is downloaded. tools/release.py runs `fetch` into the release.
@@ -34,9 +34,9 @@ CMAKE_FILES = [
 ]
 # ... and on Linux the Vulkan backend's too (src/rhi: Vulkan-Headers, volk, VMA)
 CMAKE_FILES_LINUX = CMAKE_FILES + ["src/rhi/CMakeLists.txt"]
-# ... and on macOS sse2neon (Apple Silicon: the SSE code through NEON) and the Metal shaders' compilers (glslang,
-# SPIRV-Cross: tools/shader_tools.py)
-CMAKE_FILES_MACOS = CMAKE_FILES + ["third_party/PS2Recomp/CMakeLists.txt", "tools/shader_tools/CMakeLists.txt"]
+# ... and on macOS sse2neon (Apple Silicon: the SSE code through NEON). The shader compilers (tools/shader_tools.py) only
+# serve tools/shaders.py, which a player never runs: not bundled.
+CMAKE_FILES_MACOS = CMAKE_FILES + ["third_party/PS2Recomp/CMakeLists.txt"]
 PLATFORMS = ("windows", "linux", "macos")
 
 
