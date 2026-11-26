@@ -11,14 +11,7 @@ include(FetchContent)
 
 # [gta-recomp] no ELFIO: include/ps2recomp/elf_file.h reads the ELF (PS2RECOMP_PATCHES.md)
 
-FetchContent_Declare(
-    toml11
-    GIT_REPOSITORY https://github.com/ToruNiina/toml11.git
-    GIT_TAG v4.4.0
-    GIT_SHALLOW TRUE # [gta-recomp] tag only, not the history: toml11's is 348 MB (PS2RECOMP_PATCHES.md)
-    GIT_SUBMODULES "" # [gta-recomp] its submodules are its tests' and docs' (344 MB); TOML11_BUILD_TESTS is off
-)
-FetchContent_MakeAvailable(toml11)
+# [gta-recomp] no toml11: include/ps2recomp/toml_lite.h reads the config (PS2RECOMP_PATCHES.md)
 
 # [gta-recomp] no fmt: ps2recomp::format (include/ps2recomp/format.h) writes the same text (PS2RECOMP_PATCHES.md)
 
@@ -70,7 +63,6 @@ PRIVATE
 
 target_link_libraries(ps2_recomp_lib
 PUBLIC
-    toml11::toml11
     rabbitizer
 )
 

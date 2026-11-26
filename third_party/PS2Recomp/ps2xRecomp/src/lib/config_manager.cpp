@@ -1,6 +1,6 @@
 #include "ps2recomp/config_manager.h"
 #include "ps2recomp/recompiler_reporter.h"
-#include <toml.hpp>
+#include "ps2recomp/toml_lite.h" // [gta-recomp] our TOML reader, not toml11
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -279,92 +279,6 @@ namespace ps2recomp
         }
 
         return config;
-    }
-
-    void ConfigManager::saveConfig(const RecompilerConfig &config) const
-    {
-        toml::value data;
-
-        toml::table general;
-        general["input"] = config.inputPath;
-        general["ghidra_output"] = config.ghidraMapPath;
-        general["output"] = config.outputPath;
-        general["single_file_output"] = config.singleFileOutput;
-        general["low_memory_mode"] = config.lowMemoryMode;
-        general["output_worker_threads"] = static_cast<int64_t>(config.outputWorkerThreads);
-        general["patch_syscalls"] = config.patchSyscalls;
-        general["patch_cop0"] = config.patchCop0;
-        general["patch_cache"] = config.patchCache;
-        general["skip"] = config.skipFunctions;
-        general["stubs"] = config.stubImplementations;
-        general["entry_points"] = config.entryPointHints;
-        data["general"] = general;
-
-        if (!config.mmioByInstructionAddress.empty())
-        {
-            toml::table mmioTable;
-            for (const auto &[instAddr, mmioAddr] : config.mmioByInstructionAddress)
-            {
-                std::ostringstream keyStream;
-                keyStream << "0x" << std::hex << instAddr;
-                std::ostringstream valStream;
-                valStream << "0x" << std::hex << mmioAddr;
-                mmioTable[keyStream.str()] = valStream.str();
-            }
-            data["mmio"] = mmioTable;
-        }
-
-        if (!config.jumpTables.empty())
-        {
-            toml::table jumpTables;
-            toml::array tableArray;
-            for (const auto &table : config.jumpTables)
-            {
-                toml::table tableNode;
-                std::ostringstream addressStream;
-                addressStream << "0x" << std::hex << table.address;
-                tableNode["address"] = addressStream.str();
-                tableNode["base_register"] = static_cast<int64_t>(table.baseRegister);
-
-                toml::array entries;
-                for (const auto &entry : table.entries)
-                {
-                    toml::table entryNode;
-                    entryNode["index"] = static_cast<int64_t>(entry.index);
-                    std::ostringstream targetStream;
-                    targetStream << "0x" << std::hex << entry.target;
-                    entryNode["target"] = targetStream.str();
-                    entries.push_back(entryNode);
-                }
-                tableNode["entries"] = entries;
-                tableArray.push_back(tableNode);
-            }
-            jumpTables["table"] = tableArray;
-            data["jump_tables"] = jumpTables;
-        }
-
-        toml::table patches;
-        toml::array instPatches;
-        for (const auto &[addr, value] : config.patches)
-        {
-            std::ostringstream addrStream;
-            addrStream << "0x" << std::hex << addr;
-
-            toml::table p;
-            p["address"] = addrStream.str();
-            p["value"] = value;
-            instPatches.push_back(p);
-        }
-        patches["instructions"] = instPatches;
-        data["patches"] = patches;
-
-        std::ofstream file(m_configPath);
-        if (!file)
-        {
-            throw std::runtime_error("Failed to open file for writing: " + m_configPath);
-        }
-
-        file << data;
     }
 
 } // namespace ps2recomp

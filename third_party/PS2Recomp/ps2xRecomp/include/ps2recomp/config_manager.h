@@ -15,7 +15,6 @@ namespace ps2recomp
         ~ConfigManager();
 
         RecompilerConfig loadConfig() const;
-        void saveConfig(const RecompilerConfig &config) const;
         void setReporter(RecompilerReporter *reporter);
 
     private:
