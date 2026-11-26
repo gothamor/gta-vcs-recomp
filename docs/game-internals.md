@@ -82,8 +82,17 @@ disassembly with names from `game/vcs/functions.csv`), `tools/vudis.py` (VU micr
   "SShd" header (u32 size 0x18, type 1 = **16-bit little-endian PCM**, 48000 Hz, 2 channels, interleave 512 bytes),
   "SSbd" + u32 data size, then blocks of 256 left samples, then 256 right (byte order and interleave told apart by
   how smooth the samples are). First PTS: sound 0.043 s, video 0.110 s. FFmpeg's demuxer finds the video only.
+- **The video's MPEG-2 features** (`tools/pss_survey.py`, 2026-11-26): both 512x448 4:2:0, progressive_sequence 1,
+  frame pictures only (picture_structure 3, progressive_frame 1), frame_pred_frame_dct 1 (frame prediction and frame
+  DCT only - no field motion, dual prime or dct_type), intra_dc_precision 1 (9 bits), q_scale_type 1 (non-linear),
+  intra_vlc_format 1 (table B-15 for intra blocks), alternate_scan 1, the default quant matrices, no concealment
+  vectors, low_delay 0, repeat_first_field 0. GOPs `IBBPBBPBBPBBPBB` (15 pictures, a sequence header before each),
+  closed_gop mixed, broken_link 0; one slice per macroblock row (28). STINGS: 321 pictures, frame_rate_code 4 (29.97),
+  profile/level 0x48 (Main@Main); INTRO: 2527 pictures, frame_rate_code **5 (30 exactly)**, 0x14 (the encoder's
+  High@High marker on a Main Profile stream). P f_codes up to 5, B up to 5.
 - **Played natively** (`src/game/vcs_movie.cpp`): Play is replaced; the file read from the disc, demuxed, the video
-  decoded with FFmpeg and shown by the presenter at 4:3 (`ps2ShowMovieFrame`), the sound mixed into the audio
+  decoded by our MPEG-2 decoder (`src/video/mpeg2.cpp`, FFmpeg until 2026-11-26; BT.601 studio-range colour,
+  `src/video/yuv.cpp`) and shown by the presenter at 4:3 (`ps2ShowMovieFrame`), the sound mixed into the audio
   output (`ps2AudioMoviePush`), whose played-sample count is the clock (the host clock without audio output, and
   after the sound ends - the last pictures are due 30 ms after it). Start / Cross skip once the game's count
   allows. Display > Skip intro movies skips both. The game thread waits in Play, as in the game's player.

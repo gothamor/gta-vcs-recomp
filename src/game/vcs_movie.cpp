@@ -5,9 +5,13 @@
 // IPU and streams the sound through the IOP. Here Play is replaced: the file is read from the disc and demuxed
 // (MPEG-2 program stream: video in stream 0xE0; sound in private stream 1, sub-stream 0xFF, behind a 4-byte header -
 // a Sony "SShd" header (type 1 = 16-bit little-endian PCM, 48 kHz, 2 channels, 512-byte interleave: 256 left samples,
-// then 256 right), "SSbd" + size, then the samples), the video decoded with FFmpeg into RGBA and shown by the presenter
-// at 4:3 (runtime/ps2_present.h), the sound mixed into the audio output (runtime/ps2_audio_out.h) - its played-sample
-// count is the clock the pictures follow. The game thread waits in here, as it did in the game's own player.
+// then 256 right), "SSbd" + size, then the samples), the video decoded by our MPEG-2 decoder (src/video/mpeg2.h) into
+// RGBA and shown by the presenter at 4:3 (runtime/ps2_present.h), the sound mixed into the audio output
+// (runtime/ps2_audio_out.h) - its played-sample count is the clock the pictures follow. The game thread waits in here,
+// as it did in the game's own player.
+//
+// VCS_MOVIE_DUMP=<dir>: before a movie plays, every 30th picture is written there as <MOVIE>_<n>.ppm (the reference
+// tools/movie_check.py compares with).
 #include "game/vcs_movie.h"
 
 #include "ps2_runtime.h"
@@ -16,28 +20,33 @@
 #include "runtime/ps2_disc_image.h"
 #include "runtime/ps2_pad.h"
 #include "runtime/ps2_present.h"
+#include "video/mpeg2.h"
+#include "video/yuv.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 #include "runtime/ps2_host_std.h"
 
+// The FFmpeg decoder as the reference the native one was checked against (VCS_MOVIE_DECODER=ffmpeg, VCS_MOVIE_VERIFY=1);
+// removed with FFmpeg once checked.
 #if __has_include(<libavcodec/avcodec.h>)
-#define VCS_MOVIES 1
+#define VCS_FFMPEG_REFERENCE 1
 extern "C"
 {
 #include <libavcodec/avcodec.h>
 #include <libavutil/frame.h>
-#include <libswscale/swscale.h>
 }
 #else
-#define VCS_MOVIES 0
+#define VCS_FFMPEG_REFERENCE 0
 #endif
 
 namespace vcs
@@ -177,7 +186,239 @@ namespace vcs
             return std::chrono::duration<double>(ps2x::hostNow().time_since_epoch()).count();
         }
 
-#if VCS_MOVIES
+        // Pictures in display order, as YCbCr 4:2:0 planes valid until the next call.
+        class PictureSource
+        {
+        public:
+            virtual ~PictureSource() = default;
+            virtual bool next(video::Mpeg2Picture &out) = 0;
+            virtual void report(const std::string &path) const { (void)path; }
+        };
+
+        class NativeSource final : public PictureSource
+        {
+        public:
+            explicit NativeSource(const std::vector<uint8_t> &es) { decoder_.open(es.data(), es.size()); }
+            bool next(video::Mpeg2Picture &out) override { return decoder_.next(out); }
+            void report(const std::string &path) const override
+            {
+                const video::Mpeg2Stats &s = decoder_.stats();
+                if (s.sliceErrors || s.unsupported || s.skippedB)
+                    std::fprintf(stderr, "[movie] %s: %llu slice errors, %llu pictures not supported, %llu B pictures skipped (%s)\n",
+                                 path.c_str(), static_cast<unsigned long long>(s.sliceErrors),
+                                 static_cast<unsigned long long>(s.unsupported), static_cast<unsigned long long>(s.skippedB),
+                                 decoder_.lastError().c_str());
+            }
+
+        private:
+            video::Mpeg2Decoder decoder_;
+        };
+
+#if VCS_FFMPEG_REFERENCE
+        class FfmpegSource final : public PictureSource
+        {
+        public:
+            explicit FfmpegSource(const std::vector<uint8_t> &es) : es_(es)
+            {
+                const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO);
+                decoder_ = codec ? avcodec_alloc_context3(codec) : nullptr;
+                parser_ = av_parser_init(AV_CODEC_ID_MPEG2VIDEO);
+                ok_ = decoder_ && parser_ && avcodec_open2(decoder_, codec, nullptr) >= 0;
+                packet_ = av_packet_alloc();
+                frame_ = av_frame_alloc();
+            }
+            ~FfmpegSource() override
+            {
+                av_frame_free(&frame_);
+                av_packet_free(&packet_);
+                if (parser_)
+                    av_parser_close(parser_);
+                avcodec_free_context(&decoder_);
+            }
+            bool next(video::Mpeg2Picture &out) override
+            {
+                while (ok_)
+                {
+                    const int got = avcodec_receive_frame(decoder_, frame_);
+                    if (got == AVERROR(EAGAIN))
+                    {
+                        if (offset_ < es_.size())
+                        {
+                            uint8_t *data = nullptr;
+                            int dataSize = 0;
+                            const int used = av_parser_parse2(parser_, decoder_, &data, &dataSize, es_.data() + offset_,
+                                                              static_cast<int>(std::min<size_t>(4096u, es_.size() - offset_)),
+                                                              AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
+                            offset_ += static_cast<size_t>(std::max(used, 0));
+                            if (dataSize > 0)
+                            {
+                                packet_->data = data;
+                                packet_->size = dataSize;
+                                avcodec_send_packet(decoder_, packet_);
+                            }
+                        }
+                        else if (!flushing_)
+                        {
+                            avcodec_send_packet(decoder_, nullptr);
+                            flushing_ = true;
+                        }
+                        else
+                            return false;
+                        continue;
+                    }
+                    if (got < 0 || frame_->format != AV_PIX_FMT_YUV420P)
+                        return false;
+                    out.width = frame_->width;
+                    out.height = frame_->height;
+                    out.y = frame_->data[0];
+                    out.cb = frame_->data[1];
+                    out.cr = frame_->data[2];
+                    out.yStride = frame_->linesize[0];
+                    out.cStride = frame_->linesize[1];
+                    out.type = av_get_picture_type_char(frame_->pict_type);
+                    out.frameRate = decoder_->framerate.num > 0 && decoder_->framerate.den > 0 ? av_q2d(decoder_->framerate)
+                                                                                                : 30000.0 / 1001.0;
+                    return true;
+                }
+                return false;
+            }
+
+        private:
+            const std::vector<uint8_t> &es_;
+            AVCodecContext *decoder_ = nullptr;
+            AVCodecParserContext *parser_ = nullptr;
+            AVPacket *packet_ = nullptr;
+            AVFrame *frame_ = nullptr;
+            size_t offset_ = 0;
+            bool ok_ = false, flushing_ = false;
+        };
+
+        // VCS_MOVIE_VERIFY=1: every picture of both decoders compared before the movie plays
+        void verify(const std::string &path, const std::vector<uint8_t> &es)
+        {
+            NativeSource native(es);
+            FfmpegSource reference(es);
+            video::Mpeg2Picture a, b;
+            uint64_t count = 0, typeMismatches = 0;
+            double minPsnr = 99.0, sumPsnr = 0.0;
+            int maxDiff = 0;
+            uint64_t worst = 0;
+            bool moreA = true, moreB = true;
+            uint64_t onlyA = 0, onlyB = 0;
+            for (;;)
+            {
+                moreA = moreA && native.next(a);
+                moreB = moreB && reference.next(b);
+                if (!moreA && !moreB)
+                    break;
+                if (moreA != moreB)
+                {
+                    ++(moreA ? onlyA : onlyB);
+                    continue;
+                }
+                if (a.width != b.width || a.height != b.height)
+                {
+                    std::fprintf(stderr, "[movie-verify] %s picture %llu: size %dx%d vs %dx%d\n", path.c_str(),
+                                 static_cast<unsigned long long>(count), a.width, a.height, b.width, b.height);
+                    return;
+                }
+                double se = 0.0;
+                int pictureMax = 0;
+                auto plane = [&](const uint8_t *p, int ps, const uint8_t *q, int qs, int w, int h, bool luma) {
+                    for (int y = 0; y < h; ++y)
+                        for (int x = 0; x < w; ++x)
+                        {
+                            const int d = int(p[y * ps + x]) - int(q[y * qs + x]);
+                            if (luma)
+                                se += double(d) * d;
+                            pictureMax = std::max(pictureMax, std::abs(d));
+                        }
+                };
+                plane(a.y, a.yStride, b.y, b.yStride, a.width, a.height, true);
+                plane(a.cb, a.cStride, b.cb, b.cStride, (a.width + 1) / 2, (a.height + 1) / 2, false);
+                plane(a.cr, a.cStride, b.cr, b.cStride, (a.width + 1) / 2, (a.height + 1) / 2, false);
+                const double mse = se / (double(a.width) * a.height);
+                const double psnr = mse > 0.0 ? 10.0 * std::log10(255.0 * 255.0 / mse) : 99.0;
+                if (psnr < minPsnr)
+                {
+                    minPsnr = psnr;
+                    worst = count;
+                }
+                sumPsnr += psnr;
+                maxDiff = std::max(maxDiff, pictureMax);
+                if (a.type != b.type)
+                    ++typeMismatches;
+                if (psnr < 45.0)
+                    std::fprintf(stderr, "[movie-verify] %s picture %llu (%c): Y %.2f dB, max difference %d\n", path.c_str(),
+                                 static_cast<unsigned long long>(count), a.type, psnr, pictureMax);
+                ++count;
+            }
+            native.report(path);
+            std::fprintf(stderr,
+                         "[movie-verify] %s: %llu pictures compared (%llu only native, %llu only FFmpeg, %llu types differ); Y min "
+                         "%.2f dB (picture %llu), mean %.2f dB; largest sample difference %d; %s\n",
+                         path.c_str(), static_cast<unsigned long long>(count), static_cast<unsigned long long>(onlyA),
+                         static_cast<unsigned long long>(onlyB), static_cast<unsigned long long>(typeMismatches), minPsnr,
+                         static_cast<unsigned long long>(worst), count ? sumPsnr / count : 0.0, maxDiff,
+                         (onlyA == 0 && onlyB == 0 && typeMismatches == 0 && minPsnr >= 45.0) ? "PASS" : "FAIL");
+        }
+#endif
+
+        bool useNative()
+        {
+#if VCS_FFMPEG_REFERENCE
+            const char *e = std::getenv("VCS_MOVIE_DECODER");
+            return !e || std::strcmp(e, "ffmpeg") != 0;
+#else
+            return true;
+#endif
+        }
+
+        std::unique_ptr<PictureSource> makeSource(const std::vector<uint8_t> &es)
+        {
+#if VCS_FFMPEG_REFERENCE
+            if (!useNative())
+                return std::make_unique<FfmpegSource>(es);
+#endif
+            return std::make_unique<NativeSource>(es);
+        }
+
+        // VCS_MOVIE_DUMP=<dir>: every 30th picture of the movie as <dir>/<MOVIE>_<n>.ppm (n in display order)
+        void dump(const std::string &path, const std::vector<uint8_t> &es, const char *dir)
+        {
+            std::string name = path;
+            const size_t slash = name.find_last_of("\\/");
+            if (slash != std::string::npos)
+                name = name.substr(slash + 1);
+            name = name.substr(0, name.find('.'));
+            std::unique_ptr<PictureSource> source = makeSource(es);
+            video::Mpeg2Picture p;
+            std::vector<uint8_t> rgba;
+            uint64_t index = 0, written = 0;
+            while (source->next(p))
+            {
+                if (index % 30u == 0u)
+                {
+                    rgba.resize(static_cast<size_t>(p.width) * p.height * 4u);
+                    video::yuv420ToRgba(p.y, p.yStride, p.cb, p.cr, p.cStride, p.width, p.height, rgba.data());
+                    char file[64];
+                    std::snprintf(file, sizeof(file), "/%s_%04llu.ppm", name.c_str(), static_cast<unsigned long long>(index));
+                    if (FILE *f = std::fopen((std::string(dir) + file).c_str(), "wb"))
+                    {
+                        std::fprintf(f, "P6\n%d %d\n255\n", p.width, p.height);
+                        for (size_t i = 0; i < rgba.size(); i += 4)
+                            std::fwrite(&rgba[i], 1, 3, f);
+                        std::fclose(f);
+                        ++written;
+                    }
+                }
+                ++index;
+            }
+            std::fprintf(stderr, "[movie] %s: %llu pictures, %llu written to %s (%s decoder)\n", path.c_str(),
+                         static_cast<unsigned long long>(index), static_cast<unsigned long long>(written), dir,
+                         useNative() ? "native" : "FFmpeg");
+        }
+
         // Plays one movie; false if it could not be read or decoded (then the game goes on as if it was skipped).
         bool play(const std::string &path, uint32_t skipAfterFrames, PS2Runtime *runtime)
         {
@@ -198,19 +439,14 @@ namespace vcs
             std::vector<uint8_t>().swap(file);
             const std::vector<int16_t> sound = soundFrames(pss.sound);
 
-            const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO);
-            AVCodecContext *decoder = codec ? avcodec_alloc_context3(codec) : nullptr;
-            AVCodecParserContext *parser = av_parser_init(AV_CODEC_ID_MPEG2VIDEO);
-            if (!decoder || !parser || avcodec_open2(decoder, codec, nullptr) < 0)
-            {
-                avcodec_free_context(&decoder);
-                if (parser)
-                    av_parser_close(parser);
-                return false;
-            }
-            AVPacket *packet = av_packet_alloc();
-            AVFrame *frame = av_frame_alloc();
-            SwsContext *scaler = nullptr;
+            if (const char *dir = std::getenv("VCS_MOVIE_DUMP"); dir && *dir)
+                dump(path, pss.video, dir);
+#if VCS_FFMPEG_REFERENCE
+            if (const char *v = std::getenv("VCS_MOVIE_VERIFY"); v && *v == '1')
+                verify(path, pss.video);
+#endif
+            std::unique_ptr<PictureSource> source = makeSource(pss.video);
+            video::Mpeg2Picture picture;
             std::vector<uint8_t> rgba;
 
             // the sound starts the clock (or the host clock without audio output)
@@ -246,49 +482,14 @@ namespace vcs
                 return soundClock + (nowSeconds() - soundClockAt);
             };
 
-            double frameRate = 30000.0 / 1001.0; // the stream's own rate once the decoder knows it
+            double frameRate = 30000.0 / 1001.0; // the stream's own rate (STINGS 29.97, INTRO 30)
             uint64_t shown = 0, decoded = 0, dropped = 0;
             bool skipHeld = skipPressed(), skipped = false;
-            size_t offset = 0;
-            bool flushing = false, done = false;
             const double started = nowSeconds();
-            while (!done && !runtime->isStopRequested())
+            while (!runtime->isStopRequested() && source->next(picture))
             {
-                // next decoded picture
-                int got = avcodec_receive_frame(decoder, frame);
-                if (got == AVERROR(EAGAIN))
-                {
-                    if (offset < pss.video.size())
-                    {
-                        uint8_t *data = nullptr;
-                        int dataSize = 0;
-                        const int used = av_parser_parse2(parser, decoder, &data, &dataSize, pss.video.data() + offset,
-                                                          static_cast<int>(std::min<size_t>(4096u, pss.video.size() - offset)),
-                                                          AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
-                        offset += static_cast<size_t>(std::max(used, 0));
-                        if (dataSize > 0)
-                        {
-                            packet->data = data;
-                            packet->size = dataSize;
-                            avcodec_send_packet(decoder, packet);
-                        }
-                    }
-                    else if (!flushing)
-                    {
-                        avcodec_send_packet(decoder, nullptr);
-                        flushing = true;
-                    }
-                    else
-                        done = true;
-                    continue;
-                }
-                if (got < 0)
-                {
-                    done = true;
-                    continue;
-                }
-                if (decoder->framerate.num > 0 && decoder->framerate.den > 0)
-                    frameRate = av_q2d(decoder->framerate);
+                if (picture.frameRate > 0.0)
+                    frameRate = picture.frameRate;
                 const double due = pss.videoStart + decoded / frameRate;
                 ++decoded;
                 // late by more than a frame: drop it (keeps the pictures with the sound)
@@ -297,12 +498,9 @@ namespace vcs
                     ++dropped;
                     continue;
                 }
-                scaler = sws_getCachedContext(scaler, frame->width, frame->height, static_cast<AVPixelFormat>(frame->format),
-                                              frame->width, frame->height, AV_PIX_FMT_RGBA, SWS_POINT, nullptr, nullptr, nullptr);
-                rgba.resize(static_cast<size_t>(frame->width) * frame->height * 4u);
-                uint8_t *planes[1] = {rgba.data()};
-                const int strides[1] = {frame->width * 4};
-                sws_scale(scaler, frame->data, frame->linesize, 0, frame->height, planes, strides);
+                rgba.resize(static_cast<size_t>(picture.width) * picture.height * 4u);
+                video::yuv420ToRgba(picture.y, picture.yStride, picture.cb, picture.cr, picture.cStride, picture.width,
+                                    picture.height, rgba.data());
                 // wait for the picture's moment, feeding the sound and watching for a skip
                 while (clock() < due && !runtime->isStopRequested())
                 {
@@ -329,7 +527,7 @@ namespace vcs
                 if (skipped)
                     break;
                 // the PS2 showed the 512x448 picture across a 4:3 TV
-                ps2ShowMovieFrame(rgba.data(), frame->width, frame->height, 4.0f / 3.0f);
+                ps2ShowMovieFrame(rgba.data(), picture.width, picture.height, 4.0f / 3.0f);
                 ++shown;
                 pushSound();
             }
@@ -343,17 +541,12 @@ namespace vcs
             }
             ps2AudioMovieReset();
             ps2EndMovieFrames();
-            std::fprintf(stderr, "[movie] %s: %llu pictures shown, %llu dropped, %.1f s%s%s\n", path.c_str(),
+            source->report(path);
+            std::fprintf(stderr, "[movie] %s: %llu pictures shown, %llu dropped, %.1f s%s%s (%s decoder)\n", path.c_str(),
                          static_cast<unsigned long long>(shown), static_cast<unsigned long long>(dropped), nowSeconds() - started,
-                         skipped ? ", skipped" : "", audio ? "" : ", no sound output (host clock)");
-            sws_freeContext(scaler);
-            av_frame_free(&frame);
-            av_packet_free(&packet);
-            av_parser_close(parser);
-            avcodec_free_context(&decoder);
-            return true;
+                         skipped ? ", skipped" : "", audio ? "" : ", no sound output (host clock)", useNative() ? "native" : "FFmpeg");
+            return decoded > 0;
         }
-#endif
 
         // replaces CMoviePlayer::Play(path, 0, skipAfterFrames) (0x40D8B8)
         PS2_GUEST_CC void moviePlay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -362,15 +555,8 @@ namespace vcs
             const uint32_t skipAfter = GPR_U32(ctx, 6);
             if (g_skipIntro.load(std::memory_order_relaxed))
                 std::fprintf(stderr, "[movie] %s skipped (Display > Intro movies)\n", path.c_str());
-#if VCS_MOVIES
             else
                 play(path, skipAfter, runtime);
-#else
-            else
-                std::fprintf(stderr, "[movie] %s: built without FFmpeg, skipped\n", path.c_str());
-            (void)skipAfter;
-            (void)runtime;
-#endif
             SET_GPR_U64(ctx, 2, 0);
             ctx->pc = GPR_U32(ctx, 31);
         }
