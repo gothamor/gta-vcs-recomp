@@ -11,8 +11,9 @@ Standard library only.
     python launcher/make_icon.py --png DIR  also writes each size as DIR/launcher_<size>.png and DIR/game_<size>.png
     python launcher/make_icon.py --header OUT.h   only the X11 window icon (_NET_WM_ICON: 32, 64, 128 px as
                                             ARGB) as a C header - launcher/CMakeLists.txt runs it on Linux
-    python launcher/make_icon.py --icns OUT.icns  only the macOS app icon (PNG entries 16 - 256 px) - the
-                                            launcher's CMakeLists.txt runs it on macOS for VCSLauncher.app
+    python launcher/make_icon.py --icns OUT.icns  only the macOS app icon (PNG entries 16 - 512 px, the square
+                                            inside Apple's icon grid) - the launcher's CMakeLists.txt runs it on
+                                            macOS for VCSLauncher.app
 
 Drawn here rather than kept as artwork, so the repository holds the source of every byte. Small sizes draw less (no
 windows or stars below 128 px, no towers below 24) and up to 64 px put the scene's edges and the sun's stripes on whole
@@ -216,18 +217,23 @@ def pixel(S, x, y):
     return colour
 
 
-def render(size, pixels_only=False, pal=DUSK):
+def render(size, pixels_only=False, pal=DUSK, inset=1.0):
+    """The icon as a PNG (or RGBA): the scene's rounded square fills `inset` of the canvas, centred."""
     S = Scene(size, pal)
     n = 8 if size <= 64 else 3  # supersampling per side
+    margin = (1.0 - inset) / 2.0
+    lo, hi = int(margin * size), size - int(margin * size)  # pixels outside are transparent
     rows = []
     for py in range(size):
         row = bytearray([0])  # PNG filter: none
         for px in range(size):
             acc = [0.0, 0.0, 0.0]
             cover = 0
-            for sy in range(n):
+            for sy in range(n if lo <= px < hi and lo <= py < hi else 0):
                 for sx in range(n):
-                    c = pixel(S, (px + (sx + 0.5) / n) / size, (py + (sy + 0.5) / n) / size)
+                    u = ((px + (sx + 0.5) / n) / size - margin) / inset
+                    v = ((py + (sy + 0.5) / n) / size - margin) / inset
+                    c = pixel(S, u, v) if 0.0 <= u < 1.0 and 0.0 <= v < 1.0 else None
                     if c is not None:
                         for i in range(3):
                             acc[i] += c[i]
@@ -268,10 +274,13 @@ def write_header(path):
 
 
 def write_icns(path):
-    """Apple's icon container: 'icns', its length, then (type, length, PNG) entries."""
+    """Apple's icon container: 'icns', its length, then (type, length, PNG) entries. macOS draws app icons from a
+    grid where the rounded square is 824 of 1024 pixels with a margin around it (Dock, Launchpad and Finder show every
+    app's icon at the same canvas size): the scene fills that square, not the whole canvas, or it looks a size larger
+    than the apps beside it. 512 px for Retina screens (256 at 2x) and Finder's large previews."""
     entries = b""
-    for kind, size in ((b"icp4", 16), (b"icp5", 32), (b"icp6", 64), (b"ic07", 128), (b"ic08", 256)):
-        data = render(size)
+    for kind, size in ((b"icp4", 16), (b"icp5", 32), (b"icp6", 64), (b"ic07", 128), (b"ic08", 256), (b"ic09", 512)):
+        data = render(size, inset=824.0 / 1024.0)
         entries += kind + struct.pack(">I", 8 + len(data)) + data
     tmp = path + ".tmp"
     with open(tmp, "wb") as f:
