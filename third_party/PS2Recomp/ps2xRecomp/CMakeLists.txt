@@ -26,14 +26,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(toml11)
 
-FetchContent_Declare(
-    fmt
-    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-    GIT_TAG 12.1.0
-    GIT_SHALLOW TRUE # [gta-recomp] tag only, not the history (PS2RECOMP_PATCHES.md)
-)
-FetchContent_MakeAvailable(fmt)
- 
+# [gta-recomp] no fmt: ps2recomp::format (include/ps2recomp/format.h) writes the same text (PS2RECOMP_PATCHES.md)
+
 FetchContent_Declare(
     libdwarf
     GIT_REPOSITORY https://github.com/davea42/libdwarf-code.git
@@ -107,8 +101,7 @@ PRIVATE
 
 target_link_libraries(ps2_recomp_lib
 PUBLIC
-    fmt::fmt
-    toml11::toml11 
+    toml11::toml11
     dwarf
     rabbitizer
 )

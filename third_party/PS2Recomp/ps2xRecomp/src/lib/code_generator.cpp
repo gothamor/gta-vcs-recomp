@@ -18,7 +18,7 @@
 #include "ps2recomp/types.h"
 #include "ps2_runtime_calls.h"
 
-#include <fmt/format.h>
+#include "ps2recomp/format.h"
 #include <sstream>
 #include <algorithm>
 #include <cstring>
@@ -286,7 +286,7 @@ namespace ps2recomp
             m_reporter->recordUnhandledInstruction(m_currentFunctionName, inst.address, inst.raw, message);
         }
 
-        return fmt::format("throw std::runtime_error(\"{} at 0x{:X} raw=0x{:08X}\");", message, inst.address, inst.raw);
+        return ps2recomp::format("throw std::runtime_error(\"{} at 0x{:X} raw=0x{:08X}\");", message, inst.address, inst.raw);
     }
 
     std::string CodeGenerator::generateFunctionRegistration(const std::vector<Function> &functions, const std::map<uint32_t, std::string> &stubs)

@@ -7,7 +7,7 @@
 #include "ps2_runtime_calls.h"
 
 #include <algorithm>
-#include <fmt/format.h>
+#include "ps2recomp/format.h"
 #include <sstream>
 #include <utility>
 
@@ -123,7 +123,7 @@ namespace ps2recomp
         std::string code;
         if (m_gen.m_emitInstructionComments)
         {
-            code = "// 0x" + fmt::format("{:x}", m_delaySlot.address) + ": 0x" + fmt::format("{:x}", m_delaySlot.raw);
+            code = "// 0x" + ps2recomp::format("{:x}", m_delaySlot.address) + ": 0x" + ps2recomp::format("{:x}", m_delaySlot.raw);
             std::string disassembly = R5900Decoder::disassembleInstruction(m_delaySlot);
             if (!disassembly.empty())
             {
@@ -147,7 +147,7 @@ namespace ps2recomp
         {
             const bool access = isPlainMemoryOpcode(m_delaySlot);
             if (access)
-                m_ss << fmt::format("{}{{ constexpr uint32_t ps2AccessPc = 0x{:X}u;\n", indent, delayPc());
+                m_ss << ps2recomp::format("{}{{ constexpr uint32_t ps2AccessPc = 0x{:X}u;\n", indent, delayPc());
             const std::string code = delaySlotCode();
             std::istringstream lines(code);
             std::string line;
@@ -161,9 +161,9 @@ namespace ps2recomp
             return;
         }
 
-        m_ss << fmt::format("{}ctx->pc = 0x{:X}u;\n", indent, delayPc());
-        m_ss << fmt::format("{}ctx->in_delay_slot = true;\n", indent);
-        m_ss << fmt::format("{}ctx->branch_pc = 0x{:X}u;\n", indent, branchPc());
+        m_ss << ps2recomp::format("{}ctx->pc = 0x{:X}u;\n", indent, delayPc());
+        m_ss << ps2recomp::format("{}ctx->in_delay_slot = true;\n", indent);
+        m_ss << ps2recomp::format("{}ctx->branch_pc = 0x{:X}u;\n", indent, branchPc());
 
         const std::string code = delaySlotCode();
         std::istringstream lines(code);
@@ -176,7 +176,7 @@ namespace ps2recomp
             }
         }
 
-        m_ss << fmt::format("{}ctx->in_delay_slot = false;\n", indent);
+        m_ss << ps2recomp::format("{}ctx->in_delay_slot = false;\n", indent);
     }
 
     void ControlFlowEmitter::emitResumeFromDelaySlotEntry()
@@ -186,17 +186,17 @@ namespace ps2recomp
             return;
         }
 
-        m_ss << fmt::format("    if (ctx->pc == 0x{:X}u) {{\n", delayPc());
+        m_ss << ps2recomp::format("    if (ctx->pc == 0x{:X}u) {{\n", delayPc());
         emitDelaySlot("        ");
-        m_ss << fmt::format("        ctx->pc = 0x{:X}u;\n", fallthroughPc());
+        m_ss << ps2recomp::format("        ctx->pc = 0x{:X}u;\n", fallthroughPc());
 
         if (isInternalTarget(fallthroughPc()))
         {
-            m_ss << fmt::format("        goto label_{:x};\n", fallthroughPc());
+            m_ss << ps2recomp::format("        goto label_{:x};\n", fallthroughPc());
         }
         else
         {
-            m_ss << fmt::format("        goto label_fallthrough_0x{:x};\n", branchPc());
+            m_ss << ps2recomp::format("        goto label_fallthrough_0x{:x};\n", branchPc());
         }
 
         m_ss << "    }\n";
@@ -206,14 +206,14 @@ namespace ps2recomp
     {
         const bool backEdge = target <= sourcePc && !isCallLikeEdge();
         if (backEdge || !leanDelaySlot()) // a checkpoint resumes at the target: keep it
-            m_ss << fmt::format("{}ctx->pc = 0x{:X}u;\n", indent, target);
+            m_ss << ps2recomp::format("{}ctx->pc = 0x{:X}u;\n", indent, target);
         if (backEdge)
         {
-            m_ss << fmt::format("{}if (runtime->eeCheckpointDue()) {{\n", indent);
-            m_ss << fmt::format("{}    return;\n", indent);
-            m_ss << fmt::format("{}}}\n", indent);
+            m_ss << ps2recomp::format("{}if (runtime->eeCheckpointDue()) {{\n", indent);
+            m_ss << ps2recomp::format("{}    return;\n", indent);
+            m_ss << ps2recomp::format("{}}}\n", indent);
         }
-        m_ss << fmt::format("{}goto label_{:x};\n", indent, target);
+        m_ss << ps2recomp::format("{}goto label_{:x};\n", indent, target);
     }
 
     void ControlFlowEmitter::emitRuntimeBranchDispatch(std::string_view targetExpression,
@@ -224,7 +224,7 @@ namespace ps2recomp
                                                        std::string_view indent,
                                                        bool returnOnTransfer)
     {
-        m_ss << fmt::format(
+        m_ss << ps2recomp::format(
             "{}if (!runtime->dispatchGuestBranch(rdram, ctx, {}, 0x{:X}u, 0x{:X}u, PS2Runtime::GuestBranchKind::{}, \"{}\")) {{\n",
             indent,
             targetExpression,
@@ -234,9 +234,9 @@ namespace ps2recomp
             debugName);
         if (returnOnTransfer)
         {
-            m_ss << fmt::format("{}    return;\n", indent);
+            m_ss << ps2recomp::format("{}    return;\n", indent);
         }
-        m_ss << fmt::format("{}}}\n", indent);
+        m_ss << ps2recomp::format("{}}}\n", indent);
     }
 
     bool ControlFlowEmitter::emitDirectFunctionJumpIfAvailable(uint32_t target, StaticBranchKind kind, std::string_view indent)
@@ -259,7 +259,7 @@ namespace ps2recomp
     void ControlFlowEmitter::emitExternalJumpDispatch(uint32_t target, StaticBranchKind kind, std::string_view indent)
     {
         const bool isCall = kind == StaticBranchKind::Call;
-        emitRuntimeBranchDispatch(fmt::format("0x{:X}u", target),
+        emitRuntimeBranchDispatch(ps2recomp::format("0x{:X}u", target),
                                   branchPc(),
                                   isCall ? fallthroughPc() : 0u,
                                   isCall ? "DirectCall" : "DirectJump",
@@ -290,7 +290,7 @@ namespace ps2recomp
         {
             m_ss << indent << "#if defined(PS2X_STRICT_RETURN_DIAGNOSTICS) && PS2X_STRICT_RETURN_DIAGNOSTICS\n";
             m_ss << indent << "(void)runtime->dispatchGuestBranch(rdram, ctx, " << jumpTargetExpression
-                 << ", 0x" << fmt::format("{:X}", branchPc())
+                 << ", 0x" << ps2recomp::format("{:X}", branchPc())
                  << "u, 0u, PS2Runtime::GuestBranchKind::Return, \"JR $ra\");\n";
             m_ss << indent << "return;\n";
             m_ss << indent << "#else\n";
@@ -330,7 +330,7 @@ namespace ps2recomp
         m_ss << indent << "{\n";
         if (kind == StaticBranchKind::Call)
         {
-            m_ss << fmt::format("{}    ctx->pc = 0x{:X}u;\n", indent, fallthroughPc());
+            m_ss << ps2recomp::format("{}    ctx->pc = 0x{:X}u;\n", indent, fallthroughPc());
         }
         else
         {
@@ -346,7 +346,7 @@ namespace ps2recomp
         }
         else
         {
-            m_ss << fmt::format("{}if (ctx->pc != 0x{:X}u) {{ return; }}\n", indent, fallthroughPc());
+            m_ss << ps2recomp::format("{}if (ctx->pc != 0x{:X}u) {{ return; }}\n", indent, fallthroughPc());
         }
 
         return true;
@@ -356,7 +356,7 @@ namespace ps2recomp
     {
         if (kind == StaticBranchKind::Call)
         {
-            m_ss << fmt::format("    SET_GPR_U32(ctx, 31, 0x{:X}u);\n", fallthroughPc());
+            m_ss << ps2recomp::format("    SET_GPR_U32(ctx, 31, 0x{:X}u);\n", fallthroughPc());
         }
 
         emitDelaySlot("    ");
@@ -370,7 +370,7 @@ namespace ps2recomp
 
         // [gta-recomp] lean pc: a call's dispatch (and the relocation stub path) store the pc themselves
         if (kind != StaticBranchKind::Call || !leanDelaySlot())
-            m_ss << fmt::format("    ctx->pc = 0x{:X}u;\n", target);
+            m_ss << ps2recomp::format("    ctx->pc = 0x{:X}u;\n", target);
 
         if (kind == StaticBranchKind::Call && emitRelocationCallIfAvailable(kind, "    "))
         {
@@ -396,7 +396,7 @@ namespace ps2recomp
 
         if (kind == RegisterBranchKind::Call && rdReg != 0u)
         {
-            m_ss << fmt::format("        SET_GPR_U32(ctx, {}, 0x{:X}u);\n", rdReg, fallthroughPc());
+            m_ss << ps2recomp::format("        SET_GPR_U32(ctx, {}, 0x{:X}u);\n", rdReg, fallthroughPc());
         }
 
         emitDelaySlot("        ");
@@ -407,7 +407,7 @@ namespace ps2recomp
             m_ss << "        switch (jumpTarget) {\n";
             for (uint32_t target : sortedInternalTargets)
             {
-                m_ss << fmt::format("            case 0x{:X}u: goto label_{:x};\n", target, target);
+                m_ss << ps2recomp::format("            case 0x{:X}u: goto label_{:x};\n", target, target);
             }
             m_ss << "            default: break;\n";
             m_ss << "        }\n";
@@ -434,20 +434,20 @@ namespace ps2recomp
         {
         case OPCODE_BEQ:
         case OPCODE_BEQL:
-            return fmt::format("GPR_U64(ctx, {}) == GPR_U64(ctx, {})", rsReg, rtReg);
+            return ps2recomp::format("GPR_U64(ctx, {}) == GPR_U64(ctx, {})", rsReg, rtReg);
         case OPCODE_BNE:
         case OPCODE_BNEL:
-            return fmt::format("GPR_U64(ctx, {}) != GPR_U64(ctx, {})", rsReg, rtReg);
+            return ps2recomp::format("GPR_U64(ctx, {}) != GPR_U64(ctx, {})", rsReg, rtReg);
         // [gta-recomp] The R5900's compare-with-zero branches test the whole 64-bit register (as BEQ / BNE and SLT
         // do). Upstream tested the low word: identical for sign-extended 32-bit values, wrong after an LD of a 64-bit
         // bitfield whose bit 31 differs from bit 63 - VCS's CPed::ProcessControl took "bFadeOut" (bit 63 of +0x1C8) from
         // bit 31 and faded out / deleted mission peds (game-internals.md 12, the Shakedown shopkeeper).
         case OPCODE_BLEZ:
         case OPCODE_BLEZL:
-            return fmt::format("GPR_S64(ctx, {}) <= 0", rsReg);
+            return ps2recomp::format("GPR_S64(ctx, {}) <= 0", rsReg);
         case OPCODE_BGTZ:
         case OPCODE_BGTZL:
-            return fmt::format("GPR_S64(ctx, {}) > 0", rsReg);
+            return ps2recomp::format("GPR_S64(ctx, {}) > 0", rsReg);
         case OPCODE_REGIMM:
             switch (m_branchInst.rt)
             {
@@ -455,12 +455,12 @@ namespace ps2recomp
             case REGIMM_BLTZL:
             case REGIMM_BLTZAL:
             case REGIMM_BLTZALL:
-                return fmt::format("GPR_S64(ctx, {}) < 0", rsReg);
+                return ps2recomp::format("GPR_S64(ctx, {}) < 0", rsReg);
             case REGIMM_BGEZ:
             case REGIMM_BGEZL:
             case REGIMM_BGEZAL:
             case REGIMM_BGEZALL:
-                return fmt::format("GPR_S64(ctx, {}) >= 0", rsReg);
+                return ps2recomp::format("GPR_S64(ctx, {}) >= 0", rsReg);
             default:
                 return "false";
             }
@@ -500,7 +500,7 @@ namespace ps2recomp
     {
         const uint32_t target = conditionalBranchTarget();
         const bool likely = isLikelyBranch();
-        const std::string branchTakenVar = fmt::format("branch_taken_0x{:x}", m_branchInst.address);
+        const std::string branchTakenVar = ps2recomp::format("branch_taken_0x{:x}", m_branchInst.address);
         std::string unconditionalLinkCode;
         std::string conditionalLinkCode;
 
@@ -508,11 +508,11 @@ namespace ps2recomp
         {
             if (m_branchInst.rt == REGIMM_BLTZAL || m_branchInst.rt == REGIMM_BGEZAL)
             {
-                unconditionalLinkCode = fmt::format("SET_GPR_U32(ctx, 31, 0x{:X}u);", fallthroughPc());
+                unconditionalLinkCode = ps2recomp::format("SET_GPR_U32(ctx, 31, 0x{:X}u);", fallthroughPc());
             }
             else if (m_branchInst.rt == REGIMM_BLTZALL || m_branchInst.rt == REGIMM_BGEZALL)
             {
-                conditionalLinkCode = fmt::format("SET_GPR_U32(ctx, 31, 0x{:X}u);", fallthroughPc());
+                conditionalLinkCode = ps2recomp::format("SET_GPR_U32(ctx, 31, 0x{:X}u);", fallthroughPc());
             }
         }
 
@@ -539,7 +539,7 @@ namespace ps2recomp
             }
             else
             {
-                m_ss << fmt::format("            ctx->pc = 0x{:X}u;\n", target);
+                m_ss << ps2recomp::format("            ctx->pc = 0x{:X}u;\n", target);
                 m_ss << "            return;\n";
             }
             m_ss << "        }\n";
@@ -560,7 +560,7 @@ namespace ps2recomp
             }
             else
             {
-                m_ss << fmt::format("            ctx->pc = 0x{:X}u;\n", target);
+                m_ss << ps2recomp::format("            ctx->pc = 0x{:X}u;\n", target);
                 m_ss << "            return;\n";
             }
             m_ss << "        }\n";
@@ -579,13 +579,13 @@ namespace ps2recomp
     {
         if (isInternalTarget(delayPc()) && !isInternalTarget(fallthroughPc()))
         {
-            m_ss << fmt::format("label_fallthrough_0x{:x}:\n", branchPc());
+            m_ss << ps2recomp::format("label_fallthrough_0x{:x}:\n", branchPc());
         }
     }
 
     void ControlFlowEmitter::emitFinalFallthrough()
     {
-        m_ss << fmt::format("    ctx->pc = 0x{:X}u;\n", fallthroughPc());
+        m_ss << ps2recomp::format("    ctx->pc = 0x{:X}u;\n", fallthroughPc());
     }
 
     std::string ControlFlowEmitter::emit()
@@ -598,7 +598,7 @@ namespace ps2recomp
                                 (m_branchInst.opcode == OPCODE_J || m_branchInst.opcode == OPCODE_JAL ||
                                  (m_branchInst.isBranch && !(m_branchInst.opcode == OPCODE_SPECIAL)));
         if (!leanBranch)
-            m_ss << fmt::format("    ctx->pc = 0x{:X}u;\n", branchPc());
+            m_ss << ps2recomp::format("    ctx->pc = 0x{:X}u;\n", branchPc());
 
         if (m_branchInst.opcode == OPCODE_J || m_branchInst.opcode == OPCODE_JAL)
         {

@@ -168,6 +168,10 @@ def main():
     ap.add_argument("iso", nargs="?", help="your Vice City Stories (USA) disc image")
     ap.add_argument("-v", "--verbose", action="store_true", help="show all build output")
     ap.add_argument("--check", action="store_true", help="only say whether the generated code is current (exit 0) or not (1)")
+    ap.add_argument("--compare", metavar="DIR",
+                    help="after recompiling, require generated/ee to be byte for byte DIR (a copy of an earlier "
+                         "generated/ee, e.g. build/regress/baseline/recompiler/generated_ee): a change to the "
+                         "recompiler that should not change its output (exit 1 on a difference)")
     a = ap.parse_args()
     if a.check:
         why = why_recompile()
@@ -175,6 +179,21 @@ def main():
         sys.exit(1 if why else 0)
     tc.fix_future_files()  # as build.py: else Ninja re-runs CMake until it gives up
     recompile(a.iso, verbose=a.verbose)
+    if a.compare:
+        sys.exit(0 if compare(os.path.join(GENERATED, "ee"), a.compare) else 1)
+
+
+def compare(new_dir, ref_dir):
+    """Every file of the two folders the same, and the same files; prints what differs."""
+    new, ref = set(os.listdir(new_dir)), set(os.listdir(ref_dir))
+    differ = sorted(n for n in new & ref if not filecmp.cmp(os.path.join(new_dir, n), os.path.join(ref_dir, n), shallow=False))
+    for title, names in (("only in generated/ee", sorted(new - ref)), ("only in " + ref_dir, sorted(ref - new)),
+                         ("different", differ)):
+        if names:
+            print("[compare] %s: %d (%s)" % (title, len(names), ", ".join(names[:8]) + (" ..." if len(names) > 8 else "")))
+    same = not differ and new == ref
+    print("[compare] %s: %d files" % ("identical" if same else "DIFFERENT", len(new)))
+    return same
 
 
 if __name__ == "__main__":

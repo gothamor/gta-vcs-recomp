@@ -2,7 +2,7 @@
 #include "ps2recomp/codegen_helpers.h"
 #include "ps2recomp/instructions.h"
 #include "ps2recomp/types.h"
-#include <fmt/format.h>
+#include "ps2recomp/format.h"
 #include <sstream>
 #include <cmath>
 
