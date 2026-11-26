@@ -7,40 +7,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-include(FetchContent)
-
-# [gta-recomp] no ELFIO: include/ps2recomp/elf_file.h reads the ELF (PS2RECOMP_PATCHES.md)
-
-# [gta-recomp] no toml11: include/ps2recomp/toml_lite.h reads the config (PS2RECOMP_PATCHES.md)
-
-# [gta-recomp] no fmt: ps2recomp::format (include/ps2recomp/format.h) writes the same text (PS2RECOMP_PATCHES.md)
-
-# [gta-recomp] no libdwarf: retail ELFs carry no DWARF, and the parser no longer reads it (PS2RECOMP_PATCHES.md)
-
-FetchContent_Declare(
-    rabbitizer
-    GIT_REPOSITORY https://github.com/Decompollaborate/rabbitizer.git
-    GIT_TAG 1.14.3
-    GIT_SHALLOW TRUE # [gta-recomp] tag only, not the history (PS2RECOMP_PATCHES.md)
-)
-FetchContent_MakeAvailable(rabbitizer)
-
-if (NOT TARGET rabbitizer)
-    file(GLOB_RECURSE RABBITIZER_SOURCES CONFIGURE_DEPENDS
-        "${rabbitizer_SOURCE_DIR}/src/analysis/*.c"
-        "${rabbitizer_SOURCE_DIR}/src/common/*.c"
-        "${rabbitizer_SOURCE_DIR}/src/instructions/*.c"
-        "${rabbitizer_SOURCE_DIR}/src/instructions/*/*.c"
-    )
-
-    add_library(rabbitizer STATIC ${RABBITIZER_SOURCES})
-
-    target_include_directories(rabbitizer PUBLIC
-        "${rabbitizer_SOURCE_DIR}/include"
-        "${rabbitizer_SOURCE_DIR}/tables"
-        "${rabbitizer_SOURCE_DIR}/tables/tables"
-    )
-endif()
+# [gta-recomp] Nothing downloaded (DECISIONS.md 2026-11-27, PS2RECOMP_PATCHES.md): the recompiler's own code replaced
+# - ELFIO: include/ps2recomp/elf_file.h reads the ELF
+# - toml11: include/ps2recomp/toml_lite.h reads the config
+# - fmt: ps2recomp::format (include/ps2recomp/format.h) writes the same text
+# - libdwarf: retail ELFs carry no DWARF, and the parser no longer reads it
+# - rabbitizer: src/lib/r5900_disasm.cpp identifies and disassembles the instructions (its tables: r5900_tables.inc)
 
 file(GLOB_RECURSE PS2RECOMP_LIB_SOURCES CONFIGURE_DEPENDS
     src/lib/*.cpp
@@ -61,10 +33,6 @@ PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../ps2xRuntime/include
 )
 
-target_link_libraries(ps2_recomp_lib
-PUBLIC
-    rabbitizer
-)
 
 file(GLOB_RECURSE PS2RECOMP_EXE_SOURCES CONFIGURE_DEPENDS
     src/runner/*.cpp

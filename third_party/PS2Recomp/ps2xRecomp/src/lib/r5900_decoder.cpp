@@ -1,24 +1,10 @@
 #include "ps2recomp/r5900_decoder.h"
-#include "rabbitizer.h"
+#include "ps2recomp/r5900_disasm.h" // [gta-recomp] our own, not rabbitizer
 #include <iostream>
 #include <vector>
 
 namespace ps2recomp
 {
-    static std::string disassembleRabbitizerInstruction(RabbitizerInstruction &rabbitizerInst)
-    {
-        std::string disassembly;
-        const size_t bufferSize = RabbitizerInstruction_getSizeForBuffer(&rabbitizerInst, 0, 0);
-        if (bufferSize > 0)
-        {
-            std::vector<char> buffer(bufferSize + 1, '\0');
-            RabbitizerInstruction_disassemble(&rabbitizerInst, buffer.data(), nullptr, 0, 0);
-            disassembly = buffer.data();
-        }
-
-        return disassembly;
-    }
-
     R5900Decoder::R5900Decoder()
     {
     }
@@ -29,14 +15,7 @@ namespace ps2recomp
 
     std::string R5900Decoder::disassembleInstruction(uint32_t address, uint32_t rawInstruction)
     {
-        RabbitizerInstruction rabbitizerInst;
-        RabbitizerInstructionR5900_init(&rabbitizerInst, rawInstruction, address);
-        RabbitizerInstructionR5900_processUniqueId(&rabbitizerInst);
-
-        std::string disassembly = disassembleRabbitizerInstruction(rabbitizerInst);
-
-        RabbitizerInstructionR5900_destroy(&rabbitizerInst);
-        return disassembly;
+        return r5900::disassemble(rawInstruction, address);
     }
 
     std::string R5900Decoder::disassembleInstruction(const Instruction &inst)
@@ -98,21 +77,17 @@ namespace ps2recomp
         inst.modificationInfo.modifiesMemory = false;
         inst.modificationInfo.modifiesControl = false;
 
-        RabbitizerInstruction rabbitizerInst;
-        RabbitizerInstructionR5900_init(&rabbitizerInst, rawInstruction, address);
-        RabbitizerInstructionR5900_processUniqueId(&rabbitizerInst);
+        // [gta-recomp] the instruction's facts from our own tables (r5900_disasm.h; they were rabbitizer's)
+        const r5900::Facts facts = r5900::examine(rawInstruction);
 
-        const RabbitizerInstrDescriptor *desc = rabbitizerInst.descriptor;
+        inst.isBranch = facts.isBranch;
+        inst.isJump = facts.isJump;
+        inst.isCall = facts.isFunctionCall;
+        inst.isReturn = facts.isReturn || facts.isEret;
+        inst.hasDelaySlot = facts.hasDelaySlot;
 
-        inst.isBranch = RabbitizerInstrDescriptor_isBranch(desc);
-        inst.isJump = RabbitizerInstrDescriptor_isJump(desc);
-        inst.isCall = RabbitizerInstruction_isFunctionCall(&rabbitizerInst);
-        inst.isReturn = RabbitizerInstruction_isReturn(&rabbitizerInst) ||
-                        rabbitizerInst.uniqueId == RABBITIZER_INSTR_ID_cpu_eret;
-        inst.hasDelaySlot = RabbitizerInstruction_hasDelaySlot(&rabbitizerInst);
-
-        inst.isLoad = RabbitizerInstrDescriptor_doesLoad(desc);
-        inst.isStore = RabbitizerInstrDescriptor_doesStore(desc);
+        inst.isLoad = facts.doesLoad;
+        inst.isStore = facts.doesStore;
 
         inst.isMMI = inst.opcode == OPCODE_MMI;
         inst.isVU = inst.opcode == OPCODE_COP2 ||
@@ -122,36 +97,31 @@ namespace ps2recomp
                     inst.opcode == OPCODE_SDC2;
 
         bool modifiesGpr = false;
-        if (RabbitizerInstrDescriptor_modifiesRs(desc) && inst.rs != 0)
+        if (facts.modifiesRs && inst.rs != 0)
         {
             modifiesGpr = true;
         }
-        if (RabbitizerInstrDescriptor_modifiesRt(desc) && inst.rt != 0)
+        if (facts.modifiesRt && inst.rt != 0)
         {
             modifiesGpr = true;
         }
-        if (RabbitizerInstrDescriptor_modifiesRd(desc) && inst.rd != 0)
+        if (facts.modifiesRd && inst.rd != 0)
         {
             modifiesGpr = true;
         }
-        if (RabbitizerInstrDescriptor_doesLink(desc))
+        if (facts.doesLink)
         {
             modifiesGpr = true;
         }
         inst.modificationInfo.modifiesGPR = modifiesGpr;
 
-        inst.modificationInfo.modifiesFPR = RabbitizerInstrDescriptor_modifiesFs(desc) ||
-                                            RabbitizerInstrDescriptor_modifiesFt(desc) ||
-                                            RabbitizerInstrDescriptor_modifiesFd(desc);
+        inst.modificationInfo.modifiesFPR = facts.modifiesFs || facts.modifiesFt || facts.modifiesFd;
 
-        inst.modificationInfo.modifiesMemory = RabbitizerInstrDescriptor_doesStore(desc);
-        inst.modificationInfo.modifiesControl = RabbitizerInstrDescriptor_isBranch(desc) ||
-                                                RabbitizerInstrDescriptor_isJump(desc) ||
-                                                RabbitizerInstrDescriptor_isTrap(desc) ||
-                                                RabbitizerInstrDescriptor_modifiesHI(desc) ||
-                                                RabbitizerInstrDescriptor_modifiesLO(desc);
+        inst.modificationInfo.modifiesMemory = facts.doesStore;
+        inst.modificationInfo.modifiesControl = facts.isBranch || facts.isJump || facts.isTrap ||
+                                                facts.modifiesHI || facts.modifiesLO;
 
-        if (rabbitizerInst.uniqueId == RABBITIZER_INSTR_ID_cpu_eret)
+        if (facts.isEret)
         {
             inst.isReturn = true;
             inst.hasDelaySlot = false;
@@ -215,10 +185,8 @@ namespace ps2recomp
 
         if (includeDisassembly)
         {
-            inst.disassembly = disassembleRabbitizerInstruction(rabbitizerInst);
+            inst.disassembly = r5900::disassemble(rawInstruction, address);
         }
-
-        RabbitizerInstructionR5900_destroy(&rabbitizerInst);
 
         return inst;
     }
