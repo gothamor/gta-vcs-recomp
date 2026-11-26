@@ -64,7 +64,9 @@ python tools/build.py --iop-tests           # SPU2 unit tests (reverb, interpola
 python tools/build.py --quick               # no LTO (= --opt none): fast relinks; kept until --opt lto
 python tools/build.py --check-deps          # Linux: missing packages and the command that installs them; macOS: the
                                             # Command Line Tools (docs/MACOS.md)
-python3 tools/shader_tools.py               # macOS: glslang + SPIRV-Cross for the Metal shaders (the build runs it)
+python tools/shaders.py build|check         # the Vulkan / Metal shaders: compiled once (pinned glslang + SPIRV-Cross,
+                                            # tools/shader_tools.py) and committed in compiled/; after editing an .hlsl,
+                                            # build (build.py does it when it sees the change) and commit compiled/ too
 python tools/build.py --opt none|lto|pgo    # game optimisation, kept until changed (lto: the default; pgo: ThinLTO + profile, trains if needed)
 python tools/bench.py [OUT]                  # game-thread benchmark: fixed city spots + an AI drive (game / worker ms)
 python tools/cruise.py run [OUT] [ENV=VAL]   # stutter rig: the car along a fixed route at 144 km/h, every frame timed;
@@ -83,7 +85,10 @@ python3 tools/release.py --platform linux [--worktree --allow-new-glibc]   # the
                                              # Ubuntu 22.04 for glibc 2.35; a v* tag publishes zip + AppImage together)
 python3 tools/release.py --platform macos [--worktree]   # the macOS .dmg: the app next to an Applications link
                                              # (tools/dmg.py writes the Finder layout; `dmg.py show X.dmg` prints it)
-python tools/deps.py list|fetch|check        # the libraries CMake downloads; deps/ makes the build offline
+python tools/deps.py list|fetch|check        # the libraries CMake downloads (SDL3, Dear ImGui; Linux: the Vulkan
+                                             # headers, volk, VMA; macOS: sse2neon); deps/ makes the build offline
+python tools/recompile.py --compare DIR      # recompile and require generated/ee byte for byte DIR (a change to the
+                                             # recompiler that must not change its output; a copy of generated/ee first)
 python tools/backup.py create|list|restore   # memory card backups (VCS_DATA_DIR honoured: test on copies)
 python tools/setup_vs.py status|install [--dry-run]   # Visual Studio Build Tools (+ clang) from Microsoft, elevated
 python tools/hlsl_dxbc.py ... [--check-fxc FXC]       # HLSL -> DXBC through Windows' d3dcompiler_47.dll (no Windows SDK)

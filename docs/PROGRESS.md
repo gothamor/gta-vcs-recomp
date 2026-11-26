@@ -1116,6 +1116,23 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
       Not checked: a ThinLTO build (the quick build was used), and - never checkable here - the choice between two
       cards. Not done, for the user to decide: the game's window has no icon on Linux (issue 91 gave vcs.exe one
       through its resources; DECISIONS.md).
+- [x] **Fewer downloads (2026-11-27, the user's request; DECISIONS.md)**: a Windows build now fetches SDL3 and Dear ImGui
+      only (was nine). Each replacement checked against what it replaced before that went:
+      - the recompiler's fmt / ELFIO / toml11 / libdwarf / rabbitizer: our `format.h`, `elf_file.h`, `toml_lite.h`,
+        `r5900_disasm.cpp` (+ tables from rabbitizer's, MIT). After each step the recompiled game, 10,386 files, byte for
+        byte the same and the same warnings (`tools/recompile.py --compare`, baseline in
+        `build/regress/baseline/recompiler`); the disassembler against rabbitizer over all 2^32 words (text and
+        facts: 0 differences, 17 min on 8 threads); the TOML reader against Python's tomllib on every config here.
+      - nlohmann_json: the analyzer, which nothing runs, is off (`VCS_BUILD_ANALYZER`).
+      - zlib (screenshots): `src/platform/deflate.cpp` - 21 inputs round-trip through Python's zlib; on 9 screenshots
+        4,034,616 bytes in 884 ms against zlib 1.3.1's 4,019,529 in 928 ms (+0.4%, 5% faster); a game screenshot
+        decodes.
+      - glslang / SPIRV-Cross for players: the SPIR-V and MSL committed (`tools/shaders.py`, 1 MB); a fresh compile
+        gives the same bytes, the headers equal a live compile's, an edited shader is reported stale; CI compiles
+        them again on Linux and macOS and compares.
+      Not checked here: the Linux SPIR-V (now the pinned glslang's, not the distribution's) on Linux, and a macOS game
+      build - CI and the user's Mac.
+
 ## Useful switches
 | Env var | Effect |
 |---|---|

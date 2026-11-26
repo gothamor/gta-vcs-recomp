@@ -27,8 +27,8 @@ part of that check:
 | What | How |
 |---|---|
 | CMake, Ninja | any on PATH (Homebrew's, CMake.app), else Kitware's universal tarball / Ninja's mac zip into `build/build-tools` |
-| glslang, SPIRV-Cross (the Metal shaders) | built once from `tools/shader_tools/CMakeLists.txt` into `build/build-tools/shader-tools` (`tools/shader_tools.py`, ~1 min). `VCS_GLSLANG` / `VCS_SPIRV_CROSS` take other copies |
-| SDL3, Dear ImGui, zlib, sse2neon, ... | FetchContent, as on the other platforms |
+| glslang, SPIRV-Cross (the Metal shaders) | not for a build since 2026-11-27: the MSL is committed (`src/render/shaders/compiled/msl`). Only `tools/shaders.py build`, after a shader edit, builds them (`tools/shader_tools.py`, ~1 min) |
+| SDL3, Dear ImGui, sse2neon | FetchContent, as on the other platforms |
 
 - **The compiler is Apple's clang only** (`toolchain.macos_compiler_defines`: `xcrun -f clang`). Homebrew's LLVM is
   never taken: its bitcode can't go through Apple's linker for ThinLTO.
@@ -48,7 +48,7 @@ part of that check:
   GPU). `VCS_RHI=null` draws nothing (the CPU side alone). The window is a Retina window: it draws at the screen's own
   pixels.
 - **Shaders** are the one HLSL source as MSL text (`tools/hlsl_msl.py`: glslang -> SPIR-V, with the dual-source patch
-  of `hlsl_spirv.py` -> SPIRV-Cross), compiled by the OS at run time with fast math off (`MTLMathModeSafe`) - the
+  of `hlsl_spirv.py` -> SPIRV-Cross; made once by `tools/shaders.py build` and committed), compiled by the OS at run time with fast math off (`MTLMathModeSafe`) - the
   Command Line Tools have no Metal compiler. All of the game's 39 take ~50 ms on an M1.
 - **Vertical sync is on by default** on macOS (Display > Vertical sync; DECISIONS.md 2026-11-13); the log says
   `[rhi] metal: vertical sync on|off`.
@@ -83,7 +83,7 @@ title bar. Its Build tools step installs the Command Line Tools (`build.py --ins
 | Area | Windows | Linux | macOS | Why |
 |---|---|---|---|---|
 | Renderer | D3D11 | Vulkan | Metal | Each platform's own API; Vulkan on macOS would need MoltenVK |
-| Shaders | DXBC (d3dcompiler_47) | SPIR-V (glslang) | MSL text (glslang + SPIRV-Cross), compiled at run time | One HLSL source |
+| Shaders | DXBC (d3dcompiler_47) | SPIR-V (glslang) | MSL text (glslang + SPIRV-Cross, committed), compiled at run time | One HLSL source |
 | SSE | native | native | sse2neon (precise) | arm64 |
 | Rounding mode | MXCSR | MXCSR | FPCR | arm64 |
 | Write watch | `GetWriteWatch` | userfaultfd, opt-in | off | No gain measured on Linux; 16 KB pages here |

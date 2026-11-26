@@ -29,7 +29,7 @@ step loses players, and the README's *Problems* table is mostly those steps goin
 | `VCSLauncher.exe` | the launcher, one static exe (4 MB) |
 | `VERSION`, `RELEASE.json` | the release's number (the repository's `VERSION`, also built into VCSLauncher.exe's version information; a `v*` tag must match it); its repository, commit and file list (tools/update.py) |
 | `python/` | python.org's embeddable CPython (the version that made the release). Not on PATH: the build hands it to CMake (`-DPython3_EXECUTABLE`, `toolchain.python_defines`), which runs `tools/hlsl_dxbc.py` for the shaders - without it a PC with no Python of its own stopped at "Could NOT find Python3" (0.2.1, issues 67-73) |
-| `deps/` | the libraries CMake would download (tools/deps.py): SDL3, Dear ImGui, zlib, ELFIO, toml11, fmt, libdwarf, rabbitizer, nlohmann/json (until 2026-11-26 also FFmpeg's LGPL build, a 35 MB archive: the movies have their own decoder now) |
+| `deps/` | the libraries CMake would download (tools/deps.py): SDL3 and Dear ImGui (until 2026-11-26 also FFmpeg's LGPL build, a 35 MB archive: the movies have their own decoder now; until 2026-11-27 zlib, ELFIO, toml11, fmt, libdwarf, rabbitizer and nlohmann/json: DECISIONS.md) |
 | `THIRD_PARTY_LICENSES.txt` | their licences, collected from the libraries themselves |
 | the source | the repository at the tag (`git archive`; `--worktree` for tests) |
 
@@ -388,7 +388,7 @@ recompiler, the runtime headers it compiles in, the translate / sync scripts; `r
 | `python tools/report.py [OUT]` | build logs, the newest four game logs (crash reports included), state files, doctor's JSON, Windows / CPU / GPU names; never the disc, generated code or the card |
 | `python tools/update.py check / apply [--zip F]` | GitHub's latest release vs RELEASE.json; apply replaces the release's files, removes the ones the new release dropped, keeps build/ and generated/ and anything added; files in use (the launcher, the running Python) are renamed `*.old` and removed next time, a file held open is tried again for a few seconds; a file it still can't write is skipped and named, `VERSION` / `RELEASE.json` stay the old ones and it fails with `update_incomplete` (the launcher offers the update again; issue 66); checks the `.sha256`; its result says `restart: true` when it put a new release in place (the launcher's Restart button) |
 | `python tools/rip_disc.py list / rip E: OUT.iso` | a disc's sectors (the size its ISO 9660 volume gives) to an .iso, retries, then the check |
-| `python tools/deps.py list / fetch [DIR] / check [DIR]` | the FetchContent pins read from the CMake files (one list); nlohmann/json from its release archive (0.2 MB instead of a 188 MB clone) |
+| `python tools/deps.py list / fetch [DIR] / check [DIR]` | the FetchContent pins read from the CMake files (one list): a shallow clone of each at its tag |
 | `python tools/release.py [--ref vX / --worktree] [--version X] [--launcher EXE]` | the release zip |
 | `python tools/vcs_disc.py check ISO [--json]` | the disc check, for scripts |
 

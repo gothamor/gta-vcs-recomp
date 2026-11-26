@@ -570,7 +570,8 @@ libraries through the same `tools/build.py`; no container, Flatpak or Steam Runt
   (immutable pipelines, explicit passes), and it can be checked against D3D11 on the same Windows PC
   (`-DVCS_RHI_VULKAN=ON`). D3D11 stays the Windows default and the reference. Vulkan 1.3 with dynamic rendering,
   synchronization2 and push descriptors; volk, VMA and the headers from source (no SDK).
-- **Shaders stay one HLSL source**: glslang (a distro package) compiles them to SPIR-V through `tools/hlsl_spirv.py`.
+- **Shaders stay one HLSL source**: glslang (a distro package) compiles them to SPIR-V through `tools/hlsl_spirv.py`
+  (since 2026-11-27 once, by `tools/shaders.py`, and committed: no glslang package).
   DXC was the plan, but no distro ships it here and a downloaded binary is a tool the user didn't install; glslang
   handles every shader, and the script fixes the one thing it gets wrong (dual-source output: Location 0 Index 1).
 - **Dear ImGui through the RHI** (`render/ui_renderer.cpp`) for Vulkan instead of `imgui_impl_vulkan`: one pipeline
@@ -1439,6 +1440,7 @@ turned stick (the pull-in toward the player), through the game's own switch for 
   Tools have no Metal compiler (`xcrun metal` needs Xcode and a separate download); the OS's Metal framework compiles
   MSL. Fast math off (`MTLMathModeSafe`). glslang and SPIRV-Cross are built from the Vulkan SDK 1.4.350.1 tags, the same
   pins as the Vulkan headers. Bindings without the Vulkan shifts (Metal has 16 sampler slots and a table per kind).
+  (Since 2026-11-27 the MSL is compiled once and committed: no Mac builds glslang / SPIRV-Cross for a game build.)
 - **Apple clang and ld64**, not Homebrew's LLVM: Homebrew's bitcode can't go through Apple's linker for ThinLTO, and
   lld isn't part of the Command Line Tools. `preserve_none` exists from Apple clang 17 (LLVM 19), checked by CMake.
 - **sse2neon with its precise options** for the generated code's SSE (already wired upstream for ARM): VU0 / HLE verify
@@ -1534,3 +1536,38 @@ build tree. `src/video/mpeg2.cpp` replaces it.
   is replaced first). `PS2X_ENABLE_FFMPEG` is off, so it falls back to upstream's stub - not ported to our decoder.
 - Cost: ~1,500 lines to keep (decoder, tables, colour); decoding ~2 ms a picture against FFmpeg's ~0.8 on the dev PC,
   of 33 ms. Updating rebuilds everything once (FFmpeg's include folders left every compile command).
+
+## 2026-11-27 - Fewer downloads: the recompiler's libraries, zlib and the shader compilers gone (the user's request, plan approved; details Claude's)
+
+After FFmpeg, the user asked to remove the other external dependencies "as much as possible". Of the nine
+libraries a Windows build fetched, seven went; what stays is SDL3 and Dear ImGui (and on Linux the Vulkan headers,
+volk and VMA, on macOS sse2neon). Each replacement was checked against the library it replaced before that went:
+
+- **The recompiler** (every player builds it) had five: fmt, ELFIO, toml11, libdwarf, rabbitizer. Its own
+  `format.h`, `elf_file.h`, `toml_lite.h` and `r5900_disasm.cpp` replace them; libdwarf's path is gone (retail ELFs
+  carry no DWARF - Vice City Stories' has no `.debug_*` section). The check: the recompiled game, all 10,386 files,
+  byte for byte the same after each step (`tools/recompile.py --compare`), and the same warnings.
+- **Rabbitizer was more than the comments**: R5900Decoder took each instruction's facts from it too (branch, jump,
+  load / store, the registers it writes, link). `r5900_disasm.cpp` is our decode tree and text; its tables
+  (`r5900_tables.inc`) were generated once from rabbitizer 1.14.3's own (MIT, the licence in the file), so the
+  decoding is exactly what the recompiler had. Compared over all 2^32 words before rabbitizer was removed: the same
+  text and facts for every one.
+- **toml_lite reads TOML 1.0 minus multi-line strings and dates** (not in our configs; an error naming the line).
+  `saveConfig` had no caller and went.
+- **nlohmann_json** was only the analyzer's, which nothing runs (it made `build/analyzer/analyzer.toml` once):
+  `VCS_BUILD_ANALYZER` is off by default.
+- **zlib** was one call: the PNG screenshots. `src/platform/deflate.cpp` (RFC 1950/1951, hash chains and lazy
+  matching as zlib's level 6) - 0.4% larger, 5% faster than the zlib 1.3.1 it replaces. The game's own inflate
+  (`vcs_inflate.cpp`) was never zlib the library.
+- **Shaders: compiled once and committed**, not compiled by players. Linux players needed `glslang-tools` and every
+  macOS build tree built glslang and SPIRV-Cross (a minute) to turn our five HLSL files into SPIR-V and MSL. Now
+  `tools/shaders.py build` does it with the pinned compilers into `compiled/` (1 MB, binary `.spv`, text `.metal`)
+  and the builds make the same headers from those. The risk is a stale commit: `compiled/manifest.json` holds the
+  hash of everything they come from; the game's build warns, `tools/build.py` compiles again by itself when it sees a
+  change, and CI compiles them afresh and compares bytes. D3D11 stays compiled at build time (Windows' own
+  d3dcompiler). No switch back to live compiling: one path, and `shaders.py build` is the live compile.
+- **Not done** (the survey, same session): SDL3 (gamepads: hundreds of controllers, rumble, the prompts' type
+  detection - many sessions, and it would break some players' controllers), Dear ImGui (830 calls across the F2 / F5
+  / F3 menus; only with a redesign), the Vulkan headers (the API itself), sse2neon (bit-exact SSE on ARM).
+- Cost: ~3,000 lines to keep (most of it the instruction tables), and a recompile prompt once for players (the
+  recompiler changed; its output did not, so nothing of the game is rebuilt).

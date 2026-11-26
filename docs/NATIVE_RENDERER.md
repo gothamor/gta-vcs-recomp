@@ -60,7 +60,10 @@ Rules:
 - Shaders are written in HLSL (SM 5.0), compiled at build time to bytecode headers
   (`fxc`/`dxc`). Later ports cross-compile the same source (Slang or
   DXC -> SPIR-V -> SPIRV-Cross for MSL); keep shaders free of D3D-only intrinsics
-  where a portable form exists.
+  where a portable form exists. (As built: D3D11's DXBC at build time by Windows' d3dcompiler; SPIR-V by glslang and
+  MSL by glslang + SPIRV-Cross, compiled once by `tools/shaders.py build` into `src/render/shaders/compiled` and
+  committed - the list is `src/render/shaders/shaders.txt`. Edit an .hlsl, then build: tools/build.py compiles them
+  again when it sees the change; commit `compiled/` with the shader. DECISIONS.md 2026-11-27.)
 - The runtime reaches the platform and RHI through the host-backend seam it already
   has (`ps2_host_backend.h`); raylib is removed from it. Patches go in
   PS2RECOMP_PATCHES.md as usual. (Upstream's Vita build stops building; we don't

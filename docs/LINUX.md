@@ -20,7 +20,7 @@ Needed (the `--check-deps` list, Debian / Ubuntu names):
 |---|---|
 | Compiler: clang 19+, lld, llvm (`llvm-profdata`, `llvm-symbolizer`) | `clang-20 lld-20 llvm-20` (Ubuntu 24.04 / Mint 22; newer from apt.llvm.org) |
 | Build tools | `pkg-config git`; `cmake ninja-build` optional: without CMake 3.21+ / Ninja 1.10+ (Debian 11's 3.18, say) the build downloads Kitware's / Ninja's own x86-64 or aarch64 builds into `build/build-tools` (`toolchain.build_tools`) |
-| Vulkan shaders (HLSL -> SPIR-V) | `glslang-tools` |
+| Vulkan shaders (HLSL -> SPIR-V) | none since 2026-11-27: the SPIR-V is committed (`src/render/shaders/compiled`, `tools/shaders.py`); `glslang-tools` can go |
 | SDL3, built from source: window (X11, Wayland), audio, gamepads | `libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev libpipewire-0.3-dev libpulse-dev libasound2-dev libudev-dev libdbus-1-dev` |
 | Optional: Vulkan validation (`PS2X_RHI_DEBUG=1`) | `vulkan-validationlayers` |
 | The launcher (`build.py --launcher`), on top of the above | `libvulkan-dev libfreetype-dev libfontconfig-dev` (X11, Wayland, xkbcommon, D-Bus: already listed) |
@@ -109,7 +109,7 @@ prompt) or opens a terminal with the command. `VCS_LAUNCHER_VIDEO=x11|wayland`, 
 | Area | Windows | Linux | Why |
 |---|---|---|---|
 | Renderer | D3D11 (reference) | Vulkan | D3D11 is Windows only. The Vulkan backend builds on Windows too (`-DVCS_RHI_VULKAN=ON`, then Graphics > Graphics API), to compare it with D3D11 on the same PC |
-| Shaders | D3DCompile (Windows' d3dcompiler_47.dll) -> DXBC (`tools/hlsl_dxbc.py`; fxc's bytes) | glslang -> SPIR-V (`tools/hlsl_spirv.py`) | One HLSL source. glslang ignores `[[vk::index(1)]]`, so the script moves the second output to Location 0 Index 1 itself. `VCS_SPIRV` adds a point size, which Vulkan needs for points |
+| Shaders | D3DCompile (Windows' d3dcompiler_47.dll) -> DXBC (`tools/hlsl_dxbc.py`; fxc's bytes) | glslang -> SPIR-V (`tools/hlsl_spirv.py`), once, by `tools/shaders.py build`; committed | One HLSL source. glslang ignores `[[vk::index(1)]]`, so the script moves the second output to Location 0 Index 1 itself. `VCS_SPIRV` adds a point size, which Vulkan needs for points |
 | Dear ImGui | `imgui_impl_dx11` | `render/ui_renderer.cpp` (through the RHI) | One pipeline for every target format (the swapchain's BGRA, the RGBA captures) |
 | Write watch (`ps2_write_watch.cpp`) | `GetWriteWatch` (dirty bits: free writes) | userfaultfd async write-protect + `PAGEMAP_SCAN`, **opt-in** (`PS2X_WRITE_WATCH=1`) | Correct (0 wrong skips), but each first write to a page after a fold is a page fault on the game thread: no net gain measured (PERFORMANCE.md 20) |
 | Card creation time | `GetFileAttributesExW` | `statx` birth time (mtime without one) | Only the order of new entries; `.ps2x-order` is the source of truth |
