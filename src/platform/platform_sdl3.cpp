@@ -1,5 +1,6 @@
 // SDL3 implementation of platform.h.
 #include "platform/platform.h"
+#include "platform/deflate.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -16,7 +17,6 @@ namespace platform
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
-#include <zlib.h>
 
 #include <algorithm>
 #include <array>
@@ -909,7 +909,7 @@ namespace platform
     bool writePng(const char *path, const uint8_t *rgb, int width, int height)
     {
         // Each row with the PNG filter (none / sub / up / paeth) whose bytes sum smallest as signed values - the
-        // usual heuristic - then zlib. A 1080p screenshot was 6.2 MB with stored blocks.
+        // usual heuristic - then deflate (deflate.cpp). A 1080p screenshot was 6.2 MB with stored blocks.
         const size_t stride = static_cast<size_t>(width) * 3u;
         std::vector<uint8_t> raw(static_cast<size_t>(height) * (stride + 1u));
         std::vector<uint8_t> trial(stride);
@@ -948,11 +948,7 @@ namespace platform
                 }
             }
         }
-        uLongf zSize = compressBound(static_cast<uLong>(raw.size()));
-        std::vector<uint8_t> z(zSize);
-        if (compress2(z.data(), &zSize, raw.data(), static_cast<uLong>(raw.size()), 6) != Z_OK)
-            return false;
-        z.resize(zSize);
+        const std::vector<uint8_t> z = zlibCompress(raw.data(), raw.size()); // deflate.cpp (no zlib library)
 
         std::vector<uint8_t> png = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
         std::vector<uint8_t> ihdr;

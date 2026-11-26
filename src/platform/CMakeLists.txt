@@ -38,20 +38,12 @@ add_library(imgui STATIC
 target_include_directories(imgui PUBLIC "${imgui_SOURCE_DIR}")
 set(VCS_IMGUI_BACKENDS_DIR "${imgui_SOURCE_DIR}/backends" CACHE INTERNAL "")
 
-# zlib for compressed screenshots (writePng); only the static library is built for us.
-set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    zlib
-    GIT_REPOSITORY "https://github.com/madler/zlib.git"
-    GIT_TAG "v1.3.1"
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(zlib)
-
+# deflate.cpp compresses the screenshots (writePng): no zlib since 2026-11-27 (DECISIONS.md)
 add_library(vcs_platform STATIC
     platform_sdl3.cpp
+    deflate.cpp
     "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
 )
 target_include_directories(vcs_platform PUBLIC "${CMAKE_SOURCE_DIR}/src"
-                           PRIVATE "${imgui_SOURCE_DIR}/backends" "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
-target_link_libraries(vcs_platform PUBLIC imgui PRIVATE SDL3::SDL3-static zlibstatic)
+                           PRIVATE "${imgui_SOURCE_DIR}/backends")
+target_link_libraries(vcs_platform PUBLIC imgui PRIVATE SDL3::SDL3-static)
