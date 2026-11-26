@@ -20,19 +20,17 @@ import shutil
 import stat
 import subprocess
 import sys
-import tarfile
 import time
-import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import toolchain as tc  # noqa: E402
 
 # the CMake files with FetchContent_Declare that a Windows build of the game and the recompiler uses (not ps2xStudio,
-# which is off; not sse2neon, ARM only; not the Vulkan backend's, off on Windows). The launcher downloads nothing.
+# which is off; not ps2xAnalyzer, off since 2026-11-27 (VCS_BUILD_ANALYZER); not sse2neon, ARM only; not the Vulkan
+# backend's, off on Windows). The launcher downloads nothing.
 CMAKE_FILES = [
     "src/platform/CMakeLists.txt",
     "third_party/PS2Recomp/ps2xRecomp/CMakeLists.txt",
-    "third_party/PS2Recomp/ps2xAnalyzer/CMakeLists.txt",
 ]
 # ... and on Linux the Vulkan backend's too (src/rhi: Vulkan-Headers, volk, VMA)
 CMAKE_FILES_LINUX = CMAKE_FILES + ["src/rhi/CMakeLists.txt"]
@@ -48,12 +46,6 @@ def this_platform():
 
 def cmake_files(platform):
     return {"linux": CMAKE_FILES_LINUX, "macos": CMAKE_FILES_MACOS}.get(platform, CMAKE_FILES)
-
-
-# a release archive instead of the repository where the repository carries far more than the build needs
-ARCHIVES = {
-    "nlohmann_json": "https://github.com/nlohmann/json/releases/download/{tag}/json.tar.xz",  # 0.2 MB, not 188
-}
 
 
 def declared(platform=None):
@@ -97,12 +89,6 @@ def _move(src, dst):
     _remove_tree(src)
 
 
-def download(url, out):
-    with urllib.request.urlopen(url, timeout=120) as r, open(out + ".part", "wb") as f:
-        shutil.copyfileobj(r, f, 1 << 20)
-    os.replace(out + ".part", out)
-
-
 def fetch(out_dir, platform=None):
     platform = platform or this_platform()
     deps = declared(platform)
@@ -114,23 +100,6 @@ def fetch(out_dir, platform=None):
         tc.event(progress=i, total=len(deps), eta=None, note=dep["name"])
         if os.path.isdir(target):
             _remove_tree(target)
-        archive = ARCHIVES.get(dep["name"].lower())
-        if archive:
-            url = archive.format(tag=dep["tag"])
-            print("[deps] %s %s (%s)" % (dep["name"], dep["tag"], url))
-            tmp = target + ".tar.xz"
-            download(url, tmp)
-            with tarfile.open(tmp) as t:
-                if hasattr(tarfile, "data_filter"):  # Python 3.12 / backports; macOS' own python3 is 3.9
-                    t.extractall(target + ".x", filter="data")
-                else:
-                    t.extractall(target + ".x")
-            os.remove(tmp)
-            inner = os.listdir(target + ".x")  # the archive holds one folder
-            _move(os.path.join(target + ".x", inner[0]) if len(inner) == 1 else target + ".x", target)
-            if os.path.isdir(target + ".x"):
-                _remove_tree(target + ".x")
-            continue
         print("[deps] %s %s (%s)" % (dep["name"], dep["tag"], dep["repo"]))
         cmd = ["git", "-c", "advice.detachedHead=false", "clone", "--quiet", "--depth", "1", "--branch", dep["tag"],
                dep["repo"], target]

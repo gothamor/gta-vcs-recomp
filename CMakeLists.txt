@@ -11,10 +11,13 @@ set(PS2X_LTO "THIN" CACHE STRING "Link-time optimisation for the game: THIN (def
 set(PS2X_PGO "" CACHE STRING "Profile-guided optimisation: empty (off), GEN (instrumented), or a .profdata path (tools/build.py --opt)")
 set(PS2X_CPU "AVX2" CACHE STRING "The CPU the build runs on: AVX2 (Haswell / Zen and newer, the default), AVX (Sandy / Ivy Bridge, Bulldozer) or SSE4 (no AVX); tools/build.py picks it from this PC")
 set_property(CACHE PS2X_CPU PROPERTY STRINGS AVX2 AVX SSE4)
-option(VCS_BUILD_TOOLS "Build the PS2Recomp recompiler/analyzer" ON)
+option(VCS_BUILD_TOOLS "Build the PS2Recomp recompiler" ON)
+# The analyzer (SCE library identification) made build/analyzer/analyzer.toml once, which tools/make_config.py merges;
+# no tool runs it, so it is off: it alone needed nlohmann_json (DECISIONS.md 2026-11-27).
+option(VCS_BUILD_ANALYZER "Build ps2xAnalyzer (downloads nlohmann_json)" OFF)
 
 set(PS2X_BUILD_RECOMP ${VCS_BUILD_TOOLS} CACHE BOOL "" FORCE)
-set(PS2X_BUILD_ANALYZER ${VCS_BUILD_TOOLS} CACHE BOOL "" FORCE)
+set(PS2X_BUILD_ANALYZER ${VCS_BUILD_ANALYZER} CACHE BOOL "" FORCE)
 set(PS2X_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(PS2X_BUILD_STUDIO OFF CACHE BOOL "" FORCE)
 # No FFmpeg (DECISIONS.md 2026-11-26): the movies are decoded by src/video/mpeg2.cpp. The runtime's own sceMpeg HLE,
