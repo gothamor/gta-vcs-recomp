@@ -5,20 +5,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <unordered_set>
-#define NOMINMAX
-
-#include <fcntl.h>
-
-#if defined(_WIN32)
-#include <io.h>
-#include <direct.h>
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
-#include "libdwarf_private.h"
-#include <libdwarf.h>
-#include <dwarf.h>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -34,45 +20,34 @@ namespace
                name.rfind("DAT_", 0) == 0;
     }
 
-    void AppendLoadSegmentsAsSections(const ELFIO::elfio &elf, std::vector<ps2recomp::Section> &sections)
+    void AppendLoadSegmentsAsSections(const ps2recomp::elf::ElfFile &elf, std::vector<ps2recomp::Section> &sections)
     {
-        const ELFIO::Elf_Half segCount = elf.segments.size();
-        if (segCount == 0)
+        const auto &segments = elf.segments();
+        for (size_t i = 0; i < segments.size(); ++i)
         {
-            return;
-        }
-
-        for (ELFIO::Elf_Half i = 0; i < segCount; ++i)
-        {
-            ELFIO::segment *segment = elf.segments[i];
-            if (!segment || segment->get_type() != ELFIO::PT_LOAD)
+            const ps2recomp::elf::SegmentHeader &segment = segments[i];
+            if (segment.type != ps2recomp::elf::PT_LOAD)
             {
                 continue;
             }
 
-            const ELFIO::Elf64_Addr vaddr = segment->get_virtual_address();
-            const ELFIO::Elf_Xword fileSize = segment->get_file_size();
-            const ELFIO::Elf_Xword memSize = segment->get_memory_size();
-            const ELFIO::Elf_Word flags = segment->get_flags();
-
-            if (vaddr > 0xFFFFFFFFu || fileSize > 0xFFFFFFFFu || memSize > 0xFFFFFFFFu)
-            {
-                continue;
-            }
+            const uint32_t vaddr = segment.virtualAddress;
+            const uint32_t fileSize = segment.fileSize;
+            const uint32_t memSize = segment.memorySize;
+            const uint32_t flags = segment.flags;
 
             if (fileSize > 0)
             {
                 ps2recomp::Section load{};
                 load.name = "LOAD" + std::to_string(i);
-                load.address = static_cast<uint32_t>(vaddr);
-                load.size = static_cast<uint32_t>(fileSize);
-                load.offset = static_cast<uint32_t>(segment->get_offset());
-                load.isCode = (flags & ELFIO::PF_X) != 0;
-                load.isData = (flags & ELFIO::PF_W) != 0 || (flags & ELFIO::PF_R) != 0;
+                load.address = vaddr;
+                load.size = fileSize;
+                load.offset = segment.offset;
+                load.isCode = (flags & ps2recomp::elf::PF_X) != 0;
+                load.isData = (flags & ps2recomp::elf::PF_W) != 0 || (flags & ps2recomp::elf::PF_R) != 0;
                 load.isBSS = false;
-                load.isReadOnly = (flags & ELFIO::PF_W) == 0;
-                load.data = const_cast<uint8_t *>(
-                    reinterpret_cast<const uint8_t *>(segment->get_data()));
+                load.isReadOnly = (flags & ps2recomp::elf::PF_W) == 0;
+                load.data = const_cast<uint8_t *>(segment.data);
 
                 sections.push_back(load);
             }
@@ -81,9 +56,9 @@ namespace
             {
                 ps2recomp::Section bss{};
                 bss.name = "LOAD" + std::to_string(i) + ".bss";
-                bss.address = static_cast<uint32_t>(vaddr + fileSize);
-                bss.size = static_cast<uint32_t>(memSize - fileSize);
-                bss.offset = static_cast<uint32_t>(segment->get_offset() + fileSize);
+                bss.address = vaddr + fileSize;
+                bss.size = memSize - fileSize;
+                bss.offset = segment.offset + fileSize;
                 bss.isCode = false;
                 bss.isData = true;
                 bss.isBSS = true;
@@ -119,13 +94,11 @@ namespace
 {
     using namespace ps2recomp;
 
-    bool HasDwarfSections(const ELFIO::elfio &elf)
+    bool HasDwarfSections(const ps2recomp::elf::ElfFile &elf)
     {
-        for (ELFIO::Elf_Half i = 0; i < elf.sections.size(); ++i)
+        for (const auto &section : elf.sections())
         {
-            const ELFIO::section *section = elf.sections[i];
-            const std::string &name = section->get_name();
-            if (name.rfind(".debug_", 0) == 0 || name.rfind(".zdebug_", 0) == 0)
+            if (section.name.rfind(".debug_", 0) == 0 || section.name.rfind(".zdebug_", 0) == 0)
             {
                 return true;
             }
@@ -218,242 +191,6 @@ namespace
         char buffer[32]{};
         std::snprintf(buffer, sizeof(buffer), "sub_%08X", address);
         return std::string(buffer);
-    }
-
-    std::string ReadDieName(Dwarf_Debug dbg, Dwarf_Die die, Dwarf_Error *error)
-    {
-        const int kAttrsToTry[] =
-            {
-#ifdef DW_AT_linkage_name
-                DW_AT_linkage_name,
-#endif
-#ifdef DW_AT_MIPS_linkage_name
-                DW_AT_MIPS_linkage_name,
-#endif
-            };
-
-        for (int attrNum : kAttrsToTry)
-        {
-            Dwarf_Attribute attr = nullptr;
-            if (dwarf_attr(die, attrNum, &attr, error) == DW_DLV_OK)
-            {
-                char *attrString = nullptr;
-                if (dwarf_formstring(attr, &attrString, error) == DW_DLV_OK && attrString)
-                {
-                    std::string result(attrString);
-                    dwarf_dealloc(dbg, attrString, DW_DLA_STRING);
-                    dwarf_dealloc(dbg, attr, DW_DLA_ATTR);
-                    return result;
-                }
-                dwarf_dealloc(dbg, attr, DW_DLA_ATTR);
-            }
-        }
-
-        // Fallback: DW_AT_name
-        char *dieName = nullptr;
-        if (dwarf_diename(die, &dieName, error) == DW_DLV_OK && dieName)
-        {
-            std::string result(dieName);
-            dwarf_dealloc(dbg, dieName, DW_DLA_STRING);
-            return result;
-        }
-
-        return {};
-    }
-
-    bool TryReadDieRange(
-        Dwarf_Debug dbg,
-        Dwarf_Die die,
-        uint32_t &outLowPc,
-        uint32_t &outHighPc,
-        Dwarf_Error *error)
-    {
-        outLowPc = 0;
-        outHighPc = 0;
-
-        Dwarf_Addr lowPc = 0;
-        if (dwarf_lowpc(die, &lowPc, error) != DW_DLV_OK)
-        {
-            return false;
-        }
-
-        // high_pc can be absolute address (DWARF2/3) or offset from low_pc (DWARF4+)
-        Dwarf_Addr highPc = 0;
-        Dwarf_Half highPcForm = 0;
-        Dwarf_Form_Class highPcClass = DW_FORM_CLASS_UNKNOWN;
-
-        if (dwarf_highpc_b(die, &highPc, &highPcForm, &highPcClass, error) == DW_DLV_OK)
-        {
-            if (highPcClass == DW_FORM_CLASS_CONSTANT)
-            {
-                highPc = lowPc + highPc;
-            }
-
-            if (lowPc <= 0xFFFFFFFFu && highPc <= 0xFFFFFFFFu && highPc > lowPc)
-            {
-                outLowPc = static_cast<uint32_t>(lowPc);
-                outHighPc = static_cast<uint32_t>(highPc);
-                return true;
-            }
-            return false;
-        }
-
-        // If no high_pc, try DW_AT_ranges
-        Dwarf_Attribute rangesAttr = nullptr;
-        if (dwarf_attr(die, DW_AT_ranges, &rangesAttr, error) != DW_DLV_OK)
-        {
-            if (lowPc <= 0xFFFFFFFFu)
-            {
-                outLowPc = static_cast<uint32_t>(lowPc);
-                outHighPc = static_cast<uint32_t>(lowPc + 4);
-                return true;
-            }
-            return false;
-        }
-
-        Dwarf_Off rangesOffset = 0;
-        if (dwarf_global_formref(rangesAttr, &rangesOffset, error) != DW_DLV_OK)
-        {
-            dwarf_dealloc(dbg, rangesAttr, DW_DLA_ATTR);
-            return false;
-        }
-
-        Dwarf_Ranges *ranges = nullptr;
-        Dwarf_Signed rangesCount = 0;
-        Dwarf_Unsigned byteCount = 0;
-        Dwarf_Off realOffset = 0;
-
-        if (dwarf_get_ranges_b(dbg, rangesOffset, die, &realOffset, &ranges, &rangesCount, &byteCount, error) != DW_DLV_OK)
-        {
-            dwarf_dealloc(dbg, rangesAttr, DW_DLA_ATTR);
-            return false;
-        }
-
-        Dwarf_Addr baseAddr = lowPc;
-        Dwarf_Addr minPc = 0;
-        Dwarf_Addr maxPc = 0;
-        bool hasAny = false;
-
-        for (Dwarf_Signed i = 0; i < rangesCount; ++i)
-        {
-            const Dwarf_Ranges &entry = ranges[i];
-
-            if (entry.dwr_type == DW_RANGES_END)
-            {
-                break;
-            }
-
-            if (entry.dwr_type == DW_RANGES_ADDRESS_SELECTION)
-            {
-                baseAddr = entry.dwr_addr2;
-                continue;
-            }
-
-            if (entry.dwr_type != DW_RANGES_ENTRY)
-            {
-                continue;
-            }
-
-            const Dwarf_Addr start = baseAddr + entry.dwr_addr1;
-            const Dwarf_Addr end = baseAddr + entry.dwr_addr2;
-
-            if (end <= start)
-            {
-                continue;
-            }
-
-            if (!hasAny)
-            {
-                minPc = start;
-                maxPc = end;
-                hasAny = true;
-            }
-            else
-            {
-                minPc = std::min(minPc, start);
-                maxPc = std::max(maxPc, end);
-            }
-        }
-
-        dwarf_dealloc_ranges(dbg, ranges, rangesCount);
-        dwarf_dealloc(dbg, rangesAttr, DW_DLA_ATTR);
-
-        if (!hasAny)
-        {
-            return false;
-        }
-
-        if (minPc <= 0xFFFFFFFFu && maxPc <= 0xFFFFFFFFu && maxPc > minPc)
-        {
-            outLowPc = static_cast<uint32_t>(minPc);
-            outHighPc = static_cast<uint32_t>(maxPc);
-            return true;
-        }
-
-        return false;
-    }
-
-    void VisitDieTreeAndCollectFunctions(
-        Dwarf_Debug dbg,
-        Dwarf_Die rootDie,
-        ps2recomp::ElfParser *parser,
-        std::vector<ps2recomp::Function> &outFunctions)
-    {
-        Dwarf_Error error = nullptr;
-
-        Dwarf_Die current = rootDie;
-        while (current)
-        {
-            Dwarf_Half tag = 0;
-            if (dwarf_tag(current, &tag, &error) == DW_DLV_OK)
-            {
-                if (tag == DW_TAG_subprogram)
-                {
-                    uint32_t lowPc = 0;
-                    uint32_t highPc = 0;
-
-                    if (TryReadDieRange(dbg, current, lowPc, highPc, &error))
-                    {
-                        if (FindCodeSectionByAddress(parser->getSections(), lowPc))
-                        {
-                            ps2recomp::Function func{};
-                            func.name = ReadDieName(dbg, current, &error);
-                            func.start = lowPc;
-                            func.end = highPc;
-                            func.isRecompiled = false;
-                            func.isStub = false;
-                            func.isSkipped = false;
-
-                            if (func.name.empty())
-                            {
-                                func.name = MakeAutoFunctionName(func.start);
-                            }
-
-                            outFunctions.push_back(std::move(func));
-                        }
-                    }
-                }
-            }
-
-            // Depth-first: child first
-            Dwarf_Die child = nullptr;
-            if (dwarf_child(current, &child, &error) == DW_DLV_OK)
-            {
-                VisitDieTreeAndCollectFunctions(dbg, child, parser, outFunctions);
-            }
-
-            // Next sibling
-            Dwarf_Die sibling = nullptr;
-            const int siblingResult = dwarf_siblingof_b(dbg, current, TRUE, &sibling, &error);
-            dwarf_dealloc(dbg, current, DW_DLA_DIE);
-
-            if (siblingResult != DW_DLV_OK)
-            {
-                break;
-            }
-
-            current = sibling;
-        }
     }
 
     bool ReadSectionWord(const ps2recomp::Section &section, uint32_t offset, uint32_t &outWord)
@@ -1683,29 +1420,29 @@ namespace ps2recomp
 {
 
     ElfParser::ElfParser(const std::string &filePath)
-        : m_filePath(filePath), m_elf(new ELFIO::elfio())
+        : m_filePath(filePath), m_elf(new elf::ElfFile())
     {
     }
 
-    bool ElfParser::isExecutableSection(const ELFIO::section *section) const
+    bool ElfParser::isExecutableSection(const elf::SectionHeader &section) const
     {
-        if ((section->get_flags() & ELFIO::SHF_EXECINSTR) == 0)
+        if ((section.flags & elf::SHF_EXECINSTR) == 0)
             return false;
 
         // Sony's PS2 linker marks embedded VU microprogram sections executable,
         // but their words use the VU ISA rather than the EE/R5900 ISA. Keep the
         // bytes in the parsed ELF while excluding these ABI-defined section
         // names from EE function discovery and recompilation.
-        const std::string name = section->get_name();
+        const std::string &name = section.name;
         const bool vuText = name == ".vutext" || name.rfind(".vutext.", 0) == 0;
         const bool dvpOverlay = name == ".DVP.overlay" || name.rfind(".DVP.overlay.", 0) == 0;
         return !vuText && !dvpOverlay;
     }
 
-    bool ElfParser::isDataSection(const ELFIO::section *section) const
+    bool ElfParser::isDataSection(const elf::SectionHeader &section) const
     {
-        return (section->get_flags() & ELFIO::SHF_ALLOC) != 0 &&
-               !(section->get_flags() & ELFIO::SHF_EXECINSTR);
+        return (section.flags & elf::SHF_ALLOC) != 0 &&
+               !(section.flags & elf::SHF_EXECINSTR);
     }
 
     std::vector<Function> ElfParser::extractFunctions() const
@@ -2104,7 +1841,7 @@ namespace ps2recomp
 
     uint32_t ElfParser::getEntryPoint() const
     {
-        return static_cast<uint32_t>(m_elf->get_entry());
+        return m_elf->entry();
     }
 
     void ElfParser::setReporter(RecompilerReporter *reporter)
@@ -2284,13 +2021,13 @@ namespace ps2recomp
         {
             if (m_reporter)
             {
-                m_reporter->error("elf", "Could not load ELF file: " + m_filePath);
+                m_reporter->error("elf", "Could not load ELF file: " + m_filePath + " (" + m_elf->error() + ")");
             }
             return false;
         }
 
         // Check if this is a PS2 ELF (MIPS R5900)
-        if (m_elf->get_machine() != ELFIO::EM_MIPS)
+        if (m_elf->machine() != elf::EM_MIPS)
         {
             if (m_reporter)
             {
@@ -2311,30 +2048,18 @@ namespace ps2recomp
     {
         m_sections.clear();
 
-        ELFIO::Elf_Half sec_num = m_elf->sections.size();
-
-        for (ELFIO::Elf_Half i = 0; i < sec_num; ++i)
+        for (const elf::SectionHeader &psec : m_elf->sections())
         {
-            ELFIO::section *psec = m_elf->sections[i];
-
             Section section;
-            section.name = psec->get_name();
-            section.address = psec->get_address();
-            section.size = psec->get_size();
-            section.offset = psec->get_offset();
+            section.name = psec.name;
+            section.address = psec.address;
+            section.size = psec.size;
+            section.offset = psec.offset;
             section.isCode = isExecutableSection(psec);
             section.isData = isDataSection(psec);
-            section.isBSS = (psec->get_type() == ELFIO::SHT_NOBITS);
-            section.isReadOnly = !(psec->get_flags() & ELFIO::SHF_WRITE);
-
-            if (psec->get_size() > 0 && psec->get_type() != ELFIO::SHT_NOBITS)
-            {
-                section.data = (uint8_t *)psec->get_data();
-            }
-            else
-            {
-                section.data = nullptr;
-            }
+            section.isBSS = (psec.type == elf::SHT_NOBITS);
+            section.isReadOnly = !(psec.flags & elf::SHF_WRITE);
+            section.data = (psec.size > 0 && psec.type != elf::SHT_NOBITS) ? const_cast<uint8_t *>(psec.data) : nullptr;
 
             m_sections.push_back(section);
         }
@@ -2356,53 +2081,35 @@ namespace ps2recomp
     {
         m_symbols.clear();
 
-        for (ELFIO::Elf_Half i = 0; i < m_elf->sections.size(); ++i)
+        const auto &sections = m_elf->sections();
+        for (const elf::SectionHeader &psec : sections)
         {
-            ELFIO::section *psec = m_elf->sections[i];
-
-            if (psec->get_type() == ELFIO::SHT_SYMTAB || psec->get_type() == ELFIO::SHT_DYNSYM)
+            if (psec.type == elf::SHT_SYMTAB || psec.type == elf::SHT_DYNSYM)
             {
-                if (psec->get_link() >= m_elf->sections.size())
+                if (psec.link >= sections.size())
                 {
                     if (m_reporter)
                     {
-                        m_reporter->warning("elf", "Symbol section link out of bounds: " + std::to_string(psec->get_link()));
+                        m_reporter->warning("elf", "Symbol section link out of bounds: " + std::to_string(psec.link));
                     }
                     continue;
                 }
 
-                ELFIO::symbol_section_accessor symbols(*m_elf, psec);
-
-                ELFIO::Elf_Xword sym_num = symbols.get_symbols_num();
-
-                ELFIO::section *pstrSec = m_elf->sections[psec->get_link()];
-                ELFIO::string_section_accessor strings(pstrSec);
-
-                for (ELFIO::Elf_Xword j = 0; j < sym_num; ++j)
+                for (const elf::SymbolEntry &entry : m_elf->symbols(psec))
                 {
-                    std::string name;
-                    ELFIO::Elf64_Addr value;
-                    ELFIO::Elf_Xword size;
-                    unsigned char bind;
-                    unsigned char type;
-                    ELFIO::Elf_Half section_index;
-                    unsigned char other;
-
-                    symbols.get_symbol(j, name, value, size, bind, type, section_index, other);
-
-                    if (name.empty())
+                    if (entry.name.empty())
                     {
                         continue;
                     }
 
                     Symbol symbol;
-                    symbol.name = name;
-                    symbol.address = static_cast<uint32_t>(value);
-                    symbol.size = static_cast<uint32_t>(size);
-                    symbol.isFunction = (type == ELFIO::STT_FUNC);
+                    symbol.name = entry.name;
+                    symbol.address = entry.value;
+                    symbol.size = entry.size;
+                    symbol.isFunction = (entry.type == elf::STT_FUNC);
 
-                    symbol.isImported = section_index == ELFIO::SHN_UNDEF;
-                    symbol.isExported = (!symbol.isImported && bind == ELFIO::STB_GLOBAL);
+                    symbol.isImported = entry.sectionIndex == elf::SHN_UNDEF;
+                    symbol.isExported = (!symbol.isImported && entry.bind == elf::STB_GLOBAL);
 
                     m_symbols.push_back(symbol);
                 }
@@ -2414,82 +2121,46 @@ namespace ps2recomp
     {
         m_relocations.clear();
 
-        for (ELFIO::Elf_Half i = 0; i < m_elf->sections.size(); ++i)
+        const auto &sections = m_elf->sections();
+        for (const elf::SectionHeader &psec : sections)
         {
-            ELFIO::section *psec = m_elf->sections[i];
-
-            if (psec->get_type() == ELFIO::SHT_REL || psec->get_type() == ELFIO::SHT_RELA)
+            if (psec.type == elf::SHT_REL || psec.type == elf::SHT_RELA)
             {
-                if (psec->get_link() >= m_elf->sections.size())
+                if (psec.link >= sections.size())
                 {
                     if (m_reporter)
                     {
-                        m_reporter->warning("elf", "Relocation section link out of bounds: " + std::to_string(psec->get_link()));
+                        m_reporter->warning("elf", "Relocation section link out of bounds: " + std::to_string(psec.link));
                     }
                     continue;
                 }
 
-                ELFIO::relocation_section_accessor relocs(*m_elf, psec);
+                const elf::SectionHeader &symSec = sections[psec.link];
 
-                ELFIO::section *symSec = m_elf->sections[psec->get_link()];
-
-                if (symSec->get_link() >= m_elf->sections.size())
+                if (symSec.link >= sections.size())
                 {
                     if (m_reporter)
                     {
-                        m_reporter->warning("elf", "Symbol section link out of bounds (in relocation): " + std::to_string(symSec->get_link()));
+                        m_reporter->warning("elf", "Symbol section link out of bounds (in relocation): " + std::to_string(symSec.link));
                     }
                     continue;
                 }
 
-                ELFIO::symbol_section_accessor symbols(*m_elf, symSec);
+                const std::vector<elf::SymbolEntry> symbols = m_elf->symbols(symSec);
 
-                ELFIO::section *strSec = m_elf->sections[symSec->get_link()];
-
-                ELFIO::string_section_accessor strings(strSec);
-
-                for (ELFIO::Elf_Xword j = 0; j < relocs.get_entries_num(); ++j)
+                for (const elf::RelocationEntry &entry : m_elf->relocations(psec))
                 {
-                    ELFIO::Elf64_Addr offset;
-                    ELFIO::Elf_Word symbol;
-                    ELFIO::Elf_Word type;
-                    ELFIO::Elf_Sxword addend;
-
-                    // Always use the 5-parameter version
-                    if (psec->get_type() == ELFIO::SHT_REL)
-                    {
-                        // Pass addend even for REL sections
-                        relocs.get_entry(j, offset, symbol, type, addend);
-                        // Reset addend for REL sections since it's not part of the section
-                        addend = 0;
-                    }
-                    else
-                    {
-                        relocs.get_entry(j, offset, symbol, type, addend);
-                    }
-
                     Relocation reloc;
-                    reloc.offset = static_cast<uint32_t>(offset);
-                    reloc.info = (symbol << 8) | (type & 0xFF);
-                    reloc.symbol = symbol;
+                    reloc.offset = entry.offset;
+                    reloc.info = (entry.symbol << 8) | (entry.type & 0xFF);
+                    reloc.symbol = entry.symbol;
                     reloc.symbolName.clear();
-                    reloc.type = type;
-                    reloc.addend = static_cast<int32_t>(addend);
+                    reloc.type = entry.type;
+                    reloc.addend = entry.addend;
 
-                    if (symbol < symbols.get_symbols_num())
+                    if (entry.symbol < symbols.size())
                     {
-                        std::string symName;
-                        ELFIO::Elf64_Addr symValue = 0;
-                        ELFIO::Elf_Xword symSize = 0;
-                        unsigned char symBind = 0;
-                        unsigned char symType = 0;
-                        ELFIO::Elf_Half symSectionIndex = 0;
-                        unsigned char symOther = 0;
-                        if (symbols.get_symbol(symbol, symName, symValue, symSize,
-                                               symBind, symType, symSectionIndex, symOther))
-                        {
-                            reloc.symbolName = symName;
-                        }
+                        reloc.symbolName = symbols[entry.symbol].name;
                     }
 
                     m_relocations.push_back(reloc);
@@ -2504,74 +2175,13 @@ namespace ps2recomp
         m_hasLoadedGhidraMap = false;
         m_ghidraMapStarts.clear();
 
-        if (HasDwarfSections(*m_elf))
+        // [gta-recomp] DWARF is not read (that took libdwarf): retail ELFs carry none - Vice City Stories' has no
+        // .debug_* section - and the function starts come from the scan below and the Ghidra map.
+        if (HasDwarfSections(*m_elf) && m_reporter)
         {
-#if defined(_WIN32)
-            const int fileDescriptor = _open(m_filePath.c_str(), _O_RDONLY | _O_BINARY);
-#else
-            const int fileDescriptor = ::open(m_filePath.c_str(), O_RDONLY);
-#endif
-            if (fileDescriptor >= 0)
-            {
-                Dwarf_Debug dbg = nullptr;
-                Dwarf_Error error = nullptr;
-
-                const int initResult = dwarf_init_b(fileDescriptor, DW_GROUPNUMBER_BASE, nullptr, nullptr, &dbg, &error);
-                if (initResult == DW_DLV_OK)
-                {
-                    for (;;)
-                    {
-                        Dwarf_Unsigned cuHeaderLength = 0;
-                        Dwarf_Half versionStamp = 0;
-                        Dwarf_Unsigned abbrevOffset = 0;
-                        Dwarf_Half addressSize = 0;
-                        Dwarf_Half lengthSize = 0;
-                        Dwarf_Half extensionSize = 0;
-                        Dwarf_Sig8 typeSignature = {0};
-                        Dwarf_Unsigned typeOffset = 0;
-                        Dwarf_Unsigned nextCuHeader = 0;
-                        Dwarf_Half headerCuType = 0;
-                        Dwarf_Die cuDie = nullptr;
-
-                        const int cuResult = dwarf_next_cu_header_e(
-                            dbg,
-                            TRUE,
-                            &cuDie,
-                            &cuHeaderLength,
-                            &versionStamp,
-                            &abbrevOffset,
-                            &addressSize,
-                            &lengthSize,
-                            &extensionSize,
-                            &typeSignature,
-                            &typeOffset,
-                            &nextCuHeader,
-                            &headerCuType,
-                            &error);
-
-                        if (cuResult != DW_DLV_OK)
-                        {
-                            break;
-                        }
-
-                        if (cuDie != nullptr)
-                        {
-                            VisitDieTreeAndCollectFunctions(dbg, cuDie, this, m_extraFunctions);
-                        }
-                    }
-
-                    dwarf_finish(dbg);
-                }
-
-#if defined(_WIN32)
-                _close(fileDescriptor);
-#else
-                ::close(fileDescriptor);
-#endif
-            }
+            m_reporter->warning("elf", "the ELF's DWARF debug info is ignored (not read since 2026-11-27)");
         }
 
-        // DWARF in retail ELFs is often partial.
         ScanFunctionStartsFallback(this, m_extraFunctions);
 
         std::sort(m_extraFunctions.begin(), m_extraFunctions.end(),

@@ -9,13 +9,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
-FetchContent_Declare(
-    elfio
-    GIT_REPOSITORY https://github.com/serge1/ELFIO.git
-    GIT_TAG Release_3.12
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(elfio)
+# [gta-recomp] no ELFIO: include/ps2recomp/elf_file.h reads the ELF (PS2RECOMP_PATCHES.md)
 
 FetchContent_Declare(
     toml11
@@ -28,23 +22,7 @@ FetchContent_MakeAvailable(toml11)
 
 # [gta-recomp] no fmt: ps2recomp::format (include/ps2recomp/format.h) writes the same text (PS2RECOMP_PATCHES.md)
 
-FetchContent_Declare(
-    libdwarf
-    GIT_REPOSITORY https://github.com/davea42/libdwarf-code.git
-    GIT_TAG v2.2.0
-    GIT_SHALLOW TRUE
-)
-
-set(BUILD_DWARFDUMP    OFF CACHE BOOL "" FORCE)
-set(BUILD_DWARFEXAMPLE OFF CACHE BOOL "" FORCE)
-set(BUILD_DWARFGEN     OFF CACHE BOOL "" FORCE)
-
-set(BUILD_SHARED   OFF CACHE BOOL "" FORCE)
-set(BUILD_NON_SHARED ON CACHE BOOL "" FORCE)
-
-FetchContent_MakeAvailable(libdwarf)
-
-set(LIBDWARF_INCLUDE_DIR "${libdwarf_SOURCE_DIR}/src/lib/libdwarf")
+# [gta-recomp] no libdwarf: retail ELFs carry no DWARF, and the parser no longer reads it (PS2RECOMP_PATCHES.md)
 
 FetchContent_Declare(
     rabbitizer
@@ -82,18 +60,9 @@ file(GLOB_RECURSE PS2RECOMP_HEADERS CONFIGURE_DEPENDS
 
 add_library(ps2_recomp_lib STATIC ${PS2RECOMP_LIB_SOURCES} ${PS2RECOMP_HEADERS})
 
-target_compile_definitions(ps2_recomp_lib
-PUBLIC
-    LIBDWARF_STATIC
-PRIVATE
-    LIBDWARF_STATIC
-)
-
 target_include_directories(ps2_recomp_lib
 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${elfio_SOURCE_DIR}
-    ${LIBDWARF_INCLUDE_DIR}
 
 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../ps2xRuntime/include
@@ -102,7 +71,6 @@ PRIVATE
 target_link_libraries(ps2_recomp_lib
 PUBLIC
     toml11::toml11
-    dwarf
     rabbitizer
 )
 

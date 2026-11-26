@@ -2,7 +2,7 @@
 #define PS2RECOMP_ELF_PARSER_H
 
 #include <cstdint>
-#include <elfio/elfio.hpp>
+#include "ps2recomp/elf_file.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -43,7 +43,7 @@ namespace ps2recomp
 
         private:
                 std::string m_filePath;
-                std::unique_ptr<ELFIO::elfio> m_elf;
+                std::unique_ptr<elf::ElfFile> m_elf; // [gta-recomp] our own reader, not ELFIO
 
                 std::vector<Section> m_sections;
                 std::vector<Symbol> m_symbols;
@@ -57,8 +57,8 @@ namespace ps2recomp
                 void loadSymbols();
                 void loadRelocations();
                 void loadDebugFunctions();
-                bool isExecutableSection(const ELFIO::section *section) const;
-                bool isDataSection(const ELFIO::section *section) const;
+                bool isExecutableSection(const elf::SectionHeader &section) const;
+                bool isDataSection(const elf::SectionHeader &section) const;
         };
 
 } // namespace ps2recomp
