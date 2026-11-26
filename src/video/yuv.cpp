@@ -1,5 +1,7 @@
 #include "video/yuv.h"
 
+#include <cstddef>
+
 namespace video
 {
     namespace
