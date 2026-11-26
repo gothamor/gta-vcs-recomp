@@ -664,10 +664,20 @@ namespace
         }();
         return on;
     }
-    // [gta-recomp] PS2X_GPU_TIMING (the RHI's GPU timer): a marker around each draw, named by its kind and target
+    // [gta-recomp] PS2X_GPU_TIMING (the RHI's GPU timer): a marker around each draw, named by its kind and target.
+    // PS2X_GPU_TIMING=gs: GS draws only (effects, 2D) - the native draws stay in their passes, so on a tile-based GPU
+    // (Metal) the ~1000 world draws aren't each a pass of their own that loads and stores the frame
     bool gpuTimingMarkers()
     {
         static const bool on = std::getenv("PS2X_GPU_TIMING") != nullptr;
+        return on;
+    }
+    bool gpuTimingNativeMarkers()
+    {
+        static const bool on = [] {
+            const char *e = std::getenv("PS2X_GPU_TIMING");
+            return e && std::strcmp(e, "gs") != 0;
+        }();
         return on;
     }
 
@@ -1100,7 +1110,7 @@ namespace
                                      (unsigned long long)n.meshKey, n.s.fbp, n.s.zbp, n.s.tme, n.s.abe, n.s.fge);
                     hudSceneDraw(n.s.fbp);
                     sources.nativeDraw();
-                    const bool timed = gpuTimingMarkers();
+                    const bool timed = gpuTimingNativeMarkers();
                     if (timed)
                     {
                         char name[96];

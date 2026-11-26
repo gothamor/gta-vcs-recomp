@@ -1227,7 +1227,7 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `PS2X_HW_MSAA=2/4/8` | MSAA for the picture's targets (menu: Anti-aliasing) |
 | `PS2X_HW_ANISO=2..16`, `PS2X_HW_ANISO_LOG=1` | anisotropic filtering of the game's textures (menu: Texture filtering); count the draws per sampling path |
 | `PS2X_HW_GATHER=0` / `verify` | bilinear game textures through four loads with the wrap per tap (before 2026-10-30) / both paths, a pixel whose texels differ drawn magenta |
-| `PS2X_GPU_TIMING=1` | GPU time per frame by marker (D3D11 timestamp queries; a marker per draw, named by kind, target and texture), every 5 s |
+| `PS2X_GPU_TIMING=1` / `gs` | GPU time per frame by marker (D3D11 timestamp queries; a marker per draw, named by kind, target and texture), every 5 s; Metal: per encoder, gs_hw ending the pass after each draw. `gs`: GS draws only, the native draws left in their passes (on Metal the world otherwise loads and stores the frame per draw) |
 | `PS2X_RHI_LOG_CREATES=1` | each texture of 256x256 or more as it is created (a target re-created every frame shows as a stream) |
 | `PS2X_HW_RT_REUSE=0` | render targets re-created as before 2026-10-30: a new texture at every drop and growth, FBP 420 scaled by each draw's width |
 | `VCS_FPS=60` | 60 fps: the game's limiter waits one VBlank a frame instead of two (menu: Frame rate) |
@@ -1328,7 +1328,7 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
 | `PS2X_RHI_DEBUG=1` | the API's validation layer: D3D11 debug layer / Vulkan's Khronos validation; their messages in the log (`[rhi] d3d11` once per kind, `[rhi] vulkan`) |
 | `PS2X_RHI_WARP=1` | D3D11 on WARP, Windows' software rasteriser: a third implementation for a picture that differs between GPU vendors (a few frames a second) |
 | `PS2X_RHI_STATS=1` | Vulkan: draws, descriptor writes, passes, suspended passes, barriers, uploads, CPU waits per frame, and input to GPU done (avg / p50 / p95) every 5 s; gs_hw: the input delay by stage |
-| `PS2X_RHI_GPU_TIME=1` | Vulkan: GPU time of the passes and the whole frame (`PS2X_GPU_TIMING=1`: per draw, breaking passes) |
+| `PS2X_RHI_GPU_TIME=1` | Vulkan: GPU time of the passes and the whole frame (`PS2X_GPU_TIMING=1`: per draw, breaking passes). Metal: each encoder's fragment and vertex stage (stage-boundary timestamps), by target, and the frame (PERFORMANCE.md 33) |
 | `PS2X_HOST_SPIKES=<ms>` | main-loop frames whose work went over it, by phase (events, begin, frames, ui, window, present) with the main thread's CPU time; Vulkan: the frame's waits, draws with their CPU time in `prepareDraw` / `vkCmdDraw`, pipeline binds, descriptor pushes, passes, uploads, and the fence wait after it (PERFORMANCE.md 26) |
 | `PS2X_RHI_LOG_MEMORY=1` | Vulkan: every device memory allocation / free VMA makes, with its size and time |
 | `PS2X_RHI_STATIC_DEPTH=1` | Vulkan: depth test / write / compare in each pipeline, as before 2026-11-02 (now dynamic state, pipelines differing only there shared: PERFORMANCE.md 27) |

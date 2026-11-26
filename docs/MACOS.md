@@ -59,8 +59,12 @@ part of that check:
 ## Debugging
 
 - **Metal validation**: `MTL_DEBUG_LAYER=1` (add `MTL_DEBUG_LAYER_ERROR_MODE=nslog` to log instead of stopping).
-  `PS2X_RHI_STATS=1` prints draws, passes, suspended passes and upload volume per frame every 5 s
-  (`[rhi] metal per frame: ...`).
+  `PS2X_RHI_STATS=1` prints draws, passes, suspended passes, upload volume and the GPU time per frame every 5 s
+  (`[rhi] metal per frame: ...`). `PS2X_RHI_GPU_TIME=1`: GPU time per encoder by target (`[gpu-timing]`; stage-boundary
+  timestamps, so per pass, not per draw - PERFORMANCE.md 33); `PS2X_GPU_TIMING=gs` splits the effects' draws out.
+- **Shader maths**: the shaders are compiled with `MTLMathModeSafe`, where every division is the correctly rounded
+  one - several times the cost of D3D11's / Vulkan's. Hot divisions by a constant go through an exact replacement
+  (`div255` in gs_draw.hlsl, checked bit for bit on the GPU); fast or relaxed maths would save more but changes pixels.
 - **Crashes**: SIGSEGV / SIGBUS / SIGILL / SIGFPE print `[crash]` lines with each frame as `module+offset (symbol)` and
   an `atos -o <module> -l <load address> <addresses>` line that gives files and lines (`src/debug/crash.cpp`). Or
   `lldb -- build/vcs <iso>`.
