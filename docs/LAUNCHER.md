@@ -22,7 +22,7 @@ step loses players, and the README's *Problems* table is mostly those steps goin
 ## A release
 
 `python tools/release.py` (CI on a `v*` tag: `.github/workflows/launcher.yml`) writes
-`build/dist/VCS-Recomp-<version>-windows.zip` (82 MB) and its `.sha256`. One folder inside:
+`build/dist/VCS-Recomp-<version>-windows.zip` (38 MB since 2026-11-27; 82 MB with FFmpeg and the old libraries) and its `.sha256`. One folder inside:
 
 | What | |
 |---|---|
@@ -508,7 +508,7 @@ On the dev laptop (Mint 22.3, XFCE on X11, i7-6600U, HD 520, Mesa 25), the launc
 | Linux: idle (reduce motion, `--hidden --quit-after 20`) | 7 frames in 20 s (the entrance and the doctor's answer), then none; **5 ms of CPU in all** |
 | Linux: Home, moving (`--hidden --quit-after 10`, paced at 60 Hz) | 346 frames in 10 s (~33 a second after the entrance); 0.96 ms a frame on the laptop at its idle clock (0.33 of it the renderer: upload + submit); 40 ms of CPU a second |
 | `doctor.py` | 0.8 s |
-| Release zip | 82 MB; 1 min to make with the libraries cached, +17 s to fetch them |
+| Release zip | 82 MB (38 MB since 2026-11-27: SDL3 and Dear ImGui are all `deps/` holds); 1 min to make with the libraries cached, +17 s to fetch them |
 | First build from the release, through the hidden launcher (i7-7700K, 8 threads, ThinLTO, offline) | **8 min 42 s**: configure 52 s (with the recompiler), MIPS -> C++ 36 s, configure again 41 s, compile + link 6 min 25 s (786 steps) |
 | The release folder after it | 1.13 GB (build/ 0.75, generated/ 0.20, deps/ 0.12, python/ 0.02) |
 | The built game started by `--play` (hidden, a test card) | boots from the disc, the intro movie 321 pictures, 0 dropped |

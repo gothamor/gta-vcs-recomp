@@ -106,10 +106,16 @@ def fetch(out_dir, platform=None):
         if subprocess.run(cmd).returncode != 0:
             tc.fail("git clone of %s %s failed" % (dep["repo"], dep["tag"]), "download_failed")
         _remove_tree(os.path.join(target, ".git"))
-    # a folder fetched before 2026-11-26 has the FFmpeg archive the build no longer uses
+    # what an older fetch left that the build no longer uses: FFmpeg's archive (until 2026-11-26), the libraries that
+    # went on 2026-11-27 (zlib, the recompiler's) - else a release would bundle them still
+    names = {d["name"] for d in deps}
     for name in os.listdir(out_dir):
+        path = os.path.join(out_dir, name)
         if name.startswith("ffmpeg-") and name.endswith((".zip", ".tar.xz")):
-            os.remove(os.path.join(out_dir, name))
+            os.remove(path)
+        elif os.path.isdir(path) and name not in names:
+            print("[deps] %s: no longer used, removed" % name)
+            _remove_tree(path)
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=1)
     print("[deps] %d libraries in %s (%s)" % (len(deps), out_dir, platform))
@@ -130,6 +136,9 @@ def check(out_dir, platform=None):
     have = {(d["name"], d["repo"], d["tag"]) for d in manifest.get("deps", [])}
     problems = ["%s %s missing or at another pin" % (d["name"], d["tag"]) for d in deps
                 if (d["name"], d["repo"], d["tag"]) not in have or not os.path.isdir(os.path.join(out_dir, d["name"]))]
+    names = {d["name"] for d in deps}
+    problems += ["%s is no longer used" % n for n in sorted(os.listdir(out_dir))
+                 if os.path.isdir(os.path.join(out_dir, n)) and n not in names]
     return problems  # (an older manifest's "ffmpeg" entry is ignored: nothing uses it)
 
 

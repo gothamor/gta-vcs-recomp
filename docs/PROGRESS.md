@@ -1130,6 +1130,8 @@ Python scripts still usable on their own. docs/LAUNCHER.md has the whole of it; 
       - glslang / SPIRV-Cross for players: the SPIR-V and MSL committed (`tools/shaders.py`, 1 MB); a fresh compile
         gives the same bytes, the headers equal a live compile's, an edited shader is reported stale; CI compiles
         them again on Linux and macOS and compares.
+      Whole: a fresh build folder downloaded SDL3 and Dear ImGui only and built (6.5 min, quick); movie_check passes;
+      the Windows release zip 50 -> 38 MB (`deps/` 102 -> 63 MB; deps.py now drops folders a pin list no longer has).
       Not checked here: the Linux SPIR-V (now the pinned glslang's, not the distribution's) on Linux, and a macOS game
       build - CI and the user's Mac.
 
