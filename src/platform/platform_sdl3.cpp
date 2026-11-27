@@ -373,6 +373,17 @@ namespace platform
 
     bool init(const WindowDesc &desc)
     {
+#if defined(__APPLE__)
+        // macOS 14+: SDL leaves the app's activation to the system there (SDL_HINT_MAC_BACKGROUND_APP defaults to on),
+        // and the system activates an app it launched, not a program the launcher's Play starts by fork / exec. The
+        // game's window opened behind the launcher, and with Game > In the background: Pause the game held at a black
+        // screen until a click. Off: SDL activates the app at start (the Dock first, then the app - cooperative
+        // activation refuses a plain request, so raising the window alone was not enough); full screen loses it again
+        // and the shown window is raised as well. Not for hidden test runs, which must not take the focus. The
+        // environment variable SDL_MAC_BACKGROUND_APP still wins
+        if (!desc.hidden)
+            SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "0");
+#endif
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
         {
             std::fprintf(stderr, "[platform] SDL_Init: %s\n", SDL_GetError());
@@ -409,6 +420,9 @@ namespace platform
             g_mouseMovedNs = SDL_GetTicksNS();
             SDL_ShowWindow(g_window);
             SDL_SyncWindow(g_window);
+#if defined(__APPLE__)
+            SDL_RaiseWindow(g_window); // after the full-screen switch's move to a Space of its own, which loses it (init)
+#endif
             if (!placed)
                 notePlacement();
             currentPlacement(g_reported);
