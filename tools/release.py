@@ -31,7 +31,7 @@ appimagetool with the type 2 runtime (static: no libfuse2 needed), both pinned b
 Writes build/dist/VCS-Recomp-<version>-macos-arm64.dmg and its .sha256 (docs/MACOS.md): a disk image that opens as
 a Finder window with VCSLauncher.app next to a link to Applications, to drag it there (tools/dmg.py; DECISIONS.md
 2026-11-14). The app is signed ad-hoc (DECISIONS.md 2026-11-12), with the release's files in
-Contents/Resources/release - the source, VERSION, RELEASE.json, deps/ for macOS (the shader compilers' included),
+Contents/Resources/release - the source, VERSION, RELEASE.json, deps/ for macOS (with sse2neon),
 licences; no Python (the Command Line Tools' is used). The launcher copies them at start to
 ~/Library/Application Support/VCSRecomp/install, as the AppImage does. The image is checked once made: mounted, the
 app's signature verified inside it, the link and the window's layout there.
@@ -411,7 +411,7 @@ def release_macos(a, ref, version):
     copy_source(payload, ref, a.worktree)
     with open(os.path.join(payload, "VERSION"), "w", encoding="utf-8") as f:
         f.write(version + "\n")
-    print("[release] libraries (deps/, macOS: with sse2neon and the shader compilers)")
+    print("[release] libraries (deps/, macOS: with sse2neon)")
     bundle_deps(payload, "macos")
     licenses(payload)
     files = sorted(os.path.relpath(os.path.join(d, f), payload).replace(os.sep, "/")

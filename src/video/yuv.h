@@ -1,6 +1,7 @@
 // YCbCr 4:2:0 to RGBA for the movies (src/video/mpeg2.h's pictures).
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace video
