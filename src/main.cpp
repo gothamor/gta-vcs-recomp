@@ -53,11 +53,14 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #if defined(_WIN32)
@@ -85,10 +88,49 @@ namespace
     class MappedDisc final : public IPS2DiscImage
     {
     public:
-        explicit MappedDisc(const vcs::IsoImage &iso) : m_iso(iso) {}
+        // overlayDir (overlay/ENGLISH.GXT, overlay/PS2/GAME.DTZ, ...).
+        MappedDisc(const vcs::IsoImage &iso, const fs::path &overlayDir) : m_iso(iso)
+        {
+            m_totalSectors = iso.totalSectors();
+            std::error_code ec;
+            const bool exists = fs::is_directory(overlayDir, ec);
+            std::cerr << "[overlay] folder " << overlayDir.string() << (exists ? "" : " (not found)") << "\n";
+            if (!exists)
+                return;
+            for (const auto &e : fs::recursive_directory_iterator(overlayDir, ec))
+            {
+                if (!e.is_regular_file(ec))
+                    continue;
+                const std::string key = vcs::IsoImage::normalizePath(fs::relative(e.path(), overlayDir, ec).generic_string());
+                vcs::IsoEntry onDisc;
+                const uintmax_t size = e.file_size(ec);
+                if (!m_iso.find(key, onDisc) || onDisc.isDirectory || size == 0 || size > 0xFFFFFFFFull)
+                {
+                    std::cerr << "overlay: skipped " << key << " (not a file on the disc, or empty)\n";
+                    continue;
+                }
+                Override o;
+                o.lba = m_totalSectors;
+                o.size = static_cast<uint32_t>(size);
+                o.file.open(e.path(), std::ios::binary);
+                if (!o.file)
+                    continue;
+                m_totalSectors += (o.size + 2047) / 2048;
+                m_byPath[key] = m_over.size();
+                m_over.push_back(std::move(o));
+                std::cerr << "overlay: " << key << " <- " << e.path().string() << "\n";
+            }
+        }
 
         bool findFile(std::string_view ps2Path, uint32_t &lsn, uint32_t &sizeBytes, bool &isDirectory) const override
         {
+            if (const auto it = m_byPath.find(vcs::IsoImage::normalizePath(ps2Path)); it != m_byPath.end())
+            {
+                lsn = m_over[it->second].lba;
+                sizeBytes = m_over[it->second].size;
+                isDirectory = false;
+                return true;
+            }
             vcs::IsoEntry entry;
             if (!m_iso.find(ps2Path, entry))
                 return false;
@@ -100,25 +142,95 @@ namespace
 
         bool readBytes(uint64_t offset, size_t byteCount, void *destination) const override
         {
-            return m_iso.readBytes(offset, byteCount, destination);
+            const uint64_t isoBytes = uint64_t(m_iso.totalSectors()) * vcs::IsoImage::kSectorSize;
+            if (m_over.empty() || offset + byteCount <= isoBytes)
+                return m_iso.readBytes(offset, byteCount, destination);
+            auto *out = static_cast<uint8_t *>(destination);
+            bool ok = true;
+            while (byteCount)
+            {
+                size_t n;
+                if (offset < isoBytes)
+                {
+                    n = static_cast<size_t>(std::min<uint64_t>(byteCount, isoBytes - offset));
+                    ok &= m_iso.readBytes(offset, n, out);
+                }
+                else
+                {
+                    const Override *o = nullptr;
+                    uint64_t start = 0, end = 0;
+                    for (const Override &c : m_over)
+                    {
+                        start = uint64_t(c.lba) * vcs::IsoImage::kSectorSize;
+                        end = start + (uint64_t(c.size) + 2047) / 2048 * vcs::IsoImage::kSectorSize;
+                        if (offset >= start && offset < end)
+                        {
+                            o = &c;
+                            break;
+                        }
+                    }
+                    if (!o)
+                    {
+                        std::memset(out, 0, byteCount);
+                        return false;
+                    }
+                    n = static_cast<size_t>(std::min<uint64_t>(byteCount, end - offset));
+                    std::memset(out, 0, n);
+                    const uint64_t rel = offset - start;
+                    if (rel < o->size)
+                    {
+                        const size_t m = static_cast<size_t>(std::min<uint64_t>(n, o->size - rel));
+                        std::lock_guard<std::mutex> lock(m_mutex);
+                        o->file.clear();
+                        o->file.seekg(static_cast<std::streamoff>(rel));
+                        o->file.read(reinterpret_cast<char *>(out), static_cast<std::streamsize>(m));
+                        ok &= static_cast<size_t>(o->file.gcount()) == m;
+                    }
+                }
+                out += n;
+                offset += n;
+                byteCount -= n;
+            }
+            return ok;
         }
-
-        uint32_t totalSectors() const override { return m_iso.totalSectors(); }
+    
+        uint32_t totalSectors() const override { return m_totalSectors; }
 
         bool listDirectory(std::string_view ps2Path, std::vector<DirEntry> &out) const override
         {
             const vcs::IsoImage::Children *kids = m_iso.children(ps2Path);
             if (!kids)
                 return false;
+            const std::string dir = vcs::IsoImage::normalizePath(ps2Path);
             out.clear();
             out.reserve(kids->size());
             for (const auto &[name, entry] : *kids)
-                out.push_back(DirEntry{name, entry.lba, entry.size, entry.isDirectory});
+            {
+                DirEntry d{name, entry.lba, entry.size, entry.isDirectory};
+                if (const auto it = m_byPath.find(vcs::IsoImage::normalizePath(dir.empty() ? name : dir + "/" + name));
+                    it != m_byPath.end())
+                {
+                    d.lsn = m_over[it->second].lba;
+                    d.sizeBytes = m_over[it->second].size;
+                }
+                out.push_back(std::move(d));
+            }
             return true;
         }
 
     private:
+        struct Override
+        {
+            uint32_t lba = 0;
+            uint32_t size = 0;
+            mutable std::ifstream file;
+        };
+
         const vcs::IsoImage &m_iso;
+        uint32_t m_totalSectors = 0;
+        std::vector<Override> m_over;
+        std::unordered_map<std::string, size_t> m_byPath;
+        mutable std::mutex m_mutex;
     };
 
     fs::path exeDirectory()
@@ -894,7 +1006,7 @@ int main(int argc, char *argv[])
             return code;
         }
 
-        MappedDisc disc(iso);
+        MappedDisc disc(iso, data / "overlay");
         ps2_disc::setImage(&disc);
 
         // the trainer's mission list names each mission from MAIN.SCM (game/vcs_trainer.h)
