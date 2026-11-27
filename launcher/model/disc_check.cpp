@@ -76,7 +76,7 @@ namespace launcher
         std::vector<uint8_t> bytes(elf.size);
         iso.readBytes(uint64_t(elf.lba) * vcs::IsoImage::kSectorSize, bytes.size(), bytes.data());
         const std::string sha1 = vcs::sha1Hex(bytes.data(), bytes.size());
-        if (sha1 != vcs::disc::kElfSha1)
+        if (!vcs::disc::isSupportedElfSha1(sha1))
             return fail("unsupported_build", "an unsupported build of the game's executable (sha1 " + sha1 +
                                                  "): a modified or damaged copy?", boot);
         return {true, "ok", vcs::disc::kTitle, boot};
