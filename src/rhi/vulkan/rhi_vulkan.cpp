@@ -1450,14 +1450,19 @@ namespace rhi
                     missing = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
                     return false;
                 }
+                VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extended{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT};
                 VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
                 VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+                f13.pNext = &extended;
                 f2.pNext = &f13;
                 vkGetPhysicalDeviceFeatures2(device, &f2);
-                if (!f13.dynamicRendering || !f13.synchronization2 || !f13.shaderDemoteToHelperInvocation || !f2.features.dualSrcBlend ||
-                    !f2.features.depthClamp || !f2.features.shaderClipDistance)
+                if (!f13.dynamicRendering || !f13.synchronization2 || !f13.shaderDemoteToHelperInvocation ||
+                    !extended.extendedDynamicState || !f2.features.dualSrcBlend || !f2.features.depthClamp ||
+                    !f2.features.shaderClipDistance)
                 {
-                    missing = "a required feature (dynamic rendering, synchronization2, demote, dual-source blend, depth clamp, clip distance)";
+                    missing = "a required feature (dynamic rendering, synchronization2, demote, extended dynamic state, "
+                              "dual-source blend, depth clamp, clip distance)";
                     return false;
                 }
                 vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
@@ -1494,8 +1499,18 @@ namespace rhi
                 VkPhysicalDeviceFeatures2 have{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
                 have.pNext = &have12;
                 vkGetPhysicalDeviceFeatures2(m_core->physical, &have);
+                VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extended{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT};
+                // dynamicDepth() records VK_DYNAMIC_STATE_DEPTH_TEST/WRITE/COMPARE_OP (VK_EXT_extended_dynamic_state:
+                // its commands are core in 1.3, this struct enables them) and calls vkCmdSetDepthTestEnable & co. RADV
+                // only creates its PS epilog cache when this feature is on, and a depth-writing fragment shader with
+                // dynamic rendering takes that path (the HUD's depth-only fill): without it,
+                // radv_shader_part_cache_get() dereferenced a null - a crash on the first frame (2026-11-27). The
+                // feature is required, not optional, because the pipeline declares those dynamic states.
+                extended.extendedDynamicState = VK_TRUE;
                 VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
                 f12.hostQueryReset = have12.hostQueryReset; // GPU timing (PS2X_GPU_TIMING)
+                f12.pNext = &extended;
                 VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
                 f13.pNext = &f12;
                 f13.dynamicRendering = VK_TRUE;
