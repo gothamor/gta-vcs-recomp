@@ -1571,3 +1571,22 @@ volk and VMA, on macOS sse2neon). Each replacement was checked against the libra
   / F3 menus; only with a redesign), the Vulkan headers (the API itself), sse2neon (bit-exact SSE on ARM).
 - Cost: ~3,000 lines to keep (most of it the instruction tables), and a recompile prompt once for players (the
   recompiler changed; its output did not, so nothing of the game is rebuilt).
+
+## 2026-11-27 - SDL's spawn probe is re-tested every configure (an AppImage update failed, the user's report)
+
+- Updating 0.2.4 -> 0.3.0 from the AppImage on CachyOS stopped in SDL 3.4.18's `SDL_posixprocess.c`:
+  `call to undeclared function 'posix_spawn_file_actions_addchdir'`, with the note that `<spawn.h>` declares only
+  `_np`. glibc 2.44 briefly had the POSIX-2024 name as a header redirect to `_np` (April 2026), reverted before the
+  release branch closed (BZ 34437; 2.45 exports real symbols). CachyOS had the redirect's snapshot when the old
+  install's build folder was configured, and CMake had cached SDL's `check_symbol_exists` as found; the 0.3.0
+  configure reused that cache (`build/release` survives the update), so SDL compiled the POSIX name and its own
+  `_np` shim (which keys on the same probe) stayed off.
+- `src/platform/CMakeLists.txt` now unsets `HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR` and its `_NP` counterpart before
+  SDL's configure, so both probes run on every configure: two try_compiles, well under a second. On today's glibc
+  the POSIX name is not found and `_np` is, and SDL uses the shim; on glibc 2.45 both are found and the real symbol
+  is used.
+- Checked against the failing object: a scratch configure seeded with the stale `=1` fails `SDL_posixprocess.c`
+  exactly as the user's build did; with the unset it finds only `_np` and the object builds. A 0.3.0 install (no
+  such source change) is unblocked by removing the two cache entries or the build folder (docs/LINUX.md).
+- What would change it: SDL keying its probe on the glibc version itself, or the minimum glibc rising to 2.45.
+- Cost: two extra try_compiles per configure on Linux (about 0.3 s).

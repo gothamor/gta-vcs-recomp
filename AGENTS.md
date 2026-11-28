@@ -265,6 +265,11 @@ itself ("GTA Vice City Stories Launcher vX"), so the file has no heading. Follow
   game streams the same model in at another address, so such keys never stop coming. The RSL recordings were one
   (bounded since 2026-11-10, `VCS_RSL_RECORDINGS_MB`); `VCS_RSL_WORLD_LOG=1` prints what they hold, `tools/memcheck.py`
   is the check (PERFORMANCE.md 31).
+- A Linux build that stops in SDL's `SDL_posixprocess.c` on `posix_spawn_file_actions_addchdir` (the header has only
+  `_np`): CMake kept SDL's probe from a build made before a glibc update. glibc 2.44's rolling snapshots declared the
+  POSIX name and then reverted it (BZ 34437; 2.45 exports it for real); `src/platform/CMakeLists.txt` now re-tests
+  both names every configure. In a tree built before 2026-11-27, remove the two `HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR*`
+  lines from `build/release/CMakeCache.txt` (or the build folder) and build again (DECISIONS.md 2026-11-27).
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs
