@@ -57,6 +57,16 @@ step installs missing packages through `pkexec` (`python3 tools/build.py --insta
 prompt) or opens a terminal with the command. `VCS_LAUNCHER_VIDEO=x11|wayland`, `VCS_LAUNCHER_VK_DEBUG=1` and
 `VCS_LAUNCHER_VK_DEVICE=<name>` are its switches.
 
+**Updating from an older install.** The install keeps its CMake build folder (`build/release`), and CMake keeps its
+probe results. A build that stops in
+`deps/SDL3/src/process/posix/SDL_posixprocess.c` with `call to undeclared function
+'posix_spawn_file_actions_addchdir'` (the note says the header has only `_np`) is such a stale probe: glibc 2.44's
+rolling snapshots declared the POSIX-2024 name for a while and reverted it (BZ 34437; 2.45 exports it for real), and
+the probe had been cached while it was there. Since 2026-11-27 the source re-tests both names every configure; in
+0.3.0, remove the two `HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR*` entries from
+`~/.local/share/VCSRecomp/install/build/release/CMakeCache.txt` (or delete that folder) and build again
+(DECISIONS.md 2026-11-27).
+
 ## Running
 
 - The renderer is Vulkan (`[present] Vulkan on <GPU>` in the log). `VCS_RHI=null` draws nothing: the null backend,

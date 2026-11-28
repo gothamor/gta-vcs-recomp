@@ -11,6 +11,15 @@ set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
 # Linux: XTest only serves SDL's global mouse warp (the game captures the mouse through XInput2's relative motion);
 # off, so the build needs one package less (SDL stops at a missing one it was asked for)
 set(SDL_X11_XTEST OFF CACHE BOOL "" FORCE)
+# SDL asks CMake whether <spawn.h> has posix_spawn_file_actions_addchdir (POSIX 2024) and its _np spelling, and CMake
+# keeps the answer in the cache. glibc 2.44's rolling snapshots had the POSIX name for a while and then reverted it
+# (BZ 34437; 2.45 exports it for real), so a build folder made before such an update keeps a stale "found" and SDL's
+# SDL_posixprocess.c stops compiling - an AppImage update on CachyOS hit it on 2026-11-27. Test this system every
+# configure instead (two try_compiles): with today's glibc only _np exists, and SDL's own shim then uses it.
+if(UNIX AND NOT APPLE)
+    unset(HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR CACHE)
+    unset(HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCHDIR_NP CACHE)
+endif()
 FetchContent_Declare(
     SDL3
     GIT_REPOSITORY "https://github.com/libsdl-org/SDL.git"
