@@ -88,6 +88,11 @@ prompt) or opens a terminal with the command. `VCS_LAUNCHER_VIDEO=x11|wayland`, 
 - **Profiler**: `VCS_PROFILE=5` works as on Windows (`src/debug/profiler.cpp`: one SIGPROF per sample instead of
   SuspendThread), including `VCS_PROFILE_THREAD`, `VCS_PROFILE_SPIKES` and `VCS_PROFILE_GUEST_FILE`.
   `VCS_PROFILE_CALLERS` and `VCS_PROFILE_LINES` are Windows only: `perf record -g build/vcs <iso>` covers them.
+- **A crash in RADV on the first frame** (`libvulkan_radeon.so`, `radv_shader_part_cache_get`, right after
+  `[present] display aspect`): Mesa 26.3.1 takes its PS epilog path for the HUD's depth-only fill; a build from
+  before 2026-11-27 recorded dynamic depth state without enabling `extendedDynamicState`, so RADV's cache was never
+  made (DECISIONS.md, that date). Run an old build with `PS2X_RHI_STATIC_DEPTH=1`; the current source enables the
+  feature.
 - **Vulkan**: `PS2X_RHI_DEBUG=1` turns on the Khronos validation layer and prints its messages as `[rhi] vulkan`.
   `VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` adds the synchronization checks. `PS2X_RHI_STATS=1` prints draws,
   descriptor writes, passes, suspended passes, barriers, upload volume and the CPU's waits (fence, acquire, submit,

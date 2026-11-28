@@ -265,6 +265,10 @@ itself ("GTA Vice City Stories Launcher vX"), so the file has no heading. Follow
   game streams the same model in at another address, so such keys never stop coming. The RSL recordings were one
   (bounded since 2026-11-10, `VCS_RSL_RECORDINGS_MB`); `VCS_RSL_WORLD_LOG=1` prints what they hold, `tools/memcheck.py`
   is the check (PERFORMANCE.md 31).
+- A crash on the first frame in `libvulkan_radeon.so` (`radv_shader_part_cache_get`, from `lookup_ps_epilog`), just
+  after `[present] display aspect`: RADV's PS epilog cache was never made because the app recorded dynamic depth
+  states without enabling `extendedDynamicState` (RADV-only null dereference; fixed 2026-11-27 by enabling the
+  feature). An older build runs with `PS2X_RHI_STATIC_DEPTH=1`; see DECISIONS.md 2026-11-27.
 - First things to grep in a log: `[ee] thread N -> dormant`, `[guest-branch:unlisted-resume]`.
 
 ## Working style for long autonomous runs

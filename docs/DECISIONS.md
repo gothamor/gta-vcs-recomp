@@ -1571,3 +1571,27 @@ volk and VMA, on macOS sse2neon). Each replacement was checked against the libra
   / F3 menus; only with a redesign), the Vulkan headers (the API itself), sse2neon (bit-exact SSE on ARM).
 - Cost: ~3,000 lines to keep (most of it the instruction tables), and a recompile prompt once for players (the
   recompiler changed; its output did not, so nothing of the game is rebuilt).
+
+## 2026-11-27 - Vulkan: the extended dynamic state feature is required (a RADV crash on the first frame, the user's report)
+
+- The rebuilt game then started and crashed on the user's Radeon RX 6600 XT (RADV, Mesa 26.3.1): SIGSEGV with a bad
+  address of (nil) inside `libvulkan_radeon.so`, right after the first `[present] display aspect 1.333`. The stack
+  is `radv_CmdDraw` -> `radv_bind_ps_epilog` -> `lookup_ps_epilog` -> `radv_shader_part_cache_get`, and the line
+  resolves to `uint32_t hash = cache->ops->hash(key)` (radv_shader.c:3312): `device->ps_epilogs.ops` was NULL.
+- Why: our device enables dynamic rendering but never enabled `VK_EXT_extended_dynamic_state`, although the pipelines
+  record `VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE` / `DEPTH_WRITE_ENABLE` / `DEPTH_COMPARE_OP` and the code calls
+  `vkCmdSetDepthTestEnable` and co. (`dynamicDepth()`, PERFORMANCE.md 27) - invalid usage that the Intel and NVIDIA
+  drivers tolerated. RADV creates its device-level PS epilog cache only when one of a set of features is enabled
+  (`extendedDynamicState` among them). The HUD's depth-only fill draws `ps_fill_depth` (SV_Depth) under dynamic
+  rendering, so RADV marks the shader as having an epilog (`has_epilog`) and, at the first draw, looks it up in the
+  cache that was never made.
+- The fix: `VkPhysicalDeviceExtendedDynamicStateFeaturesEXT::extendedDynamicState` is chained into the device's
+  features and into the GPU check (with the other required features), so the usage is now valid and RADV creates the
+  cache. The RADV crash is a driver bug too (it should not call into a cache it never made), but the app was wrong
+  first: the feature is what a pipeline recording those dynamic states must enable.
+- Checked with the user's build: a hidden 20 s run (RX 6600 XT, Mesa 26.3.1) passes the frame that crashed - the HUD,
+  the main menu, the world (209,763 packets, motion blur) and the first cutscene draw. `PS2X_RHI_STATIC_DEPTH=1`
+  remains the escape hatch for an older build: it keeps the depth state in each pipeline and does not touch the
+  epilog path.
+- What would change it: nothing expected - the dynamic states are a measured win (PERFORMANCE.md 27) and requiring
+  the feature is a spec requirement, not a workaround.
